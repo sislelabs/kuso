@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1.7
-FROM alpine:3.20
+# syntax=docker/dockerfile:1.28
+FROM alpine:3.24
 
 # apk normally hits the network on every build. Persist /var/cache/apk
 # across builds so a no-op rebuild is ~3s instead of ~12s. We keep

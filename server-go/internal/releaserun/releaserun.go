@@ -164,7 +164,7 @@ exit $rc
 func WaitForAddonsInitContainer(envVars []corev1.EnvVar, envFrom []corev1.EnvFromSource) corev1.Container {
 	return corev1.Container{
 		Name:    "wait-for-addons",
-		Image:   "busybox:1.36",
+		Image:   "busybox:1.38",
 		Env:     envVars,
 		EnvFrom: envFrom,
 		Command: []string{"sh", "-c", waitForAddonsScript},

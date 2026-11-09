@@ -26,7 +26,7 @@
 #     spec.backup.barmanObjectStore (post-install via kubectl edit)
 #
 # CNPG operator must be installed first (hack/install.sh handles it,
-# or `kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.24/releases/cnpg-1.24.0.yaml`).
+# or `kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml`).
 #
 # Bootstrap order:
 #   1. Install CNPG operator
@@ -482,7 +482,7 @@ spec:
           # previous "1.23.1" pulled 404 from the registry and wedged
           # the v0.13.0 rollout (server-go now routes through this
           # pooler, so a missing PgBouncer means crashlooping kuso pods).
-          image: edoburu/pgbouncer:v1.25.2-p0
+          image: edoburu/pgbouncer:v1.26.1-p0
           imagePullPolicy: IfNotPresent
           ports:
             - { name: pgbouncer, containerPort: 6432 }

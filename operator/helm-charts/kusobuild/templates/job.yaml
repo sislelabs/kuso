@@ -212,7 +212,7 @@ spec:
         # log parser can extract it without false positives from app
         # output that happens to look JSON-shaped.
         - name: env-detect
-          image: {{ printf "%s:%s" (.Values.envDetect.image | default "ghcr.io/sislelabs/kuso-env-detect") (.Values.envDetect.tag | default "v1") | quote }}
+          image: {{ printf "%s:%s" (.Values.envDetect.image | default "ghcr.io/sislelabs/kuso-env-detect") (.Values.envDetect.tag | default "v2") | quote }}
           # Baked image ships ripgrep + jq, so the container runs as
           # 1000:1000 (matches cache-init). No apk add at runtime,
           # no root, full cap drop. Matches the rest of the Job's
@@ -521,7 +521,7 @@ spec:
         # Runs as the lifecycle UID/GID (1000:1000) — that's a baked-in
         # contract of the lifecycle image.
         - name: buildpacks
-          image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.20.20" | quote }}
+          image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.21.28" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

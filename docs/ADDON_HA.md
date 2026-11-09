@@ -21,7 +21,7 @@ kind of complexity we said up front we wouldn't do.
 Install CNPG once per cluster:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.24/releases/cnpg-1.24.0.yaml
+kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
 ```
 
 That registers the `Cluster`, `Backup`, `Pooler`, etc. CRDs and

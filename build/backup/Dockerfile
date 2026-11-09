@@ -31,9 +31,9 @@
 # one for a server newer than anything we ship (which dumps fine; it is
 # only the restore direction that breaks).
 #
-# alpine:3.23 packages 16, 17 and 18 side by side.
+# alpine:3.24 packages 16, 17 and 18 side by side.
 #
-# Pinned to alpine:3.21 because alpine:3.20 packages aws-cli 2.15.57,
+# Must stay >= alpine:3.21 because alpine:3.20 packages aws-cli 2.15.57,
 # which crashes inside its s3errormsg customisation when talking to
 # any non-AWS S3 endpoint that returns an error format aws-cli's
 # error-enhancer can't parse (Hetzner Object Storage is the case we
@@ -42,7 +42,14 @@
 # the spurious "argument of type NoneType is not iterable" abort.
 #
 # Built + pushed by `make backup-image`.
-FROM alpine:3.23
+FROM alpine:3.24
+
+# aws-cli >= 2.23 sends a CRC64NVME checksum on every upload and
+# validates response checksums by default. Hetzner Object Storage and
+# (per user reports) Backblaze B2 reject the x-amz-checksum-* headers;
+# when_required restores the pre-2.23 behaviour and is harmless on AWS.
+ENV AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 
 RUN apk add --no-cache \
       bash \

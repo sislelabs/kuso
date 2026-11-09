@@ -712,7 +712,7 @@ fi
 # image even when its own version stays put. Same idempotent
 # inspect-before-build dance as the nixpacks image.
 
-ENV_DETECT_TAG="${KUSO_RELEASE_ENV_DETECT_TAG:-v1}"
+ENV_DETECT_TAG="${KUSO_RELEASE_ENV_DETECT_TAG:-v2}"
 ENV_DETECT_IMAGE="${KUSO_RELEASE_ENV_DETECT_IMAGE:-ghcr.io/sislelabs/kuso-env-detect}"
 if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   if [[ "${KUSO_RELEASE_FORCE_ENV_DETECT:-0}" != "1" ]] \

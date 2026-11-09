@@ -165,7 +165,7 @@ spec:
             - { name: shared, mountPath: /shared }
       containers:
         - name: pgbouncer
-          image: edoburu/pgbouncer:v1.25.2-p0
+          image: edoburu/pgbouncer:v1.26.1-p0
           imagePullPolicy: IfNotPresent
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:

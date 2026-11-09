@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 #
 # Build the standalone Discord incident-bridge bot. This module is NOT in the
 # root go.work, so the build context is just this directory and we build with
@@ -21,7 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Minimal runtime: static binary + CA roots for the HTTPS Discord gateway and
 # the (possibly TLS) kuso API.
-FROM alpine:3.20
+FROM alpine:3.24
 RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
 COPY --from=build /out/incident-bot /usr/local/bin/incident-bot
 USER 65534:65534

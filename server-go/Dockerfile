@@ -12,13 +12,13 @@
 #                    runs go build into /out/kuso-server.
 #   3. final       — FROM scratch + the static binary + CA bundle.
 
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 # ↑ enables RUN --mount=type=cache for buildkit. Without it the cache
 # mounts below are syntax errors on older docker frontends.
 
 # ---- 1. web-build --------------------------------------------------------
 
-FROM node:22-bookworm-slim AS web-build
+FROM node:24-bookworm-slim AS web-build
 WORKDIR /web
 
 # Copy package metadata first so the install caches across SPA edits
@@ -108,7 +108,7 @@ RUN mkdir -p /tmp/kuso-data && chmod 777 /tmp/kuso-data
 # for a working backup story; the alternatives (sidecar, separate
 # Job) all add operational complexity.
 
-FROM alpine:3.20
+FROM alpine:3.24
 ARG VERSION=v0.2.0-dev
 
 LABEL maintainer="https://kuso.sislelabs.com"

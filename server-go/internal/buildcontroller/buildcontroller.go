@@ -70,10 +70,10 @@ import (
 // the controller self-contained.
 const (
 	defaultEnvDetectImage     = "ghcr.io/sislelabs/kuso-env-detect"
-	defaultEnvDetectTag       = "v1"
+	defaultEnvDetectTag       = "v2"
 	defaultNixpacksImage      = "ghcr.io/sislelabs/kuso-nixpacks"
 	defaultNixpacksVersion    = "1.41.0"
-	defaultBuildpacksImage    = "buildpacksio/lifecycle:0.20.20"
+	defaultBuildpacksImage    = "buildpacksio/lifecycle:0.21.28"
 	defaultBuildpacksBuilder  = "paketobuildpacks/builder-jammy-base:latest"
 	defaultStaticBuilderImage = "node:20-alpine"
 	defaultStaticRuntimeImage = "nginx:1.30-alpine"
