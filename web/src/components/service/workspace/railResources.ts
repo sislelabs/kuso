@@ -1,4 +1,4 @@
-import { deriveAddonStatus, deriveServiceStatus, type NodeStatus } from "@/features/services";
+import { deriveAddonStatus, deriveServiceStatus, type BuildSummary, type NodeStatus } from "@/features/services";
 import { serviceShortName } from "@/lib/utils";
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
 
@@ -28,6 +28,9 @@ export function railResources(
   services: KusoService[],
   envs: KusoEnvironment[],
   addons: KusoAddon[],
+  // Latest build per service short name (useLatestBuilds), so a rail dot
+  // says Building when the canvas card does.
+  latestBuilds?: Record<string, BuildSummary>,
 ): { services: RailService[]; addons: RailAddon[] } {
   const suffixes = [`-${env}`];
   if (env.startsWith("preview-")) suffixes.push(`-${env.slice("preview-".length)}`);
@@ -64,7 +67,7 @@ export function railResources(
         name,
         display: s.spec.displayName?.trim() || name,
         runtime: s.spec.runtime,
-        status: deriveServiceStatus({ stopped: !!s.spec.stopped, env: e }),
+        status: deriveServiceStatus({ stopped: !!s.spec.stopped, env: e, latestBuild: latestBuilds?.[name] }),
       };
     })
     .sort((a, b) => a.display.localeCompare(b.display));
