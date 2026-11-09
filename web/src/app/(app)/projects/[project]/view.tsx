@@ -28,6 +28,7 @@ import {
 } from "@/components/project/projectViewPref";
 import { Package } from "lucide-react";
 import { addonPageHref, servicePageHref } from "@/components/service/workspace/hrefs";
+import { opensInPage } from "@/components/service/workspace/peekPref";
 import { StagedChangesBar } from "@/components/staged";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
@@ -445,8 +446,9 @@ export function ProjectDetailView() {
     );
   }
 
+  // Settings and Logs skip the peek for the full page (peekPref).
   const selectService = (shortName: string, tab?: string) =>
-    phone ? openServicePage(shortName, tab) : openOverlay("service", shortName, tab);
+    phone || opensInPage(tab) ? openServicePage(shortName, tab) : openOverlay("service", shortName, tab);
   const selectAddon = (name: string, tab?: string) =>
     phone ? openAddonPage(stripPrefix(name), tab) : openOverlay("addon", stripPrefix(name), tab);
 
@@ -518,6 +520,13 @@ export function ProjectDetailView() {
             envs={envs}
             onSelectService={selectService}
             onSelectAddon={selectAddon}
+            selectedNodeId={
+              selectedService
+                ? `svc:${projectName}-${selectedService}`
+                : selectedAddon
+                  ? `addon:${selectedAddon}`
+                  : null
+            }
           />
         )}
       </div>

@@ -24,7 +24,7 @@ import {
 } from "@/features/services";
 import { errorsEnvScope, useServiceErrorCount } from "@/features/errors";
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
-import { useEnvironments } from "@/features/projects";
+import { useEnvironments, useProject } from "@/features/projects";
 import { buildRefLabel } from "@/features/builds";
 import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -88,6 +88,7 @@ import { classifyError } from "@/lib/error-kind";
 import { EmptyState } from "@/components/shared/EmptyState";
 import Link from "next/link";
 import { projectCanvasHref } from "./hrefs";
+import { opensInPage, setComplexTabsInPage } from "./peekPref";
 import { PackageX } from "lucide-react";
 
 type Tab =
@@ -398,6 +399,27 @@ export function ServiceWorkspace({
     });
   }, [guard, onOpenPage]);
 
+  // A tab picked from the strip or a g-chord. In the peek, Settings and
+  // Logs go to the full page (peekPref); in-panel links (a fix button
+  // jumping to a settings anchor) keep using guardedSetTab.
+  const pickTab = useCallback(
+    (next: Tab) => {
+      if (page || !onOpenPage || !opensInPage(next)) {
+        guardedSetTab(next);
+        return;
+      }
+      guard("opening the full page", () => {
+        setPanels({});
+        onOpenPage(next);
+        toast(`${next === "logs" ? "Logs" : "Settings"} opened in the full page`, {
+          description: "It needs more room than the side panel has.",
+          action: { label: "Keep in panel next time", onClick: () => setComplexTabsInPage(false) },
+        });
+      });
+    },
+    [page, onOpenPage, guardedSetTab, guard],
+  );
+
   // Land on the requested tab (?tab=, right-click "View logs" → Logs),
   // else the last-used tab in this session, else Deployments. Re-runs on
   // Back/Forward because the URL's tab flows back in as defaultTab.
@@ -450,13 +472,20 @@ export function ServiceWorkspace({
   }, [open, onClose, guardedClose]);
 
   const svc = useService(project, service ?? "");
-  const drift = useDrift(project, service ?? "");
+  // The per-service queries below wait until the service is known to
+  // exist: the project listing (usually cached from the canvas) or the
+  // service's own fetch says so. A link to a deleted service then costs
+  // one 404, not five.
+  const proj = useProject(project);
+  const listed = service ? proj.data?.services.some((s) => s.metadata.name === `${project}-${service}`) : false;
+  const known = service && (svc.isSuccess || listed) ? service : "";
+  const drift = useDrift(project, known);
   const envs = useEnvironments(project);
   // Crons + Runs only show when the service has at least one (or the
   // user can create them). Shares cache keys with the panels.
-  const crons = useServiceCrons(project, service ?? "");
-  const runs = useRuns(project, service ?? "");
-  const builds = useBuilds(project, service ?? "");
+  const crons = useServiceCrons(project, known);
+  const runs = useRuns(project, known);
+  const builds = useBuilds(project, known);
   // Build-time failure kinds carry the classifier's lineHint + remediation
   // on the build record; the bell link only has ?kind=.
   const failureClass = useMemo(
@@ -487,7 +516,7 @@ export function ServiceWorkspace({
   // Same count (and env scope) as the health strip's Errors cell and the
   // Errors tab headline.
   const errorCount =
-    useServiceErrorCount(project, service ?? "", undefined, errorsEnvScope(envParam)).data?.occurrences ?? 0;
+    useServiceErrorCount(project, known, undefined, errorsEnvScope(envParam)).data?.occurrences ?? 0;
   const tabItems = useMemo<OverlayTabItem<Tab>[]>(
     () =>
       MAIN_TABS.map((t) =>
@@ -503,7 +532,7 @@ export function ServiceWorkspace({
     manageFocus: !page,
     keys: onOpenPage ? { o: openPage } : undefined,
     chords: Object.fromEntries(
-      [...MAIN_TABS, PINNED_TAB].filter((t) => t.chord).map((t) => [t.chord as string, () => guardedSetTab(t.id)]),
+      [...MAIN_TABS, PINNED_TAB].filter((t) => t.chord).map((t) => [t.chord as string, () => pickTab(t.id)]),
     ),
   });
 
@@ -674,14 +703,16 @@ export function ServiceWorkspace({
     return null;
   })();
 
-  const actions = service ? (
+  // Waits for `known` like the queries above: the header actions read the
+  // service's builds, and a missing service has nothing to act on.
+  const actions = known ? (
     <>
       {status === "sleeping" && !stopped ? (
-        <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
+        <WakeControl project={project} service={known} env={wakeEnvParam(env, envGroup)} />
       ) : null}
       <ServiceHeaderActions
         project={project}
-        service={service}
+        service={known}
         env={env}
         stopped={stopped}
         showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
@@ -753,6 +784,15 @@ export function ServiceWorkspace({
   ) : null;
 
   const envChip = <EnvChip env={envGroup} />;
+  // Same "project / service" line on the peek and the full page, so the
+  // two read as one header.
+  const pathLine = (
+    <span className="min-w-0 truncate">
+      {project}
+      <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+      <span className="font-mono">{service}</span>
+    </span>
+  );
 
   const firstLive = service ? (
     <FirstLiveNotice
@@ -778,10 +818,8 @@ export function ServiceWorkspace({
               <SharedStatusPill status={statusMeta} detail={statusDetail} />
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+              {pathLine}
               {envChip}
-              {svc.data?.spec.displayName?.trim() && svc.data.spec.displayName.trim() !== service ? (
-                <span className="font-mono text-[var(--text-tertiary)]">{service}</span>
-              ) : null}
               {urlLine}
             </div>
           </div>
@@ -812,11 +850,7 @@ export function ServiceWorkspace({
             <div className="ml-auto hidden flex-nowrap items-center gap-1.5 sm:flex">{actions}</div>
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
-            <span className="min-w-0 truncate">
-              {project}
-              <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
-              <span className="font-mono">{service}</span>
-            </span>
+            {pathLine}
             {envChip}
             {urlLine}
           </div>
@@ -901,7 +935,7 @@ export function ServiceWorkspace({
           tabs={tabItems}
           pinned={{ ...PINNED_TAB }}
           active={tab}
-          onChange={guardedSetTab}
+          onChange={pickTab}
           idPrefix="svc-overlay"
           label="Service sections"
         />
@@ -1037,9 +1071,11 @@ export function ServiceWorkspace({
             </OverlayDirtyContext.Provider>
           )}
         </div>
-        {/* Phones: the actions live in a bar pinned to the bottom. */}
+        {/* Phones: the actions live in a bar pinned to the bottom. It sits
+            on the mobile nav, which already clears the home indicator, so
+            it stays one compact row (no safe-area padding of its own). */}
         {service ? (
-          <div className="flex shrink-0 items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] empty:hidden sm:hidden">
+          <div className="flex shrink-0 items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5 empty:hidden sm:hidden">
             {actions}
           </div>
         ) : null}

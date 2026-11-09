@@ -56,6 +56,9 @@ export function OverlayTabs<T extends string>({
   const stripRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [fade, setFade] = useState({ left: false, right: false });
+  // Error counts on tabs scrolled out of view, per side, so a phone user
+  // sees "Errors 14" is there without scrolling the strip.
+  const [hiddenErrors, setHiddenErrors] = useState({ left: 0, right: 0 });
   // Phones: every section is a chip in one sideways-scrolling row (no
   // "More" popover, no select), pinned tab last.
   const phone = useMediaQuery("(max-width: 639px)");
@@ -70,6 +73,15 @@ export function OverlayTabs<T extends string>({
     const el = stripRef.current;
     if (!el) return;
     setFade({ left: el.scrollLeft > 2, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 2 });
+    const next = { left: 0, right: 0 };
+    el.querySelectorAll<HTMLElement>("[data-error-count]").forEach((tab) => {
+      const n = Number(tab.dataset.errorCount) || 0;
+      const left = tab.offsetLeft - el.offsetLeft;
+      // Hidden = more than half of it is outside the visible strip.
+      if (left + tab.offsetWidth / 2 < el.scrollLeft) next.left += n;
+      else if (left + tab.offsetWidth / 2 > el.scrollLeft + el.clientWidth) next.right += n;
+    });
+    setHiddenErrors((prev) => (prev.left === next.left && prev.right === next.right ? prev : next));
   }, []);
 
   useLayoutEffect(() => {
@@ -125,6 +137,7 @@ export function OverlayTabs<T extends string>({
         id={`${idPrefix}-tab-${t.id}`}
         aria-selected={selected}
         aria-controls={`${idPrefix}-panel`}
+        data-error-count={t.badge && t.badgeTone === "error" ? t.badge : undefined}
         tabIndex={selected ? 0 : -1}
         title={t.chord ? `${t.label} (G then ${t.chord.toUpperCase()})` : t.label}
         onClick={() => onChange(t.id)}
@@ -180,8 +193,8 @@ export function OverlayTabs<T extends string>({
         </div>
         {/* Clipped tabs get a fade plus a chevron, so the strip reads as
             scrollable; the chevron pages it (keyboard users have arrows). */}
-        {fade.left && <ScrollEdge side="left" onPage={() => pageStrip(-1)} />}
-        {fade.right && <ScrollEdge side="right" onPage={() => pageStrip(1)} />}
+        {fade.left && <ScrollEdge side="left" errors={hiddenErrors.left} onPage={() => pageStrip(-1)} />}
+        {fade.right && <ScrollEdge side="right" errors={hiddenErrors.right} onPage={() => pageStrip(1)} />}
       </div>
       {overflow.length > 0 && (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
@@ -245,7 +258,7 @@ export function OverlayTabs<T extends string>({
   );
 }
 
-function ScrollEdge({ side, onPage }: { side: "left" | "right"; onPage: () => void }) {
+function ScrollEdge({ side, errors, onPage }: { side: "left" | "right"; errors: number; onPage: () => void }) {
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
   return (
     <span
@@ -263,6 +276,18 @@ function ScrollEdge({ side, onPage }: { side: "left" | "right"; onPage: () => vo
       >
         <Icon className="h-4 w-4" />
       </button>
+      {errors > 0 && (
+        // Visible hint only; the tab itself carries the count for screen readers.
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute top-1 rounded-full bg-[var(--error)] px-1 text-2xs font-semibold leading-4 tabular-nums text-[var(--bg-primary)]",
+            side === "left" ? "left-5" : "right-0",
+          )}
+        >
+          {badgeText(errors)}
+        </span>
+      )}
     </span>
   );
 }
