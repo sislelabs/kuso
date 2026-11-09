@@ -12,6 +12,7 @@ export {
   useStartService,
   useDeleteService,
   usePatchService,
+  useServiceBranches,
   useErrors,
   useRuns,
   useCreateRun,

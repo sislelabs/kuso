@@ -18,18 +18,19 @@ export function categoryLabel(c: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Tint classes per token, spelled out so Tailwind sees them.
+// Text tint per token, spelled out so Tailwind sees them.
 const TINT_CLASS: Record<(typeof LETTERMARK_TINTS)[number], string> = {
-  "--chart-1": "bg-[var(--chart-1)]/25 text-[var(--chart-1)]",
-  "--chart-2": "bg-[var(--chart-2)]/25 text-[var(--chart-2)]",
-  "--chart-3": "bg-[var(--chart-3)]/25 text-[var(--chart-3)]",
-  "--chart-4": "bg-[var(--chart-4)]/25 text-[var(--chart-4)]",
-  "--chart-5": "bg-[var(--chart-5)]/25 text-[var(--chart-5)]",
+  "--chart-1": "text-[var(--chart-1)]",
+  "--chart-2": "text-[var(--chart-2)]",
+  "--chart-3": "text-[var(--chart-3)]",
+  "--chart-4": "text-[var(--chart-4)]",
+  "--chart-5": "text-[var(--chart-5)]",
 };
 
-// AppIcon shows the catalog's SVG brand mark over a tinted lettermark.
-// The lettermark is what you see until the image loads, and for good
-// when the app has no icon (the endpoint 404s).
+// AppIcon puts every app on the same neutral tile: the catalog's SVG
+// brand mark inset with padding, or, when the app has no icon (the
+// endpoint 404s), its initials. Same tile, same border, so a template
+// without artwork doesn't look like a different kind of thing.
 export function AppIcon({ app, title, className }: { app: string; title: string; className?: string }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -37,17 +38,17 @@ export function AppIcon({ app, title, className }: { app: string; title: string;
     <span
       aria-hidden
       className={cn(
-        "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg font-heading font-semibold select-none [container-type:size]",
+        "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] font-heading font-semibold select-none [container-type:size]",
         TINT_CLASS[lettermarkTint(app)],
         className,
       )}
     >
-      {!loaded && <span className="text-[50cqh] leading-none">{lettermark(title)}</span>}
+      {!loaded && <span className="text-[42cqh] leading-none">{lettermark(title)}</span>}
       {!failed && (
         <img
           src={`${env.apiBase}/api/marketplace/${encodeURIComponent(app)}/icon?v=4`}
           alt=""
-          className={cn("absolute inset-0 h-full w-full", !loaded && "opacity-0")}
+          className={cn("absolute inset-0 h-full w-full object-contain p-[14%]", !loaded && "opacity-0")}
           // A cached image can finish before onLoad is attached.
           ref={(img) => {
             if (img?.complete && img.naturalWidth > 0) setLoaded(true);

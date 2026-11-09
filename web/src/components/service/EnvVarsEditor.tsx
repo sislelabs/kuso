@@ -262,6 +262,9 @@ export function EnvVarsEditor({
   const rawRef = useRef<RawEnvEditorHandle>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const valueInputs = useRef(new Map<string, RefValueInputHandle>());
+  const nameInputs = useRef(new Map<string, HTMLInputElement>());
+  // Row whose invalid name was just submitted: its message is announced.
+  const [nameAlert, setNameAlert] = useState<string | null>(null);
 
   // Concurrent-edit guard: when env.data refetches, only re-baseline the
   // rows when the user has nothing dirty; otherwise keep local edits and
@@ -877,6 +880,13 @@ export function EnvVarsEditor({
           ? `${name} is already set. Rename one of them`
           : "";
     const reserved = reservedEnvWarning(name);
+    const nameErrorId = `env-name-error-${r.id}`;
+    // Enter on an unusable name keeps the row open, puts focus on the
+    // name and announces why.
+    const submitBadName = () => {
+      setNameAlert(r.id);
+      nameInputs.current.get(r.id)?.focus();
+    };
     return (
       <div
         key={r.id}
@@ -888,12 +898,27 @@ export function EnvVarsEditor({
       >
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
           <Input
+            ref={(el) => {
+              if (el) nameInputs.current.set(r.id, el);
+              else nameInputs.current.delete(r.id);
+            }}
             autoFocus={!r.name}
             placeholder="KEY or paste a .env"
             aria-label={r.name ? `Name of variable ${r.name}` : `Name of new variable`}
             aria-invalid={!!nameError}
+            aria-describedby={nameError ? nameErrorId : undefined}
+            aria-errormessage={nameError ? nameErrorId : undefined}
             value={r.name}
-            onChange={(e) => update(i, { name: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              if (!name || nameError) submitBadName();
+              else valueInputs.current.get(r.id)?.focus();
+            }}
+            onChange={(e) => {
+              update(i, { name: e.target.value });
+              if (nameAlert === r.id) setNameAlert(null);
+            }}
             onPaste={(e) => onNamePaste(e, r)}
             className={cn("h-8 font-mono text-xs sm:w-64 sm:shrink-0", reserved && !nameError && "border-[var(--warning)]/60")}
             disabled={r.fromSecret}
@@ -913,7 +938,7 @@ export function EnvVarsEditor({
               ariaLabel={r.name ? `Value of ${r.name}` : "Value of new variable"}
               value={r.value}
               onChange={(v) => update(i, { value: v, ...(r.fromSecret ? { fromSecret: false, origValueFrom: undefined } : {}) })}
-              onSubmit={() => name && !nameError && stopEdit(r.id)}
+              onSubmit={() => (name && !nameError ? stopEdit(r.id) : submitBadName())}
               className="h-8 font-mono text-xs"
             />
             <button
@@ -945,17 +970,19 @@ export function EnvVarsEditor({
             <button
               type="button"
               aria-label="Done editing"
-              title="Done (Enter)"
               onClick={() => stopEdit(r.id)}
               disabled={!name || !!nameError}
+              title={!name ? "Name the variable first" : nameError || "Done (Enter)"}
               className={cn(iconBtn, "h-8 w-8 disabled:opacity-30")}
             >
               <Check className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
-        {nameError ? (
-          <p className="text-xs text-[var(--error)]">{nameError}</p>
+        {nameError || (nameAlert === r.id && !name) ? (
+          <p id={nameErrorId} role={nameAlert === r.id ? "alert" : undefined} className="text-xs text-[var(--error)]">
+            {nameError || "Name the variable before saving it"}
+          </p>
         ) : reserved ? (
           <p className="text-xs text-[var(--warning)]">{reserved}</p>
         ) : buildTimePrefix(name) ? (
@@ -1136,6 +1163,10 @@ export function EnvVarsEditor({
   // unless it's expanded or holds a row being edited.
   const body: ReactNode[] = [];
   const doneGroups = new Set<string>();
+  // The "pooler is off" note sits under the addon's own variable group
+  // (POSTGRES_*), where the missing keys would be; leftovers go below.
+  const unprovidedAddons = new Set(unprovided.map((r) => r.addon).filter((a): a is string => !!a));
+  const attachedNotes = new Set<string>();
   for (const it of shown) {
     const g = groupOf.get(it.name);
     if (!g) {
@@ -1185,7 +1216,17 @@ export function EnvVarsEditor({
         </div>,
       );
     }
+    const noteAddons = sources.filter((src): src is string => !!src && unprovidedAddons.has(src) && !attachedNotes.has(src));
+    if (view === "table" && !q && noteAddons.length > 0) {
+      for (const a of noteAddons) attachedNotes.add(a);
+      body.push(
+        <div key={`group-note:${g}`} className="bg-[var(--bg-secondary)]/40 px-3 py-2 pl-8">
+          <UnprovidedNote project={project} rows={unprovided.filter((r) => r.addon && noteAddons.includes(r.addon))} />
+        </div>,
+      );
+    }
   }
+  const looseUnprovided = unprovided.filter((r) => !r.addon || !attachedNotes.has(r.addon));
 
   const total = items.length;
   const empty = newRows.length === 0 && total === 0;
@@ -1390,8 +1431,8 @@ export function EnvVarsEditor({
         </div>
       )}
 
-      {view === "table" && unprovided.length > 0 && !q && (
-        <UnprovidedNote project={project} rows={unprovided} />
+      {view === "table" && looseUnprovided.length > 0 && !q && (
+        <UnprovidedNote project={project} rows={looseUnprovided} />
       )}
 
       {view === "table" && missing.length > 0 && !q && (

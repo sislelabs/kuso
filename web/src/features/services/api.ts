@@ -809,3 +809,15 @@ export async function removeEnvDomain(
 ): Promise<KusoEnvironment> {
   return api(`${envDomainsPath(project, service, env)}/${encodeURIComponent(host)}`, { method: "DELETE" });
 }
+
+// RepoBranches is GET .../branches: the service repo's branches, listed
+// with the credentials its builds clone with.
+export interface RepoBranches {
+  defaultBranch: string;
+  branches: string[];
+  truncated?: boolean;
+}
+
+export async function listServiceBranches(project: string, service: string): Promise<RepoBranches> {
+  return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/branches`);
+}

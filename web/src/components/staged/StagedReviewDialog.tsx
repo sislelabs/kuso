@@ -30,7 +30,6 @@ import { healthcheckCheck, overlaySettings, patchFieldDiff, planService, type He
 type Phase = "idle" | "applying" | "done" | "failed";
 
 const PATCH_LABEL: Record<string, string> = {
-  displayName: "Display name",
   port: "Port",
   internal: "Visibility",
   requestLimits: "Request limits",

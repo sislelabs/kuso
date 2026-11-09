@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useId } from "react";
 import type React from "react";
-import { Check, CircleAlert } from "lucide-react";
+import { Check, CircleAlert, Layers, Zap } from "lucide-react";
 import type { KusoService, KusoVolume } from "@/types/projects";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -32,9 +32,6 @@ export interface VolumeRow {
 }
 
 export interface FormState {
-  // Display label (free-form). Empty = canvas/header falls back to
-  // the slug.
-  displayName: string;
   // Source
   repoURL: string;
   repoBranch: string;
@@ -184,7 +181,6 @@ export function fromSvc(svc?: KusoService): FormState {
   // provider row shows the stored driver and isn't marked dirty on load.
   const repoProvider = (repo as { provider?: string } | undefined)?.provider ?? "";
   return {
-    displayName: svc?.spec.displayName ?? "",
     repoURL: repo?.url ?? "",
     repoBranch: repo?.defaultBranch ?? "",
     repoPath: repo?.path && repo.path !== "." ? repo.path : "",
@@ -321,9 +317,14 @@ export function Section({
   children,
   tone = "default",
   scope = "all",
+  applies,
 }: {
   id: string;
   title: string;
+  // How a card without a staged/immediate save commits: "now" for cards
+  // whose controls write on click (domains, alert rules), "none" for
+  // cards that only link elsewhere. Saveable cards get it from context.
+  applies?: "now" | "none";
   // Which environments a save touches: "all" for service-spec fields,
   // an env name for per-environment cards, "none" to say nothing.
   scope?: "all" | "none" | { env: string };
@@ -339,6 +340,7 @@ export function Section({
   const headingId = useId();
   const st = useContext(SettingsSaveContext)?.status(id);
   const staged = !!st && st.mode === "staged" && st.dirty;
+  const commit: CommitMode | null = st?.mode === "staged" ? "staged" : st?.mode === "immediate" || applies === "now" ? "now" : null;
   return (
     <section
       id={id}
@@ -361,14 +363,17 @@ export function Section({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h3
               id={headingId}
+              data-section-heading
+              tabIndex={-1}
               className={cn(
+                "outline-none focus-visible:underline focus-visible:underline-offset-4",
                 "font-heading text-[15px] font-semibold tracking-tight",
                 tone === "danger" && "text-[var(--error)]",
               )}
             >
               {title}
             </h3>
-            {staged && <StagedChip />}
+            {staged ? <StagedChip /> : commit && <CommitModeChip mode={commit} />}
             {scope !== "none" && (
               <span className="text-xs text-[var(--text-tertiary)]">
                 {scope === "all" ? "Applies to all environments" : `Only the ${scope.env} environment`}
@@ -388,6 +393,28 @@ export function Section({
       <div className="space-y-5 px-4 py-4 sm:px-5 sm:py-5">{children}</div>
       <SectionFooter section={id} note={footerNote} />
     </section>
+  );
+}
+
+type CommitMode = "staged" | "now";
+
+// CommitModeChip says, before anyone edits, how this card's changes land:
+// held for the review-and-deploy bar, or written as soon as you act.
+function CommitModeChip({ mode }: { mode: CommitMode }) {
+  const label = mode === "staged" ? "Deploys on review" : "Applies now";
+  const title =
+    mode === "staged"
+      ? "Edits here are staged. They wait in the bar at the bottom and roll out together when you review and deploy."
+      : "Changes here take effect as soon as you save or click. They aren't staged.";
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] px-2 py-px text-xs text-[var(--text-secondary)]"
+    >
+      {mode === "now" ? <Zap aria-hidden className="h-3 w-3" /> : <Layers aria-hidden className="h-3 w-3" />}
+      {label}
+      <span className="sr-only">. {title}</span>
+    </span>
   );
 }
 
@@ -457,6 +484,11 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
   );
 }
 
+// A search or deep-link jump outlines the field it lands on for a moment
+// (reveal.ts sets data-flash).
+const FLASH_CLASS =
+  "rounded-md transition-shadow duration-500 data-[flash=true]:ring-2 data-[flash=true]:ring-[var(--ring)] data-[flash=true]:ring-offset-4 data-[flash=true]:ring-offset-[var(--bg-secondary)]";
+
 // Field: label + hint above a full-width control.
 export function Field({
   label,
@@ -464,9 +496,13 @@ export function Field({
   htmlFor,
   children,
   className,
+  anchorId,
 }: {
   label: React.ReactNode;
   hint?: React.ReactNode;
+  // Deep-link target (#branch): CTAs and settings search land on the
+  // field itself, not just its card.
+  anchorId?: string;
   // When set, the label is a real <label for>; otherwise the control
   // should carry its own aria-label.
   htmlFor?: string;
@@ -474,14 +510,20 @@ export function Field({
   className?: string;
 }) {
   return (
-    <div className={cn("min-w-0 space-y-2", className)}>
+    <div
+      id={anchorId}
+      data-settings-field={htmlFor ?? anchorId ?? ""}
+      className={cn("min-w-0 space-y-2", FLASH_CLASS, anchorId && "scroll-mt-20 md:scroll-mt-6", className)}
+    >
       <div className="space-y-0.5">
         {htmlFor ? (
-          <label htmlFor={htmlFor} className="block text-[13px] font-medium text-[var(--text-primary)]">
+          <label htmlFor={htmlFor} data-field-label className="block text-[13px] font-medium text-[var(--text-primary)]">
             {label}
           </label>
         ) : (
-          <div className="text-[13px] font-medium text-[var(--text-primary)]">{label}</div>
+          <div data-field-label className="text-[13px] font-medium text-[var(--text-primary)]">
+            {label}
+          </div>
         )}
         {hint && <p className="text-xs leading-relaxed text-[var(--text-secondary)]">{hint}</p>}
       </div>
@@ -520,10 +562,11 @@ export function SwitchField({
 }) {
   const labelId = useId();
   const hintId = useId();
+  const fieldId = useId();
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div id={fieldId} data-settings-field={fieldId} className={cn("flex items-start justify-between gap-4", FLASH_CLASS)}>
       <div className="min-w-0 space-y-0.5">
-        <div id={labelId} className="text-[13px] font-medium text-[var(--text-primary)]">
+        <div id={labelId} data-field-label className="text-[13px] font-medium text-[var(--text-primary)]">
           {label}
         </div>
         {hint && (

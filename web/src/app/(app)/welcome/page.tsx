@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { toastError } from "@/lib/errors";
 import { welcomeProgress, type WelcomeProgress } from "./progress";
+import { NextSteps } from "./NextSteps";
+import type { ProjectSummaryItem } from "@/features/projects/api";
 
 // Guided 3-step onboarding for users landing on a fresh kuso install.
 // Before this, the path from "I just signed up" to "I have a service
@@ -142,7 +144,7 @@ export default function WelcomePage() {
           />
         )}
         {step === 3 &&
-          (!projectParam && progress?.allDeployed ? <AllSet /> : <Step3Deploy project={project} />)}
+          (!projectParam && progress?.allDeployed ? <AllSet hasGitHub={hasGitHub} projects={summary.data ?? []} /> : <Step3Deploy project={project} />)}
       </div>
         </>
       )}
@@ -241,24 +243,18 @@ function StepLabel({
 
 // AllSet is step 3 when every project already runs a service: nothing
 // to prompt for, so point at the places a returning user goes next.
-function AllSet() {
+function AllSet({ hasGitHub, projects }: { hasGitHub: boolean; projects: readonly ProjectSummaryItem[] }) {
   return (
-    <div className="flex items-start gap-3">
-      <CheckCircle2 className="mt-1 h-5 w-5 text-[var(--success)]" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <h2 className="text-base font-semibold tracking-tight">You&apos;re set up</h2>
-        <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-secondary)]">
-          Each of your projects already runs a service. Start another project, or head to the dashboard.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Link href="/projects" className={buttonVariants({ size: "sm" })}>
-            Open the dashboard
-            <ArrowRight className="h-3 w-3" />
-          </Link>
-          <Link href="/projects/new" className={buttonVariants({ variant: "secondary", size: "sm" })}>
-            New project
-          </Link>
-        </div>
+    <div className="space-y-5">
+      <NextSteps hasGitHub={hasGitHub} projects={projects} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Link href="/projects" className={buttonVariants({ size: "sm" })}>
+          Open the dashboard
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+        <Link href="/projects/new" className={buttonVariants({ variant: "secondary", size: "sm" })}>
+          New project
+        </Link>
       </div>
     </div>
   );

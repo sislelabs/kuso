@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 
 // FormField: label and hint above a full-width control, error below.
 // The hint sits under the label so it reads before the user types.
@@ -20,6 +20,17 @@ export function FormField({
   children: ReactNode;
 }) {
   const labelClass = "text-[13px] font-medium text-[var(--text-primary)]";
+  // With a single control, its hint and error are tied to it so a screen
+  // reader reads them on focus, and the error marks it invalid.
+  const hintId = htmlFor && hint ? `${htmlFor}-hint` : undefined;
+  const errorId = htmlFor && error ? `${htmlFor}-error` : undefined;
+  const control =
+    htmlFor && isValidElement(children)
+      ? cloneElement(children as ReactElement<Record<string, unknown>>, {
+          "aria-describedby": [hintId, errorId].filter(Boolean).join(" ") || undefined,
+          ...(error ? { "aria-invalid": true, "aria-errormessage": errorId } : {}),
+        })
+      : children;
   return (
     <div className="min-w-0 space-y-1.5">
       <div>
@@ -31,11 +42,15 @@ export function FormField({
           <div className={labelClass}>{label}</div>
         )}
         {optional && <span className="ml-1.5 text-xs text-[var(--text-tertiary)]">optional</span>}
-        {hint && <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">{hint}</p>}
+        {hint && (
+          <p id={hintId} className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+            {hint}
+          </p>
+        )}
       </div>
-      {children}
+      {control}
       {error && (
-        <p role="alert" className="text-xs text-[var(--error)]">
+        <p id={errorId} role="alert" className="text-xs text-[var(--error)]">
           {error}
         </p>
       )}

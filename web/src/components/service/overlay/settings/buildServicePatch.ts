@@ -16,13 +16,6 @@ export function buildServicePatch(
   stored: { command?: string[]; releaseCommand?: string[] },
 ): { body: PatchServiceBody } | { error: string } {
   const body: PatchServiceBody = {};
-  if (state.displayName !== baseline.displayName) {
-    const trimmed = state.displayName.trim();
-    if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {
-      return { error: "Display name: letters, digits, spaces and hyphens only, up to 60 characters" };
-    }
-    body.displayName = trimmed;
-  }
   const portNum = Number(state.port);
   if (portNum !== Number(baseline.port)) {
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
@@ -271,7 +264,6 @@ export function fieldDiffValues(field: string, base: FormState, next: FormState)
       .filter(Boolean)
       .join(", ");
   const pick: Record<string, (s: FormState) => string> = {
-    displayName: (s) => s.displayName.trim(),
     port: (s) => s.port,
     internal: (s) => (s.internal ? "internal (no public URL)" : "public"),
     requestLimits: (s) =>

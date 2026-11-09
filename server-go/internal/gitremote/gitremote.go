@@ -203,3 +203,16 @@ func readPkt(br *bufio.Reader) (string, error) {
 	}
 	return string(buf), nil
 }
+
+// BranchNames is Refs flattened to names, for callers that only list them.
+func (in *Inspector) BranchNames(ctx context.Context, repoURL, token string) (string, []string, error) {
+	info, err := in.Refs(ctx, repoURL, token)
+	if err != nil {
+		return "", nil, err
+	}
+	names := make([]string, 0, len(info.Branches))
+	for _, b := range info.Branches {
+		names = append(names, b.Name)
+	}
+	return info.DefaultBranch, names, nil
+}

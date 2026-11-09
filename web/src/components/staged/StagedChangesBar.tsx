@@ -11,6 +11,7 @@ import { serviceQueryKey } from "@/features/services/hooks";
 import { reviewItemCount } from "./plan";
 import { cn } from "@/lib/utils";
 import { StagedReviewDialog } from "./StagedReviewDialog";
+import { useAnnounceChange } from "@/components/shared/LiveAnnouncer";
 
 // Page shells mount a fixed bar; the settings and variables panels mount
 // a sticky one at the end of their content. The sticky one wins while
@@ -87,6 +88,7 @@ export function StagedChangesBar({
     return () => setStickyBars(-1);
   }, [placement]);
   const [fixedEl, setFixedEl] = useState<HTMLDivElement | null>(null);
+  const [barEl, setBarEl] = useState<HTMLDivElement | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const services = Object.keys(staged ?? {}).sort();
   // The same count the review shows (rows, not raw form fields).
@@ -117,6 +119,8 @@ export function StagedChangesBar({
   }, [changes, canWrite, hidden]);
 
   useReserveSpace(placement === "fixed" && !hidden && changes > 0 ? fixedEl : null);
+  useKeepFocusClear(!hidden && changes > 0 ? barEl : null);
+  useAnnounceChange(String(changes), (n) => (n === "0" ? "No staged changes" : `${n} staged ${n === "1" ? "change" : "changes"}`), !hidden);
 
   if (hidden || (changes === 0 && !reviewOpen)) return null;
   return (
@@ -135,6 +139,7 @@ export function StagedChangesBar({
           )}
         >
           <div
+            ref={setBarEl}
             role="region"
             aria-label="Staged changes"
             className="pointer-events-auto flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--accent)]/40 bg-[var(--bg-elevated)] py-2 pr-2 pl-3 shadow-[var(--shadow-lg)]"
@@ -185,6 +190,30 @@ export function StagedChangesBar({
       />
     </>
   );
+}
+
+// useKeepFocusClear scrolls the focused control up when the bar sits on
+// top of it: the bar appears on the first keystroke, often right over
+// the field being typed into, and later focus moves can land under it.
+function useKeepFocusClear(bar: HTMLElement | null) {
+  useEffect(() => {
+    if (!bar) return;
+    const clear = (el: Element | null) => {
+      if (!(el instanceof HTMLElement) || bar.contains(el) || el === document.body) return;
+      const r = el.getBoundingClientRect();
+      const top = bar.getBoundingClientRect().top - 12;
+      if (r.bottom <= top || r.top >= bar.getBoundingClientRect().bottom) return;
+      let scroller: HTMLElement | null = el.parentElement;
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+      const delta = r.bottom - top;
+      if (scroller) scroller.scrollBy({ top: delta });
+      else window.scrollBy({ top: delta });
+    };
+    clear(document.activeElement);
+    const onFocus = (e: FocusEvent) => clear(e.target as Element | null);
+    document.addEventListener("focusin", onFocus);
+    return () => document.removeEventListener("focusin", onFocus);
+  }, [bar]);
 }
 
 // useWarnOnUnload asks before a reload or tab close would drop staged
