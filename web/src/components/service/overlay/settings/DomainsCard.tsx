@@ -64,6 +64,7 @@ export function DomainsCard({
   // Hosts added in this session stay expanded (instructions visible) until
   // the status endpoint reports them valid.
   const [justAdded, setJustAdded] = useState<string[]>([]);
+  const ingress = useIngressTargets();
 
   const rows = useMemo(() => {
     const out: { host: string; kind: DomainKind; tlsSecret?: string }[] = [];
@@ -188,7 +189,25 @@ export function DomainsCard({
                   try {
                     await add.mutateAsync({ host, ...(tlsSecret ? { tlsSecret } : {}) });
                     noteDomainAdd(host);
-                    toast.success(`${host} added. Point its DNS at the cluster to finish.`);
+                    const rec =
+                      ingress.data && ingress.data.source !== "none" ? suggestRecords(host, ingress.data)[0] : undefined;
+                    toast.success(`${host} added`, {
+                      description: rec
+                        ? `At your DNS provider, create: ${rec.type}  ${rec.name}  →  ${rec.value}`
+                        : "Point its DNS at the cluster's public address to finish.",
+                      duration: 20_000,
+                      action: rec
+                        ? {
+                            label: "Copy value",
+                            onClick: () => {
+                              void navigator.clipboard.writeText(rec.value).then(
+                                () => toast.success(`${rec.value} copied`),
+                                () => toast.error("Couldn't copy to the clipboard"),
+                              );
+                            },
+                          }
+                        : undefined,
+                    });
                     setJustAdded((l) => [...l, host]);
                     setAdding(false);
                     void refreshStatus();
@@ -386,6 +405,7 @@ function DomainRow({
           {summary.detail}
         </p>
       )}
+      {needsDns && !open && resolve?.state !== "match" && summary?.tone !== "ok" && <DnsRecordLine host={host} />}
       {(diagnosis || (open && needsDns)) && (
         <div className="mt-3 space-y-3 sm:pl-5.5">
           {diagnosis && <DiagnosisNote diagnosis={diagnosis} />}
@@ -561,6 +581,31 @@ function formatClock(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// DnsRecordLine is the record to create, on the row itself, so it's
+// visible without expanding DNS.
+function DnsRecordLine({ host }: { host: string }) {
+  const targets = useIngressTargets();
+  const t = targets.data;
+  if (!t || t.source === "none") return null;
+  const rec = suggestRecords(host, t)[0];
+  if (!rec) return null;
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--text-secondary)] sm:pl-5.5">
+      <span>Create</span>
+      <span className="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-[var(--text-primary)]">{rec.type}</span>
+      <span className="inline-flex items-center gap-0.5 font-mono text-[var(--text-primary)]">
+        {rec.name}
+        <CopyButton value={rec.name} label={`Copy record name ${rec.name}`} size="xs" />
+      </span>
+      <span aria-hidden>→</span>
+      <span className="inline-flex min-w-0 items-center gap-0.5 font-mono text-[var(--text-primary)]">
+        <span className="break-all">{rec.value}</span>
+        <CopyButton value={rec.value} label={`Copy ${rec.value}`} size="xs" />
+      </span>
+    </p>
+  );
 }
 
 // DnsInstructions shows the exact record(s) to create, with copy buttons.

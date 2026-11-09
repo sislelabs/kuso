@@ -25,7 +25,8 @@ describe("yAxisWidth", () => {
   it("grows the gutter with the widest tick label", () => {
     expect(yAxisWidth(["0", "5"])).toBe(30);
     expect(yAxisWidth(["0", "512 MiB"])).toBeGreaterThan(yAxisWidth(["0", "5m"]));
-    expect(yAxisWidth(["a".repeat(40)])).toBe(84);
+    expect(yAxisWidth(["a".repeat(40)])).toBe(96);
+    expect(yAxisWidth(["0", "100 mCPU"])).toBeGreaterThanOrEqual(70);
   });
 });
 

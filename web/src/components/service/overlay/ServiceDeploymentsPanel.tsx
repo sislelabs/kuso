@@ -16,9 +16,10 @@ import { useQuery } from "@tanstack/react-query";
 import { CopyButton } from "@/components/ui/copy-button";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useCanOnProject, Perms } from "@/features/auth";
+import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import {
   buildRefLabel,
+  buildTrigger,
   classifyBuild,
   hasLiveInfo,
   liveBuildId,
@@ -29,7 +30,7 @@ import {
 } from "@/features/builds";
 import { envRevisionName, groupRevisionRuns, interleaveTimeline, useRevisions } from "@/features/revisions";
 import type { KusoEnvironment } from "@/types/projects";
-import { Check, ExternalLink, Loader2, Rocket, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
 import { buildDurationLabel } from "./deployParts";
@@ -37,6 +38,7 @@ import { LiveDeploymentCard, type LiveHealth } from "./LiveDeploymentCard";
 import { AutoDeployBanner, pushDeployState } from "./AutoDeployBanner";
 import { RevisionGroup, RevisionRow } from "./RevisionRow";
 import { ServicePodsSection } from "./ServicePodsSection";
+import { ServiceEventsSection } from "./ServiceEventsSection";
 import { ServiceAuditSection } from "./ServiceAuditSection";
 import { useRedeploy } from "./ServiceHeaderActions";
 import { FirstDeployProgress, FirstLiveCard } from "./FirstDeployProgress";
@@ -91,6 +93,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   const gh = useSetupStatus();
   const isImage = svc.data?.spec.runtime === "image";
   const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
+  const canSeeClusterEvents = useCan(Perms.SettingsAdmin);
   const group = envGroupName(env);
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
 
@@ -124,7 +127,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         </div>
       </div>
 
-      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} />}
+      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} onNavigate={onNavigate} />}
 
       {isImage ? (
         <ImageDeploymentCard
@@ -154,12 +157,16 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
           uptimeDown={uptimeStatus?.state === "down"}
           onDeploy={canDeploy ? redeploy.request : undefined}
           deploying={redeploy.pending}
+          deployVerb={redeploy.verb}
           autoDeploy={!!pushDeploy?.on}
           onNavigate={onNavigate}
         />
       )}
 
       <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} />
+      {env ? (
+        <ServiceEventsSection project={project} service={service} envName={env?.metadata?.name} canSeeClusterEvents={canSeeClusterEvents} />
+      ) : null}
       <ServiceAuditSection project={project} service={service} />
 
       {redeploy.dialog}
@@ -195,6 +202,7 @@ function DeployList({
   uptimeDown,
   onDeploy,
   deploying,
+  deployVerb = "Redeploy",
   autoDeploy,
   onNavigate,
 }: {
@@ -209,6 +217,7 @@ function DeployList({
   // Starts a build; shown as the empty state's action when nothing was ever built.
   onDeploy?: () => void;
   deploying?: boolean;
+  deployVerb?: string;
   autoDeploy?: boolean;
   onNavigate?: (tab: string, anchor?: string) => void;
 }) {
@@ -321,6 +330,7 @@ function DeployList({
       canDeploy={canDeploy}
       releaseFailed={releaseFailed}
       onShowBuild={showBuild}
+      trigger={buildTrigger(live, builds)}
     />
     </>
   ) : visible.length > 0 ? (
@@ -328,8 +338,8 @@ function DeployList({
       Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet.{" "}
       {newestStatus === "failed"
         ? autoDeploy
-          ? "The latest build failed: fix the cause shown below and push, or press Redeploy to try the same commit again."
-          : "The latest build failed: fix the cause shown below, then press Redeploy. Auto-deploy is off, so pushes won't retry it."
+          ? `The latest build failed: fix the cause shown below and push, or press ${deployVerb} to try the same commit again.`
+          : `The latest build failed: fix the cause shown below, then press ${deployVerb}. Auto-deploy is off, so pushes won't retry it.`
         : autoDeploy
           ? "The first successful build below goes live automatically."
           : "The first successful build goes live. Auto-deploy is off, so press Deploy to start one."}
@@ -353,13 +363,13 @@ function DeployList({
           </p>
           <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[var(--text-secondary)]">
             {envBranch && builds.length > 0
-              ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}. Push to ${envBranch} or click Redeploy.`
+              ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}. Push to ${envBranch} or click ${deployVerb}.`
               : "Nothing has been built yet. Add any variables the app needs, then deploy to build and ship the first version."}
           </p>
           {onDeploy && builds.length === 0 && (
             <Button size="sm" className="mt-4" onClick={onDeploy} disabled={deploying}>
               <Rocket className="h-3.5 w-3.5" />
-              {deploying ? "Starting…" : "Deploy now"}
+              {deploying ? "Starting…" : deployVerb}
             </Button>
           )}
         </div>
@@ -388,6 +398,9 @@ function DeployList({
           </div>
           {/* overflow-hidden trims the config-change rail where the list ends */}
           <ul className="space-y-2 overflow-hidden">
+            {live && rolledBackFrom && (
+              <RollbackMarker live={live} from={rolledBackFrom} at={lastDeployedAt(env)} onShowBuild={showBuild} />
+            )}
             {shownTimeline.map((item) => {
               if (item.type === "revisions") {
                 return (
@@ -429,6 +442,7 @@ function DeployList({
                   isOpen={expanded === b.id}
                   canDeploy={canDeploy}
                   pinActions={b.id === rollbackTargetId}
+                  trigger={buildTrigger(b, builds)}
                   onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
                   onNavigate={onNavigate}
                 />
@@ -452,6 +466,49 @@ function DeployList({
         </p>
       )}
     </div>
+  );
+}
+
+// RollbackMarker pins the rollback itself at the top of the history: it
+// isn't a build, so it would otherwise only show on the live card.
+function RollbackMarker({
+  live,
+  from,
+  at,
+  onShowBuild,
+}: {
+  live: DeployBuild;
+  from: DeployBuild;
+  at?: string;
+  onShowBuild: (id: string) => void;
+}) {
+  const fromSha = buildRefLabel(from, 7) || from.id;
+  return (
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:px-4">
+      <Undo2 aria-hidden className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+      <span className="min-w-0 flex-1">
+        <span className="font-medium text-[var(--text-primary)]">
+          Rolled back to <span className="font-mono">{buildRefLabel(live, 7) || live.id}</span>
+        </span>{" "}
+        from{" "}
+        <button
+          type="button"
+          onClick={() => onShowBuild(from.id)}
+          className="font-mono text-[var(--text-primary)] underline-offset-2 hover:underline"
+        >
+          {fromSha}
+        </button>
+        {at && (
+          <>
+            {" · "}
+            <time dateTime={at} title={new Date(at).toLocaleString()}>
+              {relativeTime(at)}
+            </time>
+          </>
+        )}
+      </span>
+      <span className="rounded border border-[var(--border-default)] px-1.5 py-px text-[var(--text-secondary)]">Pinned</span>
+    </li>
   );
 }
 

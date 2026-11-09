@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import Link from "next/link";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Input } from "@/components/ui/input";
@@ -15,12 +16,14 @@ import {
   EyeOff,
   Link2,
   Lock,
+  AlertTriangle,
   Plus,
   Search,
   Trash2,
   Variable,
   X,
 } from "lucide-react";
+import { danglingRef } from "./envvars/dangling";
 import { useService, useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
 import { setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
 import { setSharedSecret } from "@/features/project-secrets/api";
@@ -114,8 +117,8 @@ function writeViewPref(v: ViewMode) {
 
 // addonEmptyNote explains an addon key that arrives empty. Pooler keys
 // are the common case: they stay blank while the addon's pooler is off.
-function addonEmptyNote(name: string): string {
-  return /POOL|BOUNCER/i.test(name) ? "Not provided by this addon (pooler disabled)" : "Not provided by this addon";
+function addonEmptyNote(addon: string, key: string): string {
+  return /POOL|BOUNCER/i.test(key) ? `${addon} doesn't provide ${key}: its pooler is off` : `${addon} doesn't provide ${key}`;
 }
 
 export function EnvVarsEditor({
@@ -200,6 +203,7 @@ export function EnvVarsEditor({
     }
   };
   const addonByConn = useMemo(() => addonShortByConnSecret(addons.data ?? [], project), [addons.data, project]);
+  const addonNames = useMemo(() => new Set(addonByConn.values()), [addonByConn]);
   // Known env scopes so literalToRef can strip the env-scope segment a
   // resolved service URL carries back to the short service name. Without
   // this the read→save round-trip corrupts ${{ svc.URL }}.
@@ -950,7 +954,7 @@ export function EnvVarsEditor({
       const secretValued = r.fromSecret || isSensitiveVar(r.name, plaintext ?? "");
       // The addon's conn Secret carries the key but no value (e.g. its
       // pooler is off); the pod gets an empty string.
-      const addonEmpty = !!r.addon && !masked && !isRef && r.value === "" && !isChanged(r);
+      const dangling = !masked && !isChanged(r) ? danglingRef(r, addonNames) : null;
       const badges = (
         <>
           {secretValued && <SecretLock />}
@@ -972,12 +976,32 @@ export function EnvVarsEditor({
           {isChanged(r) && <span className="sr-only">(unsaved)</span>}
         </>
       );
-      const value = addonEmpty ? (
-        <span
-          className="font-sans italic text-[var(--text-tertiary)]"
-          title={`The ${r.addon} addon's connection secret has ${r.name} but no value, so the app reads an empty string.`}
-        >
-          {addonEmptyNote(r.name)}
+      const value = dangling ? (
+        <span className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 font-sans">
+          <span
+            className="inline-flex min-w-0 items-center gap-1 text-[var(--warning)]"
+            title={`${dangling.addon} has no value for ${dangling.key}, so the app reads an empty string.`}
+          >
+            <AlertTriangle aria-hidden className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0">{addonEmptyNote(dangling.addon, dangling.key)}</span>
+          </span>
+          {dangling.pooler && (
+            <Link
+              href={`/projects/${encodeURIComponent(project)}?addon=${encodeURIComponent(dangling.addon)}&tab=settings`}
+              className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
+            >
+              Enable pooler
+            </Link>
+          )}
+          {dangling.isRef && canWrite && (
+            <button
+              type="button"
+              onClick={() => remove(it.index)}
+              className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--danger)]"
+            >
+              Remove
+            </button>
+          )}
         </span>
       ) : isRef && !(shownValues.has(key) || revealAll) ? (
           <span className="inline-flex max-w-full items-center gap-1 text-[var(--text-secondary)]">

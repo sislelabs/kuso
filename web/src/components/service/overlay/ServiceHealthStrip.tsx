@@ -86,8 +86,8 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
     },
     {
       id: "errors",
-      label: "Errors",
-      value: errors.data ? errorCountLabel(errors.data.occurrences) : errors.isError ? "—" : "…",
+      label: `Errors · ${ERRORS_WINDOW}`,
+      value: errors.data ? errors.data.occurrences.toLocaleString() : errors.isError ? "—" : "…",
       tone: (errors.data?.occurrences ?? 0) > 0 ? "danger" : "plain",
       title: errors.data
         ? `${errorCountLabel(errors.data.occurrences)} in ${errors.data.groups} ${errors.data.groups === 1 ? "group" : "groups"}`
@@ -97,17 +97,47 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
     {
       id: "deploy",
       label: "Last deploy",
-      value: deployedAt ? relativeTime(deployedAt) : "Not deployed yet",
+      value: deployedAt ? relativeTime(deployedAt) : "Never",
       tone: "plain",
       title: deployedAt ? `Current release went live ${new Date(deployedAt).toLocaleString()}` : "Nothing has been deployed to this environment",
       tab: "deployments",
     },
   ];
 
+  const errorsN = errors.data?.occurrences;
+  const deploy = cells.find((c) => c.id === "deploy");
   return (
+    <>
+    {/* Phones: one status line instead of the five-cell grid. */}
+    <button
+      type="button"
+      onClick={() => onNavigate("deployments")}
+      className="mt-2 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-[var(--text-secondary)] sm:hidden"
+    >
+      <StatusDot status={status} />
+      <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
+      {total > 0 && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="whitespace-nowrap">{ready}/{total} ready</span>
+        </>
+      )}
+      {errorsN !== undefined && errorsN > 0 && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="whitespace-nowrap text-[var(--danger)]">{errorsN.toLocaleString()} errors</span>
+        </>
+      )}
+      {deploy && deploy.value !== "Never" && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="min-w-0 truncate">deployed {deploy.value}</span>
+        </>
+      )}
+    </button>
     <ul
       aria-label="Service health"
-      className="mt-3 grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
+      className="mt-3 hidden grid-cols-6 gap-px sm:grid overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
     >
       {cells.map((c, i) => (
         <li key={c.id} className={cn("flex min-w-0 bg-[var(--bg-primary)] lg:col-span-1", i < 3 ? "col-span-2" : "col-span-3")}>
@@ -122,10 +152,10 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
               {c.id === "status" && <StatusDot status={status} />}
               {c.label}
             </span>
-            {/* Value and its note stack and wrap; never an ellipsis. */}
+            {/* The value never wraps mid-word; qualifiers go on the muted line below. */}
             <span
               className={cn(
-                "min-w-0 max-w-full text-sm font-medium",
+                "max-w-full whitespace-nowrap text-sm font-medium",
                 c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
               )}
             >
@@ -145,6 +175,7 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
         </li>
       ))}
     </ul>
+    </>
   );
 }
 
@@ -174,6 +205,9 @@ function uptimeCell(
     return { ...base, value: "Checker off", tone: "neutral", title: "Health checks are switched off for this kuso instance" };
   }
   const v = uptimeView(s);
+  // "(last known)" is a qualifier, not part of the value.
+  const value = v.stale ? v.label.replace(/\s*\(last known\)$/, "") : v.label;
+  const staleNote = v.stale ? { text: "last known", tone: "plain" as const } : undefined;
   const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
   switch (v.state) {
     case "not_set_up":
@@ -181,16 +215,20 @@ function uptimeCell(
     case "up":
       return {
         ...base,
-        value: v.label,
+        value,
+        secondary: staleNote,
         tone: "success",
         title: `${s?.url ?? ""} answered${s?.statusCode ? ` HTTP ${s.statusCode}` : ""}, ${checked}`,
       };
     case "failing":
-      return { ...base, value: v.label, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
+      return { ...base, value, secondary: staleNote, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
     case "down":
       return {
         ...base,
-        value: `${v.label}${s?.since ? ` · ${relativeTime(s.since).replace(/ ago$/, "")}` : ""}`,
+        value,
+        secondary: s?.since
+          ? { text: `for ${relativeTime(s.since).replace(/ ago$/, "")}${v.stale ? " · last known" : ""}`, tone: "plain" }
+          : staleNote,
         tone: "danger",
         title: [s?.reason || s?.error, s?.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked]
           .filter(Boolean)

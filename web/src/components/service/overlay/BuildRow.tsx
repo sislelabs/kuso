@@ -30,6 +30,7 @@ import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/se
 import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
+  buildTitle,
   buildRefLabel,
   failedStepFromBuild,
   failedStepTitle,
@@ -43,12 +44,13 @@ import {
   useRetryRelease,
   useRollbackToBuild,
   type BuildRowStatus,
+  type BuildTrigger,
   type DeployBuild,
 } from "@/features/builds";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
-import { CommitRef, CompareLink, Dot, LiveDuration, triggerLabel } from "./deployParts";
+import { actorLabel, CommitRef, CompareLink, Dot, LiveDuration, TriggerChip } from "./deployParts";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Button } from "@/components/ui/button";
 
@@ -106,6 +108,8 @@ export interface BuildRowProps {
   // The newest row you can roll back to keeps its actions visible, so
   // "how do I undo this deploy" is answered without hovering.
   pinActions?: boolean;
+  // How the build started (Push / Manual / Retry …), shown as a chip.
+  trigger?: BuildTrigger;
 }
 
 export function BuildRow({
@@ -126,13 +130,14 @@ export function BuildRow({
   onToggle,
   onNavigate,
   pinActions = false,
+  trigger,
 }: BuildRowProps) {
   const m = STATUS[s];
   const Icon = m.icon;
   const sha = buildRefLabel(b, 7);
   const ts = b.startedAt ?? b.finishedAt;
   const note = buildNote(b, s);
-  const who = triggerLabel(b);
+  const who = actorLabel(b);
   const live = s === "running" || s === "pending" || s === "queued";
   const failed = s === "failed";
   const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
@@ -174,11 +179,10 @@ export function BuildRow({
               aria-controls={logId}
               className="min-w-0 flex-1 text-left text-sm font-medium text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded-sm"
             >
-              <span className="line-clamp-2 break-words">
-                {buildTitle(b, sha)}
-              </span>
+              <span className="line-clamp-2 break-words">{buildTitle(b)}</span>
               <span className="sr-only">{`, ${m.label}. ${isOpen ? "Hide" : "Show"} build log`}</span>
             </button>
+            <TriggerChip trigger={trigger} className="mt-0.5" />
             <StatusBadge s={s} queuePos={b.queuePosition} />
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--text-secondary)]">
@@ -719,6 +723,7 @@ export function RollbackButton({
   const target = env || "production";
   const sha = buildRefLabel(b, 7) || b.id;
   const back = label === "Rollback";
+  const sameCommit = isSameCommit(b, liveBuild);
   const run = (force: boolean) =>
     m.mutate(
       { build: b.id, force },
@@ -743,15 +748,25 @@ export function RollbackButton({
       <button
         type="button"
         onClick={() => setStep("confirm")}
-        title={`Point ${target} at ${sha} right away, without rebuilding`}
-        className={cn(ACTION_BTN, "hover:border-[var(--warning)]/50 hover:text-[var(--warning)]")}
+        title={
+          sameCommit
+            ? `Same commit as live: point ${target} at this older image of ${sha}`
+            : `Point ${target} at ${sha} right away, without rebuilding`
+        }
+        className={ACTION_BTN}
       >
         <Undo2 className="h-3.5 w-3.5" />
         <span>{label}</span>
       </button>
       <ConfirmDialog
         open={step === "confirm"}
-        title={back ? `Roll ${target} back to ${sha}?` : `Switch ${target} to ${sha}?`}
+        title={
+          sameCommit
+            ? `Switch ${target} to an older image of ${sha}?`
+            : back
+              ? `Roll ${target} back to ${sha}?`
+              : `Switch ${target} to ${sha}?`
+        }
         destructive={false}
         confirmLabel={back ? "Roll back" : "Switch"}
         body={<RollbackSummary target={target} build={b} liveBuild={liveBuild} repoUrl={repoUrl} back={back} />}
@@ -788,9 +803,10 @@ function RollbackSummary({
   back: boolean;
 }) {
   const ts = b.finishedAt ?? b.startedAt;
-  const who = triggerLabel(b);
+  const who = actorLabel(b);
+  const sameCommit = isSameCommit(b, liveBuild);
   const compare =
-    liveBuild && liveBuild.id !== b.id
+    !sameCommit && liveBuild && liveBuild.id !== b.id
       ? back
         ? githubCompareUrl(repoUrl, b.commitSha, liveBuild.commitSha)
         : githubCompareUrl(repoUrl, liveBuild.commitSha, b.commitSha)
@@ -799,7 +815,7 @@ function RollbackSummary({
     <span className="block space-y-3">
       <span className="block rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2">
         <span className="block break-words text-sm font-medium text-[var(--text-primary)]">
-          {buildTitle(b, buildRefLabel(b, 7))}
+          {buildTitle(b)}
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]">
           <span className="font-mono">{buildRefLabel(b, 7) || b.id}</span>
@@ -825,7 +841,14 @@ function RollbackSummary({
           )}
         </span>
       </span>
-      {liveBuild && liveBuild.id !== b.id && (
+      {sameCommit && (
+        <span className="block rounded-md border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+          <strong className="text-[var(--text-primary)]">Same commit, older image.</strong> {target} already runs{" "}
+          <span className="font-mono">{buildRefLabel(b, 7)}</span>, so the code doesn&apos;t change. This only helps if
+          the newer build picked up a different base image or build setting.
+        </span>
+      )}
+      {!sameCommit && liveBuild && liveBuild.id !== b.id && (
         <span className="block text-xs text-[var(--text-secondary)]">
           Replaces <span className="font-mono text-[var(--text-primary)]">{buildRefLabel(liveBuild, 7) || liveBuild.id}</span>
           {liveBuild.commitMessage ? <> ({liveBuild.commitMessage})</> : null}, which is live now.
@@ -850,8 +873,8 @@ function RollbackSummary({
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 
-function buildTitle(b: DeployBuild, sha: string): string {
-  return b.commitMessage || (b.triggeredBy === "user" ? "Manual redeploy" : sha ? `Deploy ${sha}` : "Deploy");
+function isSameCommit(b: DeployBuild, live?: DeployBuild): boolean {
+  return !!live && live.id !== b.id && !!b.commitSha && b.commitSha === live.commitSha;
 }
 
 // Server-side fallbacks that say a container failed without saying why;

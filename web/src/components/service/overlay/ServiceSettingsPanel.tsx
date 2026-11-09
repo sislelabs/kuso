@@ -28,6 +28,7 @@ import {
   Globe,
   GitBranch,
   HeartPulse,
+  BellRing,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,7 @@ import { SleepSection } from "./settings/SleepSection";
 import { PlacementSection } from "./settings/PlacementSection";
 import { VolumesSection } from "./settings/VolumesSection";
 import { BuildSection } from "./settings/BuildSection";
+import { AlertsSection } from "./settings/AlertsSection";
 import { DeploySection } from "./settings/DeploySection";
 import { ReleaseSection } from "./settings/ReleaseSection";
 import { UptimeSection } from "./settings/UptimeSection";
@@ -93,6 +95,7 @@ const SECTIONS = [
   { id: "release", label: "Release", icon: Rocket },
   { id: "healthcheck", label: "Health check", icon: HeartPulse },
   { id: "uptime", label: "Uptime", icon: Activity },
+  { id: "alerts", label: "Alerts", icon: BellRing },
   { id: "security", label: "Security", icon: ShieldAlert },
   { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
@@ -112,6 +115,7 @@ const SECTION_KEYWORDS: Record<string, string> = {
   healthcheck: "readiness liveness probe path",
   uptime: "monitor ping check",
   security: "capabilities privilege root security context",
+  alerts: "alert rule notify notification page error rate latency",
   danger: "delete remove",
 };
 
@@ -335,6 +339,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
               <HealthcheckSection state={state} setState={setState} project={project} service={service} env={envName} />
             )}
             {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
+            <AlertsSection project={project} service={service} env={envName} />
             <SecuritySection state={state} setState={setState} />
             <DangerSection
               project={project}

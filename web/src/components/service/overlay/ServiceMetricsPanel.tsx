@@ -224,7 +224,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
               titleNote="5xx"
               value={errOverall === null ? "—" : fmtPct(errOverall)}
               valueNote={errOverall === null ? "no requests" : "of requests"}
-              foot={errShape.sparse ? `${samplesLabel(errShape)} with traffic` : undefined}
+              foot={errShape.sparse ? "Drawn only where there was traffic" : undefined}
               badge={
                 errOverall !== null && errOverall >= 1 ? (
                   <span className="inline-flex items-center gap-1 rounded border border-[var(--error)]/40 bg-[var(--error-subtle)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--error)]">
@@ -233,7 +233,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 ) : undefined
               }
               loading={traffic.isPending}
-              empty={!traffic.isPending && !hasTraffic ? <p className="text-xs text-[var(--text-secondary)]">No requests in this range, so there&apos;s no error rate to show.</p> : undefined}
+              empty={!traffic.isPending && !hasTraffic ? <NoTraffic /> : undefined}
             >
               <TimeSeriesChart
                 points={err}
@@ -258,13 +258,13 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
               valueNote="latest"
               foot={
                 p95Stats.max !== null
-                  ? [p95Shape.sparse ? samplesLabel(p95Shape) : null, `peak ${fmtMs(p95Stats.max)}`, `avg ${fmtMs(p95Stats.avg ?? 0)}`]
+                  ? [`peak ${fmtMs(p95Stats.max)}`, `avg ${fmtMs(p95Stats.avg ?? 0)}`, p95Shape.sparse ? "only where there was traffic" : null]
                       .filter(Boolean)
                       .join(" · ")
                   : undefined
               }
               loading={traffic.isPending}
-              empty={!traffic.isPending && p95.length === 0 ? <p className="text-xs text-[var(--text-secondary)]">Latency is measured per request — none in this range.</p> : undefined}
+              empty={!traffic.isPending && p95.length === 0 ? <NoTraffic /> : undefined}
             >
               <TimeSeriesChart
                 points={p95}
@@ -380,11 +380,7 @@ function ResourceCharts({
   else if (cpuRequest) cpuTh.push({ value: cpuRequest * n, label: `request ${formatCpu(cpuRequest * n)}` });
   const memTh: ChartThreshold[] = memLimit ? [{ value: memLimit * n, label: `limit ${fmtBytes(memLimit * n)}` }] : [];
 
-  const collectingNote = !shape.sparse
-    ? undefined
-    : live
-      ? `${samplesLabel(shape)} so far · a new one every 15s`
-      : samplesLabel(shape);
+  const collectingNote = samplingNote(shape, domain, gapMs, live);
 
   if (!loading && podCount === 0 && samples.length === 0) {
     return (
@@ -554,14 +550,14 @@ function ChartCard({
   );
 }
 
+const NO_TRAFFIC_HINT =
+  "Request metrics come from the ingress through Prometheus. They stay empty until traffic reaches the service's domain, or if no Prometheus scrapes the ingress.";
+
 function NoTraffic() {
   return (
-    <p className="flex items-start gap-1.5 text-left text-xs text-[var(--text-secondary)]">
-      <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-      <span>
-        No requests recorded in this range. Request metrics are read from the ingress through Prometheus, so they stay empty
-        until traffic reaches the service&apos;s domain, or if this cluster has no Prometheus scraping the ingress.
-      </span>
+    <p className="flex items-center gap-1.5 whitespace-nowrap text-xs text-[var(--text-secondary)]" title={NO_TRAFFIC_HINT}>
+      No traffic in this range
+      <Info aria-label={NO_TRAFFIC_HINT} className="h-3.5 w-3.5 shrink-0 cursor-help text-[var(--text-tertiary)]" />
     </p>
   );
 }
@@ -574,8 +570,19 @@ function EmptyPanel({ children }: { children: ReactNode }) {
   );
 }
 
-function samplesLabel(shape: SeriesShape): string {
-  return `${shape.samples} sample${shape.samples === 1 ? "" : "s"}`;
+// samplingNote says where data is missing instead of counting samples
+// (a bare "8 samples" reads as contradicting "sampled every 30s").
+function samplingNote(shape: SeriesShape, domain: [number, number], gapMs: number, live: boolean): string | undefined {
+  const segs = shape.segments;
+  if (segs.length === 0) return undefined;
+  const lastStart = segs[segs.length - 1][0][0];
+  const firstStart = segs[0][0][0];
+  const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (segs.length > 1) return `Gap in sampling · resumed at ${clock(lastStart)}`;
+  if (firstStart - domain[0] > gapMs) {
+    return live ? `Collecting since ${clock(firstStart)} · every 15s` : `No samples before ${clock(firstStart)}`;
+  }
+  return undefined;
 }
 
 function stats(points: Point[]): { avg: number | null; max: number | null; last: number | null } {

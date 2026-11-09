@@ -26,8 +26,7 @@ import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
-import { useCan, useCanOnProject, Perms } from "@/features/auth";
-import Link from "next/link";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -64,6 +63,7 @@ import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
 import { ServiceHealthStrip } from "./overlay/ServiceHealthStrip";
+import { trimRepeatedCause } from "./overlay/statusCopy";
 import { ExternalLink, X, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
@@ -156,7 +156,8 @@ type Tab =
 // Crons and Runs always show for users who can create them (admin —
 // the server gates creation on secrets:read); for everyone else they
 // only appear once the service has at least one cron / run.
-// Order is priority: when the strip is narrow the tail moves into "More".
+// The strip keeps this order at every width (it scrolls when narrow);
+// secondary tabs always sit under "More".
 const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean; secondary?: boolean }[] = [
   { id: "deployments", label: "Deployments", chord: "d", alwaysShow: true },
   { id: "variables", label: "Variables", chord: "v", alwaysShow: true },
@@ -166,8 +167,8 @@ const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: bool
   { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
   // Always under More, so every service type shows the same strip.
   { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true, secondary: true },
-  { id: "crons", label: "Crons", chord: "c" },
-  { id: "runs", label: "Runs", chord: "r" },
+  { id: "crons", label: "Crons", chord: "c", secondary: true },
+  { id: "runs", label: "Runs", chord: "r", secondary: true },
 ];
 const PINNED_TAB: { id: Tab; label: string; chord?: string } = { id: "settings", label: "Settings", chord: "s" };
 
@@ -498,8 +499,6 @@ export function ServiceOverlay({
   // AddonOverlay makes for its SQL tab: rendering a terminal that can
   // only 403 on connect is worse than not offering it.
   const canShell = useCanOnProject(project, Perms.ShellExec);
-  // Kube events live on Settings → Health, which is admin-only.
-  const canSeeEvents = useCan(Perms.SettingsAdmin);
   // Always show whichever tab the user is on so the active-tab
   // underline has something to anchor to after a deep link.
   const MAIN_TABS = useMemo(
@@ -791,15 +790,9 @@ export function ServiceOverlay({
                           <AlertTriangle aria-hidden className="h-3 w-3" />
                           Rollout taking longer than expected
                           <span aria-hidden>·</span>
-                          {canSeeEvents ? (
-                            <Link href="/settings/health#kube-events" className="underline underline-offset-2">
-                              View events
-                            </Link>
-                          ) : (
-                            <button type="button" onClick={() => navigateTo("logs")} className="underline underline-offset-2">
-                              View logs
-                            </button>
-                          )}
+                          <button type="button" onClick={() => navigateTo("deployments", "pod-events")} className="underline underline-offset-2">
+                            View events
+                          </button>
                         </span>
                       );
                     }
@@ -817,7 +810,8 @@ export function ServiceOverlay({
                         </span>
                       );
                     }
-                    if (specOff) {
+                    // Nothing has ever run, so there's nothing for a change to be pending against.
+                    if (specOff && env?.status?.state !== "no_image") {
                       return (
                         <span
                           className="inline-flex items-center gap-1 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
@@ -840,6 +834,9 @@ export function ServiceOverlay({
                     }
                     return null;
                   })()}
+                </div>
+                {/* Actions keep one row; what doesn't fit lives in ⋯. */}
+                <div className="mt-2 hidden flex-nowrap items-center gap-1.5 sm:flex">
                   {service && status === "sleeping" && !stopped ? (
                     <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
                   ) : null}
@@ -1136,6 +1133,21 @@ export function ServiceOverlay({
                 </OverlayDirtyContext.Provider>
               )}
             </div>
+            {/* Phones: the actions live in a bar pinned to the bottom. */}
+            {service ? (
+              <div className="flex shrink-0 items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] empty:hidden sm:hidden">
+                {status === "sleeping" && !stopped ? (
+                  <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
+                ) : null}
+                <ServiceHeaderActions
+                  project={project}
+                  service={service}
+                  env={env}
+                  stopped={stopped}
+                  showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                />
+              </div>
+            ) : null}
           </motion.div>
           <ConfirmDialog
             open={confirmDiscard}
@@ -1208,6 +1220,7 @@ function HealthBanner({
 }) {
   const label = (serverState && PROBLEM_LABEL[serverState]) || "Failed";
   const runtime = problem === "runtime";
+  const shown = trimRepeatedCause(label, detail);
   return (
     <div
       role="alert"
@@ -1222,9 +1235,9 @@ function HealthBanner({
         className={cn("h-3.5 w-3.5 shrink-0", runtime ? "text-[var(--error)]" : "text-[var(--warning)]")}
       />
       <span className="text-xs font-medium text-[var(--text-primary)]">{label}</span>
-      {detail ? (
-        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={detail}>
-          {detail}
+      {shown ? (
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={shown}>
+          {shown}
         </span>
       ) : (
         <span className="flex-1" />

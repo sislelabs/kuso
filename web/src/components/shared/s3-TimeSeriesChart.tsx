@@ -54,11 +54,11 @@ export interface TimeSeriesChartProps {
 
 const M = { top: 10, right: 10, bottom: 22 };
 
-// yAxisWidth sizes the left gutter to the widest tick label (11px
-// tabular digits ≈ 6.4px each) so "512 MiB" or "0.15/s" never clips.
+// yAxisWidth sizes the left gutter to the widest tick label (12px text;
+// unit letters like "mCPU" run ≈7.4px each) so "100 mCPU" never clips.
 export function yAxisWidth(labels: string[]): number {
   const longest = labels.reduce((m, l) => Math.max(m, l.length), 0);
-  return Math.min(84, Math.max(30, Math.ceil(longest * 6.4) + 12));
+  return Math.min(96, Math.max(30, Math.ceil(longest * 7.4) + 12));
 }
 
 export function TimeSeriesChart({
@@ -104,7 +104,8 @@ export function TimeSeriesChart({
     let mx = minYMax;
     for (const p of valid) mx = Math.max(mx, p[1]);
     for (const th of thresholds) mx = Math.max(mx, th.value);
-    return mx > 0 ? mx : 1;
+    // Headroom so a peak (or limit line) doesn't sit on the top edge.
+    return mx > 0 ? mx * 1.08 : 1;
   }, [valid, thresholds, minYMax]);
   const yTicks = useMemo(() => niceTicks(yMax / tickUnit, 4).map((v) => v * tickUnit), [yMax, tickUnit]);
   const yTop = yTicks[yTicks.length - 1];
