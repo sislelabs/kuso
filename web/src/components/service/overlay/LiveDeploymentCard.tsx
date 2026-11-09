@@ -10,7 +10,8 @@ import { buildRefLabel, buildTitle, useRollbackToBuild, type BuildTrigger, type 
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
-import { actorLabel, buildDurationLabel, CommitRef, CompareLink, Dot, TriggerChip } from "./deployParts";
+import { actorLabel, buildDurationLabel, CommitRef, CompareLink, Dot } from "./deployParts";
+import { TriggerNote } from "./BuildRow";
 
 export type LiveHealth = { label: string; tone: "ok" | "warn" | "bad" | "idle" };
 
@@ -69,11 +70,13 @@ export function LiveDeploymentCard({
   const [logOpen, setLogOpen] = useState(false);
   const went = deployedAt || build.finishedAt || build.startedAt;
   const who = actorLabel(build);
-  const dur = buildDurationLabel(build);
   const rolledBack = !!rolledBackFrom;
+  // A rollback re-points at an existing image; that build's old build time
+  // says nothing about this deploy.
+  const dur = rolledBack ? "" : buildDurationLabel(build);
   const sha = buildRefLabel(build, 7) || build.id;
   const chip: BuildTrigger | undefined = rolledBack
-    ? { kind: "rollback", label: "Rollback", hint: `Pointed back at ${sha} from ${buildRefLabel(rolledBackFrom, 7) || rolledBackFrom.id}` }
+    ? { kind: "rollback", label: "rollback", hint: `Pointed back at ${sha} from ${buildRefLabel(rolledBackFrom, 7) || rolledBackFrom.id}` }
     : trigger;
 
   return (
@@ -140,7 +143,7 @@ export function LiveDeploymentCard({
                 buildTitle(build)
               )}
             </p>
-            <TriggerChip trigger={chip} className="mt-0.5" />
+            <TriggerNote trigger={chip} className="mt-0.5" />
           </div>
           {rolledBack && build.commitMessage && (
             <p className="mt-0.5 break-words text-sm text-[var(--text-secondary)]">{buildTitle(build)}</p>

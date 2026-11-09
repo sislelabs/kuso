@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildCreateBody, describeRule, emptyRuleForm, parseDur, prefillRuleForm, type RuleFormState } from "./form";
+import {
+  autoRuleName,
+  buildCreateBody,
+  describeRule,
+  emptyRuleForm,
+  joinDur,
+  parseDur,
+  prefillRuleForm,
+  ruleStatus,
+  splitDur,
+  type RuleFormState,
+} from "./form";
 import type { AlertRule } from "./api";
 
 function form(over: Partial<RuleFormState>): RuleFormState {
@@ -116,8 +127,42 @@ describe("prefillRuleForm", () => {
   });
 
   it("drops scope the kind can't use, and service without project", () => {
-    expect(p("new=1&kind=node_cpu&project=demo&service=api")).toMatchObject({ project: "", service: "", name: "" });
+    expect(p("new=1&kind=node_cpu&project=demo&service=api")).toMatchObject({ project: "", service: "", name: "Node CPU" });
     expect(p("new=1&kind=log_match&project=demo&env=prod")).toMatchObject({ project: "demo", env: "" });
     expect(p("new=1&service=api")).toMatchObject({ project: "", service: "" });
+  });
+});
+
+describe("new kinds and form helpers", () => {
+  it("names a rule from its kind and scope until the user types one", () => {
+    expect(emptyRuleForm("crashloop").name).toBe("Crash loop");
+    expect(autoRuleName({ kind: "deploy_failed", project: "shop", service: "" })).toBe("shop Deploy failed");
+    expect(autoRuleName({ kind: "healthcheck_failing", project: "shop", service: "web" })).toBe("web Uptime check failing");
+  });
+
+  it("stores crashloop restarts and healthcheck minutes as thresholdInt", () => {
+    const c = buildCreateBody(form({ kind: "crashloop", name: "c", threshold: "4", minRequests: "" }));
+    expect(c.ok && c.body).toMatchObject({ kind: "crashloop", thresholdInt: 4 });
+    const h = buildCreateBody(form({ kind: "healthcheck_failing", name: "h", threshold: "10", minRequests: "" }));
+    expect(h.ok && h.body).toMatchObject({ kind: "healthcheck_failing", thresholdInt: 10, windowSeconds: undefined });
+  });
+
+  it("splits and joins durations", () => {
+    expect(splitDur("5m")).toEqual({ n: "5", unit: "m" });
+    expect(splitDur("300")).toEqual({ n: "300", unit: "s" });
+    expect(parseDur(joinDur("2", "h"))).toBe(7200);
+  });
+
+  it("tells firing, ok, never fired and disabled apart", () => {
+    const now = Date.parse("2026-11-09T12:00:00Z");
+    const rule = (o: Partial<AlertRule>): AlertRule => ({
+      id: "r", name: "r", enabled: true, kind: "http_5xx_rate", windowSeconds: 300, severity: "warn", throttleSeconds: 600, createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z", ...o,
+    });
+    expect(ruleStatus(rule({ enabled: false, firingSince: "2026-11-09T11:00:00Z" }), now)).toBe("disabled");
+    expect(ruleStatus(rule({ firingSince: "2026-11-09T11:00:00Z" }), now)).toBe("firing");
+    expect(ruleStatus(rule({}), now)).toBe("never");
+    expect(ruleStatus(rule({ lastFiredAt: "2026-11-09T11:59:00Z" }), now)).toBe("ok");
+    expect(ruleStatus(rule({ kind: "log_match", lastFiredAt: "2026-11-09T11:59:00Z" }), now)).toBe("firing");
+    expect(ruleStatus(rule({ kind: "log_match", lastFiredAt: "2026-11-08T11:59:00Z" }), now)).toBe("ok");
   });
 });

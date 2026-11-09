@@ -458,6 +458,10 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			if branch != svcBranch && !envBranches[short][branch] {
 				continue
 			}
+			if serviceAutoDeployPaused(&svcItems[i]) {
+				d.Logger.Info("push build skipped", "project", proj.Name, "service", short, "reason", "auto-deploy paused")
+				continue
+			}
 			// Monorepo watch paths (see watchpaths.go).
 			if ok, reason := pushTouchesService(serviceWatchPaths(&svcItems[i]), changes); !ok {
 				d.Logger.Info("push build skipped", "project", proj.Name, "service", short, "reason", reason)

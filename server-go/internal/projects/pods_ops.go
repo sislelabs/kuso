@@ -38,6 +38,9 @@ type PodSummary struct {
 	// missing as current.
 	Current   bool   `json:"current"`
 	CreatedAt string `json:"createdAt,omitempty"`
+	// ImageID is the first container's resolved image (registry@sha256:…)
+	// as the kubelet reports it; empty until the image is pulled.
+	ImageID string `json:"imageID,omitempty"`
 }
 
 // PodList is what the handler returns. Namespace is included so callers
@@ -115,7 +118,11 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 		p := &pods.Items[i]
 		ready := false
 		var restarts int32
+		imageID := ""
 		for _, c := range p.Status.ContainerStatuses {
+			if imageID == "" {
+				imageID = c.ImageID
+			}
 			// "ready" means at least one container is Ready. A pod with
 			// crashlooping sidecars but a healthy main container should
 			// still be exec'able — that's often when the user reaches
@@ -143,6 +150,7 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 			Message:    message,
 			Current:    podIsCurrent(p, currentRS),
 			CreatedAt:  p.CreationTimestamp.UTC().Format(time.RFC3339),
+			ImageID:    imageID,
 		}
 		if reason != "" {
 			sum.Summary = podreason.Summarize(reason, message)

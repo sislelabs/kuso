@@ -907,6 +907,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		dropToken()
 		return nil, fmt.Errorf("create production env: %w", err)
 	}
+	// An image service's first tag is the oldest release it can roll back
+	// to, so it gets a replayable revision like every later tag change.
+	if created.Spec.Runtime == "image" && created.Spec.Image != nil && s.RecordRevision != nil {
+		patch := PatchServiceRequest{Image: &ServiceImageSpec{
+			Repository: created.Spec.Image.Repository,
+			Tag:        created.Spec.Image.Tag,
+		}}
+		if snap, err := json.Marshal(map[string]any{"patch": patch}); err == nil {
+			s.RecordRevision(ctx, project, "service", req.Name, "create", snap)
+		}
+	}
 	return created, nil
 }
 
@@ -2615,6 +2626,9 @@ type PatchServiceRequest struct {
 	// WaitForCI toggles the wait-for-GitHub-CI build gate. Service-level
 	// only (builds read it off the service CR), so no env propagation.
 	WaitForCI *bool `json:"waitForCI,omitempty"`
+	// AutoDeployPaused pauses push-triggered builds. Pointer so omitting
+	// leaves it as-is.
+	AutoDeployPaused *bool `json:"autoDeployPaused,omitempty"`
 	// RequestLimits edits the service's ingress limits (see
 	// PatchRequestLimits for the 0 / -1 conventions).
 	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
@@ -3270,6 +3284,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		if req.WaitForCI != nil {
 			svc.Spec.WaitForCI = *req.WaitForCI
+		}
+		if req.AutoDeployPaused != nil {
+			svc.Spec.AutoDeployPaused = *req.AutoDeployPaused
 		}
 		if req.Uptime != nil {
 			up := kube.KusoServiceUptime{}

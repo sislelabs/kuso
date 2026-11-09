@@ -135,6 +135,11 @@ func serviceWatchPaths(u *unstructured.Unstructured) []string {
 	return effectiveWatchPaths(&svc.Spec)
 }
 
+func serviceAutoDeployPaused(u *unstructured.Unstructured) bool {
+	paused, _, _ := unstructured.NestedBool(u.Object, "spec", "autoDeployPaused")
+	return paused
+}
+
 // pushTouchesService decides whether a push should build a service with
 // the given watch patterns. A false result always carries a reason.
 func pushTouchesService(patterns []string, ch pushChanges) (bool, string) {

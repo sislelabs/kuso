@@ -129,6 +129,8 @@ export interface KusoServiceSpec {
   release?: { command?: string[]; timeoutSeconds?: number };
   // waitForCI holds push/PR builds until the commit's GitHub checks pass.
   waitForCI?: boolean;
+  // autoDeployPaused stops GitHub pushes from building this service.
+  autoDeployPaused?: boolean;
   // uptime: per-service opt-out and request path for the uptime check.
   // No path = the health check path, or "/".
   uptime?: { disabled?: boolean; path?: string };

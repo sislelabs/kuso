@@ -806,6 +806,7 @@ var (
 	serviceSetPrivateEgress     string // "on" | "off" | "" (leave alone)
 	serviceSetPlatformAPIEgress string // "on" | "off" | "" (leave alone)
 	serviceSetWaitForCI         string // "on" | "off" | "" (leave alone)
+	serviceSetAutoDeploy        string // "on" | "off" | "" (leave alone)
 	serviceSetMinReplicas       int
 	serviceSetMaxReplicas       int
 	serviceSetScaleUpWindow     int
@@ -1011,6 +1012,16 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 				req.WaitForCI = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--wait-for-ci must be on|off (got %q)", serviceSetWaitForCI)
+			}
+		}
+		if cmd.Flags().Changed("auto-deploy") {
+			switch serviceSetAutoDeploy {
+			case "on", "true", "yes":
+				req.AutoDeployPaused = kusoApi.BoolPtr(false)
+			case "off", "false", "no":
+				req.AutoDeployPaused = kusoApi.BoolPtr(true)
+			default:
+				return fmt.Errorf("--auto-deploy must be on|off (got %q)", serviceSetAutoDeploy)
 			}
 		}
 		req.RequestLimits = requestLimitFlags(cmd)
@@ -1946,6 +1957,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetAutoDeploy, "auto-deploy", "", "build on GitHub pushes (on|off); off pauses push deploys, manual deploys still work")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetScaleUpWindow, "scale-up-stabilization", 0, "seconds the autoscaler waits before adding pods (0-3600, default 120; -1 resets)")
@@ -2045,6 +2057,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetAutoDeploy, "auto-deploy", "", "build on GitHub pushes (on|off); off pauses push deploys, manual deploys still work")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetScaleUpWindow, "scale-up-stabilization", 0, "seconds the autoscaler waits before adding pods (0-3600, default 120; -1 resets)")

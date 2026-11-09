@@ -41,6 +41,32 @@ export const ALERT_KINDS: Record<AlertKind, KindMeta> = {
     scope: "env",
     help: "Fires when a cert expires within N days or its cert-manager Certificate isn't Ready.",
   },
+  crashloop: {
+    label: "Crash loop",
+    group: "Service",
+    threshold: { label: "Restarts", field: "thresholdInt", placeholder: "3" },
+    minRequests: false,
+    window: true,
+    scope: "env",
+    help: "Fires when a container is in CrashLoopBackOff, or has restarted at least N times with its last restart inside the window.",
+  },
+  deploy_failed: {
+    label: "Deploy failed",
+    group: "Service",
+    minRequests: false,
+    window: true,
+    scope: "env",
+    help: "Fires when a service's newest build fails or its release hook (migrations) fails. Only failures inside the window open an alert; it resolves when a later build succeeds.",
+  },
+  healthcheck_failing: {
+    label: "Uptime check failing",
+    group: "Service",
+    threshold: { label: "Failing for (minutes)", field: "thresholdInt", placeholder: "5" },
+    minRequests: false,
+    window: false,
+    scope: "env",
+    help: "Fires when the uptime ping has been failing for N minutes. Sleeping, stopped and deploying environments are skipped.",
+  },
   dns_mismatch: {
     label: "DNS mismatch",
     group: "Edge",
@@ -101,10 +127,18 @@ export interface RuleFormState {
   severity: AlertRule["severity"];
 }
 
+// autoRuleName is the name a new rule gets until the user types one:
+// "web Crash loop", "shop HTTP 5xx rate", "Node CPU".
+export function autoRuleName(s: Pick<RuleFormState, "kind" | "project" | "service">): string {
+  const target = s.service || s.project;
+  const label = ALERT_KINDS[s.kind].label;
+  return target ? `${target} ${label}` : label;
+}
+
 export function emptyRuleForm(kind: AlertKind): RuleFormState {
   return {
     kind,
-    name: "",
+    name: ALERT_KINDS[kind].label,
     project: "",
     service: "",
     env: "",
@@ -195,6 +229,12 @@ export function describeRule(rule: AlertRule): string {
       return `expires within ${rule.thresholdInt ?? 14}d or not Ready`;
     case "dns_mismatch":
       return "host doesn't resolve to the cluster";
+    case "crashloop":
+      return `≥ ${rule.thresholdInt ?? 3} restarts within ${win}, or backing off`;
+    case "deploy_failed":
+      return `build or release fails (new failures within ${win})`;
+    case "healthcheck_failing":
+      return `uptime check failing for ≥ ${rule.thresholdInt ?? 5} min`;
     default:
       return `≥ ${rule.thresholdFloat ?? 80}% (window ${win})`;
   }
@@ -217,6 +257,43 @@ export function parseDur(s: string): number {
       return n * 86_400;
   }
   return 0;
+}
+
+export type DurUnit = "s" | "m" | "h" | "d";
+export const DUR_UNITS: { value: DurUnit; label: string }[] = [
+  { value: "s", label: "seconds" },
+  { value: "m", label: "minutes" },
+  { value: "h", label: "hours" },
+  { value: "d", label: "days" },
+];
+
+// splitDur turns "5m" into its number and unit for the number + unit
+// inputs; a bare number is seconds.
+export function splitDur(s: string): { n: string; unit: DurUnit } {
+  const m = s.trim().match(/^(\d*)\s*([smhd]?)$/);
+  if (!m) return { n: "", unit: "m" };
+  return { n: m[1], unit: (m[2] || "s") as DurUnit };
+}
+
+export function joinDur(n: string, unit: DurUnit): string {
+  return `${n.trim()}${unit}`;
+}
+
+// RuleStatus is what a rule row's dot says: firing now, has fired and is
+// quiet, never fired, or switched off.
+export type RuleStatus = "firing" | "ok" | "never" | "disabled";
+
+export function ruleStatus(rule: AlertRule, now = Date.now()): RuleStatus {
+  if (!rule.enabled) return "disabled";
+  if (rule.firingSince) return "firing";
+  const last = rule.lastFiredAt ? Date.parse(rule.lastFiredAt) : NaN;
+  if (!Number.isFinite(last)) return "never";
+  // Log and node rules have no open/resolved state: they re-fire once per
+  // throttle window while the condition holds, so a fire within the last
+  // window (plus a tick of slack) counts as still firing.
+  const throttled = rule.kind === "log_match" || rule.kind.startsWith("node_");
+  if (throttled && now - last < (Math.max(rule.throttleSeconds, 60) + 120) * 1000) return "firing";
+  return "ok";
 }
 
 export function formatSec(n: number): string {
@@ -260,7 +337,6 @@ export function prefillRuleForm(params: URLSearchParams): RuleFormState | null {
   }
   // log_match: the text to look for, e.g. from an error group.
   if (kind === "log_match") f.query = params.get("query")?.trim() ?? "";
-  const target = f.service || f.project;
-  if (target) f.name = `${target} ${meta.label}`;
+  f.name = autoRuleName(f);
   return f;
 }

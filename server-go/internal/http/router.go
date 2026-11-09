@@ -594,6 +594,11 @@ func mountAuthenticatedRoutes(
 					return true, nil
 				}
 			}
+			if d.Kube != nil {
+				notifH.Live = func(ctx context.Context) (httphandlers.LiveScopes, error) {
+					return liveNotificationScopes(ctx, d.Kube)
+				}
+			}
 			notifH.Mount(r)
 			drainsH := &httphandlers.DrainsHandler{Store: &drains.SettingStore{DB: d.DB}, Tester: drains.NewSender(), Logger: d.Logger, ProjectExists: notifH.ProjectExists}
 			drainsH.Mount(r)

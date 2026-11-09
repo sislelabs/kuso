@@ -27,13 +27,18 @@ const (
 	AlertKindHTTPP95Latency = "http_p95_latency" // p95 latency >= ThresholdFloat (ms), needs >= ThresholdInt requests
 	AlertKindCertExpiry     = "cert_expiry"      // TLS cert expires within ThresholdInt days, or its Certificate isn't Ready
 	AlertKindDNSMismatch    = "dns_mismatch"     // env host doesn't resolve to the cluster's ingress IPs
+	// Workload kinds, also episodic.
+	AlertKindCrashloop          = "crashloop"           // a container is in CrashLoopBackOff, or restarted >= ThresholdInt times with the last restart inside the window
+	AlertKindDeployFailed       = "deploy_failed"       // a service's newest finished build failed or its release hook failed
+	AlertKindHealthcheckFailing = "healthcheck_failing" // the uptime check has failed for >= ThresholdInt minutes
 )
 
 // IsEpisodicAlertKind reports whether kind uses fire-once + resolve
 // semantics instead of the throttled re-fire of the original kinds.
 func IsEpisodicAlertKind(kind string) bool {
 	switch kind {
-	case AlertKindHTTP5xxRate, AlertKindHTTPP95Latency, AlertKindCertExpiry, AlertKindDNSMismatch:
+	case AlertKindHTTP5xxRate, AlertKindHTTPP95Latency, AlertKindCertExpiry, AlertKindDNSMismatch,
+		AlertKindCrashloop, AlertKindDeployFailed, AlertKindHealthcheckFailing:
 		return true
 	}
 	return false

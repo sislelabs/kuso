@@ -29,6 +29,7 @@ import {
 import { AnsiText } from "@/components/logs/AnsiText";
 import { buildMatcher } from "@/components/logs/logParse";
 import { ApiError } from "@/lib/api-client";
+import { describeError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Segmented } from "@/components/ui/segmented";
@@ -87,11 +88,13 @@ export const BuildLogViewer = memo(function BuildLogViewer({
   }, [lines, live, follow, view]);
 
   const loading = live ? stream.state === "connecting" && lines.length === 0 : stored.isPending;
-  const loadError =
+  // A 404 is final (the log expired or was never archived); anything else
+  // (network, 5xx) may pass on a second try, so only that gets Retry.
+  const loadError: { message: string; detail?: string; retry: boolean } | null =
     !live && stored.isError
       ? stored.error instanceof ApiError && stored.error.status === 404
-        ? stored.error.message || "This build's log is no longer available."
-        : "Couldn't load the build log."
+        ? { message: stored.error.message || "This build's log is no longer available.", retry: false }
+        : { message: "Couldn't load the build log.", detail: describeError(stored.error, "The request failed."), retry: true }
       : null;
 
   const download = () => {
@@ -193,7 +196,23 @@ export const BuildLogViewer = memo(function BuildLogViewer({
           {loading ? (
             <p className="px-3 py-2 text-[var(--text-tertiary)]">Loading log…</p>
           ) : loadError ? (
-            <p className="px-3 py-2 text-[var(--text-secondary)]">{loadError}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 font-sans text-[var(--text-secondary)]">
+              <span className="min-w-0">
+                {loadError.message}
+                {loadError.detail && <span className="text-[var(--text-tertiary)]"> {loadError.detail}</span>}
+              </span>
+              {loadError.retry && (
+                <button
+                  type="button"
+                  onClick={() => void stored.refetch()}
+                  disabled={stored.isFetching}
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-default)] px-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                >
+                  <RefreshCw aria-hidden className={cn("h-3.5 w-3.5", stored.isFetching && "motion-safe:animate-spin")} />
+                  {stored.isFetching ? "Retrying…" : "Retry"}
+                </button>
+              )}
+            </div>
           ) : lines.length === 0 ? (
             <p className="px-3 py-2 text-[var(--text-tertiary)]">
               {live ? "Waiting for the build to print…" : "The build printed nothing."}

@@ -26,10 +26,24 @@ import {
   newerReleaseFailure,
   previousSucceeded,
   rollForwardTarget,
+  useSetAutoDeployPaused,
   type DeployBuild,
 } from "@/features/builds";
-import { envRevisionName, groupRevisionRuns, interleaveTimeline, useRevisions } from "@/features/revisions";
+import {
+  envRevisionName,
+  groupRevisionRuns,
+  imageRef,
+  imageReleases,
+  interleaveTimeline,
+  shortDigest,
+  useRevertRevision,
+  useRevisions,
+  type ImageRelease,
+} from "@/features/revisions";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { KusoEnvironment } from "@/types/projects";
+import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
@@ -101,6 +115,13 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   const uptimeStatus =
     group === "production" ? (uptime.data?.services ?? []).find((s) => s.service === service) : undefined;
 
+  const setPaused = useSetAutoDeployPaused(project, service);
+  const resumeAutoDeploy = () =>
+    setPaused.mutate(false, {
+      onSuccess: () => toast.success("Auto-deploy resumed"),
+      onError: (e) => toastError(e, "Couldn't resume auto-deploy"),
+    });
+
   const pushDeploy = pushDeployState({
     spec: svc.data?.spec,
     projectRepoUrl: proj.data?.project.spec.defaultRepo?.url,
@@ -127,7 +148,14 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         </div>
       </div>
 
-      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} onNavigate={onNavigate} />}
+      {pushDeploy && !pushDeploy.on && (
+        <AutoDeployBanner
+          state={pushDeploy}
+          onNavigate={onNavigate}
+          onResume={canDeploy ? resumeAutoDeploy : undefined}
+          resuming={setPaused.isPending}
+        />
+      )}
 
       {isImage ? (
         <ImageDeploymentCard
@@ -136,6 +164,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
           env={env}
           url={url}
           image={svc.data?.spec.image}
+          canDeploy={canDeploy}
         />
       ) : builds.isPending ? (
         <div className="space-y-2">
@@ -535,12 +564,14 @@ function ImageDeploymentCard({
   env,
   url,
   image,
+  canDeploy,
 }: {
   project: string;
   service: string;
   env?: KusoEnvironment;
   url?: string;
   image?: { repository?: string; tag?: string };
+  canDeploy: boolean;
 }) {
   const envName = env?.metadata?.name;
   const envState = env?.status?.state;
@@ -574,8 +605,14 @@ function ImageDeploymentCard({
       : live
         ? "border-[var(--success)]/35"
         : "border-[var(--border-default)]";
+  // The digest the ready pods actually run, as the kubelet resolved it.
+  const runningImageID = (podList ?? [])
+    .filter((p) => isCurrentPod(p) && p.ready)
+    .map((p) => (p as { imageID?: string }).imageID ?? "")
+    .find(Boolean);
 
   return (
+    <div className="space-y-4">
     <section aria-label={`Deployment in ${group}`} className={cn("rounded-lg border bg-[var(--bg-secondary)] p-4", tone)}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <RolloutBadge state={state} />
@@ -625,6 +662,217 @@ function ImageDeploymentCard({
         </div>
       )}
     </section>
+    <ImageReleaseHistory
+      project={project}
+      service={service}
+      env={env}
+      image={image}
+      rollout={state}
+      runningImageID={runningImageID}
+      canDeploy={canDeploy}
+    />
+    </div>
+  );
+}
+
+const RELEASE_OUTCOME: Record<RolloutState["status"], { label: string; dot: string }> = {
+  done: { label: "Live", dot: "bg-[var(--success)]" },
+  active: { label: "Rolling out", dot: "bg-[var(--info)]" },
+  failed: { label: "Rollout stuck", dot: "bg-[var(--danger)]" },
+  idle: { label: "Current", dot: "bg-[var(--text-tertiary)]" },
+};
+
+// ImageReleaseHistory is the release list for runtime=image services: one
+// row per saved image tag (from service revisions), with the other config
+// changes interleaved under "All changes". Rolling back replays the
+// revision that set that tag.
+function ImageReleaseHistory({
+  project,
+  service,
+  env,
+  image,
+  rollout,
+  runningImageID,
+  canDeploy,
+}: {
+  project: string;
+  service: string;
+  env?: KusoEnvironment;
+  image?: { repository?: string; tag?: string };
+  rollout: RolloutState;
+  runningImageID?: string;
+  canDeploy: boolean;
+}) {
+  const envCRName = env?.metadata?.name;
+  const serviceRevs = useRevisions(project, "service", service);
+  const envRevs = useRevisions(project, "environment", envCRName ? envRevisionName(project, envCRName) : undefined);
+  const [filter, setFilter] = useHistoryFilter();
+  const [limit, setLimit] = useState(HISTORY_PAGE);
+
+  if (serviceRevs.isPending) return <Skeleton className="h-16 w-full rounded-lg" />;
+  if (serviceRevs.isError) {
+    return <QueryErrorState what="release history" error={serviceRevs.error} onRetry={() => void serviceRevs.refetch()} />;
+  }
+  const { releases, other } = imageReleases(serviceRevs.data ?? [], image);
+  const config = [...other, ...(envRevs.data ?? [])];
+  // interleaveTimeline orders "builds" by startedAt; a release is placed by
+  // the time its tag was saved.
+  const items = releases.map((r) => ({ ...r, startedAt: r.revision.createdAt }));
+  const timeline = groupRevisionRuns(interleaveTimeline(items, filter === "builds" ? [] : config));
+  const shown = timeline.slice(0, limit);
+  const currentRef = image?.repository ? imageRef(image.repository, image.tag) : "";
+
+  if (releases.length === 0 && config.length === 0) {
+    return (
+      <p className="text-xs text-[var(--text-tertiary)]">
+        No image changes recorded yet. Each new tag you save shows up here with a one-click rollback.
+      </p>
+    );
+  }
+
+  return (
+    <section aria-labelledby="image-history-h" className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 id="image-history-h" className="text-xs font-medium text-[var(--text-secondary)]">
+          Releases
+          <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+            {releases.length} image{releases.length === 1 ? "" : "s"}
+            {filter === "all" && config.length > 0
+              ? ` · ${config.length} config change${config.length === 1 ? "" : "s"}`
+              : ""}
+          </span>
+        </h4>
+        {config.length > 0 && (
+          <Segmented
+            size="sm"
+            label="Show in history"
+            options={[
+              { value: "builds", label: "Releases" },
+              { value: "all", label: "All changes", title: "Image releases plus config changes (variables, scale, settings)" },
+            ]}
+            value={filter}
+            onChange={setFilter}
+          />
+        )}
+      </div>
+      <ul className="space-y-2 overflow-hidden">
+        {shown.map((item) => {
+          if (item.type === "revisions") {
+            return (
+              <RevisionGroup key={`revs-${item.revisions[0].id}`} project={project} revisions={item.revisions} canRevert={canDeploy} />
+            );
+          }
+          if (item.type === "revision") {
+            return <RevisionRow key={`rev-${item.revision.id}`} project={project} revision={item.revision} canRevert={canDeploy} />;
+          }
+          const r = item.build;
+          return (
+            <ImageReleaseRow
+              key={r.revision.id}
+              project={project}
+              release={r}
+              outcome={r.current ? RELEASE_OUTCOME[rollout.status] : undefined}
+              digest={r.current ? shortDigest(runningImageID) : ""}
+              canRollBack={canDeploy && !r.current && r.ref !== currentRef}
+            />
+          );
+        })}
+      </ul>
+      {timeline.length > limit && (
+        <button
+          type="button"
+          onClick={() => setLimit((l) => l + HISTORY_PAGE)}
+          className="w-full rounded-lg border border-[var(--border-subtle)] py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+        >
+          Show {Math.min(HISTORY_PAGE, timeline.length - limit)} more of {timeline.length - limit}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function ImageReleaseRow({
+  project,
+  release,
+  outcome,
+  digest,
+  canRollBack,
+}: {
+  project: string;
+  release: ImageRelease;
+  outcome?: { label: string; dot: string };
+  digest: string;
+  canRollBack: boolean;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const revert = useRevertRevision(project);
+  const { revision } = release;
+  const onConfirm = () =>
+    revert.mutate(revision.id, {
+      onSuccess: () => toast.success(`Rolling back to ${release.ref}`),
+      onError: (e) => toastError(e, "Rollback failed"),
+      onSettled: () => setConfirm(false),
+    });
+  return (
+    <li
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border px-3 py-2.5 sm:px-4",
+        release.current ? "border-[var(--border-default)] bg-[var(--bg-secondary)]" : "border-[var(--border-subtle)]",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate font-mono text-[13px] text-[var(--text-primary)]" title={release.ref}>
+            {release.ref}
+          </span>
+          <CopyButton value={release.ref} label="Copy image reference" size="xs" />
+        </div>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-tertiary)]">
+          {outcome ? (
+            <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
+              <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", outcome.dot)} />
+              {outcome.label}
+            </span>
+          ) : (
+            <span>Replaced</span>
+          )}
+          {revision.summary === "create" && <span>· first image</span>}
+          {revision.actor && <span>· by {revision.actor}</span>}
+          <span>
+            ·{" "}
+            <time dateTime={revision.createdAt} title={new Date(revision.createdAt).toLocaleString()}>
+              {relativeTime(revision.createdAt)}
+            </time>
+          </span>
+          {digest && (
+            <span className="font-mono" title="Digest the running pods pulled">
+              · {digest}
+            </span>
+          )}
+        </p>
+      </div>
+      {canRollBack && (
+        <Button size="sm" variant="secondary" onClick={() => setConfirm(true)} disabled={revert.isPending}>
+          <Undo2 className="h-3.5 w-3.5" />
+          Roll back to this image
+        </Button>
+      )}
+      <ConfirmDialog
+        open={confirm}
+        title={`Roll back to ${release.tag}?`}
+        destructive={false}
+        confirmLabel="Roll back"
+        body={
+          <span>
+            Sets the image to <span className="font-mono">{release.ref}</span> and rolls the pods in every environment
+            of this service. A release hook, if configured, runs first.
+          </span>
+        }
+        pending={revert.isPending}
+        onConfirm={onConfirm}
+        onCancel={() => setConfirm(false)}
+      />
+    </li>
   );
 }
 

@@ -1,18 +1,19 @@
 "use client";
 
-import { GitBranch, Info } from "lucide-react";
+import { GitBranch, Info, PauseCircle } from "lucide-react";
 import type { KusoServiceSpec } from "@/types/projects";
 import { githubRepoSlug } from "@/features/builds";
+import { Button } from "@/components/ui/button";
 
 export type PushDeploy =
   | { on: true; repo: string; branch: string; watchPaths: string[] }
-  | { on: false; reason: string; hint: string; action?: { label: string; tab: string; anchor?: string } };
+  | { on: false; paused: true; repo: string; branch: string }
+  | { on: false; paused?: false; reason: string; hint: string; action?: { label: string; tab: string; anchor?: string } };
 
 // pushDeployState answers "will a git push deploy this env?" from what the
 // server's push dispatcher checks: a GitHub repo on the service (or the
 // project default), the instance's GitHub App, and a buildable runtime.
-// There is no per-service auto-deploy switch, so these are the only ways
-// it can be off.
+// Besides those, spec.autoDeployPaused is the per-service pause switch.
 export function pushDeployState({
   spec,
   projectRepoUrl,
@@ -57,6 +58,10 @@ export function pushDeployState({
       hint: "Redeploy by hand, or call the deploy hook (Settings → Deploy) from your CI.",
     };
   }
+  const branch = envBranch || spec.repo?.defaultBranch || "main";
+  // An explicit pause is the user's own switch: show it (with Resume) even
+  // when something else would also stop pushes.
+  if (spec.autoDeployPaused) return { on: false, paused: true, repo: slug, branch };
   if (githubConfigured === false) {
     return {
       on: false,
@@ -64,20 +69,20 @@ export function pushDeployState({
       hint: "An admin can connect it under Settings → GitHub.",
     };
   }
-  return {
-    on: true,
-    repo: slug,
-    branch: envBranch || spec.repo?.defaultBranch || "main",
-    watchPaths: spec.watchPaths ?? [],
-  };
+  return { on: true, repo: slug, branch, watchPaths: spec.watchPaths ?? [] };
 }
 
 export function AutoDeployBanner({
   state,
   onNavigate,
+  onResume,
+  resuming,
 }: {
   state: PushDeploy;
   onNavigate?: (tab: string, anchor?: string) => void;
+  // Omitted when the viewer can't edit the service.
+  onResume?: () => void;
+  resuming?: boolean;
 }) {
   if (state.on) {
     return (
@@ -94,6 +99,28 @@ export function AutoDeployBanner({
         )}
         .
       </p>
+    );
+  }
+  if (state.paused) {
+    return (
+      <div
+        role="note"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-3 py-2.5 text-sm"
+      >
+        <PauseCircle aria-hidden className="h-4 w-4 shrink-0 text-[var(--warning)]" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-[var(--text-primary)]">Auto-deploy paused</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+            Pushes to <span className="font-mono">{state.branch}</span> on <span className="font-mono">{state.repo}</span>{" "}
+            don&apos;t build this service. Manual deploys still work.
+          </p>
+        </div>
+        {onResume && (
+          <Button size="sm" variant="secondary" onClick={onResume} disabled={resuming}>
+            {resuming ? "Resuming…" : "Resume"}
+          </Button>
+        )}
+      </div>
     );
   }
   const action = state.action;

@@ -152,17 +152,28 @@ func IsAttentionEvent(eventType, severity string) bool {
 // to the table cap). When unreadOnly is true, only events with
 // readAt IS NULL are returned.
 func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly bool) ([]NotificationEvent, error) {
-	return d.listNotificationEvents(ctx, limit, unreadOnly, false)
+	return d.listNotificationEvents(ctx, limit, unreadOnly, false, "")
+}
+
+// ListNotificationEventsInProject is the newest `limit` events of one
+// project, filtered in SQL so a busy instance can't push the project's
+// events out of the page.
+func (d *DB) ListNotificationEventsInProject(ctx context.Context, project string, limit int, attentionOnly bool) ([]NotificationEvent, error) {
+	if project == "" {
+		return []NotificationEvent{}, nil
+	}
+	return d.listNotificationEvents(ctx, limit, false, attentionOnly, project)
 }
 
 // ListAttentionNotificationEvents is ListNotificationEvents narrowed to
 // attentionPredicate, so the bell's "Needs attention" view isn't
 // crowded out of its page by a burst of successes.
 func (d *DB) ListAttentionNotificationEvents(ctx context.Context, limit int) ([]NotificationEvent, error) {
-	return d.listNotificationEvents(ctx, limit, false, true)
+	return d.listNotificationEvents(ctx, limit, false, true, "")
 }
 
-func (d *DB) listNotificationEvents(ctx context.Context, limit int, unreadOnly, attentionOnly bool) ([]NotificationEvent, error) {
+// listNotificationEvents: project "" = every project.
+func (d *DB) listNotificationEvents(ctx context.Context, limit int, unreadOnly, attentionOnly bool, project string) ([]NotificationEvent, error) {
 	if limit <= 0 || limit > notificationEventCap {
 		limit = notificationEventCap
 	}
@@ -174,8 +185,13 @@ func (d *DB) listNotificationEvents(ctx context.Context, limit int, unreadOnly, 
 	if attentionOnly {
 		q += ` AND ` + attentionPredicate
 	}
+	args := []any{limit}
+	if project != "" {
+		q += ` AND "project" = $2`
+		args = append(args, project)
+	}
 	q += ` ORDER BY "id" DESC LIMIT $1`
-	rows, err := d.QueryContext(ctx, q, limit)
+	rows, err := d.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list notification events: %w", err)
 	}
@@ -355,11 +371,17 @@ func (d *DB) notificationReadMark(ctx context.Context, userID string) (int64, ti
 // ListNotificationEventsForUser is ListNotificationEvents with readAt
 // (and the unread filter) taken from userID's own watermark.
 func (d *DB) ListNotificationEventsForUser(ctx context.Context, userID string, limit int, unreadOnly, attentionOnly bool) ([]NotificationEvent, error) {
+	return d.ListNotificationEventsForUserInProject(ctx, userID, "", limit, unreadOnly, attentionOnly)
+}
+
+// ListNotificationEventsForUserInProject narrows ListNotificationEventsForUser
+// to one project ("" = all).
+func (d *DB) ListNotificationEventsForUserInProject(ctx context.Context, userID, project string, limit int, unreadOnly, attentionOnly bool) ([]NotificationEvent, error) {
 	mark, at, err := d.notificationReadMark(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	all, err := d.listNotificationEvents(ctx, limit, false, attentionOnly)
+	all, err := d.listNotificationEvents(ctx, limit, false, attentionOnly, project)
 	if err != nil {
 		return nil, err
 	}

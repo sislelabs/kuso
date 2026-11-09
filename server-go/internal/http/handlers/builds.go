@@ -649,6 +649,11 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 		stampPromotion(out, idx)
 	}
 	out, truncated, next := paginateBuildSummaries(out, limitQ, offsetQ)
+	if h.DB != nil {
+		reclassifyGenericFailures(ctx, out, func(ctx context.Context, build string) (string, error) {
+			return h.DB.GetBuildLog(ctx, project, build)
+		})
+	}
 	if truncated {
 		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(next))
 	}

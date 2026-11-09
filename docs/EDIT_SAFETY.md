@@ -48,6 +48,7 @@ Edits to `KusoService` propagate down to every `KusoEnvironment` owned by that s
 | `placement` | ⚠️ Triggers reschedule | Propagates to envs that don't have their own override. |
 | `volumes` | ❌ Add only | Same as env-level: removal orphans data. |
 | `runtime` | ❌ Don't change live | Same as env-level. |
+| `autoDeployPaused` | ✅ Yes, no restart | Read by the push dispatcher on the next GitHub push. True skips push builds for this service; manual deploys, deploy hooks and PR previews still run. No effect on running pods. `kuso project service set <p> <s> --auto-deploy off`. |
 | `previews.disabled` | ✅ Yes | Affects only future PR opens; existing preview envs survive until their TTL. |
 
 ## KusoAddon

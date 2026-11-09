@@ -31,3 +31,10 @@ export async function retryRelease(
 ): Promise<RetryReleaseResult> {
   return api(`${buildPath(project, service, build)}/retry-release`, { method: "POST" });
 }
+
+export async function setAutoDeployPaused(project: string, service: string, paused: boolean): Promise<unknown> {
+  return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`, {
+    method: "PATCH",
+    body: { autoDeployPaused: paused },
+  });
+}

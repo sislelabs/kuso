@@ -417,6 +417,9 @@ type KusoServiceSpec struct {
 	// kuso/* contexts, are green. Read by builds.create + the poller's
 	// CI gate; service-level only (not mirrored onto envs).
 	WaitForCI bool `json:"waitForCI,omitempty"`
+	// AutoDeployPaused stops GitHub pushes from building this service.
+	// Manual deploys, deploy hooks and PR previews still run.
+	AutoDeployPaused bool `json:"autoDeployPaused,omitempty"`
 	// Uptime holds the uptime-check opt-out and path. nil = checked at
 	// the default path.
 	Uptime *KusoServiceUptime `json:"uptime,omitempty"`

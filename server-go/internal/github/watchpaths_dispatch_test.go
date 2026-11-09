@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/kube"
 )
@@ -104,5 +105,26 @@ func TestDispatch_PushWithSkipCIBuildsNothing(t *testing.T) {
 		if n != 0 {
 			t.Errorf("[skip ci] push built %s (%d builds)", s, n)
 		}
+	}
+}
+
+func TestDispatch_PushSkipsServiceWithAutoDeployPaused(t *testing.T) {
+	t.Parallel()
+	paused := seedMonorepoSvc("mono", "api", "apps/api", nil)
+	if err := unstructured.SetNestedField(paused.obj.Object, true, "spec", "autoDeployPaused"); err != nil {
+		t.Fatal(err)
+	}
+	d := newDispatcher(t,
+		seedProj("mono", "https://github.com/example/mono", "main", false, 0),
+		paused,
+		seedMonorepoSvc("mono", "root", ".", nil),
+	)
+	body := monorepoPush("feat: thing", `[{"modified":["apps/api/x.go"]}]`)
+	if err := d.Dispatch(context.Background(), "push", body); err != nil {
+		t.Fatal(err)
+	}
+	got := buildCounts(t, d, "mono", "api", "root")
+	if got["api"] != 0 || got["root"] != 1 {
+		t.Errorf("builds = %v, want api paused (0) and root built (1)", got)
 	}
 }
