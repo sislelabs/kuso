@@ -42,6 +42,7 @@ import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { ImportArchiveCard } from "./ImportArchiveCard";
 import { DeployImageForm, type DeployImageInput } from "./DeployImageForm";
+import { specImageTag } from "@/features/services/imageRef";
 import { TemplateCard } from "./TemplateCard";
 import { FormField, SegmentedControl } from "../[project]/services/new/FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "../[project]/services/new/RepoPicker";
@@ -277,7 +278,7 @@ export default function NewProjectPage() {
       source: "image",
       name: defaultServiceName(pName, image.name),
       image: image.repository,
-      tag: image.tag,
+      tag: specImageTag(image.tag),
       port: imagePort,
     });
     const projectHref = `/projects/${encodeURIComponent(pName)}`;

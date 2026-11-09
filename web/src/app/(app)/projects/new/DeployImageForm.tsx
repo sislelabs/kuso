@@ -63,7 +63,9 @@ export function DeployImageForm({
         ? "Paste the image to run, e.g. ghcr.io/acme/api:1.4."
         : !parsed
           ? "That isn't an image reference kuso can pull. Use registry/owner/name:tag."
-          : undefined,
+          : !parsed.tag
+            ? `Add a tag or digest, e.g. ${parsed.repository}:1.4.2. Write :latest only if you mean it.`
+            : undefined,
       project: nameProblem(name.trim()) ?? undefined,
       env: env.errors.length > 0 ? "Fix or remove the .env lines that can't be read." : undefined,
     };
@@ -79,14 +81,14 @@ export function DeployImageForm({
       <FormField
         label="Image"
         hint={
-          parsed ? (
+          parsed?.tag ? (
             <>
               Pulls <span className="font-mono text-[var(--text-primary)]">{parsed.repository}</span> at{" "}
-              <span className="font-mono text-[var(--text-primary)]">{parsed.tag || "latest"}</span>. Public images
+              <span className="font-mono text-[var(--text-primary)]">{parsed.tag}</span>. Public images
               only here; for a private registry, create an empty project and add its registry login first.
             </>
           ) : (
-            "Registry path with an optional tag or digest. Immutable tags roll out predictably; latest doesn't."
+            "Registry path with a tag or digest, e.g. ghcr.io/acme/api:1.4.2. Immutable tags roll out predictably; latest doesn't."
           )
         }
         error={errors.image}

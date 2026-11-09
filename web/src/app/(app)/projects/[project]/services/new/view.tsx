@@ -25,6 +25,7 @@ import { ApiError } from "@/lib/api-client";
 import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { slugifyServiceName } from "@/features/services/slug";
+import { imageRefString, imageRepositoryProblem, imageTagProblem, specImageTag, splitPastedImage } from "@/features/services/imageRef";
 import { FormField, SegmentedControl } from "./FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "./RepoPicker";
 import { useRepoDetection } from "./useRepoDetection";
@@ -79,7 +80,7 @@ export function AddServiceView() {
   // to first compute.
   const [source, setSource] = useState<"repo" | "image">("repo");
   const [imageRepo, setImageRepo] = useState("");
-  const [imageTag, setImageTag] = useState("latest");
+  const [imageTag, setImageTag] = useState("");
   // Registry credential secretName for image.pullSecret; "" = public
   // pull. `null` means "follow the image host" until the user picks.
   const [pullSecretChoice, setPullSecretChoice] = useState<string | null>(null);
@@ -122,6 +123,7 @@ export function AddServiceView() {
   const [fieldErrors, setFieldErrors] = useState<{
     name?: string;
     image?: string;
+    tag?: string;
     repo?: string;
     runtime?: string;
     fromService?: string;
@@ -136,6 +138,17 @@ export function AddServiceView() {
   // The two name inputs (image vs repo mode) are exclusive, so one ref.
   const nameInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+  // A full reference typed or pasted into the repository field moves its
+  // tag/digest into the Tag field.
+  const splitImageInput = (raw: string): boolean => {
+    const split = splitPastedImage(raw);
+    if (!split) return false;
+    setImageRepo(split.repository);
+    setImageTag(split.tag);
+    setFieldErrors((prev) => ({ ...prev, image: undefined, tag: undefined }));
+    return true;
+  };
   const repoSearchRef = useRef<HTMLInputElement>(null);
   const envRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<HTMLDivElement>(null);
@@ -235,7 +248,10 @@ export function AddServiceView() {
       const tooLong = serviceSlugError(project, slug);
       if (tooLong) errs.name = tooLong;
     }
-    if (source === "image" && !imageRepo.trim()) errs.image = "Image repository is required — e.g. ghcr.io/owner/app.";
+    if (source === "image") {
+      errs.image = imageRepositoryProblem(imageRepo) ?? undefined;
+      errs.tag = imageTagProblem(imageTag) ?? undefined;
+    }
     if (source === "repo" && kind === "worker" && !fromService) errs.fromService = "Pick the service whose image this worker runs.";
     if (source === "repo" && picked && kind === "web" && !runtime) errs.runtime = "Pick a runtime.";
     const sized = sizingBody(sizing, podSizes.data ?? []);
@@ -251,6 +267,7 @@ export function AddServiceView() {
         if (errs.repo) repoSearchRef.current?.focus();
         else if (errs.name) nameInputRef.current?.focus();
         else if (errs.image) imageInputRef.current?.focus();
+        else if (errs.tag) tagInputRef.current?.focus();
         else if (errs.env) envRef.current?.querySelector("textarea")?.focus();
       });
       return;
@@ -259,7 +276,7 @@ export function AddServiceView() {
 
     const body =
       source === "image"
-        ? buildCreateServiceBody({ source, name, image: imageRepo, tag: imageTag, pullSecret, port, sizing: sized })
+        ? buildCreateServiceBody({ source, name, image: imageRepo.trim(), tag: specImageTag(imageTag), pullSecret, port, sizing: sized })
         : buildCreateServiceBody({
             source,
             name,
@@ -426,7 +443,7 @@ export function AddServiceView() {
             <div className="mt-4 space-y-4">
               <FormField
                 label="Image"
-                hint="Full registry path, without the tag."
+                hint="Full registry path. Paste a full reference and the tag moves to its own field."
                 error={fieldErrors.image}
                 htmlFor="svc-image"
               >
@@ -438,6 +455,16 @@ export function AddServiceView() {
                     setImageRepo(e.target.value);
                     clearFieldError("image");
                   }}
+                  onPaste={(e) => {
+                    const text = e.clipboardData.getData("text");
+                    const el = e.currentTarget;
+                    // Only when the paste replaces the whole field.
+                    if (el.selectionStart === 0 && el.selectionEnd === el.value.length && splitImageInput(text)) e.preventDefault();
+                  }}
+                  onBlur={(e) => {
+                    if (splitImageInput(e.target.value)) return;
+                    if (e.target.value.trim()) setFieldErrors((prev) => ({ ...prev, image: imageRepositoryProblem(e.target.value) ?? undefined }));
+                  }}
                   placeholder="e.g. ghcr.io/acme/api"
                   aria-invalid={fieldErrors.image ? true : undefined}
                   spellCheck={false}
@@ -447,13 +474,22 @@ export function AddServiceView() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField
                   label="Tag"
-                  hint="Immutable tags or digests roll out predictably; latest doesn't."
+                  hint="Required. Immutable tags or digests roll out predictably; latest doesn't."
+                  error={fieldErrors.tag}
                   htmlFor="svc-tag"
                 >
                   <Input
                     id="svc-tag"
+                    ref={tagInputRef}
                     value={imageTag}
-                    onChange={(e) => setImageTag(e.target.value)}
+                    onChange={(e) => {
+                      setImageTag(e.target.value);
+                      clearFieldError("tag");
+                    }}
+                    onBlur={(e) => {
+                      if (e.target.value.trim()) setFieldErrors((prev) => ({ ...prev, tag: imageTagProblem(e.target.value) ?? undefined }));
+                    }}
+                    aria-invalid={fieldErrors.tag ? true : undefined}
                     placeholder="e.g. v1.4.2"
                     spellCheck={false}
                     className={monoInputClass}
@@ -787,7 +823,7 @@ export function AddServiceView() {
                   slug={slug}
                   runtime={source === "image" ? "image" : effectiveRuntime}
                   branch={source === "repo" && kind === "web" ? picked?.repo.defaultBranch : undefined}
-                  image={source === "image" ? `${imageRepo.trim() || "…"}:${imageTag.trim() || "latest"}` : undefined}
+                  image={source === "image" ? imageRefString(imageRepo.trim() || "…", imageTag.trim() || "…") : undefined}
                   envCount={env.vars.length}
                   addons={source === "repo" ? [...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k)) : []}
                   worker={source === "repo" && kind === "worker" ? fromService : undefined}

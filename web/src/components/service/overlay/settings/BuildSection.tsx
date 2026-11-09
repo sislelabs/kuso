@@ -4,6 +4,7 @@ import { Hammer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { useRegistryCredentials } from "@/features/registry-credentials";
+import { imageRepositoryProblem, imageTagProblem, splitPastedImage } from "@/features/services/imageRef";
 import {
   Section,
   Field,
@@ -33,26 +34,7 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
         description="This service runs a pre-built image and never builds. Deploying a new tag is how you ship it."
         footerNote="Deploying a new repository or tag rolls the service onto that image."
       >
-        <Field label="Repository" hint="Full registry path." htmlFor="build-image-repo">
-          <Input
-            id="build-image-repo"
-            value={state.imageRepository}
-            onChange={(e) => setState((s) => ({ ...s, imageRepository: e.target.value }))}
-            placeholder="e.g. ghcr.io/owner/app"
-            className={monoInputClass}
-            spellCheck={false}
-          />
-        </Field>
-        <Field label="Tag" hint="Blank uses latest." htmlFor="build-image-tag">
-          <Input
-            id="build-image-tag"
-            value={state.imageTag}
-            onChange={(e) => setState((s) => ({ ...s, imageTag: e.target.value }))}
-            placeholder="latest"
-            className={cn(monoInputClass, "sm:max-w-xs")}
-            spellCheck={false}
-          />
-        </Field>
+        <ImageRefFields state={state} setState={setState} />
         <PullSecretRow project={project} state={state} setState={setState} />
       </Section>
     );
@@ -214,5 +196,62 @@ function PullSecretRow({ project, state, setState }: SectionProps & { project: s
         label="Registry login"
       />
     </Field>
+  );
+}
+
+// ImageRefFields edits the repository + tag pair. A full reference pasted
+// or typed into Repository is split on paste/blur; problems show inline
+// and the staged settings refuse to deploy until they're fixed.
+function ImageRefFields({ state, setState }: SectionProps) {
+  const repoProblem = state.imageRepository.trim() ? imageRepositoryProblem(state.imageRepository) : null;
+  const tagProblem = state.imageRepository.trim() ? imageTagProblem(state.imageTag) : null;
+  const split = (raw: string): boolean => {
+    const parts = splitPastedImage(raw);
+    if (!parts) return false;
+    setState((s) => ({ ...s, imageRepository: parts.repository, imageTag: parts.tag }));
+    return true;
+  };
+  return (
+    <>
+      <Field label="Repository" hint="Full registry path. Paste a full reference and the tag moves to its own field." htmlFor="build-image-repo">
+        <Input
+          id="build-image-repo"
+          value={state.imageRepository}
+          onChange={(e) => setState((s) => ({ ...s, imageRepository: e.target.value }))}
+          onPaste={(e) => {
+            const el = e.currentTarget;
+            if (el.selectionStart === 0 && el.selectionEnd === el.value.length && split(e.clipboardData.getData("text"))) e.preventDefault();
+          }}
+          onBlur={(e) => split(e.target.value)}
+          placeholder="e.g. ghcr.io/owner/app"
+          aria-invalid={repoProblem ? true : undefined}
+          aria-describedby={repoProblem ? "build-image-repo-error" : undefined}
+          className={monoInputClass}
+          spellCheck={false}
+        />
+        {repoProblem && (
+          <p id="build-image-repo-error" role="alert" className="text-xs text-[var(--error)]">
+            {repoProblem}
+          </p>
+        )}
+      </Field>
+      <Field label="Tag" hint="A tag or sha256 digest. Required: an immutable tag rolls out predictably, latest doesn't." htmlFor="build-image-tag">
+        <Input
+          id="build-image-tag"
+          value={state.imageTag}
+          onChange={(e) => setState((s) => ({ ...s, imageTag: e.target.value }))}
+          placeholder="e.g. 1.4.2"
+          aria-invalid={tagProblem ? true : undefined}
+          aria-describedby={tagProblem ? "build-image-tag-error" : undefined}
+          className={cn(monoInputClass, "sm:max-w-md")}
+          spellCheck={false}
+        />
+        {tagProblem && (
+          <p id="build-image-tag-error" role="alert" className="text-xs text-[var(--error)]">
+            {tagProblem}
+          </p>
+        )}
+      </Field>
+    </>
   );
 }

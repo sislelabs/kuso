@@ -11,6 +11,7 @@ import { StagedChip } from "@/components/staged/StagedChip";
 export { Switch } from "@/components/ui/switch";
 export { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
+import { displayImageTag } from "@/features/services/imageRef";
 
 // ----- shape of the entire editable surface -----
 
@@ -215,7 +216,7 @@ export function fromSvc(svc?: KusoService): FormState {
     runtime: svc?.spec.runtime ?? "dockerfile",
     dockerfile: svc?.spec.dockerfile ?? "",
     imageRepository: svc?.spec.image?.repository ?? "",
-    imageTag: svc?.spec.image?.tag ?? "",
+    imageTag: displayImageTag(svc?.spec.image?.tag ?? ""),
     imagePullSecret: svc?.spec.image?.pullSecret ?? "",
     volumes: (svc?.spec.volumes ?? []).map((v: KusoVolume) => ({
       name: v.name,

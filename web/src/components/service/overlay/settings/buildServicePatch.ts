@@ -1,4 +1,5 @@
 import { parseWatchPathsText } from "@/features/services/watchPaths";
+import { imageRefString, imageRepositoryProblem, imageTagProblem, specImageTag } from "@/features/services/imageRef";
 import type { FormState } from "./_primitives";
 import { releasePatch } from "./releasePatch";
 import { extraServicePatch } from "./servicePatchExtras";
@@ -149,9 +150,11 @@ export function buildServicePatch(
     // Clearing the repository would strand the service with nothing to run.
     const repository = state.imageRepository.trim();
     if (!repository) return { error: "Image repository can't be empty" };
+    const problem = imageRepositoryProblem(repository) ?? imageTagProblem(state.imageTag);
+    if (problem) return { error: problem };
     body.image = {
       repository,
-      tag: state.imageTag.trim() || undefined,
+      tag: specImageTag(state.imageTag),
       pullSecret: state.imagePullSecret,
     };
   }
@@ -310,7 +313,7 @@ export function fieldDiffValues(field: string, base: FormState, next: FormState)
     dockerfile: (s) => s.dockerfile,
     watchPaths: (s) => parseWatchPathsText(s.watchPaths).join(", ") || "default",
     image: (s) =>
-      [s.imageRepository, s.imageTag && `:${s.imageTag}`, s.imagePullSecret && ` (pull secret ${s.imagePullSecret})`]
+      [imageRefString(s.imageRepository, s.imageTag), s.imagePullSecret && ` (pull secret ${s.imagePullSecret})`]
         .filter(Boolean)
         .join(""),
     repo: (s) =>
