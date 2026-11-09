@@ -97,6 +97,7 @@ describe("isCollectorNote", () => {
     expect(isCollectorNote("WARN kubelet: unable to retrieve container logs for containerd://abc")).toBe(true);
     expect(isCollectorNote("unable to retrieve container logs for containerd://abc")).toBe(true);
     expect(isCollectorNote('failed to try resolving symlinks in path "/var/log/pods/x": lstat: no such file')).toBe(true);
+    expect(isCollectorNote("wait-for-addons | unable to retrieve container logs for containerd://abc")).toBe(true);
     expect(isCollectorNote("ERROR unable to retrieve user 42")).toBe(false);
   });
 });

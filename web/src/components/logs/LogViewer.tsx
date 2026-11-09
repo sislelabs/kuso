@@ -995,7 +995,7 @@ function CollectorNotes({ notes }: { notes: ViewLine[] }) {
           {notes.map((n) => (
             <li key={n.key} className="flex gap-3 py-0.5">
               <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{n.ts ? fmtClock(n.ts, false) : "—"}</span>
-              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{stripAnsi(n.line).replace(/^WARN kubelet: /, "")}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{stripAnsi(n.line).replace(/WARN kubelet: /, "")}</span>
             </li>
           ))}
         </ul>

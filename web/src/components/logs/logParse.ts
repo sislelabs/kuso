@@ -328,7 +328,8 @@ export function sortByTime<T extends { ts: string; cont: boolean; backlog?: bool
 // output: the kubelet's "unable to retrieve container logs …" (the
 // server prefixes it "WARN kubelet: ") and its symlink lookups for a
 // rotated-away log file.
-const COLLECTOR_NOTE = /^(?:WARN kubelet: )?(?:unable to retrieve container logs|failed to try resolving symlinks in path)/;
+// Multi-container pods prefix each line with "<container> | ".
+const COLLECTOR_NOTE = /^(?:[\w.-]+ \| )?(?:WARN kubelet: )?(?:unable to retrieve container logs|failed to try resolving symlinks in path)/;
 export function isCollectorNote(raw: string): boolean {
   return COLLECTOR_NOTE.test(stripAnsi(raw).trimStart());
 }
