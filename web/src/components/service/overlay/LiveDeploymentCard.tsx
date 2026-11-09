@@ -173,8 +173,15 @@ export function LiveDeploymentCard({
             {went && (
               <>
                 <Dot />
-                <time dateTime={went} title={new Date(went).toLocaleString()}>
-                  deployed {relativeTime(went)}
+                <time
+                  dateTime={went}
+                  title={
+                    rolledBack && build.finishedAt
+                      ? `Rolled back ${new Date(went).toLocaleString()} · built ${new Date(build.finishedAt).toLocaleString()}`
+                      : new Date(went).toLocaleString()
+                  }
+                >
+                  {rolledBack ? "rolled back" : "deployed"} {relativeTime(went)}
                 </time>
               </>
             )}

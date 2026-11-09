@@ -242,7 +242,8 @@ export function BuildRow({
               )}
             </div>
           )}
-          {failed && (failedStep || failureTitle || errorLine || b.errorMessage) && (
+          {/* Open, the failure card above the log states all of this once. */}
+          {failed && !isOpen && (failedStep || failureTitle || errorLine || b.errorMessage) && (
             <div className="mt-1.5 min-w-0 space-y-1">
               {(failedStep || failureTitle) && (
                 <p className="break-words text-xs text-[var(--error)]">
@@ -265,16 +266,14 @@ export function BuildRow({
               ) : (
                 !failureTitle && b.errorMessage && !(failedStep && isGenericFailure(b.errorMessage)) && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
               )}
-              {!isOpen && (
-                <button
-                  type="button"
-                  onClick={viewFailure}
-                  aria-controls={logId}
-                  className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
-                >
-                  View failure
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={viewFailure}
+                aria-controls={logId}
+                className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
+              >
+                View failure
+              </button>
             </div>
           )}
           {note && <p className="mt-1 break-words text-xs text-[var(--text-tertiary)]">{note}</p>}
@@ -326,8 +325,11 @@ export function BuildRow({
           ) : (
             <>
               {failed && (
-                <Remediation
+                <FailureCard
                   failureClass={b.failureClass}
+                  step={failedStep}
+                  title={failureTitle || (isGenericFailure(b.errorMessage) && (failedStep || errorLine) ? "" : b.errorMessage) || ""}
+                  errorLine={errorLine}
                   project={project}
                   service={service}
                   buildId={b.id}
@@ -496,38 +498,56 @@ function RowMenu({
   );
 }
 
-// Remediation renders the classifier's fix for a failed build above the log.
-// The quoted line links into the log below.
-function Remediation({
+// FailureCard states a failed build's cause once, above its log: where it
+// failed and why, the offending line (linked into the log below) and the
+// classifier's fix when it has one.
+function FailureCard({
   failureClass,
+  step,
+  title,
+  errorLine,
   project,
   service,
   buildId,
   onJump,
 }: {
   failureClass?: BuildFailureClass;
+  step?: string;
+  title: string;
+  errorLine?: string;
   project: string;
   service: string;
   buildId: string;
   onJump: (line: number) => void;
 }) {
-  const log = useStoredBuildLog(project, service, buildId, !!failureClass?.lineHint);
+  const log = useStoredBuildLog(project, service, buildId, !!errorLine);
   const lineNo = useMemo(
-    () => hintLineNumber((log.data ?? []).map((l) => l.line), failureClass?.lineHint),
-    [log.data, failureClass?.lineHint],
+    () => hintLineNumber((log.data ?? []).map((l) => l.line), errorLine),
+    [log.data, errorLine],
   );
   const rem = failureClass?.remediation;
-  if (!failureClass?.lineHint && !rem) return null;
+  if (!step && !title && !errorLine && !rem) return null;
   return (
     <div className="space-y-2 border-b border-[var(--border-subtle)] bg-[var(--error-subtle)] px-3 py-2.5 sm:px-4">
-      {failureClass?.lineHint && (
-        <p className="break-words font-mono text-xs text-[var(--text-secondary)]">
+      {(step || title) && (
+        <p className="break-words text-sm text-[var(--text-primary)]">
+          {step && (
+            <span className="font-medium">
+              Failed at {step}
+              {title ? <span aria-hidden>: </span> : null}
+            </span>
+          )}
+          {title && <span className={step ? "text-[var(--text-secondary)]" : "font-medium"}>{title}</span>}
+        </p>
+      )}
+      {errorLine && (
+        <p className="break-words rounded border-l-2 border-[var(--error)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-xs text-[var(--text-primary)]">
           {lineNo > 0 && (
             <>
               <button
                 type="button"
                 onClick={() => onJump(lineNo)}
-                className="underline decoration-dotted underline-offset-2 hover:text-[var(--text-primary)]"
+                className="text-[var(--text-secondary)] underline decoration-dotted underline-offset-2 hover:text-[var(--text-primary)]"
                 title="Show this line in the log"
               >
                 line {lineNo}
@@ -535,7 +555,7 @@ function Remediation({
               {": "}
             </>
           )}
-          {failureClass.lineHint}
+          {errorLine}
         </p>
       )}
       {rem && (

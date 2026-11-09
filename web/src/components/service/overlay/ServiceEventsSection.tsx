@@ -7,33 +7,21 @@ import { api, ApiError } from "@/lib/api-client";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { collapseEvents, type ServicePodEvent } from "./podEvents";
+
+export type { ServicePodEvent };
 
 // GET /api/projects/{p}/services/{s}/events?env=<env CR name>
-//   → { namespace, events: [{ type, reason, message, summary?, object,
-//        count, firstSeen?, lastSeen }] }   (projects.PodEventList)
+//   → { namespace, events: ServicePodEvent[] }   (projects.PodEventList)
 // Recent kube events for the service's current pods and its Deployment,
 // newest first. Older servers 404; the section then points at the
 // cluster-wide events list on Settings → Health.
-export interface ServicePodEvent {
-  type: string; // "Normal" | "Warning"
-  reason: string;
-  // Raw kube text.
-  message: string;
-  // message in plain words; only set where the raw text is unreadable
-  // (FailedScheduling).
-  summary?: string;
-  object: string; // "pod/<name>" or "deployment/<name>"
-  count: number;
-  firstSeen?: string;
-  lastSeen?: string;
-}
-
 async function listServiceEvents(project: string, service: string, env: string): Promise<ServicePodEvent[]> {
   const qs = env ? `?env=${encodeURIComponent(env)}` : "";
   const res = await api<{ namespace?: string; events?: ServicePodEvent[] | null }>(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/events${qs}`,
   );
-  return res.events ?? [];
+  return collapseEvents(res.events ?? []);
 }
 
 const SHOWN = 12;
