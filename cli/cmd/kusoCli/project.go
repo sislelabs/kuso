@@ -1966,7 +1966,7 @@ func init() {
 	projectAddonCmd.AddCommand(addonSubscribeCmd)
 	projectAddonCmd.AddCommand(addonUnsubscribeCmd)
 	addonAddCmd.Flags().StringVar(&addonAddKind, "kind", "", "addon kind (required: "+strings.Join(supportedAddonKinds, ", ")+")")
-	addonAddCmd.Flags().StringVar(&addonAddVersion, "version", "", "engine version")
+	addonAddCmd.Flags().StringVar(&addonAddVersion, "version", "", "engine version (default: the newest kuso supports, e.g. postgres 18)")
 	addonAddCmd.Flags().StringVar(&addonAddSize, "size", "small", "small|medium|large")
 	addonAddCmd.Flags().BoolVar(&addonAddHA, "ha", false, "use clustered chart variant where supported")
 	addonAddCmd.Flags().StringVar(&addonAddStorageSize, "storage-size", "", "PVC size, e.g. 20Gi (default from --size; can't change later on most storage classes)")
