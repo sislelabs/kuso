@@ -6,7 +6,14 @@
 import dagre from "dagre";
 import type { Node, Edge } from "@xyflow/react";
 import { serviceShortName } from "@/lib/utils";
-import { COMPACT_SERVICE_NODE_HEIGHT, COMPACT_SERVICE_NODE_WIDTH, serviceNodeWidth } from "./geometry";
+import {
+  ADDON_NODE_CHROME,
+  COMPACT_SERVICE_NODE_HEIGHT,
+  COMPACT_SERVICE_NODE_WIDTH,
+  CRON_NODE_CHROME,
+  serviceNodeWidth,
+  smallNodeWidth,
+} from "./geometry";
 
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 140;
@@ -17,8 +24,18 @@ function heightOf(n: Node): number {
   return compactNode(n) ? COMPACT_SERVICE_NODE_HEIGHT : NODE_HEIGHT;
 }
 
-// Service cards widen for long names; lay them out at the width they render.
+// Cards widen for long names; lay them out at the width they render.
 function widthOf(n: Node): number {
+  const nameOf = (v: unknown) => (typeof v === "string" ? v : "");
+  if (n.type === "addon") {
+    const d = n.data as { project?: unknown; addon?: { metadata?: { name?: unknown } } };
+    return smallNodeWidth(serviceShortName(nameOf(d.project), nameOf(d.addon?.metadata?.name)), ADDON_NODE_CHROME);
+  }
+  if (n.type === "cron") {
+    const d = n.data as { project?: unknown; cron?: { metadata?: { name?: unknown }; spec?: { displayName?: unknown } } };
+    const name = nameOf(d.cron?.spec?.displayName).trim() || serviceShortName(nameOf(d.project), nameOf(d.cron?.metadata?.name));
+    return smallNodeWidth(name, CRON_NODE_CHROME);
+  }
   if (n.type !== "service") return NODE_WIDTH;
   if (compactNode(n)) return COMPACT_SERVICE_NODE_WIDTH;
   const d = n.data as { project?: unknown; service?: { metadata?: { name?: unknown }; spec?: { displayName?: unknown } } };

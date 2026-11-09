@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { facingSides, nextInDirection, readingOrder, serviceNodeWidth, type Box } from "./geometry";
+import { ADDON_NODE_CHROME, facingSides, nextInDirection, readingOrder, serviceNodeWidth, smallNodeWidth, type Box } from "./geometry";
 
 const box = (id: string, x: number, y: number, w = 200, h = 100): Box => ({ id, x, y, w, h });
 
@@ -57,5 +57,15 @@ describe("serviceNodeWidth", () => {
     expect(mid).toBeGreaterThan(280);
     expect(mid).toBeLessThan(380);
     expect(serviceNodeWidth("x".repeat(80))).toBe(380);
+  });
+});
+
+describe("smallNodeWidth", () => {
+  it("keeps short names at the base width and fits a 20-character name", () => {
+    expect(smallNodeWidth("db", ADDON_NODE_CHROME)).toBe(220);
+    const w = smallNodeWidth("clickhouse-analytics", ADDON_NODE_CHROME);
+    // name text (~7.6px/char) plus the card chrome must fit.
+    expect(w).toBeGreaterThanOrEqual(ADDON_NODE_CHROME + 20 * 7.6);
+    expect(smallNodeWidth("x".repeat(80), ADDON_NODE_CHROME)).toBe(340);
   });
 });

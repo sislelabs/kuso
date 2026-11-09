@@ -3,7 +3,7 @@
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Layers, MoreHorizontal, Undo2 } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Layers, MoreHorizontal, Undo2, XCircle } from "lucide-react";
 import { StatusChip } from "@/components/ui/status-chip";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
@@ -20,6 +20,7 @@ import { relativeTime } from "@/lib/format";
 import { stuckFacts } from "@/lib/status";
 import { toast } from "sonner";
 import { ErrorBadge, VulnBadge } from "./NodeBadges";
+import { failureCause } from "./failureCause";
 import type { ErrorSummary, VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
@@ -77,6 +78,14 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const live = liveBuildOf(data.latestBuild);
   const hasBadges = (data.errors?.occurrences ?? 0) > 0 || (data.vulns?.fixableCritical ?? 0) > 0;
   const compact = !!data.compact;
+  const cause = failureCause(status, data.env?.status, data.latestBuild);
+  // Severity reads from the icon shape too, not only the dot's hue.
+  const ToneIcon = status.tone === "error" ? XCircle : status.tone === "warning" ? AlertTriangle : null;
+  const toneMark = ToneIcon ? (
+    <ToneIcon aria-hidden className={cn("h-3.5 w-3.5 shrink-0", tone.text)} />
+  ) : (
+    <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
+  );
   const errorBadge = (
     <ErrorBadge compact tabIndex={-1} summary={data.errors} hot={data.errorsHot} onOpen={() => data.__onOpenTab?.("errors")} />
   );
@@ -89,7 +98,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       tabIndex={data.__tabIndex ?? -1}
       role="group"
       aria-roledescription="service"
-      aria-label={[displayName, status.label, data.errors?.occurrences ? `${data.errors.occurrences} errors in 24h` : ""]
+      aria-label={[displayName, status.label, cause ?? "", data.errors?.occurrences ? `${data.errors.occurrences} errors in 24h` : ""]
         .filter(Boolean)
         .join(", ")}
       onContextMenu={(e) => data.__onContext?.(e, url)}
@@ -135,8 +144,9 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       </div>
       {compact ? (
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs">
-          <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+          {ToneIcon ? <ToneIcon aria-hidden className={cn("h-3 w-3 shrink-0", tone.text)} /> : <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />}
           <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
+          {cause && <span className="min-w-0 truncate text-[var(--text-secondary)]" title={cause}>· {cause}</span>}
           {replicas && !dimmed && (
             <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]" title={`${replicas.ready} of ${replicas.desired} replicas ready`}>
               · {replicas.ready}/{replicas.desired}
@@ -170,11 +180,17 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         )}
       </div>
 
+      {cause && (
+        <p className="mt-2 truncate text-xs text-[var(--text-secondary)]" title={status.detail || cause}>
+          {cause}
+        </p>
+      )}
+
       <div className="flex-1" />
 
       <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 text-xs">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
+          {toneMark}
           <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
           {live?.rolledBack && (
             <StatusChip size="sm" icon={Undo2} title="Rolled back to an older build. The next deploy replaces it.">
@@ -182,7 +198,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
             </StatusChip>
           )}
           {/* A stuck rollout isn't "deployed 1m ago"; its reason takes the slot. */}
-          {status.kind === "stuck" ? (
+          {cause ? null : status.kind === "stuck" ? (
             <span className="truncate text-[var(--text-secondary)]" title={status.detail}>
               · {status.detail || stuckFacts(data.env?.status)?.summary || "Can't start"}
             </span>

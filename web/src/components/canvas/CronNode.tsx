@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { deriveCronStatus, STATUS_TONE } from "@/features/services";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
+import { CRON_NODE_CHROME, smallNodeWidth } from "./geometry";
 import { nodeActionButtonClass, nodeCardClass, nodeNameClass } from "./nodeStyle";
 
 // Canvas node for KusoCron. Smaller than the service/addon nodes so
@@ -107,13 +108,14 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
       aria-roledescription="cron job"
       aria-label={`${displayName}, ${suspended ? "paused" : describeSchedule(schedule)}`}
       onContextMenu={data.__onContext}
+      style={{ width: smallNodeWidth(displayName, CRON_NODE_CHROME) }}
       className={cn(
         // 220×96: smaller than the 280×120 service tiles so the visual
         // hierarchy stays. Crons have no live health, so the border stays
         // neutral; paused crons dim.
         nodeCardClass,
         // Dashed: a cron is a schedule, not a running thing.
-        "flex h-[96px] w-[220px] flex-col border-dashed p-2.5",
+        "flex h-[96px] flex-col border-dashed p-2.5",
         suspended
           ? "opacity-70 border-[var(--border-default)]"
           : "border-[var(--border-strong)]/70 hover:border-[var(--border-strong)]",
@@ -137,7 +139,7 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
 
       <div className="flex items-center gap-1.5 pr-7">
         <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-        <span className={nodeNameClass}>{displayName}</span>
+        <span className={nodeNameClass} title={displayName}>{displayName}</span>
       </div>
 
       <div className="mt-1 truncate font-mono text-xs text-[var(--text-secondary)]" title={detail}>

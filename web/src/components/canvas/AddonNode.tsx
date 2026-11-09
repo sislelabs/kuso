@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal } from "lucide-react";
+import { AlertTriangle, MoreHorizontal, XCircle } from "lucide-react";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import type { VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 import { addonVersionLabel } from "@/features/addons/version";
+import { ADDON_NODE_CHROME, smallNodeWidth } from "./geometry";
 import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
 
 export interface AddonNodeData extends CanvasNodeA11y {
@@ -42,11 +43,12 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
       aria-label={`${shortName}, ${addonLabel(data.addon.spec.kind)}, ${status.label}`}
       onContextMenu={data.__onContext}
       title={status.detail ? `${status.label}: ${status.detail}` : undefined}
+      style={{ width: smallNodeWidth(shortName, ADDON_NODE_CHROME) }}
       className={cn(
         // 3 grid units tall (services are 5) so addons read as supporting
         // pieces; both snap to the same 24px grid.
         nodeCardClass,
-        "flex h-[72px] w-[220px] flex-col justify-center px-3 py-2",
+        "flex h-[72px] flex-col justify-center px-3 py-2",
         nodeBorderClass(status.tone, tone.border),
         nodeFocusClass,
       )}
@@ -69,16 +71,25 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
       <div className="flex items-center gap-2.5 pr-6">
         <AddonIcon kind={data.addon.spec.kind} className="h-5 w-5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <p className={cn(nodeNameClass, "flex min-w-0 items-center gap-1.5")}>
-            <span className="truncate" title={data.addon.metadata.name}>{shortName}</span>
-            <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+          {/* The name owns its row; the CVE chip rides the status row. */}
+          <p className={nodeNameClass} title={data.addon.metadata.name}>
+            {shortName}
           </p>
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
-            <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+            {status.tone === "error" ? (
+              <XCircle aria-hidden className={cn("h-3 w-3 shrink-0", tone.text)} />
+            ) : status.tone === "warning" ? (
+              <AlertTriangle aria-hidden className={cn("h-3 w-3 shrink-0", tone.text)} />
+            ) : (
+              <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+            )}
             <span className={cn("shrink-0", status.tone === "success" ? "text-[var(--text-secondary)]" : tone.text)}>
               {status.label}
             </span>
-            <span className="truncate">· {meta.join(" · ")}</span>
+            <span className="min-w-0 truncate">· {meta.join(" · ")}</span>
+            <span className="ml-auto flex shrink-0 pl-1">
+              <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+            </span>
           </p>
         </div>
       </div>

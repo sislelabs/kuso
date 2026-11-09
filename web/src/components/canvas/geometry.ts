@@ -82,3 +82,15 @@ export function serviceNodeWidth(name: string): number {
   const est = Math.round(76 + name.length * 7.6);
   return Math.min(SERVICE_NODE_MAX_WIDTH, Math.max(SERVICE_NODE_MIN_WIDTH, est));
 }
+
+// Addon and cron cards start at 220px and widen the same way, so a name
+// up to ~20 characters shows in full. `chrome` is the card's fixed
+// horizontal cost (padding, icon, actions button).
+export const SMALL_NODE_MIN_WIDTH = 220;
+export const SMALL_NODE_MAX_WIDTH = 340;
+export const ADDON_NODE_CHROME = 82;
+export const CRON_NODE_CHROME = 72;
+export function smallNodeWidth(name: string, chrome: number): number {
+  const est = Math.round(chrome + name.length * 7.6);
+  return Math.min(SMALL_NODE_MAX_WIDTH, Math.max(SMALL_NODE_MIN_WIDTH, est));
+}
