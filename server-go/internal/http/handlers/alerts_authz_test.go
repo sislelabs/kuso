@@ -13,6 +13,7 @@ import (
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/notify"
 )
 
 // Alert rules are open to project members: read on viewer, write on
@@ -245,5 +246,37 @@ func TestAlerts_MemberUpdate(t *testing.T) {
 	}
 	if got.Name != "renamed" || got.ThresholdFloat == nil || *got.ThresholdFloat != 9 || got.Project != "mine" || !got.Enabled {
 		t.Fatalf("stored rule = %+v", got)
+	}
+}
+
+// The test send's per-channel result reaches project editors, who must
+// never see the admin-configured webhook URL (the URL is the secret).
+func TestAlerts_TestNeverLeaksChannelURL(t *testing.T) {
+	d := openTestDB(t)
+	seedAlertMember(t, d)
+	seedAlertRule(t, d, "own", "mine", db.AlertKindHTTP5xxRate)
+	const token = "SECRETTOKEN-1a2b3c4d5e"
+	// Loopback: the SSRF guard refuses the dial, and its raw error quotes the URL.
+	if err := d.CreateNotification(context.Background(), &db.Notification{
+		ID: "ch1", Name: "ops", Enabled: true, Type: "discord",
+		Config: map[string]any{"url": "http://127.0.0.1:9/api/webhooks/1/" + token},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := chi.NewRouter()
+	(&AlertsHandler{DB: d, Logger: slog.Default(), Notify: notify.New(d, slog.Default(), 8)}).Mount(r)
+	for _, who := range []*auth.Claims{alertAdmin, alertMember} {
+		rr := alertsDo(t, r, who, http.MethodPost, "/api/alerts/own/test", "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: POST test = %d (%s)", who.UserID, rr.Code, rr.Body.String())
+		}
+		body := rr.Body.String()
+		if strings.Contains(body, token) || strings.Contains(body, "://") {
+			t.Fatalf("%s: response leaks the channel URL: %s", who.UserID, body)
+		}
+		var out alertTestResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil || len(out.Results) != 1 || out.Results[0].OK || out.Results[0].Error == "" {
+			t.Fatalf("%s: results = %s", who.UserID, body)
+		}
 	}
 }

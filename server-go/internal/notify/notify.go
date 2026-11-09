@@ -1388,7 +1388,7 @@ type DeliveryResult struct {
 
 // DeliverNow sends e synchronously to every channel that would receive it
 // (same event, project and audience filters as the outbox) and reports
-// each send. Used to test an alert rule end to end; muted reports whether
+// each send, with errors reduced to SafeDeliveryError categories. Used to test an alert rule end to end; muted reports whether
 // a project mute would have held the real event back.
 func (d *Dispatcher) DeliverNow(ctx context.Context, e Event) (results []DeliveryResult, muted bool, err error) {
 	notifs, err := d.cachedNotifications(ctx)
@@ -1407,7 +1407,10 @@ func (d *Dispatcher) DeliverNow(ctx context.Context, e Event) (results []Deliver
 		}
 		r := DeliveryResult{Channel: n.ID, Name: n.Name, Type: n.Type, OK: true}
 		if serr := d.deliverViaChannel(ctx, n, e); serr != nil {
-			r.OK, r.Error = false, serr.Error()
+			// The raw error can hold the channel URL or the receiver's
+			// reply; it stays in the server log.
+			d.logger.Warn("notify: test delivery failed", "channel", n.ID, "type", n.Type, "err", serr)
+			r.OK, r.Error = false, SafeDeliveryError(serr)
 		}
 		results = append(results, r)
 	}
