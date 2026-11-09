@@ -9,14 +9,15 @@ import { toast } from "sonner";
 import {
   Archive,
   ArrowRight,
+  Box,
   Check,
   ChevronRight,
   FileUp,
   FolderPlus,
+  Github,
   GitBranch,
   Globe,
   Rocket,
-  Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -40,6 +41,8 @@ import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
 import { restoreFormDraft } from "@/lib/query-client";
 import { ImportArchiveCard } from "./ImportArchiveCard";
+import { DeployImageForm, type DeployImageInput } from "./DeployImageForm";
+import { TemplateCard } from "./TemplateCard";
 import { FormField, SegmentedControl } from "../[project]/services/new/FormField";
 import { RepoPicker, pickedRepoURL, useRepoSources, type PickedRepo } from "../[project]/services/new/RepoPicker";
 import { useRepoDetection } from "../[project]/services/new/useRepoDetection";
@@ -92,6 +95,9 @@ export default function NewProjectPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // The primary card builds from a repo or runs a pre-built image.
+  const [primary, setPrimary] = useState<"repo" | "image">("repo");
 
   // ---- Repo-first path ----
   const [picked, setPicked] = useState<PickedRepo | null>(null);
@@ -240,6 +246,58 @@ export default function NewProjectPage() {
     }
   };
 
+  // ---- Image path: project + one image service, no build ----
+  const onDeployImage = async ({ projectName: pName, image, port: imagePort, envVars }: DeployImageInput) => {
+    const pBody = buildCreateProjectBody({
+      name: pName,
+      description: `Runs ${image.repository}`,
+      baseDomain,
+      namespace,
+      repoURL: "",
+      repoBranch: "",
+      installationId: 0,
+      previewsEnabled,
+      previewsTTLDays,
+    });
+    if ("error" in pBody) {
+      setFormError(pBody.error);
+      setAdvancedOpen(true);
+      return;
+    }
+    setFormError(null);
+    setSubmitting(true);
+    try {
+      await create.mutateAsync(pBody);
+    } catch (err) {
+      toast.error(friendlyApiError(err, "Failed to create project"));
+      setSubmitting(false);
+      return;
+    }
+    const sBody = buildCreateServiceBody({
+      source: "image",
+      name: defaultServiceName(pName, image.name),
+      image: image.repository,
+      tag: image.tag,
+      port: imagePort,
+    });
+    const projectHref = `/projects/${encodeURIComponent(pName)}`;
+    try {
+      const out = await createServiceWithEnv(pName, sBody, { envVars });
+      await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
+      reportCreateOutcome(out, `${pName}/${sBody.name}`);
+      const tab = out.envFailed.length > 0 ? "variables" : "deployments";
+      router.replace(`${projectHref}?service=${encodeURIComponent(sBody.name)}&tab=${tab}`);
+    } catch (err) {
+      toast.error(
+        `Project ${pName} was created, but its service wasn't: ${friendlyApiError(err, "unknown error")}. Add the service again below.`,
+        { duration: Infinity, closeButton: true },
+      );
+      router.replace(`${projectHref}/services/new`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // ---- Secondary paths ----
   const [secondary, setSecondary] = useState<Secondary>(null);
   const [name, setName] = useState("");
@@ -331,7 +389,7 @@ export default function NewProjectPage() {
         className="mb-6 sm:mb-6"
         breadcrumb={[{ label: "Projects", href: "/projects" }, { label: "New project" }]}
         title="New project"
-        description="Import a Git repository and kuso builds and deploys it. A project can hold more services and databases later."
+        description="Import a Git repository to build and deploy, or run a pre-built container image. A project can hold more services and databases later."
       />
 
       {/* Primary path: import a repo. */}
@@ -339,11 +397,40 @@ export default function NewProjectPage() {
         aria-labelledby="import-heading"
         className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
       >
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
-          <h2 id="import-heading" className="text-[15px] font-semibold">
-            Import a Git repository
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+          <h2 id="import-heading" className="sr-only">
+            {primary === "repo" ? "Import a Git repository" : "Deploy a container image"}
           </h2>
-          {picked && (
+          <div role="radiogroup" aria-label="Source" className="inline-flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+            {(
+              [
+                { v: "repo", label: "Import a Git repository", short: "Git repository", icon: <Github className="h-3.5 w-3.5" /> },
+                { v: "image", label: "Deploy a container image", short: "Container image", icon: <Box className="h-3.5 w-3.5" /> },
+              ] as const
+            ).map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                role="radio"
+                aria-checked={primary === o.v}
+                onClick={() => {
+                  setPrimary(o.v);
+                  setFormError(null);
+                }}
+                className={
+                  "inline-flex min-h-8 items-center gap-1.5 rounded px-2.5 text-[13px] font-medium transition-colors " +
+                  (primary === o.v
+                    ? "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
+                    : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]")
+                }
+              >
+                {o.icon}
+                <span className="sm:hidden">{o.short}</span>
+                <span className="hidden sm:inline">{o.label}</span>
+              </button>
+            ))}
+          </div>
+          {primary === "repo" && picked && (
             <button
               type="button"
               onClick={unpick}
@@ -354,7 +441,17 @@ export default function NewProjectPage() {
           )}
         </div>
         <div className="p-4 sm:p-5">
-          {!picked ? (
+          {primary === "image" ? (
+            <DeployImageForm
+              taken={taken}
+              instanceDomain={instanceDomain}
+              baseDomain={baseDomain}
+              formError={formError}
+              submitting={submitting}
+              onSubmit={(input) => void onDeployImage(input)}
+              advanced={(pName) => <AdvancedFields {...advancedProps} projectName={pName} serviceName={pName || "web"} />}
+            />
+          ) : !picked ? (
             <RepoPicker onPick={onPick} listClassName="max-h-64" />
           ) : (
             <div className="space-y-5">
@@ -588,7 +685,7 @@ export default function NewProjectPage() {
       {/* Secondary paths. */}
       <h2 className="mb-3 mt-8 text-[13px] font-medium text-[var(--text-secondary)]">Or start another way</h2>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <OptionCard href="/marketplace" icon={<Store className="h-4 w-4" />} title="Template" hint="Gitea, Metabase, Plausible…" />
+        <TemplateCard />
         {isAdmin && (
           <OptionCard
             href="/settings/import-compose"
