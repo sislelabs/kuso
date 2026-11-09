@@ -1,6 +1,8 @@
 import type { ProjectSummaryItem } from "@/features/projects";
 import { ENV_GROUP_LABEL, envGroupName } from "@/lib/env-group";
 import { serviceShortName } from "@/lib/utils";
+import { serviceUrl } from "@/features/services/serviceUrl";
+import { liveUrlFallback, type LiveUrlFallback } from "@/features/projects/liveDomain";
 
 // One status vocabulary for every palette row, folded from the
 // server's unified env state (projects/state.go).
@@ -39,7 +41,10 @@ export interface PaletteService {
   branch?: string;
   runtime?: string;
   repo?: string;
+  // Same URL the canvas node shows (serviceUrl), plus the auto host to
+  // swap in while a custom domain isn't serving (useLiveUrl).
   url?: string;
+  urlFallback?: LiveUrlFallback;
   status: PaletteStatus;
   envVarKeys: string[];
 }
@@ -104,7 +109,8 @@ export function buildPaletteIndex(items: ProjectSummaryItem[]): PaletteIndex {
         branch: group === "production" ? undefined : env?.spec.branch,
         runtime: s.spec.runtime,
         repo: s.spec.repo?.url?.replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, ""),
-        url: env?.status?.url || (env?.spec.host ? `${env.spec.tlsEnabled === false ? "http" : "https"}://${env.spec.host}` : undefined),
+        url: serviceUrl(s, env),
+        urlFallback: liveUrlFallback(env, serviceUrl(s, env)),
         status: paletteStatus(env?.status?.state),
         envVarKeys: (s.spec.envVars ?? []).map((v) => v.name).filter((k): k is string => !!k),
       });

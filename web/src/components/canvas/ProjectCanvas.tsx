@@ -891,14 +891,13 @@ export function ProjectCanvas({
   // Right-click on a service node — Open / View logs / Redeploy / Delete.
   const onServiceContext = (
     e: React.MouseEvent,
-    data: ServiceNodeData
+    data: ServiceNodeData,
+    liveUrl: string | undefined,
   ) => {
     e.preventDefault();
     const short = serviceShortName(data.project, data.service.metadata.name);
-    // envs is already narrowed to the selected env-group, so the
-    // service's env here IS the one this tab is showing.
-    const env = envs.find((x) => x.spec.service === data.service.metadata.name);
-    const url = env?.status?.url as string | undefined;
+    // The card's own URL (custom domain, or the auto host while it isn't serving).
+    const url = liveUrl;
 
     const runtime = data.service.spec.runtime || "dockerfile";
     const items: ContextMenuEntry[] = [
@@ -1203,7 +1202,7 @@ export function ProjectCanvas({
             __tabIndex: n.id === tabStopId ? (0 as const) : (-1 as const),
             __onContext:
               n.type === "service"
-                ? (e: React.MouseEvent) => onServiceContext(e, n.data as ServiceNodeData)
+                ? (e: React.MouseEvent, liveUrl?: string) => onServiceContext(e, n.data as ServiceNodeData, liveUrl)
                 : n.type === "addon"
                   ? (e: React.MouseEvent) => onAddonContext(e, n.data as AddonNodeData)
                   : (e: React.MouseEvent) => onCronContext(e, n.data as unknown as CronNodeData),
@@ -1679,7 +1678,7 @@ function styleEdge(e: Edge, hot: Set<string>, boxById: Map<string, Box>): BuiltI
 }
 
 const NODE_FALLBACK_SIZE: Record<string, { w: number; h: number }> = {
-  service: { w: 280, h: 120 },
+  service: { w: 280, h: 120 }, // min; long names widen it (measured wins)
   addon: { w: 220, h: 72 },
   cron: { w: 220, h: 96 },
 };

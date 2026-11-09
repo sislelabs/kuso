@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ExternalLink, Loader2, X, XCircle } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
-import { useLatestBuilds } from "@/features/services";
+import { serviceUrl, useLatestBuilds } from "@/features/services";
+import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { isProductionGroup } from "@/lib/env-group";
 import { cn, serviceShortName } from "@/lib/utils";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -75,6 +76,13 @@ export function FirstDeployChecklist({
     };
   }, [pick, followed, services, envs, latestBuilds.data, project]);
 
+  const liveUrl = useLiveServiceUrl(
+    project,
+    snap ? serviceShortName(project, snap.service.metadata.name) : "",
+    snap?.env,
+    snap ? serviceUrl(snap.service, snap.env) : undefined,
+  );
+
   if (dismissed || !snap || selectedEnv !== "production" || latestBuilds.isPending) return null;
   const progress = firstDeployProgress(project, snap);
 
@@ -109,7 +117,7 @@ export function FirstDeployChecklist({
           {progress.steps.map((step, i) => (
             <li key={step.id} className="flex items-center gap-1">
               {i > 0 && <span aria-hidden className="mx-1 hidden h-px w-4 bg-[var(--border-default)] sm:inline-block" />}
-              <StepChip step={step} url={step.id === "live" ? progress.url : undefined} />
+              <StepChip step={step} url={step.id === "live" ? (liveUrl ?? progress.url) : undefined} />
             </li>
           ))}
         </ol>

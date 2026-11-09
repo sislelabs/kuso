@@ -58,6 +58,44 @@ export function useLiveProjectDomain(project: string, primary: ProjectDomain | u
   return custom.fallback;
 }
 
+// liveUrlFallback: when url is the env's custom domain, that host and
+// the env's kuso auto-host URL to show while it isn't serving. Plain
+// data, so non-hook callers (the palette index) can carry it around.
+export interface LiveUrlFallback {
+  customHost: string;
+  fallbackUrl: string;
+  envSegment: string;
+}
+
+export function liveUrlFallback(env: KusoEnvironment | undefined, url: string | undefined): LiveUrlFallback | undefined {
+  const custom = env?.spec.additionalHosts?.find((h) => !!h);
+  const auto = env?.spec.host;
+  if (!url || !custom || !auto) return undefined;
+  try {
+    if (new URL(url).host.toLowerCase() !== custom.toLowerCase()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return {
+    customHost: custom,
+    fallbackUrl: `${hostScheme(env?.spec.tlsEnabled ?? true, auto)}://${auto}`,
+    envSegment: env?.metadata.labels?.[ENV_GROUP_LABEL] ?? "production",
+  };
+}
+
+// useLiveUrl applies a precomputed fallback: the custom URL while it
+// serves (or while we don't know), else the auto host.
+export function useLiveUrl(
+  project: string,
+  serviceShort: string,
+  url: string | undefined,
+  fallback: LiveUrlFallback | undefined,
+): string | undefined {
+  const serving = useCustomHostServing(project, serviceShort, fallback?.envSegment ?? "production", fallback?.customHost);
+  if (!fallback || serving !== false) return url;
+  return fallback.fallbackUrl;
+}
+
 // useLiveServiceUrl is the same rule for one service: when its URL is the
 // env's custom domain and that domain isn't serving yet, show the env's
 // kuso auto host instead, exactly as the project card does.
@@ -67,18 +105,5 @@ export function useLiveServiceUrl(
   env: KusoEnvironment | undefined,
   url: string | undefined,
 ): string | undefined {
-  const custom = env?.spec.additionalHosts?.find((h) => !!h);
-  const auto = env?.spec.host;
-  let isCustom = false;
-  if (url && custom) {
-    try {
-      isCustom = new URL(url).host.toLowerCase() === custom.toLowerCase();
-    } catch {
-      isCustom = false;
-    }
-  }
-  const envSegment = env?.metadata.labels?.[ENV_GROUP_LABEL] ?? "production";
-  const serving = useCustomHostServing(project, serviceShort, envSegment, isCustom && auto ? custom : undefined);
-  if (!isCustom || !auto || serving !== false) return url;
-  return `${hostScheme(env?.spec.tlsEnabled ?? true, auto)}://${auto}`;
+  return useLiveUrl(project, serviceShort, url, liveUrlFallback(env, url));
 }

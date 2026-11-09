@@ -33,8 +33,9 @@ export interface ServiceNodeData extends CanvasNodeA11y {
   latestBuild?: BuildSummary;
   vulns?: VulnSummary;
   errors?: ErrorSummary;
-  // Injected by ProjectCanvas — fires the right-click context menu.
-  __onContext?: (e: React.MouseEvent) => void;
+  // Injected by ProjectCanvas — fires the right-click context menu with
+  // the URL this card shows, so "Open URL" goes to the same place.
+  __onContext?: (e: React.MouseEvent, liveUrl?: string) => void;
   // Injected by ProjectCanvas — opens the service overlay on a tab.
   __onOpenTab?: (tab: string) => void;
 }
@@ -80,7 +81,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       aria-label={[displayName, status.label, data.errors?.occurrences ? `${data.errors.occurrences} errors in 24h` : ""]
         .filter(Boolean)
         .join(", ")}
-      onContextMenu={data.__onContext}
+      onContextMenu={(e) => data.__onContext?.(e, url)}
       style={{ width: serviceNodeWidth(displayName) }}
       title={[status.detail, url ? buildRefText(data.latestBuild)?.title : ""].filter(Boolean).join("\n") || undefined}
       className={cn(
@@ -100,7 +101,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          data.__onContext?.(e);
+          data.__onContext?.(e, url);
         }}
         className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
       >
