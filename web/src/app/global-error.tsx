@@ -34,7 +34,7 @@ export default function GlobalError({
             style={{
               margin: 0,
               fontSize: 13,
-              color: "#8C91A3",
+              color: "#9EA3B5",
             }}
           >
             Something broke
@@ -58,7 +58,7 @@ export default function GlobalError({
                 margin: "6px 0 0",
                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                 fontSize: 12,
-                color: "#8C91A3",
+                color: "#9EA3B5",
               }}
             >
               digest: {error.digest}
