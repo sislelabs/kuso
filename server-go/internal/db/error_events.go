@@ -335,3 +335,53 @@ func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, si
 	}
 	return out, rows.Err()
 }
+
+// ErrorEventKey is the slice of an ErrorEvent the fingerprint rewrite reads.
+type ErrorEventKey struct {
+	ID          int64
+	Fingerprint string
+	Message     string
+	RawLine     string
+}
+
+// MaxErrorEventID is the newest ErrorEvent id (0 when empty).
+func (d *DB) MaxErrorEventID(ctx context.Context) (int64, error) {
+	var id int64
+	if err := d.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM "ErrorEvent"`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("MaxErrorEventID: %w", err)
+	}
+	return id, nil
+}
+
+// ListErrorEventKeys pages ErrorEvent rows with afterID < id <= upTo.
+func (d *DB) ListErrorEventKeys(ctx context.Context, afterID, upTo int64, limit int) ([]ErrorEventKey, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT id, fingerprint, message, "rawLine"
+		FROM "ErrorEvent"
+		WHERE id > $1 AND id <= $2
+		ORDER BY id
+		LIMIT $3`, afterID, upTo, limit)
+	if err != nil {
+		return nil, fmt.Errorf("ListErrorEventKeys: %w", err)
+	}
+	defer rows.Close()
+	out := []ErrorEventKey{}
+	for rows.Next() {
+		var k ErrorEventKey
+		if err := rows.Scan(&k.ID, &k.Fingerprint, &k.Message, &k.RawLine); err != nil {
+			return nil, fmt.Errorf("scan ErrorEventKey: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// SetErrorEventFingerprint rewrites one row's fingerprint and message.
+func (d *DB) SetErrorEventFingerprint(ctx context.Context, id int64, fingerprint, message string) error {
+	if _, err := d.ExecContext(ctx,
+		`UPDATE "ErrorEvent" SET fingerprint = $2, message = $3 WHERE id = $1`,
+		id, fingerprint, message); err != nil {
+		return fmt.Errorf("SetErrorEventFingerprint: %w", err)
+	}
+	return nil
+}

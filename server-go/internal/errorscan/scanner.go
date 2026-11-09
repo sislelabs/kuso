@@ -149,6 +149,9 @@ func (s *Scanner) tick(ctx context.Context) {
 		s.Logger.Warn("errorscan: read watermark", "err", err)
 		return
 	}
+	if err := s.refingerprintStep(ctx); err != nil {
+		s.Logger.Warn("errorscan: rewrite fingerprints", "err", err)
+	}
 	wm, err = s.skipAhead(ctx, wm)
 	if err != nil {
 		s.Logger.Warn("errorscan: skip ahead", "err", err)
@@ -213,13 +216,14 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 	scanned := 0
 	maxID := wm
 	g := newGrouper(func(c *errorChain) {
+		title := canonicalTitle(c.title, c.lines)
 		if err := s.DB.InsertErrorEvent(ctx, db.ErrorEvent{
 			Project:     c.head.project,
 			Service:     c.head.service,
 			Env:         c.head.env,
 			Pod:         c.head.pod,
-			Fingerprint: fingerprintFor(c.title),
-			Message:     truncateForMessage(c.title),
+			Fingerprint: fingerprintFor(title),
+			Message:     truncateForMessage(title),
 			RawLine:     truncateForRaw(c.raw()),
 			Ts:          c.head.ts,
 		}); err != nil {
