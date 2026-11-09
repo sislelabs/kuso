@@ -26,7 +26,16 @@ import { buildServicePatch } from "@/components/service/overlay/settings/buildSe
 import type { KusoService } from "@/types/projects";
 import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
 import { applyStagedService, refreshServiceQueries } from "./applyStaged";
-import { healthcheckCheck, isSourcePatchField, overlaySettings, patchFieldDiff, planService, type HealthcheckCheck, type ServicePlan } from "./plan";
+import {
+  healthcheckCheck,
+  isSourcePatchField,
+  overlaySettings,
+  patchFieldDiff,
+  planService,
+  rolloutImpact,
+  type HealthcheckCheck,
+  type ServicePlan,
+} from "./plan";
 
 type Phase = "idle" | "applying" | "done" | "failed";
 
@@ -123,6 +132,7 @@ export function StagedReviewDialog({
     service: s,
     staged: staged![s],
     plan: planService(svcByName.get(s), staged![s], { neverDeployed: neverDeployed(i) }),
+    neverDeployed: neverDeployed(i),
   }));
   const anyRestart = plans.some((p) => p.plan.restarts);
   const anyBuild = plans.some((p) => p.plan.builds);
@@ -228,8 +238,9 @@ export function StagedReviewDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {empty && <p className="py-6 text-center text-[13px] text-[var(--text-secondary)]">Nothing staged.</p>}
-          {plans.map(({ service, staged: st, plan }) => {
+          {plans.map(({ service, staged: st, plan, neverDeployed: fresh }) => {
             const loading = !svcByName.get(service);
+            const impact = rolloutImpact(plan, fresh);
             const errors = st.errors ?? {};
             const ph = phase[service] ?? "idle";
             return (
@@ -244,17 +255,14 @@ export function StagedReviewDialog({
                     <span
                       className={cn(
                         "rounded-full border px-2 py-px text-xs",
-                        plan.restarts
-                          ? "border-[var(--warning)]/40 text-[var(--text-primary)]"
-                          : "border-[var(--border-subtle)] text-[var(--text-secondary)]",
+                        plan.builds
+                          ? "border-[var(--accent)]/40 text-[var(--text-primary)]"
+                          : impact.rolls
+                            ? "border-[var(--warning)]/40 text-[var(--text-primary)]"
+                            : "border-[var(--border-subtle)] text-[var(--text-secondary)]",
                       )}
                     >
-                      {plan.restarts ? "Restarts pods once" : "No restart"}
-                    </span>
-                  )}
-                  {!loading && plan.builds && (
-                    <span className="rounded-full border border-[var(--accent)]/40 px-2 py-px text-xs text-[var(--text-primary)]">
-                      Builds and deploys
+                      {impact.label}
                     </span>
                   )}
                   <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" aria-live="polite">

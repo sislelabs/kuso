@@ -106,6 +106,22 @@ export function planService(
   };
 }
 
+// rolloutImpact is the one line the review shows for what applying a
+// service's changes does to its pods. A build always ends in a rollout,
+// so "no restart" is never said next to one; env/template edits on a
+// service with pods roll them now and the build rolls them again later.
+export function rolloutImpact(plan: Pick<ServicePlan, "builds" | "restarts">, neverDeployed = false): {
+  label: string;
+  rolls: boolean;
+} {
+  if (plan.builds) {
+    return plan.restarts && !neverDeployed
+      ? { label: "Restarts pods now and again after the build", rolls: true }
+      : { label: "Builds, then deploys", rolls: true };
+  }
+  return plan.restarts ? { label: "Restarts pods once", rolls: true } : { label: "No restart", rolls: false };
+}
+
 export function patchFieldDiff(plan: ServicePlan, field: string): [string, string] {
   return fieldDiffValues(field, plan.baseline, plan.target);
 }

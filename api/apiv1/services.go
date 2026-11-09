@@ -72,6 +72,23 @@ type CreateServiceRequest struct {
 	// build, so the caller can add variables or addons first and deploy
 	// later. Request-only: it is not stored on the service.
 	SkipFirstBuild bool `json:"skipFirstBuild,omitempty"`
+	// EnvValues are stored the way PUT .../env-vars/{name} with auto:true
+	// stores them: ${{ refs }} and build-time names on the service, every
+	// other value in the managed <service>-secrets Secret (never on the
+	// CR). Sent here instead of PUT after create so the first environment
+	// is born with them and the first deploy rolls once.
+	EnvValues []EnvValue `json:"envValues,omitempty"`
+	// SubscribedAddons limits which project addons' connection variables
+	// the service mounts (short names, e.g. "db"). nil = every addon,
+	// [] = none. Names of addons that don't exist yet are kept, so an
+	// addon created right after the service is mounted when it lands.
+	SubscribedAddons *[]string `json:"subscribedAddons,omitempty"`
+}
+
+// EnvValue is one variable for the server to store wherever it belongs.
+type EnvValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // ServiceRelease is the pre-deploy release hook (migrations etc.).

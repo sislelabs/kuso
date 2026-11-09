@@ -12,7 +12,6 @@ const body: CreateServiceBody = {
 function deps(created: unknown) {
   const d = {
     post: vi.fn<CreateServiceDeps["post"]>().mockResolvedValue(created),
-    setEnv: vi.fn<CreateServiceDeps["setEnv"]>().mockResolvedValue(undefined),
     trigger: vi.fn<CreateServiceDeps["trigger"]>().mockResolvedValue(undefined),
   };
   return d;

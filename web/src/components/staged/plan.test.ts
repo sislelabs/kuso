@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KusoService } from "@/types/projects";
-import { healthcheckCheck, planService } from "./plan";
+import { healthcheckCheck, planService, rolloutImpact } from "./plan";
 
 const svc = { spec: { port: 8080, scale: { min: 1, max: 3, targetCPU: 70 } } } as unknown as KusoService;
 
@@ -55,5 +55,27 @@ describe("planService", () => {
     const env = { env: { set: [{ name: "A", value: "1", before: null, sensitive: false }], unset: [] } };
     expect(planService(repoSvc, env, { neverDeployed: true }).builds).toBe(true);
     expect(planService(repoSvc, env).builds).toBe(false);
+  });
+});
+
+describe("rolloutImpact", () => {
+  const gitSvc = { spec: { port: 8080, repo: { url: "https://github.com/a/b", branch: "dev" } } } as unknown as KusoService;
+
+  it("never says 'No restart' when the apply starts a build", () => {
+    const plan = planService(gitSvc, { settings: { fields: { repoBranch: "main" }, base: { repoBranch: "dev" } } });
+    expect(plan.builds).toBe(true);
+    expect(plan.restarts).toBe(false);
+    expect(rolloutImpact(plan)).toEqual({ label: "Builds, then deploys", rolls: true });
+  });
+
+  it("says pods roll twice when variables apply now and a build follows", () => {
+    expect(rolloutImpact({ builds: true, restarts: true }).label).toBe("Restarts pods now and again after the build");
+    // Nothing is running yet, so the only rollout is the first deploy.
+    expect(rolloutImpact({ builds: true, restarts: true }, true).label).toBe("Builds, then deploys");
+  });
+
+  it("keeps the plain restart / no-restart labels without a build", () => {
+    expect(rolloutImpact({ builds: false, restarts: true })).toEqual({ label: "Restarts pods once", rolls: true });
+    expect(rolloutImpact({ builds: false, restarts: false })).toEqual({ label: "No restart", rolls: false });
   });
 });

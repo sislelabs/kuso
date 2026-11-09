@@ -71,7 +71,14 @@ import {
   rowsToRaw,
   type RawIssue,
 } from "@/components/service/envvars/rawEnv";
-import { applyStagedEnv, sameStagedEnv, toStagedEnv } from "@/components/service/envvars/staging";
+import {
+  applyStagedEnv,
+  isEmptyDraft,
+  isRowStaged,
+  rowStageMarker,
+  sameStagedEnv,
+  toStagedEnv,
+} from "@/components/service/envvars/staging";
 import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envvars/RawEnvEditor";
 import { EnvExampleDialog } from "@/components/service/envvars/EnvExampleDialog";
 import {
@@ -82,6 +89,7 @@ import {
 } from "@/components/service/envvars/refCatalog";
 import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
 import { addonPageHref } from "@/components/service/workspace/hrefs";
+import { claimEscape } from "@/lib/escape-layer";
 
 // Row + the pure transform helpers live in ./envVarTransforms; raw-mode
 // parsing, diffing and the sensitivity heuristic live in ./envvars. This
@@ -229,6 +237,9 @@ export function EnvVarsEditor({
   const svcSpec = useService(project, service).data?.spec;
   const canImportExample = canWriteEnv && !!svcSpec && svcSpec.runtime !== "image";
   const [rows, setRows] = useState<Row[]>([]);
+  // Latest rows for callbacks that run after a blur settles.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const [dirty, setDirty] = useState(false);
   const discardRef = useRef<() => void>(() => {});
   // Why the current edits can't be staged (bad name, duplicate, malformed
@@ -455,6 +466,16 @@ export function EnvVarsEditor({
     setRows((prev) => (base ? prev.map((x) => (x.id === r.id ? base : x)) : prev.filter((x) => x.id !== r.id)));
     stopEdit(r.id);
     markDirty();
+  };
+  // An added row left without a value is a placeholder: clicking away or
+  // Escape drops it rather than leaving an empty draft pinned on top.
+  const dropIfEmptyDraft = (id: string) => {
+    const r = rowsRef.current.find((x) => x.id === id);
+    if (!r || !isEmptyDraft(r, lastStagedRef.current)) return;
+    const next = rowsRef.current.filter((x) => x.id !== id);
+    setRows(next);
+    stopEdit(id);
+    if (!lastStagedRef.current && rowsShallowEqual(next, baselineFromRows.current)) setDirty(false);
   };
   const restoreRemoved = (name: string) => {
     const base = baselineFromRows.current.find((b) => b.name === name);
@@ -891,6 +912,19 @@ export function EnvVarsEditor({
       <div
         key={r.id}
         data-env-key={name || undefined}
+        onBlur={(e) => {
+          const box = e.currentTarget;
+          if (e.relatedTarget instanceof Node && box.contains(e.relatedTarget)) return;
+          // Wait for focus to settle; a blur from switching windows keeps the row.
+          window.setTimeout(() => {
+            if (document.hasFocus() && !box.contains(document.activeElement)) dropIfEmptyDraft(r.id);
+          }, 0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || e.defaultPrevented || !isEmptyDraft(r, lastStagedRef.current)) return;
+          claimEscape(e.nativeEvent);
+          dropIfEmptyDraft(r.id);
+        }}
         className={cn(
           "space-y-1.5 border-l-2 border-[var(--accent)] bg-[var(--bg-secondary)] px-3 py-2.5",
           flashKey === name && "bg-[var(--warning-subtle)]",
@@ -1015,6 +1049,7 @@ export function EnvVarsEditor({
       // Addon-injected keys (DATABASE_URL) and explicit refs
       // (${{ db.DIRECT_URL }}) are the same thing to the user: one chip.
       const addonBacked = !!r.addon && !isRef && !!r.secretBacked && !isChanged(r);
+      const marker = rowStageMarker({ changed: isChanged(r), staged: isRowStaged(r, stagedEnv), blocked: !!stageError });
       const refText = isRef ? r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "") : addonBacked ? `${r.addon}.${r.name}` : null;
       const badges = (
         <>
@@ -1034,7 +1069,12 @@ export function EnvVarsEditor({
               overridden
             </VarBadge>
           )}
-          {isChanged(r) && !stageError && <StagedChip />}
+          {marker === "staged" && <StagedChip />}
+          {marker === "not-staged" && (
+            <VarBadge tone="warn" title={stageError ?? undefined}>
+              not staged
+            </VarBadge>
+          )}
         </>
       );
       const value = dangling ? (
