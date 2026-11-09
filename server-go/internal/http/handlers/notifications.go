@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,10 @@ type NotificationsHandler struct {
 	// pre-mutes any FUTURE project created under that name. Nil (no
 	// kube wiring, tests) skips the check.
 	ProjectExists func(ctx context.Context, project string) (bool, error)
+
+	// Live lists the projects and services that exist, so the feeds hide
+	// events for deleted ones. Nil (tests, no kube) shows everything.
+	Live func(ctx context.Context) (LiveScopes, error)
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -219,8 +224,14 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 	// embed the bell on a non-admin route, and there's no reason to
 	// hide events from them.
 	attention := r.URL.Query().Get("attention") == "true"
+	// ?project= narrows the feed in SQL (the mobile project view), so a
+	// busy instance can't push one project's events off the page.
+	project := r.URL.Query().Get("project")
 	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
 		list := func() ([]db.NotificationEvent, error) {
+			if project != "" {
+				return h.DB.ListNotificationEventsInProject(ctx, project, limit, attention)
+			}
 			if attention {
 				return h.DB.ListAttentionNotificationEvents(ctx, limit)
 			}
@@ -231,7 +242,7 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, "my-feed", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, dropGhostEvents(out, h.liveScopes(ctx)))
 		return
 	}
 	tenancy, err := h.DB.ListUserTenancyCached(ctx, claims.UserID)
@@ -240,6 +251,13 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projects := auth.ProjectsAccessible(tenancy)
+	if project != "" {
+		if !slices.Contains(projects, project) {
+			writeJSON(w, http.StatusOK, []db.NotificationEvent{})
+			return
+		}
+		projects = []string{project}
+	}
 	if len(projects) == 0 {
 		writeJSON(w, http.StatusOK, []db.NotificationEvent{})
 		return
@@ -249,7 +267,7 @@ func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "my-feed: list", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, dropGhostEvents(out, h.liveScopes(ctx)))
 }
 
 // Feed returns the most recent notification events. ?limit=N (clamp
@@ -276,12 +294,13 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	}
 	unread := r.URL.Query().Get("unread") == "true"
 	attention := r.URL.Query().Get("attention") == "true"
-	out, err := h.DB.ListNotificationEventsForUser(ctx, actingUserID(r), limit, unread, attention)
+	project := r.URL.Query().Get("project")
+	out, err := h.DB.ListNotificationEventsForUserInProject(ctx, actingUserID(r), project, limit, unread, attention)
 	if err != nil {
 		h.fail(w, "feed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, dropGhostEvents(out, h.liveScopes(ctx)))
 }
 
 // FeedUnread is the cheap counter the bell badge polls. Read state is
@@ -292,6 +311,17 @@ func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	attention := r.URL.Query().Get("attention") == "true"
+	if live := h.liveScopes(ctx); live != nil {
+		// Count what the feed would show: the table is capped (200 rows),
+		// so listing the unread rows and dropping ghosts is cheap.
+		unread, err := h.DB.ListNotificationEventsForUser(ctx, actingUserID(r), 0, true, attention)
+		if err != nil {
+			h.fail(w, "unread count", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"unread": len(dropGhostEvents(unread, live))})
+		return
+	}
 	n, err := h.DB.CountUnreadNotificationEventsForUser(ctx, actingUserID(r), attention)
 	if err != nil {
 		h.fail(w, "unread count", err)

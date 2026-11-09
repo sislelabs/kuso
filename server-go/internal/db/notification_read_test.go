@@ -118,3 +118,26 @@ func TestIsAttentionEvent(t *testing.T) {
 		}
 	}
 }
+
+// The mobile project view fetched the newest 30 events globally and
+// filtered client-side, so a busy instance hid a quiet project's alerts.
+func TestListNotificationEventsInProject_FiltersBeforeTheLimit(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := d.InsertNotificationEvent(ctx, NotificationEvent{Type: "alert.fired", Title: "quiet-proj alert", Project: "quiet-proj", Severity: "error"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := d.InsertNotificationEvent(ctx, NotificationEvent{Type: "build.succeeded", Title: "noise", Project: "busy-proj"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs, err := d.ListNotificationEventsInProject(ctx, "quiet-proj", 2, false)
+	if err != nil || len(evs) != 1 || evs[0].Title != "quiet-proj alert" {
+		t.Fatalf("project feed = %+v, err %v", evs, err)
+	}
+	user, err := d.ListNotificationEventsForUserInProject(ctx, "carol", "quiet-proj", 2, false, true)
+	if err != nil || len(user) != 1 {
+		t.Fatalf("per-user project feed = %+v, err %v", user, err)
+	}
+}
