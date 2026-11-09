@@ -777,6 +777,8 @@ export function ServiceOverlay({
                     // changes" badge was their save not taking). Naming
                     // the in-flight field (envVars/image/…) makes it
                     // obvious the edit was accepted and is propagating.
+                    // A stuck rollout already has its own banner with the reason.
+                    if (rolling && derived.kind === "stuck") return null;
                     if (rolling && rolloutSlow) {
                       return (
                         <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-0.5 text-xs text-[var(--warning)]">

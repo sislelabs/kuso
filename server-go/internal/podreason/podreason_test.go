@@ -24,11 +24,15 @@ func TestSummarizeScheduling(t *testing.T) {
 }
 
 func TestSummarizeImagePull(t *testing.T) {
-	if got := Summarize("ErrImagePull", `rpc error: manifest unknown`); got != "The image tag doesn't exist in the registry" {
-		t.Errorf("got %q", got)
+	// The kubelet flips between ErrImagePull (with the registry reason) and
+	// ImagePullBackOff (without it) on every retry; the summary must not flip.
+	a := Summarize("ErrImagePull", `rpc error: manifest unknown`)
+	b := Summarize("ImagePullBackOff", `Back-off pulling image "x"`)
+	if a != b {
+		t.Errorf("summary flips across retries: %q vs %q", a, b)
 	}
-	if got := Summarize("ImagePullBackOff", `Back-off pulling image "x"`); got != "The image can't be pulled" {
-		t.Errorf("got %q", got)
+	if a == "" {
+		t.Error("empty summary")
 	}
 }
 

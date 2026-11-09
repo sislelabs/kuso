@@ -44,14 +44,10 @@ func Summarize(reason, message string) string {
 	case "Unschedulable", "SchedulerError":
 		return SummarizeScheduling(message)
 	case "ImagePullBackOff", "ErrImagePull":
-		m := strings.ToLower(message)
-		switch {
-		case strings.Contains(m, "not found") || strings.Contains(m, "manifest unknown"):
-			return "The image tag doesn't exist in the registry"
-		case strings.Contains(m, "unauthorized") || strings.Contains(m, "denied") || strings.Contains(m, "authentication"):
-			return "The registry refused to hand over the image (check registry credentials)"
-		}
-		return "The image can't be pulled"
+		// The kubelet alternates between these two while retrying, and only
+		// ErrImagePull carries the registry's reason, so the summary stays
+		// generic and the specific cause lives in the raw message.
+		return "The image can't be pulled (check the image name, tag and registry access)"
 	case "InvalidImageName":
 		return "The image name is invalid"
 	case "CreateContainerConfigError":
