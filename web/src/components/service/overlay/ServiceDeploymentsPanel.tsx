@@ -16,7 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CopyButton } from "@/components/ui/copy-button";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useCanOnProject, Perms } from "@/features/auth";
+import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import {
   buildRefLabel,
   buildTrigger,
@@ -38,6 +38,7 @@ import { LiveDeploymentCard, type LiveHealth } from "./LiveDeploymentCard";
 import { AutoDeployBanner, pushDeployState } from "./AutoDeployBanner";
 import { RevisionGroup, RevisionRow } from "./RevisionRow";
 import { ServicePodsSection } from "./ServicePodsSection";
+import { ServiceEventsSection } from "./ServiceEventsSection";
 import { ServiceAuditSection } from "./ServiceAuditSection";
 import { useRedeploy } from "./ServiceHeaderActions";
 import { FirstDeployProgress, FirstLiveCard } from "./FirstDeployProgress";
@@ -92,6 +93,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   const gh = useSetupStatus();
   const isImage = svc.data?.spec.runtime === "image";
   const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
+  const canSeeClusterEvents = useCan(Perms.SettingsAdmin);
   const group = envGroupName(env);
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
 
@@ -162,6 +164,9 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
       )}
 
       <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} />
+      {env ? (
+        <ServiceEventsSection project={project} service={service} envName={env?.metadata?.name} canSeeClusterEvents={canSeeClusterEvents} />
+      ) : null}
       <ServiceAuditSection project={project} service={service} />
 
       {redeploy.dialog}

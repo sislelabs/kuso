@@ -26,8 +26,7 @@ import { envGroupName, wakeEnvParam } from "@/lib/env-group";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, RotateCw, Sun, AlertTriangle, ScrollText, Rocket } from "lucide-react";
 import type { KusoEnvironment } from "@/types/projects";
-import { useCan, useCanOnProject, Perms } from "@/features/auth";
-import Link from "next/link";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -499,8 +498,6 @@ export function ServiceOverlay({
   // AddonOverlay makes for its SQL tab: rendering a terminal that can
   // only 403 on connect is worse than not offering it.
   const canShell = useCanOnProject(project, Perms.ShellExec);
-  // Kube events live on Settings → Health, which is admin-only.
-  const canSeeEvents = useCan(Perms.SettingsAdmin);
   // Always show whichever tab the user is on so the active-tab
   // underline has something to anchor to after a deep link.
   const MAIN_TABS = useMemo(
@@ -792,15 +789,9 @@ export function ServiceOverlay({
                           <AlertTriangle aria-hidden className="h-3 w-3" />
                           Rollout taking longer than expected
                           <span aria-hidden>·</span>
-                          {canSeeEvents ? (
-                            <Link href="/settings/health#kube-events" className="underline underline-offset-2">
-                              View events
-                            </Link>
-                          ) : (
-                            <button type="button" onClick={() => navigateTo("logs")} className="underline underline-offset-2">
-                              View logs
-                            </button>
-                          )}
+                          <button type="button" onClick={() => navigateTo("deployments", "pod-events")} className="underline underline-offset-2">
+                            View events
+                          </button>
                         </span>
                       );
                     }
