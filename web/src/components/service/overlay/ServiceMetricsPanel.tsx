@@ -249,8 +249,9 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
             </ChartCard>
 
             <ChartCard
-              title="Error rate"
-              titleNote="5xx"
+              title="5xx responses"
+              titleNote="share of requests"
+              hint="HTTP 5xx responses from the ingress. Errors your app logs are on the Errors tab, and can happen without any 5xx."
               value={errOverall === null ? "—" : fmtPct(errOverall)}
               valueNote={errOverall === null ? "no requests" : "of requests"}
               foot={errShape.sparse ? "Drawn only where there was traffic" : undefined}
@@ -268,7 +269,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 points={err}
                 domain={domain}
                 format={fmtPct}
-                ariaLabel={`5xx error rate, last ${rangeLabel(range)}. Overall ${errOverall === null ? "no data" : fmtPct(errOverall)}.`}
+                ariaLabel={`Share of requests answered with 5xx, last ${rangeLabel(range)}. Overall ${errOverall === null ? "no data" : fmtPct(errOverall)}.`}
                 gapMs={trafficGapMs}
                 markers={markers}
                 minYMax={1}
@@ -512,6 +513,7 @@ function SectionHeading({ id, title, note }: { id: string; title: string; note: 
 function ChartCard({
   title,
   titleNote,
+  hint,
   value,
   valueNote,
   badge,
@@ -524,6 +526,8 @@ function ChartCard({
 }: {
   title: string;
   titleNote?: string;
+  // What the number counts, as a tooltip on the title.
+  hint?: string;
   value: string;
   valueNote?: string;
   badge?: ReactNode;
@@ -543,7 +547,7 @@ function ChartCard({
     >
       <figcaption className="mb-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px] font-medium text-[var(--text-secondary)]">
+          <span className={cn("text-[13px] font-medium text-[var(--text-secondary)]", hint && "cursor-help")} title={hint}>
             {title}
             {titleNote && <span className="ml-1 font-normal text-[var(--text-tertiary)]">{titleNote}</span>}
           </span>

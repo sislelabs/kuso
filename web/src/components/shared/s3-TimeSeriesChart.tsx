@@ -221,16 +221,31 @@ export function TimeSeriesChart({
           ))}
           <g clipPath={`url(#${clipId})`}>
             {shape.sparse ? (
-              // Too few samples for a trend: each one is a dot, joined
-              // faintly only to an adjacent sample, never filled to zero.
+              // Too few samples for a trend: each sample is a stem from the
+              // baseline (a bar, so a lone value reads as a measurement,
+              // not a stray dot), and adjacent samples are joined by a
+              // line that breaks where there was no data.
               <g>
+                {shape.segments.flat().map((p) => (
+                  <line
+                    key={`s${p[0]}`}
+                    x1={x(p[0])}
+                    x2={x(p[0])}
+                    y1={M.top + plotH}
+                    y2={y(p[1])}
+                    stroke={color}
+                    strokeWidth={3}
+                    opacity={0.3}
+                    shapeRendering="crispEdges"
+                  />
+                ))}
                 {shape.segments.map((seg, i) =>
                   seg.length > 1 ? (
-                    <path key={`l${i}`} d={line(seg)} fill="none" stroke={color} strokeWidth={1.25} opacity={0.45} strokeLinejoin="round" />
+                    <path key={`l${i}`} d={line(seg)} fill="none" stroke={color} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
                   ) : null,
                 )}
                 {shape.segments.flat().map((p) => (
-                  <circle key={p[0]} cx={x(p[0])} cy={y(p[1])} r={3} fill={color} />
+                  <circle key={p[0]} cx={x(p[0])} cy={y(p[1])} r={2.5} fill={color} />
                 ))}
               </g>
             ) : (
