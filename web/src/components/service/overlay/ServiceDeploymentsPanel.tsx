@@ -7,7 +7,7 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
-import { deriveServiceStatus, useBuilds, usePatchService, useService } from "@/features/services";
+import { deriveServiceStatus, useBuilds, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
 import { isCurrentPod, listServicePods, useServicePods } from "@/features/pods";
@@ -31,22 +31,19 @@ import {
 } from "@/features/builds";
 import {
   configRolloutOutcome,
-  describeRevision,
   envRevisionName,
   groupRevisionRuns,
   imageRef,
   collapseFlipFlops,
   imageReleases,
   interleaveTimeline,
-  defaultPlan,
   liveImagesOf,
   neverRan,
-  previousConfig,
   shortDigest,
   useRevertRevision,
+  useReverting,
   useRevisions,
   type ImageRelease,
-  type Revision,
 } from "@/features/revisions";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { KusoEnvironment } from "@/types/projects";
@@ -66,6 +63,8 @@ import { ServicePodsSection } from "./ServicePodsSection";
 import { ServiceEventsSection } from "./ServiceEventsSection";
 import { ServiceAuditSection } from "./ServiceAuditSection";
 import { useRedeploy } from "./ServiceHeaderActions";
+import { useRolloutRevert } from "./rolloutRevert";
+import { CrashDiagnosis } from "./CrashDiagnosis";
 import { FirstDeployProgress, FirstLiveCard } from "./FirstDeployProgress";
 import { UptimeBadge } from "@/components/uptime/UptimeBadge";
 import { useProjectUptime } from "@/features/uptime";
@@ -176,6 +175,10 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
       {env?.status?.state === "rollout_failing" && (
         <RolloutFailingCard project={project} service={service} env={env} canDeploy={canDeploy} isImage={isImage} onNavigate={onNavigate} />
       )}
+      {/* An image service's rollout card carries the crash itself. */}
+      {env?.status?.state === "crashlooping" && !isImage && (
+        <CrashDiagnosis project={project} service={service} envName={env.metadata?.name} onNavigate={onNavigate} framed />
+      )}
 
       {isImage ? (
         <ImageDeploymentCard
@@ -185,6 +188,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
           url={url}
           image={svc.data?.spec.image}
           canDeploy={canDeploy}
+          onNavigate={onNavigate}
         />
       ) : builds.isPending ? (
         <div className="space-y-2">
@@ -243,32 +247,31 @@ function RolloutFailingCard({
   onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   const facts = rolloutFacts(env.status);
-  const serviceRevs = useRevisions(project, "service", service);
-  const revert = useRevertRevision(project);
-  const patch = usePatchService(project, service);
-  const [confirm, setConfirm] = useState(false);
-  const revs = serviceRevs.data ?? [];
-  const plan = previousConfig(revs);
-  // No earlier value of the changed field: going back means unsetting it.
-  const toDefault = plan ? null : defaultPlan(revs);
-  const change = plan?.change ?? toDefault?.change;
+  const revert = useRolloutRevert(project, service, env);
   const cause = facts?.cause ?? env.status?.stateDetail ?? "the new version isn't becoming ready";
   const sentence = cause.charAt(0).toUpperCase() + cause.slice(1);
   const group = envGroupName(env);
-  const pending = revert.isPending || patch.isPending;
-  const onConfirm = () => {
-    const done = {
-      onError: (e: unknown) => toastError(e, "Revert failed"),
-      onSettled: () => setConfirm(false),
-    };
-    if (plan) {
-      revert.mutate(plan.target.id, { ...done, onSuccess: () => toast.success("Reverting to the previous config") });
-    } else if (toDefault) {
-      patch.mutate(toDefault.patch, { ...done, onSuccess: () => toast.success(`Reverting to ${toDefault.label}`) });
-    }
-  };
-  const changeLabel = change ? describeChange(change) : "";
+  const change = revert.change;
+  // The header's "Last deploy" reads the same stamp: the version still serving.
+  const servingSince = lastDeployedAt(env);
   const rollbackHint = isImage ? "roll back to an earlier image below" : "roll back to an earlier build below";
+  if (revert.reverting) {
+    return (
+      <section
+        role="status"
+        aria-label="Reverting"
+        className="flex items-start gap-3 rounded-lg border border-[var(--info)]/40 bg-[var(--info-subtle)] p-4"
+      >
+        <Loader2 aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)] motion-safe:animate-spin" />
+        <div className="min-w-0 space-y-1">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">Reverting {revert.changeLabel || "the change"}…</p>
+          <p className="text-xs text-[var(--text-secondary)]">
+            The previous version keeps serving while the failing pods are replaced. This clears in a few seconds.
+          </p>
+        </div>
+      </section>
+    );
+  }
   return (
     <section
       role="status"
@@ -281,22 +284,41 @@ function RolloutFailingCard({
           <p className="text-sm font-semibold text-[var(--text-primary)]">Rollout failing in {group}</p>
           <p className="break-words text-sm text-[var(--text-primary)]">{sentence.endsWith(".") ? sentence : `${sentence}.`}</p>
           <p className="text-xs text-[var(--text-secondary)]">
-            {facts?.previousServing === false
-              ? "Nothing else is serving."
-              : "The previous version is still serving traffic; kuso keeps retrying the new one until you fix or revert the change."}
+            {facts?.previousServing === false ? (
+              "Nothing else is serving."
+            ) : (
+              <>
+                The previous version
+                {servingSince ? (
+                  <>
+                    {" "}
+                    (deployed{" "}
+                    <time dateTime={servingSince} title={new Date(servingSince).toLocaleString()}>
+                      {relativeTime(servingSince)}
+                    </time>
+                    )
+                  </>
+                ) : null}{" "}
+                is still serving traffic; kuso keeps retrying the new one until you fix or revert the change.
+              </>
+            )}
             {change && (
               <>
                 {" "}
-                Started by <span className="text-[var(--text-primary)]">{changeLabel}</span>
-                {change.actor ? ` by ${change.actor}` : ""} {relativeTime(change.createdAt)}.
+                This rollout started with <span className="text-[var(--text-primary)]">{revert.changeLabel}</span>
+                {change.actor ? ` by ${change.actor}` : ""}{" "}
+                <time dateTime={change.createdAt} title={new Date(change.createdAt).toLocaleString()}>
+                  {relativeTime(change.createdAt)}
+                </time>
+                .
               </>
             )}
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-2">
-            {(plan || toDefault) && canDeploy && (
-              <Button size="sm" onClick={() => setConfirm(true)} disabled={pending}>
+            {revert.available && canDeploy && (
+              <Button size="sm" onClick={revert.request} disabled={revert.pending}>
                 <Undo2 className="h-3.5 w-3.5" />
-                {plan ? "Revert to previous" : "Revert to default"}
+                {revert.toDefault ? "Revert to default" : "Revert to previous"}
               </Button>
             )}
             {facts?.kind === "healthcheck" && onNavigate && (
@@ -304,51 +326,27 @@ function RolloutFailingCard({
                 Health check settings
               </Button>
             )}
-            {onNavigate && (
+            {onNavigate && facts?.kind !== "crash" && (
               <Button size="sm" variant="ghost" onClick={() => onNavigate("logs")}>
                 Logs
               </Button>
             )}
           </div>
-          {!plan && !toDefault && serviceRevs.isSuccess && (
+          {!revert.available && revert.loaded && (
             <p className="pt-1 text-xs text-[var(--text-tertiary)]">
               {change
                 ? `kuso has no earlier value of this setting to go back to. Fix it in Settings, or ${rollbackHint}.`
                 : `Fix the cause in Settings, or ${rollbackHint}.`}
             </p>
           )}
+          {facts?.kind === "crash" && (
+            <CrashDiagnosis project={project} service={service} envName={env.metadata?.name} onNavigate={onNavigate} className="pt-3" />
+          )}
         </div>
       </div>
-      <ConfirmDialog
-        open={confirm}
-        title={plan ? "Revert to the previous config?" : "Revert to the default?"}
-        destructive={false}
-        confirmLabel="Revert"
-        body={
-          <span>
-            Undoes <strong>{changeLabel}</strong>{" "}
-            {plan ? (
-              <>by re-applying the config from {relativeTime(plan.target.createdAt)}.</>
-            ) : (
-              <>by going back to {toDefault?.label}.</>
-            )}{" "}
-            It&apos;s a service setting, so every environment of {service} rolls again.
-          </span>
-        }
-        pending={pending}
-        onConfirm={onConfirm}
-        onCancel={() => setConfirm(false)}
-      />
+      {revert.dialog}
     </section>
   );
-}
-
-function describeChange(rev: Revision): string {
-  const v = describeRevision(rev);
-  const s = rev.snapshot as { patch?: Record<string, unknown> } | null;
-  if (s?.patch && "healthcheck" in s.patch) return "the health check change";
-  if (s?.patch && "image" in s.patch) return "the image change";
-  return v.label.toLowerCase();
 }
 
 function useLiveHealth(project: string, service: string, env?: KusoEnvironment, uptimeDown?: boolean): LiveHealth | undefined {
@@ -424,6 +422,13 @@ function DeployList({
   const rolledBackFrom = live ? rollForwardTarget(builds, live) : undefined;
   const releaseFailed = live ? newerReleaseFailure(builds, live) : undefined;
   const [filter, setFilter] = useHistoryFilter();
+  // Builds of other branches (an old branch the env moved off, PR
+  // previews) stay reachable under their own disclosure, so a failure
+  // doesn't vanish from the record when the branch changes.
+  const otherBuilds = useMemo(
+    () => (envBranch ? builds.filter((b) => (b.branch ?? "") !== envBranch && b.id !== liveId) : []),
+    [builds, envBranch, liveId],
+  );
 
   // A failed or in-progress newest build is the thing to look at: open it
   // (once per build, so collapsing it sticks).
@@ -507,7 +512,9 @@ function DeployList({
       rolledBackFrom={rolledBackFrom}
       repoUrl={repoUrl}
       url={url}
-      deployedAt={lastDeployedAt(env)}
+      // A rolled-back card and its history marker name one moment: the
+      // rollback's promotion, not a later config rollout.
+      deployedAt={rolledBackFrom && env ? (promotedIfLive(env) ?? lastDeployedAt(env)) : lastDeployedAt(env)}
       health={health}
       serving={!["stopped", "sleeping"].includes(env?.status?.state ?? "")}
       failing={failing}
@@ -520,16 +527,47 @@ function DeployList({
   ) : visible.length > 0 ? (
     <div className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--text-secondary)]">
       Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet.{" "}
+      {/* The failed build's card below carries the cause and the fix. */}
       {newestStatus === "failed" && buildMissingBranch(newest)
-        ? "The latest build failed because its branch doesn't exist. Change the branch, and the next build can go live."
+        ? "The next build after the branch change can go live."
         : newestStatus === "failed"
         ? autoDeploy
-          ? `The latest build failed: fix the cause shown below and push, or press ${deployVerb} to try the same commit again.`
-          : `The latest build failed: fix the cause shown below, then press ${deployVerb}. Auto-deploy is off, so pushes won't retry it.`
+          ? `Its latest build failed: push a fix, or press ${deployVerb} to try the same commit again.`
+          : `Its latest build failed. Auto-deploy is off, so after fixing it press ${deployVerb}.`
         : autoDeploy
           ? "The first successful build below goes live automatically."
           : "The first successful build goes live. Auto-deploy is off, so press Deploy to start one."}
     </div>
+  ) : null;
+
+  const otherBranchList = otherBuilds.length > 0 ? (
+    <OtherBranchBuilds
+      builds={otherBuilds}
+      defaultOpen={visible.length === 0}
+      renderRow={(b) => {
+        const st = classifyBuild(b, liveId);
+        return (
+          <BuildRow
+            key={b.id}
+            project={project}
+            service={service}
+            env={group}
+            build={b}
+            previous={previousSucceeded(builds, b)}
+            repoUrl={repoUrl}
+            status={st}
+            duration={st === "running" ? "" : buildDurationLabel(b)}
+            runningSince={st === "running" ? b.startedAt : undefined}
+            isOpen={expanded === b.id}
+            // A record of another branch: its log, not actions on this env.
+            canDeploy={false}
+            trigger={buildTrigger(b, builds)}
+            onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
+            onNavigate={onNavigate}
+          />
+        );
+      }}
+    />
   ) : null;
 
   if (visible.length === 0) {
@@ -549,7 +587,7 @@ function DeployList({
           </p>
           <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[var(--text-secondary)]">
             {envBranch && builds.length > 0
-              ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}. Push to ${envBranch} or click ${deployVerb}.`
+              ? `This service has ${builds.length} build${builds.length === 1 ? "" : "s"} on ${otherBranches.slice(0, 3).join(", ")}${otherBranches.length > 3 ? ` and ${otherBranches.length - 3} more` : ""}, listed below. Push to ${envBranch} or click ${deployVerb}.`
               : "Nothing has been built yet. Add any variables the app needs, then deploy to build and ship the first version."}
           </p>
           {onDeploy && builds.length === 0 && (
@@ -559,6 +597,7 @@ function DeployList({
             </Button>
           )}
         </div>
+        {otherBranchList}
       </div>
     );
   }
@@ -649,12 +688,51 @@ function DeployList({
           )}
         </section>
       )}
+      {otherBranchList}
       {live && !firstDeploy && !rolledBackFrom && history.length === 0 && (
         <p className="text-xs text-[var(--text-tertiary)]">
           {buildRefLabel(live, 7)} is the only deployment so far.
         </p>
       )}
     </div>
+  );
+}
+
+const OTHER_BRANCH_PAGE = 10;
+
+function OtherBranchBuilds({
+  builds,
+  defaultOpen,
+  renderRow,
+}: {
+  builds: DeployBuild[];
+  defaultOpen: boolean;
+  renderRow: (b: DeployBuild) => React.ReactNode;
+}) {
+  const [limit, setLimit] = useState(OTHER_BRANCH_PAGE);
+  const branches = Array.from(new Set(builds.map((b) => b.branch || "—")));
+  const failed = builds.filter((b) => (b.status ?? "").toLowerCase() === "failed").length;
+  return (
+    <details open={defaultOpen || undefined} className="group/other space-y-2">
+      <summary className="cursor-pointer select-none text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+        Other branches
+        <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+          {builds.length} build{builds.length === 1 ? "" : "s"}
+          {failed > 0 ? ` · ${failed} failed` : ""} on {branches.slice(0, 3).join(", ")}
+          {branches.length > 3 ? ` and ${branches.length - 3} more` : ""}
+        </span>
+      </summary>
+      <ul className="mt-2 space-y-2">{builds.slice(0, limit).map(renderRow)}</ul>
+      {builds.length > limit && (
+        <button
+          type="button"
+          onClick={() => setLimit((l) => l + OTHER_BRANCH_PAGE)}
+          className="w-full rounded-lg border border-[var(--border-subtle)] py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+        >
+          Show {Math.min(OTHER_BRANCH_PAGE, builds.length - limit)} more
+        </button>
+      )}
+    </details>
   );
 }
 
@@ -723,6 +801,7 @@ function ImageDeploymentCard({
   url,
   image,
   canDeploy,
+  onNavigate,
 }: {
   project: string;
   service: string;
@@ -730,6 +809,7 @@ function ImageDeploymentCard({
   url?: string;
   image?: { repository?: string; tag?: string };
   canDeploy: boolean;
+  onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   const envName = env?.metadata?.name;
   const envState = env?.status?.state;
@@ -773,6 +853,11 @@ function ImageDeploymentCard({
     .filter((p) => isCurrentPod(p) && p.ready && !!ref && (p as { image?: string }).image === ref)
     .map((p) => (p as { imageID?: string }).imageID ?? "")
     .find(Boolean);
+  // Mid failing rollout, the older ReplicaSet's ready pods are what's live.
+  const servingRef =
+    envState === "rollout_failing"
+      ? (podList ?? []).map((p) => ({ ...p, image: (p as { image?: string }).image })).find((p) => !isCurrentPod(p) && p.ready && !!p.image)?.image
+      : undefined;
 
   return (
     <div className="space-y-4">
@@ -809,6 +894,9 @@ function ImageDeploymentCard({
       )}
 
       {(state.status === "active" || state.status === "failed") && <RolloutSteps state={state} />}
+      {state.status === "failed" && state.step === "starting" && (
+        <CrashDiagnosis project={project} service={service} envName={envName} onNavigate={onNavigate} className="mt-4" />
+      )}
 
       {live && url && (
         <div className="mt-3 flex min-w-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-1 pl-2.5 pr-1">
@@ -836,6 +924,7 @@ function ImageDeploymentCard({
       image={shown}
       rollout={state}
       runningImageID={runningImageID}
+      servingRef={servingRef}
       canDeploy={canDeploy}
     />
     </div>
@@ -849,6 +938,8 @@ const RELEASE_OUTCOME: Record<RolloutState["status"], { label: string; dot: stri
   idle: { label: "Current", dot: "bg-[var(--text-tertiary)]" },
 };
 
+const SERVING_PREVIOUS = { label: "Serving · previous version", dot: "bg-[var(--success)]" };
+
 // ImageReleaseHistory is the release list for runtime=image services: one
 // row per saved image tag (from service revisions), with the other config
 // changes interleaved under "All changes". Rolling back replays the
@@ -860,6 +951,7 @@ function ImageReleaseHistory({
   image,
   rollout,
   runningImageID,
+  servingRef,
   canDeploy,
 }: {
   project: string;
@@ -868,6 +960,8 @@ function ImageReleaseHistory({
   image?: { repository?: string; tag?: string };
   rollout: RolloutState;
   runningImageID?: string;
+  // The image the previous version's pods run while a rollout fails.
+  servingRef?: string;
   canDeploy: boolean;
 }) {
   const envCRName = env?.metadata?.name;
@@ -875,6 +969,9 @@ function ImageReleaseHistory({
   const envRevs = useRevisions(project, "environment", envCRName ? envRevisionName(project, envCRName) : undefined);
   const [filter, setFilter] = useHistoryFilter();
   const [limit, setLimit] = useState(HISTORY_PAGE);
+  // Between a sent revert and its pods coming up, the reverted-to release
+  // is on its way, not stuck.
+  const reverting = useReverting(project, service, env?.status?.state === "rollout_failing");
 
   if (serviceRevs.isPending) return <Skeleton className="h-16 w-full rounded-lg" />;
   if (serviceRevs.isError) {
@@ -889,9 +986,17 @@ function ImageReleaseHistory({
   // interleaveTimeline orders "builds" by startedAt; a release is placed by
   // the time its tag was saved.
   const items = releases.map((r) => ({ ...r, startedAt: r.revision.createdAt }));
-  const timeline = groupRevisionRuns(interleaveTimeline(items, filter === "builds" ? [] : config));
+  // Image rows lead; any run of config changes between them folds.
+  const timeline = groupRevisionRuns(interleaveTimeline(items, filter === "builds" ? [] : config), 2);
   const shown = timeline.slice(0, limit);
   const currentRef = image?.repository ? imageRef(image.repository, image.tag) : "";
+  // While the newest image fails to roll out, the release before it still
+  // serves; it isn't "replaced" yet. Without pod info, the newest other
+  // image is the best reading.
+  const servingId =
+    env?.status?.state === "rollout_failing"
+      ? releases.find((r) => !r.current && (servingRef ? r.ref === servingRef : r.ref !== currentRef))?.revision.id
+      : undefined;
 
   if (releases.length === 0 && config.length === 0) {
     return (
@@ -956,7 +1061,15 @@ function ImageReleaseHistory({
               key={r.revision.id}
               project={project}
               release={r}
-              outcome={r.current ? RELEASE_OUTCOME[rollout.status] : undefined}
+              outcome={
+                r.current
+                  ? reverting
+                    ? RELEASE_OUTCOME.active
+                    : RELEASE_OUTCOME[rollout.status]
+                  : r.revision.id === servingId
+                    ? SERVING_PREVIOUS
+                    : undefined
+              }
               digest={r.current ? shortDigest(runningImageID) : ""}
               canRollBack={canDeploy && !r.current && r.ref !== currentRef}
               neverRan={neverRan(r, live)}

@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
 	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 	"gopkg.in/yaml.v3"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/imagecheck"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
@@ -247,6 +249,9 @@ type ProjectsHandler struct {
 
 	// domainStatus caches GetEnvDomainsStatus responses for 30s.
 	domainStatus domainStatusCache
+
+	// ImageChecker answers image-check; nil uses the public-only default.
+	ImageChecker *imagecheck.Checker
 }
 
 // AddonReverter is the slice of addons.Service the revisions revert
@@ -353,6 +358,12 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// a target pod for kubectl exec, and by future shell tab in the
 	// web UI. Slim summary — name, ready, container list.
 	r.Get("/api/projects/{project}/services/{service}/pods", h.ListPods)
+	// The env's latest container crash: exit reason, the dead run's log
+	// tail and its classification (?env=, default production).
+	r.Get("/api/projects/{project}/services/{service}/crash", h.CrashReport)
+	// Does repository:tag exist in its registry? Asked before an image
+	// deploy (?repository=&tag=); anonymous, so private images read unknown.
+	r.Get("/api/projects/{project}/services/{service}/image-check", h.ImageCheck)
 	// Recent kube events for the env's pods + Deployment (?env=, default
 	// production). Viewer-gated; explains a stuck rollout inline.
 	r.Get("/api/projects/{project}/services/{service}/events", h.ListPodEvents)
@@ -1674,6 +1685,60 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 // kubectl. We audit-log calls with ?reason=shell so an admin can
 // reconstruct who exec'd into which pod even though the actual
 // kubectl exec session never touches kuso-server.
+// ImageCheck is GET /api/projects/{project}/services/{service}/image-check.
+// Editor-gated: it makes outbound registry requests on the caller's
+// behalf, and only the deploy controls ask.
+func (h *ProjectsHandler) ImageCheck(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	q := r.URL.Query()
+	ref, err := imagecheck.ParseRef(q.Get("repository"), q.Get("tag"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	svc, err := h.Svc.GetService(ctx, project, chi.URLParam(r, "service"))
+	if err != nil {
+		h.fail(w, "get service", err)
+		return
+	}
+	// A credentialed pull can't be judged anonymously.
+	if svc.Spec.Image != nil && svc.Spec.Image.PullSecret != "" {
+		writeJSON(w, http.StatusOK, imagecheck.Result{Status: imagecheck.Unknown, Detail: "private registry: checked when the pods pull it"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.imageChecker().Check(ctx, ref))
+}
+
+func (h *ProjectsHandler) imageChecker() *imagecheck.Checker {
+	if h.ImageChecker != nil {
+		return h.ImageChecker
+	}
+	return &imagecheck.Checker{}
+}
+
+// CrashReport is GET /api/projects/{project}/services/{service}/crash.
+// {"crash": null} when no container of the env has died.
+func (h *ProjectsHandler) CrashReport(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	podSvc, podEnv := envGroupTarget(ctx, h.Kube, h.Namespace, project, chi.URLParam(r, "service"), r.URL.Query().Get("env"))
+	out, err := h.Svc.CrashReport(ctx, project, podSvc, podEnv)
+	if err != nil {
+		h.fail(w, "crash report", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"crash": out})
+}
+
 func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()

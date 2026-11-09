@@ -2,9 +2,9 @@
 
 import { hasPublicIngress, stopConsequence } from "./stopCopy";
 import { firstRunState } from "./firstRun";
-import { cloneElement, useId, useState } from "react";
+import { cloneElement, useEffect, useId, useState } from "react";
 import Link from "next/link";
-import { BellPlus, MoreHorizontal, Package, Play, Rocket, RotateCw, Square, Wrench } from "lucide-react";
+import { AlertTriangle, BellPlus, Check, Loader2, MoreHorizontal, Package, Play, Rocket, RotateCw, Square, Undo2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
@@ -31,6 +31,8 @@ import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
 import type { KusoEnvironment } from "@/types/projects";
 import type { FixFirst } from "../workspace/fixFirst";
+import { useRolloutRevert } from "./rolloutRevert";
+import { useImageCheck } from "@/features/builds";
 
 const NO_ACCESS = "Requires editor access on this project";
 
@@ -167,6 +169,10 @@ export function ServiceHeaderActions({
   const [menuOpen, setMenuOpen] = useState(false);
   const group = envGroupName(env);
   const canAlert = useCan(Perms.SettingsAdmin);
+  // A failing rollout with a known previous config: undoing the change is
+  // the action that matters, so it leads; the fix-forward stays beside it.
+  const rollback = useRolloutRevert(project, service, env);
+  const revertFirst = (rollback.available && canWrite) || rollback.reverting;
 
   const onRestart = async () => {
     try {
@@ -215,8 +221,23 @@ export function ServiceHeaderActions({
 
   return (
     <>
+      {revertFirst && (
+        <Explained
+          label="Revert"
+          explain={
+            rollback.reverting
+              ? "The previous config is being re-applied; the failing pods are on their way out."
+              : `Undo ${rollback.changeLabel || "the change"} that started this rollout. The previous version is still serving.`
+          }
+        >
+          <Button size="sm" onClick={rollback.request} disabled={rollback.pending || rollback.reverting} className="h-7 px-2.5 text-xs">
+            {rollback.reverting ? <Loader2 className="h-3 w-3 motion-safe:animate-spin" /> : <Undo2 className="h-3 w-3" />}
+            {rollback.reverting ? "Reverting…" : "Revert"}
+          </Button>
+        </Explained>
+      )}
       {fix && fix.id !== "image" && onFix && (
-        <Button size="sm" onClick={() => onFix(fix)} className="h-7 px-2.5 text-xs">
+        <Button size="sm" variant={revertFirst ? "secondary" : undefined} onClick={() => onFix(fix)} className="h-7 px-2.5 text-xs">
           <Wrench className="h-3 w-3" />
           {fix.label}
         </Button>
@@ -227,7 +248,7 @@ export function ServiceHeaderActions({
           service={service}
           canWrite={canWrite}
           label={fix?.id === "image" ? `${fix.label}…` : undefined}
-          secondary={!!fix && fix.id !== "image"}
+          secondary={(!!fix && fix.id !== "image") || revertFirst}
         />
       )}
       {/* A missing branch fails every build: no Redeploy until it's changed. */}
@@ -235,10 +256,11 @@ export function ServiceHeaderActions({
         <Explained label={redeploy.verb} explain={canWrite ? redeploy.explain : NO_ACCESS}>
           <Button
             size="sm"
-            variant={fix ? "secondary" : undefined}
+            variant={fix || revertFirst ? "secondary" : undefined}
             onClick={redeploy.request}
             disabled={!canWrite || redeploy.pending}
-            className="h-7 px-2.5 text-xs"
+            // Phones keep the bar to Revert and the fix while it's failing.
+            className={cn("h-7 px-2.5 text-xs", revertFirst && "max-sm:hidden")}
           >
             <Rocket className="h-3 w-3" />
             {redeploy.pending ? "Starting…" : redeploy.verb}
@@ -370,6 +392,7 @@ export function ServiceHeaderActions({
       </div>
 
       {redeploy.dialog}
+      {rollback.dialog}
       <ConfirmDialog
         open={confirm === "restart"}
         title={`Restart ${service}?`}
@@ -428,6 +451,16 @@ function DeployImageControl({
   const parsed = parseTarget(value, repository);
   const error = touched || value ? parsed.error : undefined;
   const unchanged = !parsed.error && parsed.repository === repository && parsed.tag === currentTag;
+  // Ask the registry once typing settles: a typo'd tag is otherwise only
+  // found when the rollout can't pull it.
+  const [settled, setSettled] = useState({ repository: "", tag: "" });
+  useEffect(() => {
+    const t = setTimeout(() => setSettled({ repository: parsed.repository, tag: parsed.tag }), 400);
+    return () => clearTimeout(t);
+  }, [parsed.repository, parsed.tag]);
+  const typing = settled.repository !== parsed.repository || settled.tag !== parsed.tag;
+  const check = useImageCheck(project, service, settled.repository, settled.tag, open && !parsed.error && !unchanged && !typing);
+  const missing = !typing && !parsed.error && !unchanged && check.data?.status === "not_found";
 
   const submit = async () => {
     setTouched(true);
@@ -513,12 +546,35 @@ function DeployImageControl({
             {error ??
               `Rolls out to ${groups.length > 1 ? `all ${groups.length} environments (${groups.join(", ")})` : (groups[0] ?? "production")}. The current version serves until the new pods are ready.`}
           </p>
+          {!error && !unchanged && (
+            <p role="status" aria-live="polite" className="flex min-h-4 items-start gap-1.5 text-xs">
+              {typing || check.isFetching ? (
+                <span className="text-[var(--text-tertiary)]">Checking the registry…</span>
+              ) : missing ? (
+                <span className="flex items-start gap-1.5 text-[var(--warning)]" title={check.data?.detail}>
+                  <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+                  <span>Tag not found in the registry. Deploying it would fail to pull.</span>
+                </span>
+              ) : check.data?.status === "found" ? (
+                <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
+                  <Check aria-hidden className="h-3.5 w-3.5 text-[var(--success)]" />
+                  Found in the registry
+                </span>
+              ) : null}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button type="button" size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" size="sm" className="h-7 px-2.5 text-xs" disabled={!!parsed.error || unchanged || patch.isPending}>
-              {patch.isPending ? "Deploying…" : "Deploy"}
+            <Button
+              type="submit"
+              size="sm"
+              variant={missing ? "secondary" : undefined}
+              className="h-7 px-2.5 text-xs"
+              disabled={!!parsed.error || unchanged || patch.isPending}
+            >
+              {patch.isPending ? "Deploying…" : missing ? "Deploy anyway" : "Deploy"}
             </Button>
           </div>
         </form>
