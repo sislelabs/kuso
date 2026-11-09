@@ -78,6 +78,7 @@ var schedulingCauses = []struct{ needle, text string }{
 	{"node.kubernetes.io/not-ready", "The node isn't ready, so the pod can't be scheduled"},
 	{"node.kubernetes.io/unreachable", "The node is unreachable, so the pod can't be scheduled"},
 	{"node.kubernetes.io/unschedulable", "The node is cordoned, so the pod can't be scheduled"},
+	{"node(s) were unschedulable", "The node is cordoned, so the pod can't be scheduled"},
 	{"insufficient cpu", "No node has enough free CPU for the pod's request"},
 	{"insufficient memory", "No node has enough free memory for the pod's request"},
 	{"insufficient ephemeral-storage", "No node has enough free disk for the pod's request"},

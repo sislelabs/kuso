@@ -154,7 +154,12 @@ export const BuildLogViewer = memo(function BuildLogViewer({
           />
         )}
         {live ? (
-          <StreamState state={stream.state} message={stream.message} onReconnect={stream.reconnect} />
+          <StreamState
+            state={stream.state}
+            message={stream.message}
+            onReconnect={stream.reconnect}
+            empty={stream.lines.length === 0}
+          />
         ) : (
           stored.data && <span className="text-xs text-[var(--text-secondary)]">{summary}</span>
         )}
@@ -566,19 +571,24 @@ function StreamState({
   state,
   message,
   onReconnect,
+  empty,
 }: {
   state: LiveLogState;
   message: string | null;
   onReconnect: () => void;
+  empty: boolean;
 }) {
-  const c = STATE_COPY[state];
+  // A stream that ended before printing anything (its pod never started)
+  // isn't a finished build.
+  const closedEarly = state === "ended" && empty;
+  const c = closedEarly ? { label: "Log stream closed", dot: STATE_COPY.ended.dot } : STATE_COPY[state];
   return (
     <span className="inline-flex min-w-0 items-center gap-2 text-xs text-[var(--text-secondary)]" role="status">
       <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", c.dot)} />
       <span className="truncate" title={message ?? undefined}>
         {c.label}
       </span>
-      {(state === "reconnecting" || state === "offline") && (
+      {(state === "reconnecting" || state === "offline" || closedEarly) && (
         <button
           type="button"
           onClick={onReconnect}
