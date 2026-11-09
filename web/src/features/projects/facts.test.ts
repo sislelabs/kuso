@@ -292,6 +292,20 @@ describe("projectHealthLine", () => {
     expect(r.tone).toBe("error");
     expect(r.problems).toEqual(["api", "web"]);
   });
+  it("names a failed first build instead of counting it as an uptime failure", () => {
+    const r = projectHealthLine(
+      [row("docs", "live", "success"), row("reports", "build_failed", "error"), row("inspect", "live", "success")],
+      [
+        { service: "docs", state: "up" },
+        { service: "reports", state: "paused" },
+        { service: "inspect", state: "up" },
+      ],
+    );
+    expect(r.text).toBe("2 of 3 services checked · 1 build failed");
+    expect(r.issues).toBe("1 build failed");
+    expect(r.tone).toBe("error");
+    expect(r.problems).toEqual(["reports"]);
+  });
   it("has nothing to say for a healthy unchecked project", () => {
     expect(projectHealthLine([row("web", "live", "success")], null).text).toBeUndefined();
   });
