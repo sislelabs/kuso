@@ -391,7 +391,9 @@ function AddRuleDialog({
     if (isAdmin) return initial;
     const kind = kinds.includes(initial.kind) ? initial.kind : "http_5xx_rate";
     const base = kind === initial.kind ? initial : { ...emptyRuleForm(kind), name: initial.name };
-    return projects.includes(base.project) ? base : { ...base, project: "", service: "", env: "" };
+    // While the project list loads, keep the deep-linked scope: dropping it
+    // here would open a service's "New alert" as an unscoped rule.
+    return projectsLoading || projects.includes(base.project) ? base : { ...base, project: "", service: "", env: "" };
   });
   const [form, setForm] = useState<RuleFormState>(initialForm);
   const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
