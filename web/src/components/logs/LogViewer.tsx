@@ -498,10 +498,10 @@ export function LogViewer({
         {announcement}
       </div>
       {/* Row 1: search + range */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 max-sm:flex-nowrap">
         <form
           role="search"
-          className="relative min-w-0 flex-[1_1_16rem]"
+          className="relative min-w-0 flex-[1_1_16rem] max-sm:basis-0"
           onSubmit={(e) => {
             e.preventDefault();
             commitQuery(draft, true);
@@ -586,6 +586,26 @@ export function LogViewer({
             </div>
           )}
         </form>
+        {narrow ? (
+          // The segmented picker takes a row of its own on a phone.
+          <Select
+            size="sm"
+            value={rangeValue}
+            onChange={(e) => {
+              if (e.target.value) setRange(e.target.value);
+            }}
+            aria-label="Log time range"
+            title={customLabel}
+            wrapperClassName="w-auto shrink-0"
+          >
+            {!rangeValue && <option value="">Custom</option>}
+            {presets.map((p) => (
+              <option key={p} value={p} aria-label={p === "live" ? "Live" : `Last ${timeRangeSpan(p)}`}>
+                {p === "live" ? "Live" : p}
+              </option>
+            ))}
+          </Select>
+        ) : (
         <TimeRangePicker
           presets={presets}
           value={rangeValue}
@@ -602,11 +622,13 @@ export function LogViewer({
           onClearCustom={() => setView({ range: canStream ? { kind: "live" } : { kind: "preset", preset: "1h" } })}
           ariaLabel="Log time range"
         />
+        )}
       </div>
 
-      {/* Row 2: status + filters + actions */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-        <div className="min-w-0 flex-[1_1_14rem]">
+      {/* Row 2: status + filters + actions. On phones it stays one row
+          (the status wraps inside its own column) so the lines get the height. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 max-sm:flex-nowrap max-sm:gap-x-2">
+        <div className="min-w-0 flex-[1_1_14rem] max-sm:basis-0">
           <StatusLine
           live={live}
           connection={stream.connection}
@@ -632,7 +654,7 @@ export function LogViewer({
           onBackToLive={canStream && !live ? () => setRange("live") : undefined}
         />
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 max-sm:shrink-0 max-sm:justify-end max-sm:gap-1">
           <div role="group" aria-label="Filter by level" className="hidden items-center gap-0.5 sm:inline-flex">
             {LOG_FILTER_LEVELS.filter((l) => l !== "none" || levelCounts.none > 0 || view.levels.includes(l)).map((l) => (
               <LevelChip key={l} level={l} count={levelCounts[l]} on={view.levels.includes(l)} onClick={() => toggleLevel(l)} errorGroups={errorGroups} />
@@ -683,7 +705,7 @@ export function LogViewer({
           )}
           {/* The view actions wrap as one group, never one icon alone. */}
           <div className="flex shrink-0 items-center gap-1.5">
-          <span aria-hidden className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
+          <span aria-hidden className="mx-0.5 h-4 w-px bg-[var(--border-subtle)] max-sm:hidden" />
           <IconToggle label={view.wrap ? "Don't wrap lines" : "Wrap lines"} pressed={view.wrap} onClick={() => setView({ wrap: !view.wrap })}>
             <WrapText className="h-3.5 w-3.5" />
           </IconToggle>
@@ -879,14 +901,14 @@ function LevelPopover({
             ? "border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
             : "border-[var(--border-subtle)] text-[var(--text-secondary)]",
         )}
-        aria-label={`Filter by level: ${label}`}
+        aria-label={`Filter by level: ${label}${counts.error > 0 ? `, ${levelCountText("error", counts.error).count} ${levelCountText("error", counts.error).noun}` : ""}`}
       >
         <ListFilter aria-hidden className="h-3.5 w-3.5" />
         {label}
         {counts.error > 0 && (
           <span className="inline-flex items-center gap-1 tabular-nums text-[var(--text-tertiary)]">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--error)]" />
-            {levelCountText("error", counts.error).count} {levelCountText("error", counts.error).noun}
+            {levelCountText("error", counts.error).count}
           </span>
         )}
       </PopoverTrigger>
