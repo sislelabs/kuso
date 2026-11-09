@@ -17,14 +17,17 @@ describe("buildTitle", () => {
 
 describe("buildTrigger", () => {
   it("labels pushes, API and first deploys", () => {
-    expect(buildTrigger(b({ triggeredBy: "webhook" }), [])?.label).toBe("Push");
-    expect(buildTrigger(b({ triggeredBy: "api" }), [])?.label).toBe("API");
-    expect(buildTrigger(b({ triggeredBy: "system" }), [])?.label).toBe("First deploy");
+    expect(buildTrigger(b({ triggeredBy: "webhook" }), [])?.label).toBe("via push");
+    expect(buildTrigger(b({ triggeredBy: "api" }), [])?.label).toBe("via API");
+    expect(buildTrigger(b({ triggeredBy: "system" }), [])?.label).toBe("first deploy");
   });
   it("tells a retry after a failure from a rebuild of a good commit", () => {
     const failed = b({ id: "1", commitSha: SHA, branch: "main", status: "failed" });
-    const retry = b({ id: "2", commitSha: SHA, branch: "main", triggeredBy: "user" });
+    const retry = b({ id: "2", commitSha: SHA, branch: "main", triggeredBy: "user", status: "failed" });
     expect(buildTrigger(retry, [retry, failed])?.kind).toBe("retry");
+    // A retry that went green is labelled a rebuild, never "retry".
+    const retried = b({ id: "2b", commitSha: SHA, branch: "main", triggeredBy: "user", status: "succeeded" });
+    expect(buildTrigger(retried, [retried, failed])?.label).toBe("rebuild");
     const ok = b({ id: "3", commitSha: SHA, branch: "main" });
     const again = b({ id: "4", commitSha: SHA, branch: "main", triggeredBy: "user" });
     expect(buildTrigger(again, [again, ok])?.kind).toBe("rebuild");

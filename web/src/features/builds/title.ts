@@ -28,26 +28,31 @@ export interface BuildTrigger {
   hint: string;
 }
 
-// buildTrigger says how a build started. A manual build of a commit whose
-// previous attempt failed is a Retry; of a commit that already built fine,
-// a Rebuild. `builds` is the service's history, newest first.
+// buildTrigger says how a build started, as lowercase note text ("via
+// push", "manual", …). A manual build of a commit whose previous attempt
+// failed is a retry (a rebuild once it succeeded); of a commit that already
+// built fine, a rebuild. `builds` is the service's history, newest first.
 export function buildTrigger(b: DeployBuild, builds: DeployBuild[]): BuildTrigger | undefined {
   const by = b.triggeredByUser;
   switch (b.triggeredBy) {
     case "webhook":
-      return { kind: "push", label: "Push", hint: by ? `Pushed by ${by}` : "Started by a git push" };
+      return { kind: "push", label: "via push", hint: by ? `Pushed by ${by}` : "Started by a git push" };
     case "api":
-      return { kind: "api", label: "API", hint: "Started through the API or CLI" };
+      return { kind: "api", label: "via API", hint: "Started through the API or CLI" };
     case "system":
-      return { kind: "first", label: "First deploy", hint: "Started when the service was created" };
+      return { kind: "first", label: "first deploy", hint: "Started when the service was created" };
     case "user": {
       const who = by ? ` by ${by}` : "";
       const earlier = sameCommitBefore(b, builds);
       if (earlier && ["failed", "release-failed", "cancelled"].includes(lower(earlier.status))) {
-        return { kind: "retry", label: "Retry", hint: `Retried${who} after the previous attempt ${lower(earlier.status).replace("-", " ")}` };
+        const hint = `Retried${who} after the previous attempt ${lower(earlier.status).replace("-", " ")}`;
+        // "retry" on a green row reads like an action; it was a rebuild that worked.
+        return lower(b.status) === "succeeded"
+          ? { kind: "rebuild", label: "rebuild", hint }
+          : { kind: "retry", label: "retry", hint };
       }
-      if (earlier) return { kind: "rebuild", label: "Rebuild", hint: `Same commit built again${who}` };
-      return { kind: "manual", label: "Manual", hint: `Deployed${who} from the dashboard` };
+      if (earlier) return { kind: "rebuild", label: "rebuild", hint: `Same commit built again${who}` };
+      return { kind: "manual", label: "manual", hint: `Deployed${who} from the dashboard` };
     }
     default:
       return undefined;
