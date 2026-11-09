@@ -47,7 +47,7 @@ func TestVulnScanQueue_DedupesClaimsOneAtATimeGateFirst(t *testing.T) {
 		Findings: []VulnFinding{
 			{VulnID: "CVE-1", PkgName: "openssl", Severity: "CRITICAL", FixedVersion: "3.0.1"},
 			{VulnID: "CVE-2", PkgName: "zlib", Severity: "CRITICAL"},
-			{VulnID: "CVE-3", PkgName: "curl", Severity: "HIGH", FixedVersion: "8"},
+			{VulnID: "CVE-3", PkgName: "curl", Severity: "HIGH", FixedVersion: "8", PkgPath: "app/node_modules/curl/package.json"},
 			{VulnID: "CVE-4", PkgName: "x", Severity: "LOW"},
 			{VulnID: "CVE-5", PkgName: "y", Severity: "UNKNOWN"},
 		},
@@ -66,6 +66,9 @@ func TestVulnScanQueue_DedupesClaimsOneAtATimeGateFirst(t *testing.T) {
 	fs, err := d.ListVulnFindings(ctx, gate)
 	if err != nil || len(fs) != 5 || fs[0].Severity != "CRITICAL" || fs[4].Severity != "UNKNOWN" {
 		t.Fatalf("findings = %+v %v", fs, err)
+	}
+	if fs[2].VulnID != "CVE-3" || fs[2].PkgPath != "app/node_modules/curl/package.json" {
+		t.Errorf("pkgPath not round-tripped: %+v", fs[2])
 	}
 
 	next, err := d.ClaimNextVulnScan(ctx)

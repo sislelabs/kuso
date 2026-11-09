@@ -116,6 +116,7 @@ type trivyReport struct {
 			Severity         string `json:"Severity"`
 			Title            string `json:"Title"`
 			PrimaryURL       string `json:"PrimaryURL"`
+			PkgPath          string `json:"PkgPath"`
 		} `json:"Vulnerabilities"`
 	} `json:"Results"`
 }
@@ -157,6 +158,7 @@ func parseOutput(out scanOutput) (db.VulnScanResult, error) {
 				Title:            clip(v.Title, 512),
 				PrimaryURL:       clip(v.PrimaryURL, 512),
 				Target:           clip(r.Target, 512),
+				PkgPath:          clip(v.PkgPath, 512),
 			})
 		}
 	}

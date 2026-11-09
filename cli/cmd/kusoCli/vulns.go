@@ -34,6 +34,7 @@ var (
 
 	vulnsShowEnv, vulnsShowAddon, vulnsShowSeverity string
 	vulnsShowFixable, vulnsShowHideIgnored          bool
+	vulnsShowOrigin                                 string
 
 	vulnsScanEnv, vulnsScanAddon string
 	vulnsScanWait                bool
@@ -149,9 +150,21 @@ var vulnsShowCmd = &cobra.Command{
 	Short: "Findings for a service's or addon's live image",
 	Long: `Show the latest scan of a service's (or addon's) live image: gate mode,
 counts and the findings table, CRITICAL first. Ignored findings are listed and
-marked unless --hide-ignored.`,
+marked unless --hide-ignored.
+
+Each finding has an ORIGIN, so you can tell what the app's repo can fix:
+  app    a dependency of the app (lockfile, go.mod, requirements, …): bump it
+  os     a distro package from the base image: rebuild picks up patches, or
+         move to a newer base image
+  image  prebuilt software the image carries outside the app, like a package
+         manager's own deps or a language toolchain: bump that tool (e.g.
+         "packageManager" in package.json) or ignore it with a reason
+The JSON output carries origin plus pkgPath, the file the package was found
+in. Origin is blank for findings scanned before kuso recorded paths: run
+"kuso vulns scan … --wait" to refresh. --fixable/--origin also filter -o json.`,
 	Example: `  kuso vulns show shop web
   kuso vulns show shop web --env staging --severity CRITICAL,HIGH --fixable
+  kuso vulns show shop web --origin app --fixable -o json
   kuso vulns show shop --addon db`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -170,6 +183,10 @@ marked unless --hide-ignored.`,
 		if err != nil {
 			return err
 		}
+		origins, err := parseOriginFilter(vulnsShowOrigin)
+		if err != nil {
+			return err
+		}
 		if err := requireAPI(); err != nil {
 			return err
 		}
@@ -181,15 +198,22 @@ marked unless --hide-ignored.`,
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("vulns show: %w", err)
 		}
+		filter := findingFilter{severities: sevs, fixableOnly: vulnsShowFixable, hideIgnored: vulnsShowHideIgnored, origins: origins}
 		if asJSON {
-			return printRawJSON(resp.Body())
+			if !vulnsShowFixable && len(origins) == 0 {
+				return printRawJSON(resp.Body())
+			}
+			body, err := filterReportJSON(resp.Body(), filter)
+			if err != nil {
+				return err
+			}
+			return printRawJSON(body)
 		}
 		rep, err := decodeVulnReport(resp.Body())
 		if err != nil {
 			return err
 		}
-		renderVulnReport(os.Stdout, targetTitle(t, rep, vulnsShowEnv), rep,
-			findingFilter{severities: sevs, fixableOnly: vulnsShowFixable, hideIgnored: vulnsShowHideIgnored})
+		renderVulnReport(os.Stdout, targetTitle(t, rep, vulnsShowEnv), rep, filter)
 		renderImageUpdate(os.Stdout, rep.ImageUpdate)
 		return nil
 	},
@@ -603,6 +627,7 @@ func init() {
 	f.StringVar(&vulnsShowSeverity, "severity", "", "only these severities, e.g. CRITICAL,HIGH")
 	f.BoolVar(&vulnsShowFixable, "fixable", false, "only findings with a fixed version available")
 	f.BoolVar(&vulnsShowHideIgnored, "hide-ignored", false, "omit ignored findings")
+	f.StringVar(&vulnsShowOrigin, "origin", "", "only these origins: app, os, image (comma-separated)")
 
 	f = vulnsScanCmd.Flags()
 	f.StringVar(&vulnsScanEnv, "env", "", "environment (default production)")

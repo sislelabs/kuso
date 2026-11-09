@@ -708,6 +708,7 @@
           "VulnerabilityID": "CVE-2019-11358",
           "PkgID": "jquery@3.3.9",
           "PkgName": "jquery",
+          "PkgPath": "app/node_modules/jquery/package.json",
           "PkgIdentifier": {
             "PURL": "pkg:npm/jquery@3.3.9",
             "UID": "5624abe72853740"

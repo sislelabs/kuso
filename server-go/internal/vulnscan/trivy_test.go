@@ -72,7 +72,8 @@ func TestParseTrivyOutput_Fixture(t *testing.T) {
 		t.Errorf("first finding\n got %+v\nwant %+v", first, want)
 	}
 	last := res.Findings[5]
-	if last.PkgType != "npm" || last.Target != "app/package-lock.json" || last.PkgName != "jquery" {
+	if last.PkgType != "npm" || last.Target != "app/package-lock.json" || last.PkgName != "jquery" ||
+		last.PkgPath != "app/node_modules/jquery/package.json" {
 		t.Errorf("lang-pkg finding = %+v", last)
 	}
 	var c db.VulnCounts

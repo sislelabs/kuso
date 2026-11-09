@@ -46,6 +46,8 @@ type VulnFinding struct {
 	Title            string `json:"title,omitempty"`
 	PrimaryURL       string `json:"primaryURL,omitempty"`
 	Target           string `json:"target,omitempty"`
+	PkgPath          string `json:"pkgPath,omitempty"`
+	Origin           string `json:"origin,omitempty"`
 	Ignored          bool   `json:"ignored"`
 	IgnoreID         *int64 `json:"ignoreId,omitempty"`
 }

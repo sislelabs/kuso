@@ -35,23 +35,34 @@ func targetLabel(t kusoApi.VulnTarget) string {
 }
 
 var vulnsIgnoreAddCmd = &cobra.Command{
-	Use:   "add <project> <service|--addon addon> <VULN-ID>",
-	Short: "Ignore a vulnerability ID with a reason and optional expiry",
-	Long: `Ignore one vulnerability ID (CVE-…, GHSA-…) on a service or addon. Ignored
-findings stay visible (marked) but no longer count toward the deploy gate or
-alerts. A build that was blocked needs a rebuild (kuso build trigger) after.
+	Use:   "add <project> <service|--addon addon> <VULN-ID>...",
+	Short: "Ignore vulnerability IDs with a reason and optional expiry",
+	Long: `Ignore one or more vulnerability IDs (CVE-…, GHSA-…) on a service or addon.
+Ignored findings stay visible (marked) but no longer count toward the deploy
+gate or alerts. A build that was blocked needs a rebuild (kuso build trigger)
+after. An ignore covers the ID on every package it appears in.
 
---reason is required. --expires takes days, e.g. 30d or 30 (1-365); without it
-the ignore never expires.`,
+--reason is required and applies to every ID given. --expires takes days, e.g.
+30d or 30 (1-365); without it the ignore never expires. Prefer an expiry, so the
+finding comes back for review. Every ID is attempted; the command fails if any
+of them could not be ignored.`,
 	Example: `  kuso vulns ignore add shop web CVE-2024-12345 --reason "not reachable: CLI-only code path" --expires 30d
+  kuso vulns ignore add shop web CVE-2025-1 CVE-2025-2 --reason "pnpm's bundled deps, build-time only" --expires 30d
   kuso vulns ignore add shop --addon db CVE-2024-12345 --reason "upstream image, tracked in #42"`,
-	Args: cobra.RangeArgs(2, 3),
+	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		asJSON, err := vulnsOutput(vulnsIgnoreAddOutput)
 		if err != nil {
 			return err
 		}
-		t, rest, err := vulnTargetIgnore(args, vulnsIgnoreAddAddon, "<VULN-ID>")
+		extra := len(args) - 2
+		if vulnsIgnoreAddAddon != "" {
+			extra = len(args) - 1
+		}
+		if extra < 1 {
+			extra = 1
+		}
+		t, rest, err := vulnTargetIgnore(args, vulnsIgnoreAddAddon, "<VULN-ID>...", extra)
 		if err != nil {
 			return err
 		}
@@ -66,30 +77,50 @@ the ignore never expires.`,
 		if err := requireAPI(); err != nil {
 			return err
 		}
-		resp, err := api.AddVulnIgnore(t, kusoApi.VulnIgnoreRequest{VulnID: strings.TrimSpace(rest[0]), Reason: reason, ExpiresInDays: days})
-		if err := checkRespErr(resp, err); err != nil {
-			return fmt.Errorf("add ignore: %w", err)
+		added := []json.RawMessage{}
+		failed := 0
+		for _, id := range rest {
+			id = strings.TrimSpace(id)
+			resp, err := api.AddVulnIgnore(t, kusoApi.VulnIgnoreRequest{VulnID: id, Reason: reason, ExpiresInDays: days})
+			if err := checkRespErr(resp, err); err != nil {
+				failed++
+				fmt.Fprintf(os.Stderr, "ignore %s: %v\n", id, err)
+				continue
+			}
+			if asJSON {
+				added = append(added, json.RawMessage(resp.Body()))
+				continue
+			}
+			var ig kusoApi.VulnIgnore
+			if err := json.Unmarshal(resp.Body(), &ig); err != nil {
+				return fmt.Errorf("decode ignore: %w", err)
+			}
+			exp := "never expires"
+			if ig.ExpiresAt != "" {
+				exp = "expires " + ig.ExpiresAt
+			}
+			fmt.Printf("ignored %s on %s (#%d, %s)\n", ig.VulnID, targetLabel(t), ig.ID, exp)
 		}
 		if asJSON {
-			return printRawJSON(resp.Body())
+			body, err := json.Marshal(added)
+			if err != nil {
+				return err
+			}
+			if err := printRawJSON(body); err != nil {
+				return err
+			}
 		}
-		var ig kusoApi.VulnIgnore
-		if err := json.Unmarshal(resp.Body(), &ig); err != nil {
-			return fmt.Errorf("decode ignore: %w", err)
+		if failed > 0 {
+			return fmt.Errorf("%d of %d ignores failed", failed, len(rest))
 		}
-		exp := "never expires"
-		if ig.ExpiresAt != "" {
-			exp = "expires " + ig.ExpiresAt
-		}
-		fmt.Printf("ignored %s on %s (#%d, %s)\n", ig.VulnID, targetLabel(t), ig.ID, exp)
 		return nil
 	},
 }
 
 // vulnTargetIgnore is vulnTarget for the ignore subcommands, whose
 // trailing positional is named in the error.
-func vulnTargetIgnore(args []string, addon, last string) (kusoApi.VulnTarget, []string, error) {
-	t, rest, err := vulnTarget(args, addon, 1)
+func vulnTargetIgnore(args []string, addon, last string, extra int) (kusoApi.VulnTarget, []string, error) {
+	t, rest, err := vulnTarget(args, addon, extra)
 	if err != nil {
 		if addon != "" {
 			return t, nil, fmt.Errorf("with --addon, pass <project> %s", last)
@@ -152,7 +183,7 @@ the deploy gate and alerts again, so in enforce mode the service's next build
 can be blocked. Asks for confirmation; pass --yes in scripts.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, rest, err := vulnTargetIgnore(args, vulnsIgnoreRmAddon, "<id>")
+		t, rest, err := vulnTargetIgnore(args, vulnsIgnoreRmAddon, "<id>", 1)
 		if err != nil {
 			return err
 		}
