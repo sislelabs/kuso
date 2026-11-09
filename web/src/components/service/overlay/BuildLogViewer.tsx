@@ -446,7 +446,7 @@ const STEP_ICON: Record<StepStatus, { icon: React.ComponentType<{ className?: st
   unknown: { icon: CircleDashed, tone: "text-[var(--text-tertiary)]", label: "No result recorded" },
 };
 
-// Dockerfile instructions read as code; prose titles ("Clone and prepare")
+// Dockerfile instructions read as code; prose titles ("Clone repository")
 // stay in the UI font.
 const INSTRUCTION = /^(RUN|COPY|ADD|FROM|WORKDIR|ENV|ARG|USER|EXPOSE|CMD|ENTRYPOINT|LABEL|VOLUME|SHELL|HEALTHCHECK)\b/;
 

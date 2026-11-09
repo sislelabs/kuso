@@ -30,11 +30,13 @@ import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/se
 import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
-  buildStall,
   buildTitle,
   buildRefLabel,
-  failedStepFromBuild,
+  failedStep,
   failedStepTitle,
+  isPlatformFailure,
+  stallHeadline,
+  stallNote,
   firstErrorLine,
   isErrorLine,
   parseBuildLog,
@@ -142,19 +144,22 @@ export function BuildRow({
   const sha = buildRefLabel(b, 7);
   const ts = b.startedAt ?? b.finishedAt;
   const note = buildNote(b, s);
-  const stall = buildStall(b, s);
+  const stall = s === "pending" || s === "running" ? b.stalled : undefined;
   const who = actorLabel(b);
   const live = s === "running" || s === "pending" || s === "queued";
   const failed = s === "failed";
+  const platform = failed && isPlatformFailure(b);
   const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
   const logId = `build-log-${b.id}`;
   const [jump, setJump] = useState<{ line: number; seq: number } | null>(null);
   const rowRef = useRef<HTMLLIElement>(null);
   const peek = useLogPeek(project, service, b.id, failed && !!peekLog);
-  const failedStep = peek.step ?? failedStepFromBuild(b);
-  const errorLine = b.failureClass?.lineHint || peek.errorLine;
+  const failedStepName = failedStep(b, peek.step);
+  // A platform failure never ran the user's code, so no log line caused it.
+  const errorLine = platform ? undefined : b.failureClass?.lineHint || peek.errorLine;
+  const retryBlocked = failed ? unretryableReason(b, peek.errorLine) : undefined;
   // The classifier's "generic" summary says less than the step and error line.
-  const classSummary = b.failureClass?.kind === "generic" && (failedStep || errorLine) ? "" : b.failureClass?.summary;
+  const classSummary = b.failureClass?.kind === "generic" && (failedStepName || errorLine) ? "" : b.failureClass?.summary;
   const failureTitle = classSummary || (isGenericFailure(b.errorMessage) ? "" : b.errorMessage);
   const releaseErrorLine = s === "release-failed" ? firstReleaseError(b) : undefined;
   // Settled rows keep their actions out of the way until hovered or
@@ -237,7 +242,10 @@ export function BuildRow({
           {stall && (
             <p className="mt-1 flex items-start gap-1.5 text-xs text-[var(--warning)]" title={stall.detail}>
               <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
-              <span className="break-words">{stall.summary}</span>
+              <span className="break-words">
+                {stallHeadline(stall)}
+                <span className="text-[var(--text-secondary)]"> · {stallNote(stall)}</span>
+              </span>
             </p>
           )}
           {b.promoteHold && (s === "running" || s === "pending") && (
@@ -260,17 +268,17 @@ export function BuildRow({
             </div>
           )}
           {/* Open, the failure card above the log states all of this once. */}
-          {failed && !isOpen && (failedStep || failureTitle || errorLine || b.errorMessage) && (
+          {failed && !isOpen && (failedStepName || failureTitle || errorLine || b.errorMessage) && (
             <div className="mt-1.5 min-w-0 space-y-1">
-              {(failedStep || failureTitle) && (
+              {(failedStepName || failureTitle) && (
                 <p className="break-words text-xs text-[var(--error)]">
-                  {failedStep && (
+                  {failedStepName && (
                     <span className="font-medium">
-                      Failed at <span className="text-[var(--text-primary)]">{failedStep}</span>
+                      Failed at <span className="text-[var(--text-primary)]">{failedStepName}</span>
                     </span>
                   )}
-                  {failedStep && failureTitle && <span aria-hidden> · </span>}
-                  {failureTitle && <span className={failedStep ? undefined : "font-medium"}>{failureTitle}</span>}
+                  {failedStepName && failureTitle && <span aria-hidden> · </span>}
+                  {failureTitle && <span className={failedStepName ? undefined : "font-medium"}>{failureTitle}</span>}
                 </p>
               )}
               {errorLine ? (
@@ -281,7 +289,7 @@ export function BuildRow({
                   <span className="line-clamp-2 break-words">{errorLine}</span>
                 </p>
               ) : (
-                !failureTitle && b.errorMessage && !(failedStep && isGenericFailure(b.errorMessage)) && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
+                !failureTitle && b.errorMessage && !(failedStepName && isGenericFailure(b.errorMessage)) && <p className="break-words text-xs text-[var(--error)]">{b.errorMessage}</p>
               )}
               <button
                 type="button"
@@ -345,16 +353,19 @@ export function BuildRow({
               {failed && (
                 <FailureCard
                   failureClass={b.failureClass}
-                  step={failedStep}
-                  title={failureTitle || (isGenericFailure(b.errorMessage) && (failedStep || errorLine) ? "" : b.errorMessage) || ""}
+                  step={failedStepName}
+                  title={failureTitle || (isGenericFailure(b.errorMessage) && (failedStepName || errorLine) ? "" : b.errorMessage) || ""}
                   errorLine={errorLine}
+                  retryNote={canDeploy ? retryBlocked : undefined}
                   project={project}
                   service={service}
                   buildId={b.id}
                   onJump={(line) => setJump((j) => ({ line, seq: (j?.seq ?? 0) + 1 }))}
                 />
               )}
-              <BuildLogViewer project={project} service={service} buildId={b.id} live={live} failed={failed} jumpTo={jump ?? undefined} />
+              {/* A platform failure stopped before the user's steps: the
+                  steps that printed (the clone) succeeded. */}
+              <BuildLogViewer project={project} service={service} buildId={b.id} live={live} failed={failed && !platform} jumpTo={jump ?? undefined} />
             </>
           )}
         </div>
@@ -527,6 +538,7 @@ function FailureCard({
   step,
   title,
   errorLine,
+  retryNote,
   project,
   service,
   buildId,
@@ -536,6 +548,8 @@ function FailureCard({
   step?: string;
   title: string;
   errorLine?: string;
+  // Why the row's Retry is disabled, said here as well as on the button.
+  retryNote?: string;
   project: string;
   service: string;
   buildId: string;
@@ -547,7 +561,7 @@ function FailureCard({
     [log.data, errorLine],
   );
   const rem = failureClass?.remediation;
-  if (!step && !title && !errorLine && !rem) return null;
+  if (!step && !title && !errorLine && !rem && !retryNote) return null;
   return (
     <div className="space-y-2 border-b border-[var(--border-subtle)] bg-[var(--error-subtle)] px-3 py-2.5 sm:px-4">
       {(step || title) && (
@@ -606,6 +620,12 @@ function FailureCard({
           )}
         </div>
       )}
+      {retryNote && (
+        <p className="text-xs text-[var(--text-secondary)]">
+          <span className="font-medium text-[var(--text-primary)]">Retry is off: </span>
+          {retryNote}
+        </p>
+      )}
     </div>
   );
 }
@@ -626,7 +646,7 @@ function ReleaseFailure({ message, job, logTail }: { message?: string; job?: str
   );
 }
 
-function CancelButton({ project, service, buildId }: { project: string; service: string; buildId: string }) {
+export function CancelButton({ project, service, buildId }: { project: string; service: string; buildId: string }) {
   const qc = useQueryClient();
   const m = useMutation({
     mutationFn: () => cancelBuild(project, service, buildId),

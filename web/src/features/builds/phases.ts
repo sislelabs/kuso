@@ -4,6 +4,8 @@
 // `#N ERROR: …`), buildpacks lifecycle phases (`===> BUILDING`), and the
 // error trailer BuildKit prints after a failed solve.
 
+import { isPlatformFailure } from "./platform";
+
 export type StepStatus = "done" | "cached" | "error" | "canceled" | "running" | "unknown";
 export type StepKind = "prepare" | "buildkit" | "lifecycle" | "summary";
 
@@ -57,8 +59,12 @@ const ERROR_RE =
   /\b(error|err!|fatal|panic|failed|failure|exception|traceback|cannot|could not|denied|exit code|exited with|oomkilled|killed)\b|^\s*>>>|\s>>>\s|^Dockerfile:\d+/i;
 const NOT_ERROR_RE = /\bnpm (notice|warn)\b|\bdeprecated\b|\b0 errors?\b|\bwarn(ing)?\b/i;
 
+// The clone step has one name whether it comes from the log's preamble,
+// the archived container section or the server's failure classification.
+export const CLONE_STEP = "Clone repository";
+
 const CONTAINER_TITLES: Record<string, string> = {
-  clone: "Clone repository",
+  clone: CLONE_STEP,
   "cache-init": "Prepare build cache",
   buildkit: "Connect to BuildKit",
   build: "Run the build",
@@ -185,7 +191,7 @@ export function parseBuildLog(lines: string[], opts: { live?: boolean; failed?: 
     }
 
     if (line.trim() === "" && !prepare) return;
-    if (!prepare) prepare = open("prepare", `pre-${drafts.length}`, "Clone and prepare");
+    if (!prepare) prepare = open("prepare", `pre-${drafts.length}`, CLONE_STEP);
     prepare.raw.push({ idx, text: line });
     firstContent = false;
   });
@@ -346,8 +352,8 @@ export function failedStepTitle(parsed: ParsedBuildLog): string | undefined {
 // The server names the container that exited ("… (clone)") and classifies
 // some failures; either names the step without fetching the log.
 const KIND_STEPS: Record<string, string> = {
-  clone_ref_missing: "Clone repository",
-  clone_unreachable: "Clone repository",
+  clone_ref_missing: CLONE_STEP,
+  clone_unreachable: CLONE_STEP,
   dockerfile_not_found: "Run the build",
   dockerfile_missing_copy: "Run the build",
   lockfile_drift: "Install dependencies",
@@ -364,7 +370,30 @@ export function failedStepFromBuild(b: { errorMessage?: string; failureClass?: {
   return KIND_STEPS[b.failureClass?.kind ?? ""];
 }
 
+// failedStep names the step a failed build died in. The log's guess is
+// the more specific one inside the BuildKit solve, but it only sees steps
+// that printed: it blames the last one that did (usually the clone) when
+// a later init container never ran. So a non-BuildKit container the
+// server names wins, and a platform failure never takes the log's guess.
+export function failedStep(
+  b: { errorMessage?: string; failureClass?: { kind?: string } },
+  logStep?: string,
+): string | undefined {
+  const server = failedStepFromBuild(b);
+  if (isPlatformFailure(b)) return server;
+  const ctr = /\(([a-z0-9-]+)\)\s*$/i.exec(b.errorMessage ?? "")?.[1];
+  if (ctr && ctr !== "buildkit") return server;
+  return logStep ?? server;
+}
+
 export type DeployStage = "clone" | "build" | "push";
+
+// stallStage is the first-deploy step a stalled build is stuck in, from
+// the container the server says is waiting.
+export function stallStage(container: string | undefined): DeployStage | undefined {
+  if (!container) return undefined;
+  return container === "clone" || container === "cache-init" ? "clone" : "build";
+}
 
 // deployStage says how far a running build has got, for the first-deploy
 // progress view.
