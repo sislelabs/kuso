@@ -13,6 +13,7 @@ import {
   disableAlert,
   alertKindLabel,
   describeRule,
+  notifyCadence,
   emptyRuleForm,
   prefillRuleForm,
   ruleStatus,
@@ -303,7 +304,10 @@ function RuleRow({
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{detail}</p>
+        <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+          {detail}
+          <span className="text-[var(--text-tertiary)]"> · {notifyCadence(rule)}</span>
+        </p>
         {rule.firingSince ? (
           <p className="mt-0.5 text-xs text-[var(--error)]">
             Firing since {relativeTime(rule.firingSince)}
@@ -385,10 +389,12 @@ const STATUS_META: Record<RuleStatus, { label: string; dot: string; hint: string
   ok: { label: "OK", dot: "bg-[var(--success)]", hint: "Has fired before; quiet now" },
   never: {
     label: "Never fired",
-    dot: "border border-[var(--text-tertiary)] bg-transparent",
+    dot: "border-[1.5px] border-[var(--text-secondary)] bg-transparent",
     hint: "Evaluated every minute, hasn't fired yet",
   },
-  disabled: { label: "Off", dot: "bg-[var(--border-strong)]", hint: "Not evaluated" },
+  // A dash, not a dot: at 8px a grey dot and the hollow "never" ring were
+  // indistinguishable.
+  disabled: { label: "Off", dot: "h-0.5 w-2.5 rounded-none bg-[var(--text-tertiary)]", hint: "Not evaluated" },
 };
 
 function StatusDot({ status, className }: { status: RuleStatus; className?: string }) {
@@ -397,7 +403,7 @@ function StatusDot({ status, className }: { status: RuleStatus; className?: stri
     <span
       aria-hidden
       title={`${m.label}: ${m.hint}`}
-      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", m.dot, className)}
+      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", m.dot, status === "disabled" && "my-[3px]", className)}
     />
   );
 }

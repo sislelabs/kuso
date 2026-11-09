@@ -16,6 +16,7 @@ export {
   buildCreateBody,
   defaultAlertKindFor,
   describeRule,
+  notifyCadence,
   emptyRuleForm,
   formatSec,
   joinDur,
