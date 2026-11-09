@@ -6,6 +6,7 @@ import { Check, CircleAlert } from "lucide-react";
 import type { KusoService, KusoVolume } from "@/types/projects";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { StagedChip } from "@/components/staged/StagedChip";
 
 export { Switch } from "@/components/ui/switch";
 export { Segmented } from "@/components/ui/segmented";
@@ -284,6 +285,10 @@ export const inputClass = "h-8 text-[13px] md:text-[13px]";
 export const monoInputClass = "h-8 font-mono text-[12px] md:text-[12px]";
 
 export interface SectionSaveStatus {
+  // "staged": edits wait for the staged-changes deploy (no Save here).
+  // "immediate": the card saves on its own and says so (volumes).
+  // Unset: a plain per-card save (project settings).
+  mode?: "staged" | "immediate";
   dirty: boolean;
   saving: boolean;
   // Set for a few seconds after a successful save of this card.
@@ -331,13 +336,17 @@ export function Section({
   tone?: "default" | "danger";
 }) {
   const headingId = useId();
+  const st = useContext(SettingsSaveContext)?.status(id);
+  const staged = !!st && st.mode === "staged" && st.dirty;
   return (
     <section
       id={id}
       aria-labelledby={headingId}
+      data-staged={staged || undefined}
       className={cn(
         "scroll-mt-16 rounded-lg border bg-[var(--bg-secondary)]",
         tone === "danger" ? "border-[var(--error)]/35" : "border-[var(--border-subtle)]",
+        staged && "border-l-[3px] border-l-[var(--accent)]",
       )}
     >
       <header className="flex items-start gap-3 px-4 pt-4 sm:px-5 sm:pt-5">
@@ -358,6 +367,7 @@ export function Section({
             >
               {title}
             </h3>
+            {staged && <StagedChip />}
             {scope !== "none" && (
               <span className="text-xs text-[var(--text-tertiary)]">
                 {scope === "all" ? "Applies to all environments" : `Only the ${scope.env} environment`}
@@ -384,6 +394,7 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
   const ctx = useContext(SettingsSaveContext);
   const st = ctx?.status(section);
   if (!ctx || !st) return null;
+  const staged = st.mode === "staged";
   let left: React.ReactNode = note ? <span>{note}</span> : null;
   if (st.error) {
     left = (
@@ -393,7 +404,9 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
       </span>
     );
   } else if (st.dirty) {
-    left = (
+    left = staged ? (
+      <span className="text-[var(--text-primary)]">Staged. Deploys with your other staged changes.</span>
+    ) : (
       <span className="inline-flex items-center gap-1.5 text-[var(--text-primary)]">
         <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
         Unsaved changes
@@ -412,8 +425,17 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
       <div aria-live="polite" className="min-w-0 flex-1 text-xs leading-relaxed text-[var(--text-secondary)]">
         {left}
       </div>
-      {ctx.canWrite ? (
+      {!ctx.canWrite ? (
+        <span className="text-xs text-[var(--text-tertiary)]">Read-only for your role</span>
+      ) : staged ? (
+        st.dirty && (
+          <Button variant="ghost" size="sm" onClick={() => ctx.discard(section)}>
+            Discard
+          </Button>
+        )
+      ) : (
         <div className="flex shrink-0 items-center gap-2">
+          {st.mode === "immediate" && <span className="text-xs text-[var(--text-tertiary)]">Applies immediately</span>}
           {st.dirty && (
             <Button variant="ghost" size="sm" onClick={() => ctx.discard(section)} disabled={st.saving}>
               Discard
@@ -429,8 +451,6 @@ function SectionFooter({ section, note }: { section: string; note?: React.ReactN
             {st.saving ? "Saving…" : "Save"}
           </Button>
         </div>
-      ) : (
-        <span className="text-xs text-[var(--text-tertiary)]">Read-only for your role</span>
       )}
     </footer>
   );

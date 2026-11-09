@@ -136,7 +136,7 @@ export function DomainsCard({
               Changes apply immediately
             </TooltipTrigger>
             <TooltipContent className="max-w-64">
-              Adding or removing a domain takes effect right away. Unlike the other cards, this one has no Save.
+              Adding or removing a domain takes effect right away. Unlike most cards, domain edits aren&apos;t staged for the next deploy.
             </TooltipContent>
           </Tooltip>
           Where this service answers in the <Code>{envName}</Code> environment.

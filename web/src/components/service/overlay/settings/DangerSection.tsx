@@ -102,7 +102,7 @@ export function DangerSection({
       title="Danger zone"
       icon={Trash2}
       tone="danger"
-      description="These actions can't be undone."
+      description="These actions apply immediately, aren't staged and can't be undone."
     >
       {env && <DeleteEnvBlock project={project} service={service} env={env} canWrite={canWrite} />}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

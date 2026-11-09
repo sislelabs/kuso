@@ -51,10 +51,12 @@ import {
   dirtySections,
   discardSection,
   isSaveableSection,
-  isSectionDirty,
   scopedState,
   type SaveableSection,
 } from "./settings/sectionFields";
+import { getStagedState, stageSettings, useStagedService } from "@/features/staged";
+import { StagedChangesBar } from "@/components/staged/StagedChangesBar";
+import { overlaySettings } from "@/components/staged/plan";
 import { SourceSection } from "./settings/SourceSection";
 import { DomainsCard } from "./settings/DomainsCard";
 import { NetworkingSection } from "./settings/NetworkingSection";
@@ -127,8 +129,11 @@ function sectionMatches(id: string, label: string, query: string): boolean {
 }
 
 const SECTION_LABEL: Record<string, string> = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
-const ALL_SAVEABLE = Object.keys(SECTION_FIELDS) as SaveableSection[];
 const SAVED_FLASH_MS = 3000;
+// Cards that save on their own instead of staging: removing a volume
+// orphans its data, so it keeps its own confirm and applies at once.
+const IMMEDIATE: readonly SaveableSection[] = ["volumes"];
+const IMMEDIATE_FIELDS = new Set<string>(IMMEDIATE.flatMap((s) => SECTION_FIELDS[s] as readonly string[]));
 
 interface PendingSave {
   sections: SaveableSection[];
@@ -136,10 +141,15 @@ interface PendingSave {
   body: PatchServiceBody;
 }
 
-// ServiceSettingsPanel orchestrates the per-service settings tab. Each
-// card lives in ./settings/<Name>Section.tsx and saves only its own
-// fields (sectionFields.ts); this file owns the form state, the save /
-// confirm flow and the section nav.
+function sameValue(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+// ServiceSettingsPanel orchestrates the per-service settings tab. Edits
+// to most cards are staged (features/staged) and deploy together from the
+// StagedChangesBar, so a service rolls once however many cards changed.
+// Volumes still save per card. Each card lives in ./settings/; this file
+// owns the form state, the staging and the section nav.
 export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const onProduction = !env || env === "production";
   const envName = env || "production";
@@ -158,7 +168,17 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   }, [envs.data, project, service, envName]);
 
   const baseline = useMemo(() => fromSvc(svc), [svc]);
-  const [state, setState] = useState<FormState>(baseline);
+  const staged = useStagedService(project, service);
+  // Immediate-card edits (volumes) stay local: they're unsaved, not staged.
+  const [local, setLocal] = useState<Partial<FormState>>({});
+  const state = useMemo<FormState>(
+    () => ({ ...overlaySettings(baseline, staged?.settings?.fields), ...local }),
+    [baseline, staged?.settings?.fields, local],
+  );
+  const baselineRef = useRef(baseline);
+  baselineRef.current = baseline;
+  const localRef = useRef(local);
+  localRef.current = local;
   const [saving, setSaving] = useState<SaveableSection[]>([]);
   const [errors, setErrors] = useState<Partial<Record<SaveableSection, string>>>({});
   const [savedAt, setSavedAt] = useState<Partial<Record<SaveableSection, number>>>({});
@@ -166,26 +186,39 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const patch = usePatchService(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
-  // When fresh service data lands, re-baseline every card the user hasn't
-  // edited, plus the cards that were just saved (adoptRef), so a server
-  // that normalises a value doesn't leave a just-saved card "dirty".
-  // Cards with in-flight edits keep them.
-  const prevBaselineRef = useRef<FormState>(baseline);
-  const adoptRef = useRef<Set<SaveableSection>>(new Set());
-  useEffect(() => {
-    const prevBase = prevBaselineRef.current;
-    setState((prev) => {
-      let next = prev;
-      for (const s of ALL_SAVEABLE) {
-        if (adoptRef.current.has(s) || !isSectionDirty(s, prev, prevBase)) next = discardSection(s, next, baseline);
+  // setState keeps the cards' React setState signature. It reads the
+  // latest staged fields from the store (not a render snapshot) so two
+  // updates in one tick compose, then splits the result: immediate
+  // fields into local state, everything else into the staged store as
+  // overrides of the deployed value.
+  const setState = useCallback<React.Dispatch<React.SetStateAction<FormState>>>(
+    (update) => {
+      const base = baselineRef.current;
+      const cur = getStagedState()[project]?.[service]?.settings;
+      const current: FormState = { ...overlaySettings(base, cur?.fields), ...localRef.current };
+      const next = typeof update === "function" ? update(current) : update;
+      const fields: Record<string, unknown> = {};
+      const stagedBase: Record<string, unknown> = {};
+      const nextLocal: Partial<FormState> = {};
+      for (const key of Object.keys(next) as (keyof FormState)[]) {
+        if (sameValue(next[key], base[key])) continue;
+        if (IMMEDIATE_FIELDS.has(key)) {
+          (nextLocal as Record<string, unknown>)[key] = next[key];
+          continue;
+        }
+        fields[key] = next[key];
+        stagedBase[key] = cur?.base && key in cur.base ? cur.base[key] : base[key];
       }
-      return next;
-    });
-    adoptRef.current.clear();
-    prevBaselineRef.current = baseline;
-  }, [baseline]);
+      localRef.current = nextLocal;
+      setLocal(nextLocal);
+      stageSettings(project, service, { fields, base: stagedBase });
+    },
+    [project, service],
+  );
 
   const dirty = useMemo(() => dirtySections(state, baseline), [state, baseline]);
+  const immediateDirty = dirty.filter((d) => IMMEDIATE.includes(d));
+  const stagedError = staged?.errors?.settings;
 
   // Clear the "Saved" flash after a few seconds.
   useEffect(() => {
@@ -195,6 +228,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     return () => window.clearTimeout(t);
   }, [savedAt]);
 
+  // Only immediate cards save from here; the rest deploy from the bar.
   const requestSave = useCallback(
     (sections: SaveableSection[]) => {
       const target = scopedState(sections, state, baseline);
@@ -203,8 +237,6 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         releaseCommand: svc?.spec.release?.command,
       });
       if ("error" in res) {
-        // Attribute the error to the single card being saved; a save-all
-        // error shows on every dirty card involved.
         setErrors((e) => ({ ...e, ...Object.fromEntries(sections.map((s) => [s, res.error])) }));
         toast.error(res.error);
         return;
@@ -215,8 +247,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         return next;
       });
       if (Object.keys(res.body).length === 0) {
-        // Only cosmetic edits (an empty row added then removed): reset.
-        setState((s) => sections.reduce((acc, sec) => discardSection(sec, acc, baseline), s));
+        setLocal({});
         return;
       }
       // Open the blast-radius dialog first; applyPatch does the write.
@@ -229,9 +260,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     setSaving(sections);
     try {
       await patch.mutateAsync(body);
-      for (const s of sections) adoptRef.current.add(s);
-      // The repo token is write-only: it never comes back, so clear it.
-      if (body.repo?.token) setState((s) => ({ ...s, repoToken: "" }));
+      setLocal({});
       setSavedAt(Object.fromEntries(sections.map((s) => [s, Date.now()])));
       toast.success(sections.length === 1 ? `${SECTION_LABEL[sections[0]]} saved` : "Changes saved");
     } catch (e) {
@@ -244,42 +273,50 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     }
   };
 
-  const discardAll = () => {
-    setState(baseline);
-    setErrors({});
-  };
+  const discardSectionEdits = useCallback(
+    (id: SaveableSection) => {
+      setState((s) => discardSection(id, s, baselineRef.current));
+      setErrors((e) => {
+        const next = { ...e };
+        delete next[id];
+        return next;
+      });
+    },
+    [setState],
+  );
 
-  // The tab-switch / close guard in the overlay shell still needs to know
-  // about unsaved edits. No onSave here: the cards and the bar below own
-  // saving, so the shell's generic save bar stays hidden.
-  useOverlayDirty("settings", dirty.length > 0 && canWrite, { onDiscard: discardAll });
+  // Staged edits survive closing the panel, so the leave guard only
+  // covers an unsaved immediate card.
+  useOverlayDirty("settings", immediateDirty.length > 0 && canWrite, {
+    onDiscard: () => {
+      setLocal({});
+      setErrors({});
+    },
+  });
 
   const saveApi = useMemo<SettingsSaveApi>(
     () => ({
       canWrite,
       status: (id) => {
         if (!isSaveableSection(id)) return null;
+        const immediate = IMMEDIATE.includes(id);
+        const isDirty = dirty.includes(id);
         return {
-          dirty: dirty.includes(id),
+          mode: immediate ? "immediate" : "staged",
+          dirty: isDirty,
           saving: saving.includes(id),
           saved: savedAt[id] !== undefined,
-          error: errors[id] ?? null,
+          error: errors[id] ?? (!immediate && isDirty ? (stagedError ?? null) : null),
         };
       },
       save: (id) => {
-        if (isSaveableSection(id)) requestSave([id]);
+        if (isSaveableSection(id) && IMMEDIATE.includes(id)) requestSave([id]);
       },
       discard: (id) => {
-        if (!isSaveableSection(id)) return;
-        setState((s) => discardSection(id, s, baseline));
-        setErrors((e) => {
-          const next = { ...e };
-          delete next[id];
-          return next;
-        });
+        if (isSaveableSection(id)) discardSectionEdits(id);
       },
     }),
-    [canWrite, dirty, saving, savedAt, errors, requestSave, baseline],
+    [canWrite, dirty, saving, savedAt, errors, stagedError, requestSave, discardSectionEdits],
   );
 
   const diffEntries: DiffEntry[] = pendingSave
@@ -395,11 +432,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
                       <s.icon className="h-3.5 w-3.5 shrink-0" />
                       <span className="flex-1 truncate">{s.label}</span>
                       {isDirty && (
-                        <span
-                          aria-label="Unsaved changes"
-                          title="Unsaved changes"
-                          className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]"
-                        />
+                        <DirtyDot immediate={IMMEDIATE.includes(s.id as SaveableSection)} />
                       )}
                     </button>
                   </li>
@@ -409,37 +442,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           </nav>
         </div>
 
-        {dirty.length > 0 && canWrite && (
-          <div className="pointer-events-none sticky bottom-3 z-20 flex justify-center px-3">
-            <div
-              role="region"
-              aria-label="Unsaved settings"
-              className="pointer-events-auto flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
-            >
-              <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-primary)]">
-                <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]" />
-                <span className="truncate">
-                  Unsaved changes in {dirty.map((d) => SECTION_LABEL[d]).join(", ")}
-                </span>
-              </span>
-              <div className="flex items-center gap-1.5">
-                <Button variant="ghost" size="sm" onClick={discardAll} disabled={saving.length > 0}>
-                  Discard all
-                </Button>
-                <Button size="sm" onClick={() => requestSave(dirty)} disabled={saving.length > 0}>
-                  {saving.length > 0 ? "Saving…" : dirty.length > 1 ? "Save all" : "Save"}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-        {dirty.length > 0 && !canWrite && (
-          <div className="pointer-events-none sticky bottom-3 z-20 flex justify-center px-3">
-            <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 text-xs text-[var(--text-secondary)] shadow-[var(--shadow-md)]">
-              Read-only: your role can&apos;t edit services
-            </span>
-          </div>
-        )}
+        <StagedChangesBar project={project} placement="sticky" />
         <DiffConfirmDialog
           open={pendingSave !== null}
           title={
@@ -458,6 +461,23 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         />
       </div>
     </SettingsSaveProvider>
+  );
+}
+
+// DirtyDot marks a nav entry: accent for staged edits, warning for an
+// immediate card with unsaved input.
+function DirtyDot({ immediate }: { immediate: boolean }) {
+  const label = immediate ? "Unsaved changes" : "Staged changes";
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "h-1.5 w-1.5 shrink-0 rounded-full",
+        immediate ? "bg-[var(--warning)]" : "bg-[var(--accent)]",
+      )}
+    />
   );
 }
 
@@ -537,7 +557,7 @@ function MobileSectionNav({
             <s.icon className="h-3.5 w-3.5" />
             {s.label}
             {isSaveableSection(s.id) && dirty.includes(s.id) && (
-              <span aria-label="Unsaved changes" className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+              <DirtyDot immediate={IMMEDIATE.includes(s.id)} />
             )}
           </button>
         ))}
@@ -615,7 +635,7 @@ function EnvBranchSection({
       description={
         <>
           The branch {repoLabel ? <Code>{repoLabel}</Code> : "this service"} deploys in <Code>{env}</Code>. Production
-          keeps its own branch from the Source card.
+          keeps its own branch from the Source card. Applies immediately; not staged.
         </>
       }
     >
