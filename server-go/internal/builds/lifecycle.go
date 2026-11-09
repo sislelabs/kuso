@@ -440,9 +440,11 @@ func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, 
 	if who == "" {
 		who = "someone"
 	}
-	desc := fmt.Sprintf("%s rolled %s back to build `%s` (image `%s`).", who, group, buildName, imageTag)
+	// Plain prose: a phone's push shows the description verbatim. The
+	// image tag names the same build, so it's left out.
+	desc := fmt.Sprintf("%s rolled %s back to %s.", who, group, buildLabel(buildName))
 	if prevBuild != "" {
-		desc += fmt.Sprintf("\nPreviously live: `%s`.", prevBuild)
+		desc += fmt.Sprintf("\nPreviously live: %s.", buildLabel(prevBuild))
 	}
 	if opts.Force {
 		desc += "\nForced across branches."
@@ -459,7 +461,7 @@ func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, 
 		URL:         withEnvParam(buildEventURL(project, service), targets),
 		Severity:    "warn",
 		Fields: []EnvelopeField{
-			{Name: "Build", Value: "`" + buildName + "`", Inline: true},
+			{Name: "Build", Value: "`" + buildLabel(buildName) + "`", Inline: true},
 			{Name: "By", Value: who, Inline: true},
 		},
 	})

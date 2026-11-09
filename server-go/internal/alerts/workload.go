@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -134,7 +135,7 @@ func deployFailedFinding(r *db.AlertRule, builds []kube.KusoBuild, now time.Time
 	type latest struct {
 		at    time.Time
 		phase string
-		name  string
+		ref   string
 	}
 	newest := map[string]latest{}
 	for i := range builds {
@@ -157,7 +158,7 @@ func deployFailedFinding(r *db.AlertRule, builds []kube.KusoBuild, now time.Time
 		}
 		key := project + "/" + svc
 		if cur, ok := newest[key]; !ok || at.After(cur.at) {
-			newest[key] = latest{at: at, phase: phase, name: b.Name}
+			newest[key] = latest{at: at, phase: phase, ref: buildRefLabel(b)}
 		}
 	}
 	firing := map[string]bool{}
@@ -173,11 +174,19 @@ func deployFailedFinding(r *db.AlertRule, builds []kube.KusoBuild, now time.Time
 		if !firing[key] && now.Sub(l.at) > window {
 			continue
 		}
-		what := "build failed"
-		if l.phase == "release-failed" {
-			what = "release hook failed; the previous version keeps serving"
+		what := "build"
+		if l.ref != "" {
+			what += " of " + l.ref
 		}
-		f.add(key, fmt.Sprintf("%s: %s (%s)", key, what, l.name))
+		what += " failed"
+		if l.phase == "release-failed" {
+			what = "release hook failed"
+			if l.ref != "" {
+				what += " for " + l.ref
+			}
+			what += "; the previous version keeps serving"
+		}
+		f.add(key, key+": "+what)
 	}
 	sort.Strings(f.targets)
 	return f
@@ -274,4 +283,24 @@ func rolloutFailingFinding(envs []envTarget, pods map[string][]*corev1.Pod, dead
 	}
 	sort.Strings(f.targets)
 	return f
+}
+
+var hexSHARe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// buildRefLabel names a build the way a person does: "main@c850e9b",
+// not its CR name ("shop-api-c850e9b0ef35-mw883yzn").
+func buildRefLabel(b *kube.KusoBuild) string {
+	ref := b.Spec.Ref
+	if hexSHARe.MatchString(ref) {
+		ref = ref[:7]
+	} else {
+		ref = ""
+	}
+	switch {
+	case b.Spec.Branch != "" && ref != "":
+		return b.Spec.Branch + "@" + ref
+	case b.Spec.Branch != "":
+		return b.Spec.Branch
+	}
+	return ref
 }
