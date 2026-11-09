@@ -11,3 +11,4 @@ export { defaultPlan, previousConfig } from "./previous";
 export type { DefaultPlan, RevertPlan } from "./previous";
 export { configRolloutOutcome } from "./outcome";
 export type { RolloutOutcome } from "./outcome";
+export { markReverting, clearReverting, useReverting } from "./reverting";
