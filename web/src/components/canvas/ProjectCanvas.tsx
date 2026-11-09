@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   Panel,
   type Node,
@@ -1168,7 +1169,7 @@ export function ProjectCanvas({
       tabIndex={-1}
       role="region"
       aria-label={`${project} canvas. Arrow keys move between services and addons, Enter opens one.`}
-      className="relative flex-1 min-h-0 w-full"
+      className="relative flex-1 min-h-0 w-full bg-[var(--canvas-bg)]"
       onKeyDown={onCanvasKeyDown}
       onFocus={(e) => {
         if (e.target === e.currentTarget) {
@@ -1262,20 +1263,18 @@ export function ProjectCanvas({
         snapToGrid
         snapGrid={[24, 24]}
       >
-        {/* Brighter dots than the default border-subtle so the
-            grid actually reads on the dark bg. zinc-500 at 40%
-            opacity-equivalent — visible without being noisy. */}
-        <Background gap={24} size={1.5} color="rgb(113 113 122 / 0.55)" />
-        <Controls
-          className="!border-[var(--border-subtle)] !bg-[var(--bg-elevated)] !shadow-[var(--shadow-sm)]"
-        />
+        {/* Drafting paper: a dot on every 24px snap point and a cross
+            every fifth, so nodes visibly land on the grid. */}
+        <Background id="minor" gap={24} size={1.2} color="var(--grid-minor)" />
+        <Background id="major" variant={BackgroundVariant.Cross} gap={120} size={9} lineWidth={1} color="var(--grid-major)" />
+        <Controls />
         <EdgeLegend filters={edgeFilters} setFilters={setEdgeFilters} />
         <Panel position="top-right" className="!m-3 flex items-center gap-2">
           <button
             type="button"
             onClick={resetLayout}
             title="Forget dragged positions and re-run the automatic layout"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-[var(--shadow-sm)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            className="canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
           >
             <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
             Reset layout
@@ -1507,7 +1506,7 @@ function AddMenuPanel({
   return (
     <Panel position="top-left" className="!m-3">
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]">
+        <PopoverTrigger className="canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]">
           <Plus className="h-3.5 w-3.5" />
           Add
         </PopoverTrigger>
@@ -1574,19 +1573,19 @@ function EdgeLegend({
       <div
         role="group"
         aria-label="Edges"
-        className="flex items-center gap-0.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]"
+        className="canvas-float flex items-center gap-0.5 rounded-[10px] p-1"
       >
         <LegendToggle
           label="Addon connections"
           hint="A service reads the addon's connection secret. Fainter: mounted but not referenced by name. Dashed: the service hasn't deployed yet."
-          swatch="var(--chart-4)"
+          swatch="var(--edge-addon)"
           on={filters.addon}
           onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
         />
         <LegendToggle
           label="Service references"
           hint="One service's env vars point at another service's URL or host. Hover or select a node to highlight its connections."
-          swatch="var(--chart-1)"
+          swatch="var(--edge-ref)"
           on={filters.ref}
           onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
         />
@@ -1641,8 +1640,8 @@ interface EdgeData extends Record<string, unknown> {
 }
 
 const EDGE_COLOR: Record<EdgeData["kind"], string> = {
-  addon: "var(--chart-4)",
-  ref: "var(--chart-1)",
+  addon: "var(--edge-addon)",
+  ref: "var(--edge-ref)",
 };
 
 // styleEdge: solid and low-contrast by default, accent + thicker when
@@ -1662,17 +1661,17 @@ function styleEdge(e: Edge, hot: Set<string>, boxById: Map<string, Box>): BuiltI
   return {
     ...e,
     type: "smoothstep",
-    pathOptions: { borderRadius: 14, offset: 20 },
+    pathOptions: { borderRadius: 18, offset: 24 },
     sourceHandle: sides.source,
     targetHandle: sides.target,
     animated: false,
     zIndex: lit ? 1 : 0,
     style: {
-      stroke: lit ? "var(--accent)" : EDGE_COLOR[d.kind],
-      strokeWidth: lit ? 2 : 1.25,
-      opacity: lit ? 1 : dimmed ? 0.06 : d.implicit ? 0.5 : 0.7,
-      strokeDasharray: d.pending ? "5 4" : undefined,
-      transition: "opacity 120ms, stroke 120ms",
+      stroke: lit ? "var(--edge-lit)" : EDGE_COLOR[d.kind],
+      strokeWidth: lit ? 2.25 : 1.5,
+      strokeLinecap: "round",
+      opacity: lit ? 1 : dimmed ? 0.08 : d.implicit ? 0.45 : 0.85,
+      strokeDasharray: d.pending ? "5 5" : undefined,
     },
   };
 }
