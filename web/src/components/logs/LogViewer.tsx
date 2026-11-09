@@ -34,7 +34,7 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortReplayedBacklog, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, fmtClock, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortReplayedBacklog, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -420,6 +420,19 @@ export function LogViewer({
     view.range.kind === "abs" ? `${fmtClock(view.range.from, true).slice(0, -4)} – ${fmtClock(view.range.to, false).slice(0, -4)}` : undefined;
   const spanMs = view.range.kind === "preset" ? rangeMs(view.range.preset) : view.range.kind === "abs" ? Date.parse(view.range.to) - Date.parse(view.range.from) : 0;
   const withDate = !live && spanMs > 20 * 3_600_000;
+  // Rows show the clock only, so mark where the local date changes.
+  const dayBreaks = useMemo(() => {
+    const out = new Map<Row["key"], string>();
+    if (withDate) return out;
+    let prev: string | undefined;
+    for (const r of visible) {
+      if (r.cont || r.backlog) continue;
+      const label = dayChange(prev, r.ts);
+      if (label) out.set(r.key, label);
+      prev = r.ts;
+    }
+    return out;
+  }, [visible, withDate]);
   const filtersActive = view.levels.length > 0 || !!view.pod;
   const loading = live ? stream.connection === "connecting" && rows.length === 0 : archive.isPending;
   const narrow = useNarrow();
@@ -672,9 +685,11 @@ export function LogViewer({
             visible.map((r, i) => {
               const prevBacklog = i > 0 && !!visible[i - 1].backlog;
               const divider = r.backlog && !prevBacklog ? "backlog" : !r.backlog && prevBacklog ? "live" : null;
+              const day = dayBreaks.get(r.key);
               return (
                 <Fragment key={r.key}>
                   {divider && <ReplayDivider kind={divider} />}
+                  {day && <DayDivider label={day} />}
                   <LogRow
                     row={r}
                     wrap={view.wrap}
@@ -914,6 +929,15 @@ const LogRow = memo(function LogRow({
   );
 });
 
+function DayDivider({ label }: { label: string }) {
+  return (
+    <div role="separator" aria-label={label} className="flex items-center gap-2 px-3 pb-0.5 pt-1.5 font-sans text-xs text-[var(--text-tertiary)]">
+      <span className="shrink-0 font-medium text-[var(--text-secondary)]">{label}</span>
+      <span aria-hidden className="h-px flex-1 bg-[var(--border-subtle)]" />
+    </div>
+  );
+}
+
 function UnknownTimeCell() {
   return (
     <>
@@ -986,7 +1010,7 @@ function ClockCell({ ts }: { ts: string }) {
   return (
     <>
       {s.slice(0, 8)}
-      <span className="opacity-60">{s.slice(8)}</span>
+      <span className="opacity-60 max-sm:hidden">{s.slice(8)}</span>
     </>
   );
 }

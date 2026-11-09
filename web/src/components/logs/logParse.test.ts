@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMatcher, detectLevel, parseAnsi, parseJsonLine, sortReplayedBacklog, splitMatches, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, parseAnsi, parseJsonLine, sortReplayedBacklog, splitMatches, stripAnsi } from "./logParse";
 
 describe("detectLevel", () => {
   it.each([
@@ -90,5 +90,14 @@ describe("detectLevel plain-text errors", () => {
     expect(detectLevel("worker-1 | job 42 | 2026-01-01 12:00:00 ERROR send failed")).toBe("error");
     expect(detectLevel("Traceback (most recent call last):")).toBe("error");
     expect(detectLevel("no errors found")).toBe("none");
+  });
+});
+
+describe("dayChange", () => {
+  it("labels the first line of a new local day only", () => {
+    expect(dayChange(undefined, "2026-11-09T10:00:00")).toBeNull();
+    expect(dayChange("2026-11-09T10:00:00", "2026-11-09T23:59:00")).toBeNull();
+    expect(dayChange("2026-11-09T23:59:00", "2026-11-10T00:01:00")).toMatch(/10/);
+    expect(dayChange("2026-11-09T23:59:00", "not a time")).toBeNull();
   });
 });

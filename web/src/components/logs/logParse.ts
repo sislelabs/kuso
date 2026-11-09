@@ -267,18 +267,31 @@ export function fmtClock(iso: string, withDate: boolean): string {
   return `${months[d.getMonth()]} ${d.getDate()} ${time}`;
 }
 
-// levelCountText labels a level chip as lines ("5 error lines") so the
-// count can't be read as the Errors tab's error total.
+// levelCountText labels a level chip as lines loaded in this view
+// ("5 error lines in view") so "0" can't be read as the Errors tab's
+// error total, which spans 24h.
 export function levelCountText(level: Exclude<LogLevel, "none">, n: number): { count: string; noun: string } {
   const count = n.toLocaleString();
   switch (level) {
     case "error":
-      return { count, noun: n === 1 ? "error line" : "error lines" };
+      return { count, noun: n === 1 ? "error line in view" : "error lines in view" };
     case "warn":
-      return { count, noun: n === 1 ? "warning" : "warnings" };
+      return { count, noun: n === 1 ? "warning in view" : "warnings in view" };
     default:
-      return { count, noun: level };
+      return { count, noun: `${level} in view` };
   }
+}
+
+// dayChange returns the label for a date divider when `ts` falls on a
+// different local day than `prevTs`, else null. Unparseable times never
+// start a new day.
+export function dayChange(prevTs: string | undefined, ts: string): string | null {
+  if (!prevTs) return null;
+  const a = new Date(prevTs);
+  const b = new Date(ts);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return null;
+  if (a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()) return null;
+  return b.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: a.getFullYear() === b.getFullYear() ? undefined : "numeric" });
 }
 
 // The replayed backlog arrives pod by pod, so with several replicas it
