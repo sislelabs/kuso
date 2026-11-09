@@ -338,21 +338,21 @@ function UrlPill({ url }: { url: string }) {
     }
   };
 
-  // Only the two small icons are their own targets; the host text is
-  // part of the card, so clicking it opens the service like the rest.
+  // The host is a real link to the site; the copy button sits beside it.
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-0.5 font-mono text-xs text-[var(--text-secondary)]">
-      <span className="truncate pr-1" title={url}>{display}</span>
+    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-0.5 pr-0.5 font-mono text-xs text-[var(--text-secondary)]">
       <a
         tabIndex={-1}
         href={url}
         target="_blank"
         rel="noreferrer"
         onClick={(e) => e.stopPropagation()}
+        title={`Open ${url} in a new tab`}
         aria-label={`Open ${display} in a new tab`}
-        className="nodrag inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--accent)]"
+        className="nodrag group/url inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-px hover:bg-[var(--bg-primary)] hover:text-[var(--accent)]"
       >
-        <ExternalLink className="h-3 w-3" aria-hidden />
+        <span className="truncate group-hover/url:underline">{display}</span>
+        <ExternalLink className="h-3 w-3 shrink-0 text-[var(--text-tertiary)] group-hover/url:text-[var(--accent)]" aria-hidden />
       </a>
       <button
         tabIndex={-1}
