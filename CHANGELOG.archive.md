@@ -2,6 +2,15 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.0] — 2026-09-22
+
+### 🐛 Bug Fixes
+- Fix(ui): report real disk usage and real DB stats instead of constants ([0baf309](https://github.com/sislelabs/kuso/commit/0baf309f89d3353331f7031d6e816a4396e1fa45))
+- Fix(netpol): restore project reconcile broken by a chomped newline ([8220814](https://github.com/sislelabs/kuso/commit/82208140d672df5bbe68bfa4a9336bacdc60775a))
+- Fix(backups): match the pg client major to the server so dumps restore ([375efc6](https://github.com/sislelabs/kuso/commit/375efc686dd4f3f8aca42913e5811b0f15e1596a))
+- Fix(backups): back up every logical DB, propagate the S3 secret, stop false failures ([f9f5229](https://github.com/sislelabs/kuso/commit/f9f52297a859c3a2661de9fc301f7020030b52b0))
+- Fix(builds): stop builds starving the control plane ([fa79bf7](https://github.com/sislelabs/kuso/commit/fa79bf76d2b6283e006faa2b82d369f3a9026917))
+
 ## [0.25.30] — 2026-09-03
 
 ### 🐛 Bug Fixes
