@@ -70,39 +70,49 @@ export function WallSummary({
   );
 }
 
-// Only shown when something is broken or rolling out: each line opens
-// that service.
+// Only shown when something is broken or rolling out, as redline notes
+// on the drawing: each line opens that service.
 export function ProblemList({ items }: { items: ReadonlyArray<AttentionItem> }) {
   if (items.length === 0) return null;
   const shown = items.slice(0, MAX_PROBLEMS);
+  const broken = items.some((a) => a.tone === "danger" || a.tone === "warning");
   return (
-    <ul className="mb-8 grid gap-1.5 sm:grid-cols-2" aria-label="Services that need attention">
-      {shown.map((a) => {
-        const meta = SERVICE_STATUS[a.status];
-        return (
-          <li key={`${a.project}/${a.service}`}>
-            <Link
-              href={`/projects/${a.project}?service=${encodeURIComponent(a.service)}`}
-              className={cn(
-                "flex min-w-0 items-center gap-2.5 rounded-lg border bg-[var(--bg-elevated)] px-3 py-2 text-[13px] outline-none hover:border-[var(--border-strong)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-                TONE_CLASSES[a.tone].border,
-              )}
-            >
-              <span aria-hidden className={cn("size-2 shrink-0 rounded-full", TONE_CLASSES[a.tone].dot, meta.pulse && "motion-safe:animate-pulse")} />
-              <span className="shrink-0 font-medium text-[var(--text-primary)]">
-                {a.project} / {a.service}
-              </span>
-              <span className={cn("shrink-0", TONE_CLASSES[a.tone].text)}>{meta.label.toLowerCase()}</span>
-              {a.detail && <span className="min-w-0 truncate text-[var(--text-tertiary)]">{a.detail}</span>}
-            </Link>
-          </li>
-        );
-      })}
-      {items.length > shown.length && (
-        <li className="px-1 text-xs text-[var(--text-tertiary)] sm:col-span-2">
-          and {items.length - shown.length} more, marked on the tiles below
-        </li>
+    <div
+      className={cn(
+        "mb-8 overflow-hidden rounded-lg border",
+        broken ? "border-[var(--danger)]/35 bg-[var(--danger-subtle)]" : "border-[var(--building)]/35 bg-[var(--building-subtle)]",
       )}
-    </ul>
+    >
+      <ul className="divide-y divide-[var(--border-subtle)]" aria-label="Services that need attention">
+        {shown.map((a) => {
+          const meta = SERVICE_STATUS[a.status];
+          return (
+            <li key={`${a.project}/${a.service}`}>
+              <Link
+                href={`/projects/${a.project}?service=${encodeURIComponent(a.service)}`}
+                className="flex min-w-0 items-center gap-3 bg-[var(--bg-elevated)]/70 px-4 py-2.5 text-[13px] outline-none hover:bg-[var(--bg-elevated)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]"
+              >
+                <span aria-hidden className={cn("size-2 shrink-0 rounded-full", TONE_CLASSES[a.tone].dot, meta.pulse && "motion-safe:animate-pulse")} />
+                <span className="shrink-0 font-medium text-[var(--text-primary)]">
+                  {a.project}
+                  <span className="px-1 text-[var(--text-tertiary)]">/</span>
+                  {a.service}
+                </span>
+                <span className={cn("shrink-0 font-medium", TONE_CLASSES[a.tone].text)}>{meta.label}</span>
+                {a.detail && <span className="min-w-0 truncate text-[var(--text-secondary)]">{a.detail}</span>}
+                <span aria-hidden className="ml-auto shrink-0 text-xs text-[var(--text-tertiary)]">
+                  Open
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {items.length > shown.length && (
+        <p className="border-t border-[var(--border-subtle)] px-4 py-2 text-xs text-[var(--text-secondary)]">
+          {items.length - shown.length} more, marked on the sheets below
+        </p>
+      )}
+    </div>
   );
 }

@@ -11,7 +11,7 @@ import { NotificationsSheetButton } from "./Notifications";
 export function MobileNav() {
   const pathname = usePathname() ?? "";
   const item =
-    "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 pt-1.5 pb-1 text-xs font-medium text-[var(--text-tertiary)] outline-none focus-visible:text-[var(--text-primary)] aria-[current=page]:text-[var(--text-primary)] before:absolute before:inset-x-7 before:top-0 before:h-0.5 before:rounded-b-full aria-[current=page]:before:bg-[var(--accent)] aria-[current=page]:[&_svg]:text-[var(--accent)]";
+    "group relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 pt-1.5 pb-1 text-[11px] font-medium text-[var(--text-tertiary)] outline-none focus-visible:text-[var(--text-primary)] aria-[current=page]:text-[var(--text-primary)] [&>svg]:h-6 [&>svg]:w-11 [&>svg]:rounded-full [&>svg]:px-2.5 [&>svg]:py-0.5 aria-[current=page]:[&>svg]:bg-[var(--bg-tertiary)] aria-[current=page]:[&>svg]:text-[var(--text-primary)]";
   const openPalette = () =>
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true }));
 
@@ -25,11 +25,11 @@ export function MobileNav() {
         aria-current={pathname.startsWith("/projects") ? "page" : undefined}
         className={item}
       >
-        <FolderKanban aria-hidden className="size-6 p-0.5" />
+        <FolderKanban aria-hidden  />
         Projects
       </Link>
       <button type="button" onClick={openPalette} className={item}>
-        <Search aria-hidden className="size-6 p-0.5" />
+        <Search aria-hidden  />
         Search
       </button>
       <NotificationsSheetButton className={item}>Alerts</NotificationsSheetButton>
@@ -38,7 +38,7 @@ export function MobileNav() {
         aria-current={pathname.startsWith("/settings") ? "page" : undefined}
         className={item}
       >
-        <Settings aria-hidden className="size-6 p-0.5" />
+        <Settings aria-hidden  />
         Settings
       </Link>
     </nav>

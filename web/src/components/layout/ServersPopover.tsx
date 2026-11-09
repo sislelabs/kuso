@@ -44,6 +44,8 @@ export interface NodeSummary {
 // taint badge so the operator can see at a glance which nodes carry
 // the kuso.sislelabs.com/region=eu-west tarp. The full editor lives at
 // /settings/nodes — this popover is the read-mostly summary.
+const MAX_BARS = 10;
+
 export function ServersPopover() {
   // Node data is admin-only (server: requireAdmin → settings:admin). For
   // a regular viewer the fetch 403s and the pill degrades to "0/0 nodes".
@@ -82,18 +84,22 @@ export function ServersPopover() {
       <PopoverTrigger
         aria-label={`Cluster nodes: ${ready} of ${total} ready${pressured ? `, ${pressured} under resource pressure` : ""}`}
         title="Cluster nodes"
-        className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+        className="inline-flex h-7 items-center gap-2 rounded-md px-2 text-xs font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-elevated)] data-[popup-open]:shadow-[var(--shadow-sm)]"
       >
-        <span className="relative">
-          <Server className="size-4" aria-hidden />
-          {total > 0 && (
-            <span
-              aria-hidden
-              className={cn(
-                "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-[var(--bg-primary)]",
-                ready !== total ? "bg-[var(--error)]" : pressured > 0 ? "bg-[var(--warning)]" : "bg-[var(--success)]"
-              )}
-            />
+        {/* One bar per node, so a sick node is visible without opening this. */}
+        <span aria-hidden className="flex h-3.5 items-end gap-[2px]">
+          {total === 0 ? (
+            <Server className="size-3.5" />
+          ) : (
+            list.slice(0, MAX_BARS).map((n) => (
+              <span
+                key={n.name}
+                className={cn(
+                  "w-[3px] rounded-[1px]",
+                  !n.ready ? "h-1.5 bg-[var(--error)]" : nodePressures(n).length > 0 ? "h-2.5 bg-[var(--warning)]" : "h-3.5 bg-[var(--success)]",
+                )}
+              />
+            ))
           )}
         </span>
         <span className="tabular-nums">

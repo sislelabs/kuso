@@ -54,7 +54,7 @@ export default function ProjectsPage() {
   const header = (title: React.ReactNode, description: React.ReactNode) => (
     <>
     <PageHeader
-      className="mb-6 sm:mb-6"
+      className="mb-7 sm:mb-8"
       title={title}
       description={description}
       actions={
@@ -78,16 +78,16 @@ export default function ProjectsPage() {
   const hasList = !isPending && !isError && !!data && count > 0;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:p-8">
+    <div className="mx-auto max-w-[96rem] px-4 py-6 sm:px-6 lg:px-10 lg:py-9">
       {!hasList && header("Projects", "Each project is one product. Connect a repo and kuso builds it on every push.")}
 
 
       {isPending && (
         <>
-          <div className="mb-5 h-9 w-full max-w-md rounded-md bg-[var(--bg-secondary)] motion-safe:animate-pulse" />
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading projects">
+          <div className="mb-6 h-10 w-full border-b border-[var(--border-subtle)]" />
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(17.5rem,1fr))] gap-4" aria-busy="true" aria-label="Loading projects">
             {[0, 1, 2, 3, 4, 5].map((i) => (
-              <ProjectTileSkeleton key={i} wide={i === 0} />
+              <ProjectTileSkeleton key={i} />
             ))}
           </ul>
         </>

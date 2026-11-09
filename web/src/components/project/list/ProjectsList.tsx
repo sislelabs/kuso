@@ -326,7 +326,7 @@ export function ProjectsList({
       ) : !hasSections ? (
         renderGrid(visible)
       ) : (
-        <div className="space-y-7">
+        <div className="space-y-9">
           {starred.length > 0 && (
             <Section
               icon={<Star className="h-3.5 w-3.5 fill-current text-[var(--warning)]" />}
@@ -427,17 +427,18 @@ function Section({
         onClick={onToggle}
         aria-expanded={open}
         className={cn(
-          "mb-2.5 inline-flex items-center gap-1.5 rounded-sm text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+          "group/sec mb-3 flex w-full items-center gap-2 rounded-sm text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
           muted ? "text-[var(--text-secondary)]" : "text-[var(--text-primary)]",
         )}
       >
-        <ChevronDown
-          aria-hidden
-          className={cn("h-3.5 w-3.5 text-[var(--text-tertiary)] motion-safe:transition-transform", !open && "-rotate-90")}
-        />
         {icon}
         <span>{label}</span>
         <span className="tabular-nums text-[var(--text-tertiary)]">{items.length}</span>
+        <span aria-hidden className="h-px flex-1 bg-[var(--border-subtle)] group-hover/sec:bg-[var(--border-default)]" />
+        <ChevronDown
+          aria-hidden
+          className={cn("h-3.5 w-3.5 text-[var(--text-tertiary)] motion-safe:transition-transform", !open && "rotate-90")}
+        />
       </button>
       {open ? (
         children
@@ -461,11 +462,11 @@ function Section({
 }
 
 // One tab stop per wall: arrows move between tiles (see useRovingGrid).
-// Dense packing lets single tiles fill the gaps wide ones leave.
+// Every tile is the same size, so columns come from the width alone.
 function CardGrid({ children }: { children: React.ReactNode }) {
   const ref = useRovingGrid<HTMLUListElement>();
   return (
-    <ul ref={ref} className="grid grid-flow-row-dense grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+    <ul ref={ref} className="grid grid-cols-[repeat(auto-fill,minmax(17.5rem,1fr))] gap-4">
       {children}
     </ul>
   );

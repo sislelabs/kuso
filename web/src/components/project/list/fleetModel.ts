@@ -63,9 +63,3 @@ export function lastDeployedProject(
   }
   return best;
 }
-
-// tileSpan: projects with more services get a wider tile, so the wall's
-// shape shows how big each app is.
-export function tileSpan(serviceCount: number): 1 | 2 {
-  return serviceCount >= 4 ? 2 : 1;
-}

@@ -28,6 +28,7 @@ import { Logo } from "@/components/shared/Logo";
 import { useSession, useSignOut, useCanOnProject, Perms } from "@/features/auth";
 import {
   useProjects,
+  useProjectsSummary,
   useEnvGroups,
   useProject,
   deleteEnvGroup,
@@ -56,7 +57,10 @@ import {
   Moon,
   Sun,
   AlertTriangle,
+  LayoutGrid,
 } from "lucide-react";
+import { TONE_CLASSES, type StatusTone } from "@/lib/status";
+import { buildCardModel } from "@/components/project/list/projectCardModel";
 import { useTheme } from "next-themes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
@@ -70,10 +74,10 @@ import { useRovingToolbar } from "./useRovingToolbar";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
 // TopNav is the persistent shell across every authenticated page. Left:
-// logo, then a breadcrumb (project picker → environment, or Settings →
-// section). Right: search, settings, nodes,
-// notifications, account (which holds theme + shortcuts). Labels collapse below md so the bar
-// never wraps; below sm the global actions move to <MobileNav>.
+// the mark in its own cell, then the location capsule (project → env, or
+// Settings → section). Middle: the page's own controls. Right: search,
+// cluster nodes + notifications, account (which holds settings, theme and
+// shortcuts). Below sm the global actions move to <MobileNav>.
 export function TopNav() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const currentProject = params.project ?? "";
@@ -88,61 +92,66 @@ export function TopNav() {
   const toolbarRef = useRovingToolbar<HTMLDivElement>();
 
   return (
-    <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:px-3 lg:px-4">
-      <nav aria-label="Location" className="flex min-w-0 items-center gap-1">
+    <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] pr-2 sm:gap-3 sm:pr-3 lg:pr-4">
+      <nav aria-label="Location" className="flex h-full min-w-0 items-center gap-2 sm:gap-3">
+        {/* The mark sits in its own cell, like the corner of a title block. */}
         <Link
           href="/projects"
           aria-label="kuso — all projects"
-          className="mr-0.5 flex shrink-0 items-center rounded-md p-1 sm:mr-1"
+          className="flex h-full w-11 shrink-0 items-center justify-center border-r border-[var(--border-subtle)] outline-none hover:bg-[var(--bg-secondary)] focus-visible:bg-[var(--bg-secondary)] sm:w-12"
         >
-          <Logo showText={false} />
+          <Logo showText={false} className="[&_svg]:size-[22px]" />
         </Link>
 
-        {/* No project picker on /settings/* — it would claim a project
-            is in scope when none is. */}
-        {!settingsCrumbs && (
-          <Crumb className="min-w-0">
-            <ProjectPicker currentProject={currentProject} />
-          </Crumb>
-        )}
+        {/* Where you are, read as one address: project, then environment.
+            No project picker on /settings/* — it would claim a project is
+            in scope when none is. */}
+        <div className="flex h-8 min-w-0 items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5">
+          {!settingsCrumbs && <ProjectPicker currentProject={currentProject} />}
 
-        {/* Shown on phones too: every project and service view is scoped
-            to the env picked here. */}
-        {projectScoped && (
-          <Crumb className="flex shrink-0">
-            <EnvironmentSwitcher project={currentProject} />
-            <NonProdChip project={currentProject} />
-          </Crumb>
-        )}
+          {/* Shown on phones too: every project and service view is scoped
+              to the env picked here. */}
+          {projectScoped && (
+            <Segment>
+              <EnvironmentSwitcher project={currentProject} />
+              <NonProdChip project={currentProject} />
+            </Segment>
+          )}
 
-        {/* "Settings for the thing in scope" — the only visible path to
-            project-level destructive actions and preview TTLs. */}
-        {projectScoped && (
-          <NavIconLink
-            href={`/projects/${encodeURIComponent(currentProject)}/settings`}
-            label="Project settings"
-            className="hidden sm:inline-flex"
-          >
-            <Settings />
-          </NavIconLink>
-        )}
+          {/* "Settings for the thing in scope" — the only visible path to
+              project-level destructive actions and preview TTLs. */}
+          {projectScoped && (
+            <NavIconLink
+              href={`/projects/${encodeURIComponent(currentProject)}/settings`}
+              label="Project settings"
+              className="ml-0.5 hidden sm:inline-flex"
+            >
+              <Settings />
+            </NavIconLink>
+          )}
 
-        {settingsCrumbs?.map((c, i) => (
-          <Crumb key={c.href ?? c.label} className={i === 0 && settingsCrumbs.length > 1 ? "hidden sm:flex" : "min-w-0"}>
-            {c.href ? (
-              <Link
-                href={c.href}
-                className="inline-flex h-7 items-center rounded-md px-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-              >
-                {c.label}
-              </Link>
-            ) : (
-              <span aria-current="page" className="inline-flex h-7 min-w-0 items-center px-2 text-sm font-medium text-[var(--text-primary)]">
-                <span className="truncate">{c.label}</span>
-              </span>
-            )}
-          </Crumb>
-        ))}
+          {settingsCrumbs?.map((c, i) => (
+            <span
+              key={c.href ?? c.label}
+              className={cn("flex min-w-0 items-center", i > 0 && "border-l border-[var(--border-subtle)] pl-0.5 ml-0.5", i === 0 && settingsCrumbs.length > 1 && "hidden sm:flex")}
+            >
+              {c.href ? (
+                <Link
+                  href={c.href}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  <Settings className="size-3.5" aria-hidden />
+                  {c.label}
+                </Link>
+              ) : (
+                <span aria-current="page" className="inline-flex h-7 min-w-0 items-center gap-1.5 px-2 text-[13px] font-medium text-[var(--text-primary)]">
+                  {settingsCrumbs.length === 1 && <Settings className="size-3.5 text-[var(--text-tertiary)]" aria-hidden />}
+                  <span className="truncate">{c.label}</span>
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
       </nav>
 
       {/* The current page's own controls (the project view's toggle and
@@ -151,33 +160,22 @@ export function TopNav() {
         ref={setSlot}
         role="group"
         aria-label="Page controls"
-        className="ml-1 hidden min-w-0 shrink items-center border-l border-[var(--border-subtle)] pl-2 sm:flex sm:empty:hidden"
+        className="hidden min-w-0 shrink items-center sm:flex sm:empty:hidden"
       />
 
-      {/* Search is the main way around: wide and centred in the free space. */}
-      <div className="hidden min-w-0 flex-1 justify-center px-3 md:flex">
-        <CommandTrigger wide />
-      </div>
-
       {/* One tab stop for the global actions; arrows move along the row. */}
-      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
+      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
         {/* Search + global actions live in the bottom bar on phones. */}
-        <div className="hidden sm:flex md:hidden">
+        <div className="hidden w-64 xl:block 2xl:w-80">
+          <CommandTrigger wide />
+        </div>
+        <div className="hidden sm:flex xl:hidden">
           <CommandTrigger />
         </div>
-        <Link
-          href="/settings"
-          aria-label="Settings"
-          title="Settings"
-          className="relative hidden size-8 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
-        >
-          <Settings className="size-4" aria-hidden />
-        </Link>
         {/* Cluster health and what needs you, read together. */}
-        <div className="hidden items-center gap-px rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5 sm:flex">
+        <div className="hidden h-8 items-center gap-px rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5 sm:flex">
           <ServersPopover />
-          <span aria-hidden className="h-4 w-px bg-[var(--border-subtle)]" />
-          <NotificationsButton className="size-7 rounded-full" />
+          <NotificationsButton className="size-7 rounded-md" />
         </div>
         <UserMenu />
       </div>
@@ -304,23 +302,11 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
   return out;
 }
 
-// Crumb wraps a child with a thin chevron separator on its left.
-// Renders nothing when no children are provided so empty slots don't
-// leave dangling separators.
-function Crumb({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  // The chevron + child render as a contiguous unit, so a single
-  // wrapping span is necessary when callers need to hide just this
-  // crumb (mobile responsiveness). The original fragment-only
-  // version stripped the className escape hatch.
+// Segment is one division of the location capsule: a hairline on its
+// left, then its controls.
+function Segment({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <span className={cn("flex shrink-0 items-center gap-0.5", className)}>
-      <span aria-hidden className="shrink-0 text-[var(--border-strong)] select-none">/</span>
+    <span className={cn("ml-0.5 flex shrink-0 items-center border-l border-[var(--border-subtle)] pl-0.5", className)}>
       {children}
     </span>
   );
@@ -336,15 +322,32 @@ function ProjectPicker({ currentProject }: { currentProject: string }) {
     return [...list].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name));
   }, [projects.data]);
 
-  const label = currentProject || "Projects";
+  const label = currentProject || "All projects";
+  // Health per project from the batched summary the home page polls;
+  // neutral until it has loaded (never a guessed green).
+  const summary = useProjectsSummary();
+  const tones = useMemo(() => {
+    const m = new Map<string, StatusTone>();
+    for (const item of summary.data ?? []) {
+      const card = buildCardModel(item.project, item);
+      m.set(card.name, card.tone);
+    }
+    return m;
+  }, [summary.data]);
+  const toneOf = (name: string): StatusTone => tones.get(name) ?? "neutral";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label={currentProject ? `Project: ${currentProject}. Switch project` : "Switch project"}
-        className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+        className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-elevated)] data-[popup-open]:shadow-[var(--shadow-sm)]"
       >
-        <span className="truncate max-w-[40vw] sm:max-w-[200px]">{label}</span>
+        {currentProject ? (
+          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", TONE_CLASSES[toneOf(currentProject)].dot)} />
+        ) : (
+          <LayoutGrid className="size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+        )}
+        <span className="truncate max-w-[34vw] sm:max-w-[200px]">{label}</span>
         <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">
@@ -371,12 +374,10 @@ function ProjectPicker({ currentProject }: { currentProject: string }) {
                       className="px-2 py-1.5"
                     >
                       <span
-                        className={cn(
-                          "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                          active ? "bg-[var(--accent)]" : "bg-[var(--border-default)]"
-                        )}
+                        aria-hidden
+                        className={cn("inline-block h-1.5 w-1.5 shrink-0 rounded-full", TONE_CLASSES[toneOf(name)].dot)}
                       />
-                      <span className="truncate text-[13px]">{name}</span>
+                      <span className={cn("truncate text-[13px]", active && "font-medium")}>{name}</span>
                       {active && <Check className="ml-auto h-3 w-3 text-[var(--accent)]" />}
                     </CommandItem>
                   );
@@ -481,8 +482,8 @@ function EnvironmentSwitcher({ project }: { project: string }) {
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           className={cn(
-            "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-sm font-medium transition-colors",
-            "border-[var(--border-default)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)] data-[popup-open]:text-[var(--text-primary)]",
+            "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors",
+            "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-elevated)] data-[popup-open]:text-[var(--text-primary)] data-[popup-open]:shadow-[var(--shadow-sm)]",
           )}
         >
           <span
@@ -584,7 +585,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
 
       {preview && (
         <span
-          className="hidden items-center gap-1 text-xs text-[var(--text-tertiary)] lg:inline-flex"
+          className="ml-1 mr-1.5 hidden items-center gap-1 text-xs text-[var(--text-tertiary)] lg:inline-flex"
           title={
             preview.expiresAt
               ? `Preview expires ${new Date(preview.expiresAt).toLocaleString()}`
