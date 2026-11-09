@@ -108,6 +108,7 @@ type ProjectsAPI interface {
 
 	// Pods + diagnostics
 	ListPods(ctx context.Context, project, service, env string) (*projects.PodList, error)
+	ListPodEvents(ctx context.Context, project, service, env string) (*projects.PodEventList, error)
 	TestHealthcheck(ctx context.Context, project, service string, req projects.HealthProbeRequest) (*projects.HealthProbeResult, error)
 }
 

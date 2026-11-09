@@ -1,6 +1,8 @@
 package projects
 
 import (
+	"kuso/server/internal/podreason"
+
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +47,22 @@ func TestDeriveEnvState(t *testing.T) {
 			in.CrashDetail = `container "app" in CrashLoopBackOff (7 restarts)`
 		}), stateCrashLooping, "CrashLoopBackOff"},
 		{"deploying zero ready", mod(func(in *envStateInput) { in.Ready = 0 }), stateDeploying, "rollout in progress"},
+		{"stuck unschedulable, nothing serving", mod(func(in *envStateInput) {
+			in.Ready = 0
+			in.Stuck = &podreason.Issue{Kind: podreason.KindUnschedulable, Summary: "The node is low on disk, so the pod can't be scheduled"}
+		}), stateStuck, "low on disk"},
+		{"stuck rollout, old version serving", mod(func(in *envStateInput) {
+			in.Updated = 1
+			in.Stuck = &podreason.Issue{Kind: podreason.KindRolloutStall, Summary: "The new instance hasn't become ready in 14 min"}
+		}), stateStuck, "previous version is still serving"},
+		{"crashloop wins over stuck", mod(func(in *envStateInput) {
+			in.CrashLooping = true
+			in.Stuck = &podreason.Issue{Kind: podreason.KindCrashLoop, Summary: "x"}
+		}), stateCrashLooping, ""},
+		{"stopped wins over stuck", mod(func(in *envStateInput) {
+			in.Stopped = true
+			in.Stuck = &podreason.Issue{Kind: podreason.KindImagePull, Summary: "x"}
+		}), stateStopped, ""},
 		{"deploying rollout in flight", mod(func(in *envStateInput) { in.Updated = 1; in.Ready = 2 }), stateDeploying, "1/2 replicas updated"},
 		{"building", mod(func(in *envStateInput) { in.BuildPhase = "running" }), stateBuilding, "still serving"},
 		{"building queued nothing serving", mod(func(in *envStateInput) { in.BuildPhase = "queued"; in.Ready = 0 }), stateBuilding, "build queued"},
