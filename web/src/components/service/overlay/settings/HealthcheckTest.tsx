@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { recordHealthcheckTest } from "@/features/staged";
 import { Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -43,6 +45,7 @@ export interface HealthcheckTestRunner {
 }
 
 export function useHealthcheckTestRunner({ project, service, env, path, port }: RunnerInput): HealthcheckTestRunner {
+  const lastRecorded = useRef<HealthcheckTestResult | undefined>(undefined);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const trimmed = path.trim();
   const portNum = Number(port);
@@ -57,6 +60,20 @@ export function useHealthcheckTestRunner({ project, service, env, path, port }: 
     meta: { skipGlobalErrorToast: true },
   });
   const current = m.variables?.path === body.path && m.variables?.port === body.port;
+  // Attach each new result to the staged health check so the deploy
+  // review can show it (and ask before shipping a path that failed).
+  useEffect(() => {
+    const r = m.data;
+    if (!r || r === lastRecorded.current || !m.variables) return;
+    lastRecorded.current = r;
+    recordHealthcheckTest(project, service, {
+      path: m.variables.path,
+      port: m.variables.port ? String(m.variables.port) : "",
+      passed: healthcheckTestPassed(r),
+      summary: healthcheckTestSummary(r),
+      at: Date.now(),
+    });
+  }, [m.data, m.variables, project, service]);
   const disabledReason = !canWrite ? "Only project editors can run a test." : pathProblem(trimmed);
   return {
     run: () => m.mutate(body),
@@ -83,6 +100,12 @@ export function HealthcheckTestButton({ runner }: { runner: HealthcheckTestRunne
       Test path
     </Button>
   );
+}
+
+// healthcheckTestSummary is the one-line outcome the deploy review shows.
+export function healthcheckTestSummary(r: HealthcheckTestResult): string {
+  if (r.error || r.status === undefined) return `No answer${r.error ? `: ${r.error}` : ""}`;
+  return `${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
 }
 
 function resultStatus(r: HealthcheckTestResult): StatusMeta {

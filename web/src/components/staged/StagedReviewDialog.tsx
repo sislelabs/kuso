@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, Check, CircleAlert, Loader2, RotateCw, X } from "lucide-react";
@@ -24,7 +24,7 @@ import {
 import { buildServicePatch } from "@/components/service/overlay/settings/buildServicePatch";
 import type { KusoService } from "@/types/projects";
 import { applyStagedService, refreshServiceQueries } from "./applyStaged";
-import { overlaySettings, patchFieldDiff, planService, type ServicePlan } from "./plan";
+import { healthcheckCheck, overlaySettings, patchFieldDiff, planService, type HealthcheckCheck, type ServicePlan } from "./plan";
 
 type Phase = "idle" | "applying" | "done" | "failed";
 
@@ -107,9 +107,15 @@ export function StagedReviewDialog({
 
   const plans = services.map((s) => ({ service: s, staged: staged![s], plan: planService(svcByName.get(s), staged![s]) }));
   const anyRestart = plans.some((p) => p.plan.restarts);
+  const failingChecks = plans.filter((p) => healthcheckCheck(p.plan, p.staged)?.kind === "failed").map((p) => p.service);
+  const blocked = plans.some((p) => p.plan.settingsError);
+  // A failed health check test needs a second, explicit "Deploy anyway".
+  const [riskAccepted, setRiskAccepted] = useState(false);
+  const needsConfirm = failingChecks.length > 0 && !riskAccepted;
   const hasFailures = plans.some((p) => Object.keys(p.staged.errors ?? {}).length > 0);
 
   const deploy = async () => {
+    setRiskAccepted(false);
     setBusy(true);
     let ok = 0;
     let failed = 0;
@@ -170,7 +176,14 @@ export function StagedReviewDialog({
 
   const empty = services.length === 0;
   return (
-    <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (busy) return;
+        setRiskAccepted(false);
+        onOpenChange(o);
+      }}
+    >
       <DialogContent className="flex max-h-[min(88dvh,760px)] flex-col gap-0 p-0 sm:max-w-2xl" showCloseButton={!busy}>
         <DialogHeader className="border-b border-[var(--border-subtle)] px-5 py-4">
           <DialogTitle>Review staged changes</DialogTitle>
@@ -269,6 +282,7 @@ export function StagedReviewDialog({
                   {!loading &&
                     plan.patchFields.map((f) => {
                       const [before, after] = patchFieldDiff(plan, f);
+                      const check = f === "healthcheck" ? healthcheckCheck(plan, st) : undefined;
                       return (
                         <ItemRow
                           key={`patch:${f}`}
@@ -277,6 +291,7 @@ export function StagedReviewDialog({
                           before={before}
                           after={after}
                           note={serviceBlast(f)?.message}
+                          check={check && <HealthcheckCheckLine check={check} />}
                           error={errors.settings}
                           onDiscard={busy ? undefined : () => discardFields(service, fieldsBehind(plan, st, f))}
                         />
@@ -298,6 +313,21 @@ export function StagedReviewDialog({
             </p>
           )}
         </div>
+        {blocked && !busy && (
+          <p role="alert" className="border-t border-[var(--border-subtle)] px-5 py-2 text-xs text-[var(--error)]">
+            Fix or discard the settings marked above before deploying.
+          </p>
+        )}
+        {failingChecks.length > 0 && !blocked && !busy && (
+          <div className="flex items-start gap-2 border-t border-[var(--border-subtle)] bg-[var(--error-subtle)] px-5 py-2.5 text-xs text-[var(--text-primary)]">
+            <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-[var(--error)]" aria-hidden />
+            <p>
+              The health check path failed its last test on {failingChecks.join(", ")}. New pods won&apos;t become
+              ready and the rollout stalls while the previous version keeps serving. Settings apply to every
+              environment of the service at once; there&apos;s no staging-only deploy for them.
+            </p>
+          </div>
+        )}
         <footer className="flex flex-col gap-2 border-t border-[var(--border-subtle)] px-5 py-3 sm:flex-row sm:items-center">
           <Input
             value={message}
@@ -309,14 +339,31 @@ export function StagedReviewDialog({
             disabled={busy}
           />
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setRiskAccepted(false);
+                onOpenChange(false);
+              }}
+              disabled={busy}
+            >
               Cancel
             </Button>
-            <Button size="sm" onClick={() => void deploy()} disabled={busy || empty}>
+            <Button
+              size="sm"
+              variant={needsConfirm || riskAccepted ? "destructive" : "default"}
+              onClick={() => (needsConfirm ? setRiskAccepted(true) : void deploy())}
+              disabled={busy || empty || blocked}
+            >
               {busy ? (
                 <>
                   <Loader2 className="animate-spin" /> Applying…
                 </>
+              ) : needsConfirm ? (
+                "Deploy despite failed test…"
+              ) : riskAccepted ? (
+                "Deploy anyway"
               ) : hasFailures ? (
                 <>
                   <RotateCw /> Retry
@@ -340,6 +387,7 @@ function ItemRow({
   before,
   after,
   note,
+  check,
   error,
   onDiscard,
 }: {
@@ -348,6 +396,7 @@ function ItemRow({
   before: string | null;
   after: string | null;
   note?: string;
+  check?: ReactNode;
   error?: string;
   onDiscard?: () => void;
 }) {
@@ -368,6 +417,7 @@ function ItemRow({
           {after !== null && <span className="min-w-0 break-all text-[var(--text-primary)]">{after || "(empty)"}</span>}
         </div>
         {note && <p className="mt-1 text-xs text-[var(--text-secondary)]">{note}</p>}
+        {check}
         {error && (
           <p role="alert" className="mt-1 text-xs text-[var(--error)]">
             {error}
@@ -380,5 +430,30 @@ function ItemRow({
         </Button>
       )}
     </li>
+  );
+}
+
+function HealthcheckCheckLine({ check }: { check: HealthcheckCheck }) {
+  if (check.kind === "untested") {
+    return (
+      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+        Not tested. Use Test path in the Health check card to check <span className="font-mono">{check.path}</span>{" "}
+        answers before deploying.
+      </p>
+    );
+  }
+  const failed = check.kind === "failed";
+  return (
+    <p className={cn("mt-1 inline-flex items-start gap-1.5 text-xs", failed ? "text-[var(--error)]" : "text-[var(--text-secondary)]")}>
+      {failed ? (
+        <CircleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+      ) : (
+        <Check className="mt-px h-3.5 w-3.5 shrink-0 text-[var(--success)]" aria-hidden />
+      )}
+      <span>
+        Last test of <span className="font-mono">{check.path}</span>: {check.summary}
+        {failed ? ". Pods answering like this never become ready." : "."}
+      </span>
+    </p>
   );
 }

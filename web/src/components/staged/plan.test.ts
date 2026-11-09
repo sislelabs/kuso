@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KusoService } from "@/types/projects";
-import { planService } from "./plan";
+import { healthcheckCheck, planService } from "./plan";
 
 const svc = { spec: { port: 8080, scale: { min: 1, max: 3, targetCPU: 70 } } } as unknown as KusoService;
 
@@ -27,5 +27,16 @@ describe("planService", () => {
   it("reports a setting changed elsewhere since it was staged", () => {
     const plan = planService(svc, { settings: { fields: { port: "9090" }, base: { port: "3000" } } });
     expect(plan.conflicts).toEqual(["port"]);
+  });
+
+  it("attaches the last health check test to the staged path", () => {
+    const settings = { fields: { hcEnabled: true, hcPath: "/healthz" }, base: { hcEnabled: false, hcPath: "" } };
+    const test = { path: "/healthz", port: "8080", passed: false, summary: "404 Not Found", at: 1 };
+    const failed = { settings, healthcheckTest: test };
+    expect(healthcheckCheck(planService(svc, failed), failed)).toEqual({ kind: "failed", summary: "404 Not Found", path: "/healthz" });
+    const other = { settings, healthcheckTest: { ...test, path: "/other" } };
+    expect(healthcheckCheck(planService(svc, other), other)?.kind).toBe("untested");
+    const passed = { settings, healthcheckTest: { ...test, passed: true, summary: "200 OK" } };
+    expect(healthcheckCheck(planService(svc, passed), passed)?.kind).toBe("passed");
   });
 });

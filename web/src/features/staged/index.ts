@@ -5,6 +5,7 @@ export {
   discardProject,
   discardService,
   getStagedState,
+  recordHealthcheckTest,
   setStagedErrors,
   stageEnv,
   stageSettings,

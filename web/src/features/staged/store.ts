@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { StagedEnv, StagedProject, StagedService, StagedSettings, StagedState } from "./types";
+import type { StagedEnv, StagedHealthcheckTest, StagedProject, StagedService, StagedSettings, StagedState } from "./types";
 
 // A module-level store, so staged edits outlive the panel, the overlay
 // and the full-page shell, and every view of a service reads the same
@@ -46,6 +46,7 @@ export function persistable(s: StagedState): StagedState {
         const fields = Object.fromEntries(Object.entries(svc.settings.fields).filter(([k]) => !VOLATILE_FIELDS.has(k)));
         if (Object.keys(fields).length) next.settings = { fields, base: svc.settings.base };
       }
+      if (svc.healthcheckTest) next.healthcheckTest = svc.healthcheckTest;
       if (next.env || next.settings) p[service] = next;
     }
     if (Object.keys(p).length) out[project] = p;
@@ -117,6 +118,14 @@ export function stageSettings(project: string, service: string, settings: Staged
   }));
 }
 
+// Records the last health check test. A service with nothing staged
+// keeps no record (the test was of the deployed path).
+export function recordHealthcheckTest(project: string, service: string, test: StagedHealthcheckTest | undefined) {
+  hydrate();
+  if (!state[project]?.[service] && test) return;
+  commit(project, service, (prev) => ({ ...prev, healthcheckTest: test }));
+}
+
 export function setStagedErrors(project: string, service: string, errors: Record<string, string> | undefined) {
   commit(project, service, (prev) => ({ ...prev, errors: errors && Object.keys(errors).length ? errors : undefined }));
 }
@@ -131,6 +140,7 @@ export function clearApplied(project: string, service: string, applied: { env: s
       unset: prev.env.unset.filter((u) => !names.has(u.name)),
     },
     settings: applied.settings ? undefined : prev.settings,
+    healthcheckTest: applied.settings ? undefined : prev.healthcheckTest,
   }));
 }
 

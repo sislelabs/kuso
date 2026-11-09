@@ -32,9 +32,22 @@ export interface StagedSettings {
   base: Record<string, unknown>;
 }
 
+// The last "Test path" run from the health check card, so the review can
+// say whether the staged path answered before it's deployed.
+export interface StagedHealthcheckTest {
+  path: string;
+  // The port the test hit ("" = the service port).
+  port: string;
+  passed: boolean;
+  // "404 Not Found", "No answer: connection refused", …
+  summary: string;
+  at: number;
+}
+
 export interface StagedService {
   env?: StagedEnv;
   settings?: StagedSettings;
+  healthcheckTest?: StagedHealthcheckTest;
   // Last apply error per item key ("env:NAME" or "settings"), kept so a
   // partial failure shows on the item and the user can retry it.
   errors?: Record<string, string>;

@@ -5,6 +5,7 @@ import {
   countServiceChanges,
   getStagedState,
   persistable,
+  recordHealthcheckTest,
   stageEnv,
   stageSettings,
 } from "./store";
@@ -49,5 +50,16 @@ describe("staged store", () => {
     expect(out).not.toContain("glpat-x");
     expect(out).toContain("LOG_LEVEL");
     expect(out).toContain("9090");
+  });
+
+  it("keeps a health check test only alongside staged settings", () => {
+    const test = { path: "/healthz", port: "", passed: false, summary: "404 Not Found", at: 1 };
+    recordHealthcheckTest("p", "api", test);
+    expect(getStagedState().p).toBeUndefined();
+    stageSettings("p", "api", { fields: { hcPath: "/healthz" }, base: { hcPath: "" } });
+    recordHealthcheckTest("p", "api", test);
+    expect(getStagedState().p?.api?.healthcheckTest).toEqual(test);
+    clearApplied("p", "api", { env: [], settings: true });
+    expect(getStagedState().p).toBeUndefined();
   });
 });

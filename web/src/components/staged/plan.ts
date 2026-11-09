@@ -86,3 +86,21 @@ export function planService(svc: KusoService | undefined, staged: StagedService)
 export function patchFieldDiff(plan: ServicePlan, field: string): [string, string] {
   return fieldDiffValues(field, plan.baseline, plan.target);
 }
+
+export type HealthcheckCheck =
+  | { kind: "passed"; summary: string; path: string }
+  | { kind: "failed"; summary: string; path: string }
+  | { kind: "untested"; path: string };
+
+// healthcheckCheck says what the last "Test path" run found for the
+// health check this plan deploys. Undefined when the plan doesn't turn an
+// HTTP check on or change its path/port.
+export function healthcheckCheck(plan: ServicePlan, staged: StagedService): HealthcheckCheck | undefined {
+  if (!plan.patchFields.includes("healthcheck") || !plan.target.hcEnabled) return undefined;
+  const path = plan.target.hcPath.trim();
+  if (!path) return undefined;
+  const port = plan.target.hcPort.trim() || plan.target.port.trim();
+  const t = staged.healthcheckTest;
+  if (!t || t.path !== path || t.port !== port) return { kind: "untested", path };
+  return { kind: t.passed ? "passed" : "failed", summary: t.summary, path };
+}
