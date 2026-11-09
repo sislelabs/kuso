@@ -13,7 +13,8 @@ import (
 //
 //   kuso revision list <project> <kind> <name>      # service|environment|addon|cron
 //   kuso revision show <project> <id>
-//   kuso revision revert <project> <id>
+//   kuso revision revert <project> <id> [--env <env>]
+//   kuso revision undo <project> <service> [--dry-run]
 //
 // Revisions are stored every time a server-side update path writes a
 // CR; the History tab in the UI renders the same data.
@@ -40,16 +41,7 @@ var revisionListCmd = &cobra.Command{
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list revisions: %w", err)
 		}
-		type row struct {
-			ID        string `json:"id"`
-			Project   string `json:"project"`
-			Kind      string `json:"kind"`
-			Name      string `json:"name"`
-			Summary   string `json:"summary"`
-			Actor     string `json:"actor"`
-			CreatedAt string `json:"createdAt"`
-		}
-		var items []row
+		var items []revisionRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
@@ -62,13 +54,9 @@ var revisionListCmd = &cobra.Command{
 				return nil
 			}
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"ID", "ACTOR", "REASON", "AGE"})
+			t.SetHeader([]string{"ID", "ACTOR", "REASON", "CHANGED", "AGE"})
 			for _, r := range items {
-				reason := r.Summary
-				if len(reason) > 50 {
-					reason = reason[:47] + "..."
-				}
-				t.Append([]string{r.ID, r.Actor, reason, relativeAge(r.CreatedAt)})
+				t.Append([]string{r.ID, r.Actor, truncate(r.Summary, 50), revisionChangedText(r), relativeAge(r.CreatedAt)})
 			}
 			t.Render()
 			return nil
@@ -109,7 +97,10 @@ var revisionShowCmd = &cobra.Command{
 	},
 }
 
-var revisionRevertYes bool
+var (
+	revisionRevertYes bool
+	revisionRevertEnv string
+)
 
 var revisionRevertCmd = &cobra.Command{
 	Use:   "revert <project> <id>",
@@ -119,6 +110,8 @@ var revisionRevertCmd = &cobra.Command{
 		"history stays linear (you can revert the revert to roll forward).\n\n" +
 		"This reverts configuration (service/env/addon/cron spec), not code. To put a " +
 		"previous build's image back live, use kuso build rollback.\n\n" +
+		"--env replays an image-only service revision onto that one environment " +
+		"(an env-scoped rollback); every other revision is service-wide.\n\n" +
 		"The live spec is overwritten and pods may roll, so it asks for " +
 		"confirmation; pass --yes to skip it.",
 	Args: cobra.ExactArgs(2),
@@ -126,11 +119,15 @@ var revisionRevertCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		scope := args[0]
+		if revisionRevertEnv != "" {
+			scope += " [env=" + revisionRevertEnv + "]"
+		}
 		if err := confirmDestructive(revisionRevertYes, fmt.Sprintf(
-			"Revert %s to revision %s? The live spec is overwritten and pods may roll.", args[0], args[1])); err != nil {
+			"Revert %s to revision %s? The live spec is overwritten and pods may roll.", scope, args[1])); err != nil {
 			return err
 		}
-		resp, err := api.RevertRevision(args[0], args[1])
+		resp, err := api.RevertRevisionInEnv(args[0], args[1], revisionRevertEnv)
 		if err != nil {
 			return fmt.Errorf("revert revision: %w", err)
 		}
@@ -150,4 +147,5 @@ func init() {
 	revisionShowCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format [json]")
 	revisionCmd.AddCommand(revisionRevertCmd)
 	revisionRevertCmd.Flags().BoolVarP(&revisionRevertYes, "yes", "y", false, "skip the confirmation prompt")
+	revisionRevertCmd.Flags().StringVar(&revisionRevertEnv, "env", "", "roll only this environment back to the revision's image (image-only revisions)")
 }

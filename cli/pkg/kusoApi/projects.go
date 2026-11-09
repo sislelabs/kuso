@@ -601,7 +601,18 @@ func (k *KusoClient) GetRevision(project, id string) (*resty.Response, error) {
 // update path (service, environment, addon). Informational revisions
 // (secret writes, env creation, renames, crons) return 422.
 func (k *KusoClient) RevertRevision(project, id string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + esc(project) + "/revisions/" + esc(id) + "/revert")
+	return k.RevertRevisionInEnv(project, id, "")
+}
+
+// RevertRevisionInEnv replays a service revision onto one environment
+// only (?env=). The server accepts that for image-only revisions and
+// answers 422 for anything else; env "" is the service-wide replay.
+func (k *KusoClient) RevertRevisionInEnv(project, id, env string) (*resty.Response, error) {
+	path := "/api/projects/" + esc(project) + "/revisions/" + esc(id) + "/revert"
+	if env != "" {
+		path += "?env=" + url.QueryEscape(env)
+	}
+	return k.client.Post(path)
 }
 
 // RenameService clones the service + envs under newName and deletes
