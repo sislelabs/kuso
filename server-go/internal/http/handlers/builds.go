@@ -197,6 +197,7 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 			flat = append(flat, v)
 		}
 		stampQueuePositions(ctx, h.Svc, flat)
+		stampStalls(ctx, h.Svc, raw, flat)
 		for i, k := range keys {
 			out[k] = flat[i]
 		}
@@ -450,6 +451,22 @@ type buildSummary struct {
 	// release hook: the Job name and up to 200 redacted log lines.
 	ReleaseJob     string `json:"releaseJob,omitempty"`
 	ReleaseLogTail string `json:"releaseLogTail,omitempty"`
+	// Stalled explains an in-flight build whose pod hasn't started a
+	// minute in (unschedulable, builder image pull failure, …).
+	Stalled *builds.Stall `json:"stalled,omitempty"`
+}
+
+// stampStalls fills Stalled on in-flight summaries from their live CRs.
+func stampStalls(ctx context.Context, svc *builds.Service, raw []kube.KusoBuild, out []buildSummary) {
+	stalls := svc.Stalls(ctx, raw, time.Now())
+	if len(stalls) == 0 {
+		return
+	}
+	for i := range out {
+		if st, ok := stalls[out[i].ID]; ok && (out[i].Status == "pending" || out[i].Status == "running") {
+			out[i].Stalled = st
+		}
+	}
 }
 
 // stampQueuePositions fills QueuePosition on any queued summaries in
@@ -643,6 +660,7 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stampQueuePositions(ctx, h.Svc, out)
+	stampStalls(ctx, h.Svc, raw, out)
 	if idx, ierr := h.Svc.PromotionIndex(ctx, project, service); ierr != nil {
 		h.Logger.Warn("list builds: promotion index", "project", project, "service", service, "err", ierr)
 	} else {

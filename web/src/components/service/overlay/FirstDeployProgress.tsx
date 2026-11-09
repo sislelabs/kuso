@@ -1,10 +1,10 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { Check, CheckCircle2, ExternalLink, Loader2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ExternalLink, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
-import { buildRefLabel, type DeployBuild, type DeployStage } from "@/features/builds";
+import { buildRefLabel, buildStall, type DeployBuild, type DeployStage } from "@/features/builds";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
 import { formatDuration, LiveDuration } from "./deployParts";
@@ -45,9 +45,11 @@ export function FirstDeployProgress({
   const idx = STEPS.findIndex((s) => s.step === current);
   const sha = buildRefLabel(build, 7);
   const repo = repoUrl?.replace(/^https?:\/\/(www\.)?(github\.com\/)?/, "");
+  const stall = status === "start" ? undefined : buildStall(build, status);
 
-  const headline =
-    status === "queued"
+  const headline = stall
+    ? stall.summary
+    : status === "queued"
       ? build.queuePosition
         ? `Queued behind ${build.queuePosition - 1 > 0 ? `${build.queuePosition - 1} other build${build.queuePosition - 1 === 1 ? "" : "s"}` : "another build"}`
         : "Waiting for a build slot"
@@ -85,9 +87,14 @@ export function FirstDeployProgress({
             </>
           )}
         </div>
-        <p className="mt-2 text-base font-semibold text-[var(--text-primary)]" role="status" aria-live="polite">
+        <p
+          className={cn("mt-2 text-base font-semibold", stall ? "text-[var(--warning)]" : "text-[var(--text-primary)]")}
+          role="status"
+          aria-live="polite"
+        >
           {headline}
         </p>
+        {stall?.detail && <p className="mt-0.5 break-words font-mono text-xs text-[var(--text-secondary)]">{stall.detail}</p>}
         {build.commitMessage && (
           <p className="mt-0.5 line-clamp-1 break-words text-sm text-[var(--text-secondary)]">{build.commitMessage}</p>
         )}
@@ -100,7 +107,13 @@ export function FirstDeployProgress({
                 <div
                   className={cn(
                     "h-1 rounded-full",
-                    done ? "bg-[var(--success)]" : active ? "bg-[var(--building)] motion-safe:animate-pulse" : "bg-[var(--border-default)]",
+                    done
+                      ? "bg-[var(--success)]"
+                      : active
+                        ? stall
+                          ? "bg-[var(--warning)]"
+                          : "bg-[var(--building)] motion-safe:animate-pulse"
+                        : "bg-[var(--border-default)]",
                   )}
                 />
                 <div
@@ -111,6 +124,8 @@ export function FirstDeployProgress({
                 >
                   {done ? (
                     <Check aria-hidden className="h-3 w-3 shrink-0 text-[var(--success)]" />
+                  ) : active && stall ? (
+                    <AlertTriangle aria-hidden className="h-3 w-3 shrink-0 text-[var(--warning)]" />
                   ) : active ? (
                     <Loader2 aria-hidden className="h-3 w-3 shrink-0 text-[var(--building)] motion-safe:animate-spin" />
                   ) : null}

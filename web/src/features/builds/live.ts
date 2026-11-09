@@ -58,6 +58,14 @@ export function isRolledBack(builds: DeployBuild[], live: DeployBuild): boolean 
   });
 }
 
+// buildStall is the plain reason an in-flight build isn't progressing
+// (its pod can't be scheduled or can't pull the builder image), or
+// undefined while it's progressing.
+export function buildStall(b: Pick<DeployBuild, "stalled">, status: string): { summary: string; detail?: string } | undefined {
+  if (!b.stalled || (status !== "pending" && status !== "running")) return undefined;
+  return { summary: b.stalled.summary, detail: b.stalled.detail };
+}
+
 // buildNote is the one muted line explaining why a build is where it is.
 export function buildNote(b: DeployBuild, status: BuildRowStatus): string {
   if (status === "queued" || status === "pending") {

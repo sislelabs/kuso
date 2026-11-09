@@ -7,6 +7,7 @@ export {
   classifyBuild,
   isRolledBack,
   buildNote,
+  buildStall,
   waitingLabel,
   isBranchMismatch,
   buildRefLabel,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildNote,
+  buildStall,
   buildRefLabel,
   classifyBuild,
   isBranchMismatch,
@@ -171,5 +172,17 @@ describe("newerReleaseFailure", () => {
     expect(newerReleaseFailure([other, running, rf, live], live)?.id).toBe("rf");
     const olderRf = b("orf", { status: "release-failed", finishedAt: at(1) });
     expect(newerReleaseFailure([live, olderRf], live)).toBeUndefined();
+  });
+});
+
+describe("buildStall", () => {
+  const stalled = { stalled: { kind: "image_pull", summary: "Builder image can't be pulled", detail: "ErrImagePull: denied", since: "2026-01-01T00:00:00Z" } };
+  it("explains an in-flight build whose pod can't start", () => {
+    expect(buildStall(stalled, "running")).toEqual({ summary: "Builder image can't be pulled", detail: "ErrImagePull: denied" });
+    expect(buildStall(stalled, "pending")?.summary).toBe("Builder image can't be pulled");
+  });
+  it("says nothing once the build is settled or not stalled", () => {
+    expect(buildStall(stalled, "failed")).toBeUndefined();
+    expect(buildStall({}, "running")).toBeUndefined();
   });
 });

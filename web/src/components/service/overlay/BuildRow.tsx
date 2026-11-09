@@ -30,6 +30,7 @@ import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/se
 import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
+  buildStall,
   buildTitle,
   buildRefLabel,
   failedStepFromBuild,
@@ -138,6 +139,7 @@ export function BuildRow({
   const sha = buildRefLabel(b, 7);
   const ts = b.startedAt ?? b.finishedAt;
   const note = buildNote(b, s);
+  const stall = buildStall(b, s);
   const who = actorLabel(b);
   const live = s === "running" || s === "pending" || s === "queued";
   const failed = s === "failed";
@@ -223,6 +225,12 @@ export function BuildRow({
               </span>
             )}
           </div>
+          {stall && (
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-[var(--warning)]" title={stall.detail}>
+              <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span className="break-words">{stall.summary}</span>
+            </p>
+          )}
           {b.promoteHold && (s === "running" || s === "pending") && (
             <p className="mt-1 text-xs text-[var(--warning)]">Promotion held: {b.promoteHold}</p>
           )}

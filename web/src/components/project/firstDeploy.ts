@@ -92,8 +92,9 @@ export function firstDeployProgress(project: string, s: ServiceSnapshot): FirstD
       buildDone = true;
     } else if (IN_FLIGHT.includes(build)) {
       state = "active";
-      detail =
-        build === "queued" && s.build?.queuePosition
+      detail = s.build?.stalled
+        ? s.build.stalled.summary
+        : build === "queued" && s.build?.queuePosition
           ? `Queued, #${s.build.queuePosition} in line`
           : build === "queued"
             ? "Queued"
