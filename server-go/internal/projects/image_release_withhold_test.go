@@ -95,3 +95,42 @@ func TestPatchService_SameImageClearsReleaseGiveUp(t *testing.T) {
 		}
 	}
 }
+
+func TestAddService_ImageRecordsReplayableRevision(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+	var snaps [][]byte
+	var names []string
+	s.RecordRevision = func(_ context.Context, project, kind, name, summary string, snap []byte) {
+		names = append(names, project+"/"+kind+"/"+name+"/"+summary)
+		snaps = append(snaps, snap)
+	}
+	_, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name: "web", Runtime: "image", Port: 3000, Image: &ServiceImageSpec{Repository: "ghcr.io/x/app", Tag: "v1"},
+	})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if len(names) != 1 || names[0] != "alpha/service/web/create" {
+		t.Fatalf("revisions = %v, want [alpha/service/web/create]", names)
+	}
+	// Move to v2, then replay the create revision: the image must be v1 again.
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		Image: &ServiceImageSpec{Repository: "ghcr.io/x/app", Tag: "v2"},
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	if err := s.RevertServiceSnapshot(context.Background(), "alpha", "web", snaps[0]); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	svc, err := s.GetService(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.Spec.Image == nil || svc.Spec.Image.Tag != "v1" {
+		t.Errorf("image after revert = %+v, want tag v1", svc.Spec.Image)
+	}
+}

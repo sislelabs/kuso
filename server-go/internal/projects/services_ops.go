@@ -907,6 +907,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		dropToken()
 		return nil, fmt.Errorf("create production env: %w", err)
 	}
+	// An image service's first tag is the oldest release it can roll back
+	// to, so it gets a replayable revision like every later tag change.
+	if created.Spec.Runtime == "image" && created.Spec.Image != nil && s.RecordRevision != nil {
+		patch := PatchServiceRequest{Image: &ServiceImageSpec{
+			Repository: created.Spec.Image.Repository,
+			Tag:        created.Spec.Image.Tag,
+		}}
+		if snap, err := json.Marshal(map[string]any{"patch": patch}); err == nil {
+			s.RecordRevision(ctx, project, "service", req.Name, "create", snap)
+		}
+	}
 	return created, nil
 }
 
