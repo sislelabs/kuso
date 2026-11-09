@@ -1,5 +1,6 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -304,7 +305,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const active = useScrollSpy(rootRef, sections.map((s) => s.id).join(","));
   const jump = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById(id)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
   };
   const [find, setFind] = useState("");
   const railSections = sections.filter((s) => sectionMatches(s.id, s.label, find));
@@ -510,7 +511,7 @@ function MobileSectionNav({
     const chip = strip?.querySelector<HTMLElement>(`[data-section="${active}"]`);
     if (!strip || !chip) return;
     const left = chip.offsetLeft - strip.clientWidth / 2 + chip.clientWidth / 2;
-    strip.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+    strip.scrollTo({ left: Math.max(0, left), behavior: smoothScroll() });
   }, [active]);
   return (
     <nav

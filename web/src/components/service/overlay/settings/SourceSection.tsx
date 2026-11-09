@@ -1,5 +1,6 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -419,6 +420,6 @@ function RenameRow({ project, service }: { project: string; service: string }) {
 export function jumpToImage(e?: { preventDefault: () => void }) {
   e?.preventDefault();
   const el = document.getElementById("build");
-  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
   (document.getElementById("build-image-tag") as HTMLInputElement | null)?.focus({ preventScroll: true });
 }

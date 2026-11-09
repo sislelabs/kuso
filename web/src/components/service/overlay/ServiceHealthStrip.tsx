@@ -180,33 +180,38 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
   const deploy = cells.find((c) => c.id === "deploy");
   return (
     <>
-    {/* Phones: one status line instead of the five-cell grid. */}
-    <button
-      type="button"
-      onClick={() => onNavigate("deployments")}
-      className="mt-2 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-[var(--text-secondary)] sm:hidden"
-    >
-      <StatusDot status={status} />
-      <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
-      {total > 0 && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="whitespace-nowrap">{ready}/{total} ready</span>
-        </>
-      )}
+    {/* Phones: one compact row, each fact its own tap target that opens
+        the tab it came from. */}
+    <ul aria-label="Service health" className="mt-2 flex flex-wrap items-center gap-1.5 sm:hidden">
+      <li>
+        <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
+          <StatusDot status={status} />
+          <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
+          {total > 0 && <span className="whitespace-nowrap">· {ready}/{total} ready</span>}
+        </button>
+      </li>
       {errorsN !== undefined && errorsN > 0 && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="whitespace-nowrap text-[var(--danger)]">{errorsN.toLocaleString()} errors</span>
-        </>
+        <li>
+          <button type="button" onClick={() => onNavigate("errors")} className={cn(phoneChip, "text-[var(--danger)]")}>
+            {errorsN.toLocaleString()} {errorsN === 1 ? "error" : "errors"} · {ERRORS_WINDOW}
+          </button>
+        </li>
+      )}
+      {restarts > 0 && (
+        <li>
+          <button type="button" onClick={() => onNavigate("logs")} className={cn(phoneChip, crashing ? "text-[var(--danger)]" : "text-[var(--warning)]")}>
+            {restarts.toLocaleString()} {restarts === 1 ? "restart" : "restarts"}
+          </button>
+        </li>
       )}
       {deploy && deploy.value !== "Never" && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate">deployed {deploy.value}</span>
-        </>
+        <li className="min-w-0">
+          <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
+            <span className="truncate">deployed {deploy.value}</span>
+          </button>
+        </li>
       )}
-    </button>
+    </ul>
     <ul
       aria-label="Service health"
       className="mt-3 hidden grid-cols-6 gap-px sm:grid overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
@@ -250,6 +255,9 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
     </>
   );
 }
+
+const phoneChip =
+  "inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-secondary)] active:bg-[var(--bg-secondary)]";
 
 // The checker reports one row per checked env, keyed by env CR name; it
 // only checks production today, which is also what older servers meant

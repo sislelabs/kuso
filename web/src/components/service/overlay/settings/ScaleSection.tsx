@@ -61,9 +61,10 @@ export function ScaleSection({ state, setState }: SectionProps) {
       className={monoInputClass}
     />
   );
-  const quantity = (field: "cpuRequest" | "cpuLimit" | "memRequest" | "memLimit", id: string, placeholder: string) => (
+  const quantity = (field: "cpuRequest" | "cpuLimit" | "memRequest" | "memLimit", id: string, placeholder: string, label: string) => (
     <Input
       id={id}
+      aria-label={label}
       value={state[field]}
       onChange={(e) => setState((s) => ({ ...s, [field]: e.target.value }))}
       placeholder={placeholder}
@@ -153,16 +154,16 @@ export function ScaleSection({ state, setState }: SectionProps) {
         <FieldGrid>
           <Field label="CPU request / limit" hint={<>Cores, e.g. <span className="font-mono">100m</span> or <span className="font-mono">1</span>.</>}>
             <div className="flex items-center gap-2">
-              {quantity("cpuRequest", "scale-cpu-req", "auto")}
-              <span className="text-xs text-[var(--text-tertiary)]">/</span>
-              {quantity("cpuLimit", "scale-cpu-lim", "auto")}
+              {quantity("cpuRequest", "scale-cpu-req", "auto", "CPU request, in cores")}
+              <span aria-hidden className="text-xs text-[var(--text-tertiary)]">/</span>
+              {quantity("cpuLimit", "scale-cpu-lim", "auto", "CPU limit, in cores")}
             </div>
           </Field>
           <Field label="Memory request / limit" hint={<>e.g. <span className="font-mono">128Mi</span> or <span className="font-mono">1Gi</span>.</>}>
             <div className="flex items-center gap-2">
-              {quantity("memRequest", "scale-mem-req", "auto")}
-              <span className="text-xs text-[var(--text-tertiary)]">/</span>
-              {quantity("memLimit", "scale-mem-lim", "auto")}
+              {quantity("memRequest", "scale-mem-req", "auto", "Memory request, in Mi or Gi")}
+              <span aria-hidden className="text-xs text-[var(--text-tertiary)]">/</span>
+              {quantity("memLimit", "scale-mem-lim", "auto", "Memory limit, in Mi or Gi")}
             </div>
           </Field>
         </FieldGrid>

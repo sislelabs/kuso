@@ -1,5 +1,6 @@
 "use client";
 
+import { smoothScroll } from "@/lib/reduced-motion";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -588,7 +589,7 @@ export function EnvVarsEditor({
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         const el = document.querySelector<HTMLElement>(`[data-env-key="${CSS.escape(name)}"]`);
-        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        el?.scrollIntoView({ block: "center", behavior: smoothScroll() });
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot per highlight value once data is in
