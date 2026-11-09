@@ -212,3 +212,38 @@ func TestAlerts_PendingUserSeesNothing(t *testing.T) {
 		t.Errorf("pending create: status=%d want 403", rr.Code)
 	}
 }
+
+func TestAlerts_MemberUpdate(t *testing.T) {
+	d := openTestDB(t)
+	seedAlertMember(t, d)
+	seedAlertRule(t, d, "own", "mine", db.AlertKindHTTP5xxRate)
+	seedAlertRule(t, d, "peeked", "peek", db.AlertKindHTTP5xxRate)
+	seedAlertRule(t, d, "hidden", "theirs", db.AlertKindHTTP5xxRate)
+	r := alertsTestRouter(d)
+	cases := []struct {
+		name, id, body string
+		want           int
+	}{
+		{"edit own rule", "own", `{"name":"renamed","kind":"http_5xx_rate","project":"mine","thresholdFloat":9}`, http.StatusOK},
+		{"move own rule to an unowned project", "own", `{"name":"x","kind":"http_5xx_rate","project":"theirs"}`, http.StatusForbidden},
+		{"make own rule cluster-wide", "own", `{"name":"x","kind":"http_5xx_rate"}`, http.StatusForbidden},
+		{"viewer-only rule", "peeked", `{"name":"x","kind":"http_5xx_rate","project":"peek"}`, http.StatusForbidden},
+		{"invisible rule", "hidden", `{"name":"x","kind":"http_5xx_rate","project":"mine"}`, http.StatusNotFound},
+		{"bad body", "own", `{"name":"","kind":"http_5xx_rate","project":"mine"}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := alertsDo(t, r, alertMember, http.MethodPut, "/api/alerts/"+tc.id, tc.body)
+			if rr.Code != tc.want {
+				t.Fatalf("PUT %s = %d (%s), want %d", tc.id, rr.Code, rr.Body.String(), tc.want)
+			}
+		})
+	}
+	got, err := d.GetAlertRule(context.Background(), "own")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "renamed" || got.ThresholdFloat == nil || *got.ThresholdFloat != 9 || got.Project != "mine" || !got.Enabled {
+		t.Fatalf("stored rule = %+v", got)
+	}
+}

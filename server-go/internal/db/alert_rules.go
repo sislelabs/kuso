@@ -195,6 +195,45 @@ func (d *DB) SetAlertEpisode(ctx context.Context, id string, since *time.Time, t
 	return nil
 }
 
+// UpdateAlertRule rewrites a rule's definition (everything Create sets but
+// id and enabled). A changed kind or scope ends any open episode, since its
+// firing targets were evaluated against the old definition.
+func (d *DB) UpdateAlertRule(ctx context.Context, r AlertRule) error {
+	res, err := d.ExecContext(ctx, `
+		UPDATE "AlertRule" SET
+		  "firingSince" = CASE WHEN "kind" = $3 AND COALESCE("project",'') = $4 AND COALESCE("service",'') = $5 AND COALESCE("env",'') = $6 THEN "firingSince" END,
+		  "firingTargets" = CASE WHEN "kind" = $3 AND COALESCE("project",'') = $4 AND COALESCE("service",'') = $5 AND COALESCE("env",'') = $6 THEN "firingTargets" ELSE '' END,
+		  "name" = $2, "kind" = $3, "project" = $4, "service" = $5, "env" = $6, "query" = $7,
+		  "thresholdInt" = $8, "thresholdFloat" = $9, "windowSeconds" = $10, "severity" = $11,
+		  "throttleSeconds" = $12, "updatedAt" = CURRENT_TIMESTAMP
+		WHERE "id" = $1`,
+		r.ID, r.Name, r.Kind, r.Project, r.Service, r.Env, r.Query,
+		nullableInt(r.ThresholdInt), nullableFloat(r.ThresholdFloat),
+		r.WindowSeconds, r.Severity, r.ThrottleSeconds,
+	)
+	if err != nil {
+		return fmt.Errorf("update alert rule: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrAlertNotFound
+	}
+	return nil
+}
+
+// GetAlertRule returns one rule.
+func (d *DB) GetAlertRule(ctx context.Context, id string) (AlertRule, error) {
+	rules, err := d.ListAlertRules(ctx)
+	if err != nil {
+		return AlertRule{}, err
+	}
+	for _, r := range rules {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return AlertRule{}, ErrAlertNotFound
+}
+
 // SetAlertEnabled toggles without rewriting other fields.
 func (d *DB) SetAlertEnabled(ctx context.Context, id string, on bool) error {
 	res, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "enabled" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`, on, id)

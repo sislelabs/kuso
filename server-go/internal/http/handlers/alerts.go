@@ -20,17 +20,22 @@ import (
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/notify"
 )
 
 type AlertsHandler struct {
 	DB     *db.DB
 	Logger *slog.Logger
+	// Notify sends a rule's test notification. nil = test unavailable.
+	Notify *notify.Dispatcher
 }
 
 func (h *AlertsHandler) Mount(r chi.Router) {
 	r.Get("/api/alerts", h.List)
 	r.Post("/api/alerts", h.Create)
+	r.Put("/api/alerts/{id}", h.Update)
 	r.Delete("/api/alerts/{id}", h.Delete)
+	r.Post("/api/alerts/{id}/test", h.Test)
 	r.Post("/api/alerts/{id}/enable", h.Enable)
 	r.Post("/api/alerts/{id}/disable", h.Disable)
 }
@@ -168,6 +173,105 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, rule)
+}
+
+// Update replaces a rule's definition. The caller needs edit rights on the
+// rule as it is AND on the scope it moves to, so a rule can't be lifted
+// out of (or into) a project the caller doesn't edit.
+func (h *AlertsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := alertsCtx(r)
+	defer cancel()
+	id := chi.URLParam(r, "id")
+	if !h.authorizeRuleWrite(ctx, w, id) {
+		return
+	}
+	acc, ok := h.alertCaller(ctx, w)
+	if !ok {
+		return
+	}
+	var body createAlertBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if err := normalizeAlertBody(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !acc.can(body.Project, body.Kind, db.ProjectRoleEditor) {
+		if body.Project == "" || isNodeAlertKind(body.Kind) {
+			writeErr(w, http.StatusForbidden, "cluster-wide and node alert rules need an instance admin")
+		} else {
+			writeErr(w, http.StatusForbidden, fmt.Sprintf("you need editor access on project %q to add its alert rules", body.Project))
+		}
+		return
+	}
+	rule := db.AlertRule{
+		ID:              id,
+		Name:            body.Name,
+		Kind:            body.Kind,
+		Project:         body.Project,
+		Service:         body.Service,
+		Env:             body.Env,
+		Query:           body.Query,
+		ThresholdInt:    body.ThresholdInt,
+		ThresholdFloat:  body.ThresholdFloat,
+		WindowSeconds:   body.WindowSeconds,
+		Severity:        body.Severity,
+		ThrottleSeconds: body.ThrottleSeconds,
+	}
+	if err := h.DB.UpdateAlertRule(ctx, rule); err != nil {
+		h.fail(w, "update alert", err)
+		return
+	}
+	out, err := h.DB.GetAlertRule(ctx, id)
+	if err != nil {
+		h.fail(w, "get alert", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type alertTestResponse struct {
+	Results []notify.DeliveryResult `json:"results"`
+	// Muted: the project is muted, so a real (non-error) firing of this
+	// rule would not reach these channels.
+	Muted bool `json:"muted,omitempty"`
+}
+
+// Test sends the rule's alert card, marked as a test, to every channel the
+// real alert would reach, synchronously, and returns each delivery result.
+func (h *AlertsHandler) Test(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	id := chi.URLParam(r, "id")
+	if !h.authorizeRuleWrite(ctx, w, id) {
+		return
+	}
+	if h.Notify == nil {
+		writeErr(w, http.StatusServiceUnavailable, "notifications aren't configured on this server")
+		return
+	}
+	rule, err := h.DB.GetAlertRule(ctx, id)
+	if err != nil {
+		h.fail(w, "get alert", err)
+		return
+	}
+	extra := map[string]string{"rule_id": rule.ID, "kind": rule.Kind, "test": "true"}
+	if rule.Project != "" {
+		extra["project"] = rule.Project
+	}
+	if rule.Service != "" {
+		extra["service"] = rule.Service
+	}
+	ev := notify.AlertFired(rule.Name, "Test notification for this alert rule, sent from the kuso dashboard. Nothing is wrong.", rule.Severity, extra)
+	ev.Title = "Test · " + ev.Title
+	results, muted, err := h.Notify.DeliverNow(ctx, ev)
+	if err != nil {
+		h.fail(w, "test alert", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, alertTestResponse{Results: results, Muted: muted})
 }
 
 // normalizeAlertBody validates a create request and fills per-kind

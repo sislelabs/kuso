@@ -422,6 +422,55 @@ var alertDisableCmd = &cobra.Command{
 	RunE:  func(cmd *cobra.Command, args []string) error { return alertToggle(args[0], false) },
 }
 
+var alertTestCmd = &cobra.Command{
+	Use:   "test <id>",
+	Short: "Send a test notification for an alert rule",
+	Long: "Send the rule's alert card, marked as a test, to every notification\n" +
+		"channel a real firing would reach, and print each delivery result.",
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.TestAlert(args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return err
+		}
+		var out struct {
+			Results []struct {
+				Name  string `json:"name"`
+				Type  string `json:"type"`
+				OK    bool   `json:"ok"`
+				Error string `json:"error"`
+			} `json:"results"`
+			Muted bool `json:"muted"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode test result: %w", err)
+		}
+		if len(out.Results) == 0 {
+			fmt.Println("no notification channel receives this rule's alerts (check the channels' events and project filters)")
+			return nil
+		}
+		failed := 0
+		for _, r := range out.Results {
+			if r.OK {
+				fmt.Printf("delivered  %s (%s)\n", r.Name, r.Type)
+				continue
+			}
+			failed++
+			fmt.Printf("FAILED     %s (%s): %s\n", r.Name, r.Type, r.Error)
+		}
+		if out.Muted {
+			fmt.Println("note: the project is muted, so real warn/info firings of this rule are held back")
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d of %d channels failed", failed, len(out.Results))
+		}
+		return nil
+	},
+}
+
 func alertToggle(id string, on bool) error {
 	if api == nil {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -523,4 +572,5 @@ func init() {
 	alertCmd.AddCommand(alertDeleteCmd)
 	alertCmd.AddCommand(alertEnableCmd)
 	alertCmd.AddCommand(alertDisableCmd)
+	alertCmd.AddCommand(alertTestCmd)
 }

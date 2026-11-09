@@ -702,7 +702,7 @@ func mountAuthenticatedRoutes(
 			sshH.Mount(r)
 			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, LogDB: d.LogDB, Logger: d.Logger}
 			logSearchH.Mount(r)
-			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
+			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
 			alertsH.Mount(r)
 			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			errH.Mount(r)
