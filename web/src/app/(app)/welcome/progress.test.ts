@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { welcomeProgress } from "./progress";
+import { nextSteps, welcomeProgress } from "./progress";
 
 describe("welcomeProgress", () => {
   it("starts at step 1 on a fresh install", () => {
@@ -26,5 +26,31 @@ describe("welcomeProgress", () => {
   it("does not mark deploy done when service counts are unknown", () => {
     const p = welcomeProgress(true, [{ name: "a", serviceCount: null }]);
     expect(p).toMatchObject({ step: 3, project: "a", done: { 3: false } });
+  });
+});
+
+describe("nextSteps", () => {
+  const base = { hasGitHub: true, environments: [], userCount: 1, alertRuleCount: 0 };
+  it("marks steps done from existing data and lists open ones first", () => {
+    const steps = nextSteps({
+      ...base,
+      environments: [{ envFromSecrets: ["shop-db-conn"], additionalHosts: [] }],
+    });
+    expect(steps.map((s) => [s.id, s.done])).toEqual([
+      ["domain", false],
+      ["teammate", false],
+      ["alerts", false],
+      ["github", true],
+      ["database", true],
+    ]);
+  });
+  it("leaves out steps the viewer can't check", () => {
+    const ids = nextSteps({ ...base, userCount: null, alertRuleCount: null }).map((s) => s.id);
+    expect(ids).not.toContain("teammate");
+    expect(ids).not.toContain("alerts");
+  });
+  it("doesn't count a service's own secret as a database", () => {
+    const db = nextSteps({ ...base, environments: [{ envFromSecrets: ["shop-api-secrets"] }] }).find((s) => s.id === "database");
+    expect(db?.done).toBe(false);
   });
 });
