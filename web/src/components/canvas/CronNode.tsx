@@ -2,6 +2,8 @@
 
 import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { describeCron, formatAbsoluteTime } from "@/lib/format-time";
+import { nextRuns } from "@/lib/cron-next";
 import { cn } from "@/lib/utils";
 import { deriveCronStatus, STATUS_TONE } from "@/features/services";
 import { NodeHandles } from "./NodeHandles";
@@ -54,56 +56,16 @@ function shortName(project: string, fqn: string): string {
   return fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
 }
 
-const DOW_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// describeSchedule recognises the four preset shapes that CronPicker
-// emits and turns them back into a human-readable string. Anything
-// else falls back to the raw cron expression. Mirror of the picker's
-// parseSchedule — kept duplicated rather than shared because the
-// picker doesn't export its parser shape today.
+// The cron's schedule in words with its zone ("Daily at 23:00 UTC"), and
+// a tooltip with the raw expression and the next run in both zones.
 export function describeSchedule(cron: string): string {
-  const s = cron.trim();
-  if (!s) return "—";
-  const fields = s.split(/\s+/);
-  if (fields.length !== 5) return s;
-  const [mn, hr, dom, mo, dow] = fields;
-  const isInt = (v: string, lo: number, hi: number) => {
-    if (!/^\d+$/.test(v)) return false;
-    const n = parseInt(v, 10);
-    return n >= lo && n <= hi;
-  };
-  const pad = (v: string) => (v.length === 1 ? "0" + v : v);
-  if (isInt(mn, 0, 59) && hr === "*" && dom === "*" && mo === "*" && dow === "*") {
-    return `hourly :${pad(mn)}`;
-  }
-  if (
-    isInt(mn, 0, 59) &&
-    isInt(hr, 0, 23) &&
-    dom === "*" &&
-    mo === "*" &&
-    dow === "*"
-  ) {
-    return `daily ${pad(hr)}:${pad(mn)}`;
-  }
-  if (
-    isInt(mn, 0, 59) &&
-    isInt(hr, 0, 23) &&
-    dom === "*" &&
-    mo === "*" &&
-    isInt(dow, 0, 6)
-  ) {
-    return `${DOW_LABEL[parseInt(dow, 10)]} ${pad(hr)}:${pad(mn)}`;
-  }
-  if (
-    isInt(mn, 0, 59) &&
-    isInt(hr, 0, 23) &&
-    isInt(dom, 1, 31) &&
-    mo === "*" &&
-    dow === "*"
-  ) {
-    return `${dom}th ${pad(hr)}:${pad(mn)}`;
-  }
-  return s;
+  return describeCron(cron);
+}
+
+export function scheduleTitle(cron: string): string {
+  const next = nextRuns(cron, 1)[0];
+  if (!next) return cron;
+  return `${cron} · next run ${formatAbsoluteTime(next, { timeZone: "UTC" })} (${formatAbsoluteTime(next)} your time)`;
 }
 
 // summary returns a one-line "what does this cron actually do" hint
@@ -180,7 +142,7 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
-        <span className="flex min-w-0 items-center gap-1.5" title={schedule}>
+        <span className="flex min-w-0 items-center gap-1.5" title={scheduleTitle(schedule)}>
           <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
           <span className="truncate">
             {suspended ? "Paused · " : ""}

@@ -18,7 +18,7 @@ import {
 } from "@/features/services";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
-import { describeSchedule } from "@/components/canvas/CronNode";
+import { describeSchedule, scheduleTitle } from "@/components/canvas/CronNode";
 import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { isProductionGroup } from "@/lib/env-group";
 import { relativeTime } from "@/lib/format";
@@ -188,7 +188,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                   <td className={cn(cellCls, "hidden text-[var(--text-tertiary)] lg:table-cell")}>—</td>
                   <td className={cn(cellCls, "pr-3 text-[var(--text-secondary)]")}>
                     {kind === "http" ? "HTTP" : kind === "command" ? "Command" : "Service"} ·{" "}
-                    <span title={c.spec.schedule}>{describeSchedule(c.spec.schedule ?? "")}</span>
+                    <span title={scheduleTitle(c.spec.schedule ?? "")}>{describeSchedule(c.spec.schedule ?? "")}</span>
                   </td>
                 </Row>
               );

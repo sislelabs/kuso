@@ -28,6 +28,7 @@ import { ERRORS_WINDOW, useServiceErrorCount } from "@/features/errors";
 import type { ServiceErrorCount } from "@/features/errors";
 import { serviceEnvOptions } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
+import { formatTimeRange } from "@/lib/format-time";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -445,7 +446,7 @@ export function LogViewer({
   const presets = canStream ? LIVE_PRESETS : ARCHIVE_PRESETS;
   const rangeValue = view.range.kind === "live" ? "live" : view.range.kind === "preset" ? view.range.preset : "";
   const customLabel =
-    view.range.kind === "abs" ? `${fmtClock(view.range.from, true).slice(0, -4)} – ${fmtClock(view.range.to, false).slice(0, -4)}` : undefined;
+    view.range.kind === "abs" ? formatTimeRange(view.range.from, view.range.to) : undefined;
   const spanMs = view.range.kind === "preset" ? rangeMs(view.range.preset) : view.range.kind === "abs" ? Date.parse(view.range.to) - Date.parse(view.range.from) : 0;
   const withDate = !live && spanMs > 20 * 3_600_000;
   // Rows show the clock only, so mark where the local date changes.
