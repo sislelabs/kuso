@@ -73,6 +73,8 @@ type ServiceChangesRequest struct {
 	EnvSet   []ServiceChangeEnvSet `json:"envSet,omitempty"`
 	EnvUnset []string              `json:"envUnset,omitempty"`
 	Patch    *PatchServiceRequest  `json:"patch,omitempty"`
+	// Message is the user's note for the audit log; not stored on the CR.
+	Message string `json:"message,omitempty"`
 }
 
 // ServiceChangeResult reports one item. Kind is "env-set", "env-unset" or

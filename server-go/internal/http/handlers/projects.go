@@ -1405,10 +1405,19 @@ func (h *ProjectsHandler) ApplyServiceChanges(w http.ResponseWriter, r *http.Req
 			Pipeline: project,
 			App:      service,
 			Resource: "kusoservice",
-			Message:  fmt.Sprintf("applied staged changes: env %v, patch=%v", names, req.Patch != nil),
+			Message:  fmt.Sprintf("applied staged changes: env %v, patch=%v, note=%q", names, req.Patch != nil, noteForAudit(req.Message)),
 		})
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// noteForAudit caps a user note so one request can't bloat the audit row.
+func noteForAudit(s string) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return string(r)
 }
 
 // UnsetEnvVar removes a single env var by name. ErrNotFound on
