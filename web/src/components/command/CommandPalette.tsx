@@ -58,7 +58,10 @@ import { useLiveUrl } from "@/features/projects/liveDomain";
 import { useProjectPrefs } from "@/features/userprefs";
 import { useSession, useSignOut } from "@/features/auth";
 import { buildTriggerMessage, buildsQueryKey, restartService, triggerBuild, useBuilds } from "@/features/services";
-import { buildRefLabel, buildTitle, previousDeployTarget, rollbackToBuild } from "@/features/builds";
+import { buildNeverReady, buildRefLabel, buildTitle, liveBuildId, previousDeployTarget, rollbackToBuild } from "@/features/builds";
+import { useEnvironments } from "@/features/projects/hooks";
+import { liveImagesOf } from "@/features/revisions";
+import { envGroupName } from "@/lib/env-group";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
 import { TONE_CLASSES } from "@/lib/status";
@@ -1157,8 +1160,21 @@ export function CommandTrigger() {
 function RollbackConfirm({ pending: svc, onClose }: { pending: PaletteService | null; onClose: () => void }) {
   const qc = useQueryClient();
   const builds = useBuilds(svc?.project ?? "", svc?.name ?? "");
+  const envs = useEnvironments(svc?.project ?? "");
   const [busy, setBusy] = useState(false);
-  const plan = svc && builds.data ? previousDeployTarget(builds.data, svc.group) : undefined;
+  // Skip builds that never became ready in this env: rolling back to a
+  // release that crashed on start just repeats the outage.
+  const env = svc
+    ? envs.data?.find((e) => e.spec?.service === `${svc.project}-${svc.name}` && envGroupName(e) === svc.group)
+    : undefined;
+  const liveImages = liveImagesOf(env?.metadata?.annotations);
+  const envRepo = (env?.spec as { image?: { repository?: string } } | undefined)?.image?.repository;
+  const plan =
+    svc && builds.data
+      ? previousDeployTarget(builds.data, svc.group, (b) =>
+          buildNeverReady(b, liveImages, envRepo, liveBuildId(builds.data, svc.group)),
+        )
+      : undefined;
   const run = async () => {
     if (!svc || !plan) return;
     setBusy(true);

@@ -15,7 +15,9 @@ export {
   rollForwardTarget,
   newerReleaseFailure,
   previousDeployTarget,
+  buildNeverReady,
 } from "./live";
+export type { LiveImages } from "./live";
 export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog, hintLineNumber } from "./logs";
 export type { BuildLogLine, LiveLogState } from "./logs";
 export { githubRepoSlug, githubCommitUrl, githubCompareUrl } from "./github";
