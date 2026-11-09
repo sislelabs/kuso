@@ -9,8 +9,11 @@ import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type 
 
 const badgeBase = "nodrag nopan";
 
-// Security finding marker: shield + count in a neutral/warning style so
-// it never reads as a runtime error. Clicking opens the Vulnerabilities tab.
+// Security finding marker: shield + count, deliberately quieter than the
+// error chip (no fill, no border, muted text) so a card's runtime errors
+// always out-rank its image CVEs. Clicking opens the Vulnerabilities tab.
+const vulnClass =
+  "inline-flex h-[18px] shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1 text-2xs font-medium tabular-nums leading-none text-[var(--text-tertiary)] transition-colors outline-none hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)] [&>svg]:size-3 [&>svg]:shrink-0";
 export function VulnBadge({
   summary,
   onOpen,
@@ -34,7 +37,7 @@ export function VulnBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className={cn(badgeBase, statusChipClass("neutral", { interactive: true, size: "sm" }))}
+            className={cn(badgeBase, vulnClass)}
           />
         }
       >
@@ -77,11 +80,17 @@ export function ErrorBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className={cn(badgeBase, statusChipClass(hot ? "danger" : "neutral", { interactive: true, size: "sm" }))}
+            className={cn(
+              badgeBase,
+              statusChipClass(hot ? "danger" : "neutral", { interactive: true, size: "sm" }),
+              !hot && "text-[var(--text-primary)]",
+            )}
           />
         }
       >
-        <AlertCircle className={cn(!hot && "text-[var(--text-tertiary)]")} aria-hidden />
+        {/* A steady count stays a neutral chip, but the icon keeps the
+            error hue so it still out-weighs the CVE marker beside it. */}
+        <AlertCircle className={cn(!hot && "text-[var(--error)]")} aria-hidden />
         {compact
           ? `${compactCount(summary.occurrences)} ${summary.occurrences === 1 ? "error" : "errors"}`
           : errorCountLabel(summary.occurrences)}

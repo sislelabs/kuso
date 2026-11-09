@@ -3,7 +3,7 @@
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
-import { AlertTriangle, Check, Copy, ExternalLink, Layers, MoreHorizontal, Undo2, XCircle } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink, Layers, MoreHorizontal, ScrollText, Undo2, XCircle } from "lucide-react";
 import { StatusChip } from "@/components/ui/status-chip";
 import { useAnnounceChange } from "@/components/shared/LiveAnnouncer";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
@@ -80,6 +80,10 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const hasBadges = (data.errors?.occurrences ?? 0) > 0 || (data.vulns?.fixableCritical ?? 0) > 0;
   const compact = !!data.compact;
   const cause = failureCause(status, data.env?.status, data.latestBuild);
+  // Nothing has ever gone live here: the URL is where it WILL answer, so
+  // it reads as an address, not a working link.
+  const neverServed = !data.env || (!data.env.status?.imageTag && !data.env.status?.ready);
+  const buildFailed = status.kind === "build_failed";
   // Building → Deploying → Live (or Failing) is spoken, not only redrawn.
   useAnnounceChange(cause ? `${status.label}: ${cause}` : status.label, (s) => `${displayName}: ${s}`);
   // Severity reads from the icon shape too, not only the dot's hue.
@@ -104,7 +108,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       aria-label={[displayName, status.label, cause ?? "", data.errors?.occurrences ? `${data.errors.occurrences} errors in 24h` : ""]
         .filter(Boolean)
         .join(", ")}
-      onContextMenu={(e) => data.__onContext?.(e, url)}
+      onContextMenu={(e) => data.__onContext?.(e, neverServed ? undefined : url)}
       style={
         compact
           ? { width: COMPACT_SERVICE_NODE_WIDTH, height: COMPACT_SERVICE_NODE_HEIGHT }
@@ -115,6 +119,8 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         nodeCardClass,
         compact ? "flex flex-col justify-center px-3 py-2" : "flex min-h-[120px] flex-col p-3 pt-3.5",
         nodeBorderClass(status.tone, tone.border),
+        // Never deployed: a dashed outline, like the pending edges into it.
+        status.kind === "not_deployed" && "border-dashed",
         dimmed && "opacity-70",
         nodeFocusClass,
       )}
@@ -129,7 +135,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          data.__onContext?.(e, url);
+          data.__onContext?.(e, neverServed ? undefined : url);
         }}
         className={nodeActionButtonClass}
       >
@@ -173,7 +179,14 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       {/* The URL gets the whole row; the commit moves to the tooltip
           then, and only takes this row when there's no URL to show. */}
       <div className="mt-2 flex min-w-0 items-center gap-2">
-        {url ? (
+        {url && neverServed ? (
+          <span
+            className="min-w-0 truncate rounded-md border border-dashed border-[var(--border-default)] px-2 py-0.5 font-mono text-xs text-[var(--text-tertiary)]"
+            title={`${url}\nNot serving yet: nothing has been deployed here.`}
+          >
+            {url.replace(/^https?:\/\//, "")}
+          </span>
+        ) : url ? (
           <UrlPill url={url} />
         ) : (
           <>
@@ -184,9 +197,25 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       </div>
 
       {cause && (
-        <p className="mt-2 truncate text-xs text-[var(--text-secondary)]" title={status.detail || cause}>
-          {cause}
-        </p>
+        <div className="mt-2 flex min-w-0 items-center gap-2 text-xs">
+          <p className="min-w-0 truncate text-[var(--text-secondary)]" title={status.detail || cause}>
+            {cause}
+          </p>
+          {buildFailed && data.__onOpenTab && (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={(e) => {
+                e.stopPropagation();
+                data.__onOpenTab?.("deployments");
+              }}
+              className="nodrag ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-[var(--error)] hover:bg-[var(--error-subtle)]"
+            >
+              <ScrollText aria-hidden className="h-3 w-3" />
+              View build log
+            </button>
+          )}
+        </div>
       )}
 
       <div className="flex-1" />
@@ -329,3 +358,4 @@ function UrlPill({ url }: { url: string }) {
     </span>
   );
 }
+

@@ -80,7 +80,8 @@ function summary(project: string, spec: CronNodeData["cron"]["spec"]): string {
     case "command":
       return (spec.command ?? []).join(" ") || "(no command)";
     case "service":
-      return spec.service ? `→ ${shortName(project, spec.service)}` : "(no service)";
+      // The service it runs in is on the footer; this row says what runs.
+      return (spec.command ?? []).join(" ") || "(no command)";
     default:
       return "";
   }
@@ -97,7 +98,14 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
 
   const status = deriveCronStatus(data.cron.spec);
   const tone = STATUS_TONE[status.tone];
-  const kindLabel = kind === "http" ? "HTTP" : kind === "command" ? "Command" : "Service";
+  const kindLabel =
+    kind === "http"
+      ? "HTTP"
+      : kind === "command"
+        ? "Command"
+        : data.cron.spec.service
+          ? `Runs in ${shortName(data.project, data.cron.spec.service)}`
+          : "Service";
 
   return (
     <div
@@ -154,7 +162,7 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
             {describeSchedule(schedule)}
           </span>
         </span>
-        <span className="shrink-0">{kindLabel}</span>
+        <span className="min-w-0 max-w-[50%] shrink truncate" title={kindLabel}>{kindLabel}</span>
       </div>
     </div>
   );
