@@ -1,5 +1,6 @@
 "use client";
 
+import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { Check, Copy, ExternalLink, Layers, MoreHorizontal } from "lucide-react";
@@ -56,10 +57,10 @@ export function serviceNodeStatus(data: Pick<ServiceNodeData, "service" | "env" 
 export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData }) {
   const status = serviceNodeStatus(data);
   const tone = STATUS_TONE[status.tone];
-  const url = serviceUrl(data.service, data.env);
   const internal = !!data.service.spec?.internal;
   const replicas = replicasFor(data.env);
   const shortName = serviceShortName(data.project, data.service.metadata.name);
+  const url = useLiveServiceUrl(data.project, shortName, data.env, serviceUrl(data.service, data.env));
   const displayName = data.service.spec.displayName?.trim() || shortName;
   const deployedAt = lastDeployedAt(data.env);
   const dimmed = status.kind === "sleeping" || status.kind === "stopped";

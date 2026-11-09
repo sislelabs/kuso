@@ -1,5 +1,6 @@
 "use client";
 
+import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { cronsForEnv, lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { Check, Clock, Copy, ExternalLink } from "lucide-react";
@@ -94,7 +95,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
                   </td>
                   <td className={cellCls}>
                     {url ? (
-                      <UrlCell url={url} />
+                      <LiveUrlCell project={project} service={short} env={env} url={url} />
                     ) : (
                       <span className="text-[var(--text-tertiary)]">{s.spec.internal ? "Internal only" : "—"}</span>
                     )}
@@ -281,6 +282,10 @@ export function StatusCell({ status }: { status: NodeStatus }) {
       </span>
     </span>
   );
+}
+
+function LiveUrlCell({ project, service, env, url }: { project: string; service: string; env?: KusoEnvironment; url: string }) {
+  return <UrlCell url={useLiveServiceUrl(project, service, env, url) ?? url} />;
 }
 
 function UrlCell({ url }: { url: string }) {

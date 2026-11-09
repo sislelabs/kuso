@@ -1,5 +1,6 @@
 "use client";
 
+import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -318,7 +319,7 @@ function MobileServiceCard({
   // hint for viewers instead of a post-tap 403 toast.
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
-  const url = serviceUrl(service, env);
+  const url = useLiveServiceUrl(project, shortName, env, serviceUrl(service, env));
   const stopped = service.spec.stopped === true;
   const deployed = lastDeployedAt(env);
   const latestFailed = ["failed", "error", "release-failed"].includes((latest?.status ?? "").toLowerCase());
