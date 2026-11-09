@@ -44,6 +44,27 @@ export function sameStagedEnv(a: StagedEnv | undefined, b: StagedEnv | undefined
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
+// isRowStaged: the store holds this row's current value for the next deploy.
+export function isRowStaged(row: Pick<Row, "name" | "value">, staged: StagedEnv | undefined): boolean {
+  const name = row.name.trim();
+  return !!staged?.set.some((e) => e.name === name && e.value === row.value);
+}
+
+// rowStageMarker is the per-row truth the table shows. A row the store
+// holds is staged even while another row's error blocks restaging; an
+// edit that the error kept out of the store is "not staged".
+export function rowStageMarker(o: { changed: boolean; staged: boolean; blocked: boolean }): "staged" | "not-staged" | null {
+  if (o.staged) return "staged";
+  if (!o.changed) return null;
+  return o.blocked ? "not-staged" : "staged";
+}
+
+// isEmptyDraft: a row added in this editor that never got a value and
+// isn't in the store. It's a placeholder, so leaving it drops it.
+export function isEmptyDraft(row: Row, staged: StagedEnv | undefined): boolean {
+  return !row.origName && row.value === "" && !isRowStaged(row, staged);
+}
+
 // applyStagedEnv lays staged edits over the deployed rows, sorted like the
 // editor's own load.
 export function applyStagedEnv(baseline: readonly Row[], staged: StagedEnv | undefined): Row[] {
