@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/components/project/useMediaQuery";
@@ -92,6 +92,12 @@ export function OverlayTabs<T extends string>({
     updateFade();
   }, [active, idPrefix, updateFade]);
 
+  const pageStrip = (dir: 1 | -1) => {
+    const el = stripRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: "smooth" });
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
     if (!keys.includes(e.key)) return;
@@ -172,12 +178,10 @@ export function OverlayTabs<T extends string>({
         >
           {visible.map((t) => tabButton(t))}
         </div>
-        {fade.left && (
-          <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-[var(--bg-primary)] to-transparent" />
-        )}
-        {fade.right && (
-          <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[var(--bg-primary)] to-transparent" />
-        )}
+        {/* Clipped tabs get a fade plus a chevron, so the strip reads as
+            scrollable; the chevron pages it (keyboard users have arrows). */}
+        {fade.left && <ScrollEdge side="left" onPage={() => pageStrip(-1)} />}
+        {fade.right && <ScrollEdge side="right" onPage={() => pageStrip(1)} />}
       </div>
       {overflow.length > 0 && (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
@@ -238,5 +242,27 @@ export function OverlayTabs<T extends string>({
       {pinned && !phone && tabButton(pinned, true)}
     </div>
     </>
+  );
+}
+
+function ScrollEdge({ side, onPage }: { side: "left" | "right"; onPage: () => void }) {
+  const Icon = side === "left" ? ChevronLeft : ChevronRight;
+  return (
+    <span
+      className={cn(
+        "pointer-events-none absolute inset-y-0 flex w-12 items-center from-[var(--bg-primary)] from-45% to-transparent",
+        side === "left" ? "left-0 justify-start bg-gradient-to-r" : "right-0 justify-end bg-gradient-to-l",
+      )}
+    >
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden
+        onClick={onPage}
+        className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm hover:text-[var(--text-primary)]"
+      >
+        <Icon className="h-4 w-4" />
+      </button>
+    </span>
   );
 }

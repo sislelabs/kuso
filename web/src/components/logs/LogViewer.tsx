@@ -154,7 +154,8 @@ export function LogViewer({
     env: defaultEnv,
     levels: [],
     pod: "",
-    wrap: true,
+    // Phones start unwrapped: one line per entry, tap a line for the full text.
+    wrap: !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 639px)").matches),
     scrollTop: null,
     ...takePendingLogView(project, service),
   }));
@@ -970,7 +971,7 @@ const LogRow = memo(function LogRow({
       <span
         className={cn(
           "min-w-0 flex-1 text-[var(--text-primary)] max-sm:basis-full",
-          wrap ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere]" : "whitespace-pre max-sm:whitespace-pre-wrap max-sm:[overflow-wrap:anywhere]",
+          wrap ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere]" : "whitespace-pre max-sm:truncate",
           r.level === "debug" && "text-[var(--text-secondary)]",
         )}
       >
