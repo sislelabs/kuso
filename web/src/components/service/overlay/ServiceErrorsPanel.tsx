@@ -4,14 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Link from "next/link";
-import { AlertTriangle, BellPlus, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
+import { AlertTriangle, BellPlus, CheckCircle2, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
 import { useBuilds, useErrors } from "@/features/services";
 import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
-import { errorCountLabel, errorTitle, useServiceErrorCount } from "@/features/errors";
+import { errorTitle, sinceDeployWindow, useResolveError, useServiceErrorCount } from "@/features/errors";
+import { lastDeployedAt } from "@/features/projects/facts";
+import { ApiError } from "@/lib/api-client";
+import { toastError } from "@/lib/errors";
 import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
-import { serviceEnvOptions } from "@/lib/env-group";
+import { envGroupName, serviceEnvOptions } from "@/lib/env-group";
 import { relativeTime, shortSha } from "@/lib/format";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
@@ -56,16 +59,29 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
   // With one environment there's nothing to narrow to, and filtering
   // would hide events from unlabelled pods.
   const env = envOptions.length < 2 ? "" : pickedEnv;
-  const errors = useErrors(project, service, since, env);
+  // "Since current deploy" narrows the window to the env's live version,
+  // so a fixed error stops counting once the fix is deployed.
+  const [sinceDeploy, setSinceDeploy] = useState(false);
+  const deployedAt = useMemo(() => {
+    const group = env || "production";
+    return lastDeployedAt((envs.data ?? []).find((e) => e.spec?.service === fqn && envGroupName(e) === group));
+  }, [envs.data, fqn, env]);
+  const [deployWindow, setDeployWindow] = useState<string | null>(null);
+  useEffect(() => {
+    setDeployWindow(sinceDeployWindow(deployedAt, Date.now()));
+  }, [deployedAt, sinceDeploy]);
+  const range = sinceDeploy && deployWindow ? deployWindow : since;
+  const rangeWords = sinceDeploy && deployWindow ? "since the current deploy" : `in the last ${timeRangeSpan(since)}`;
+  const errors = useErrors(project, service, range, env);
   const groups = errors.data ?? [];
   // The headline total comes from the same summary as the canvas badge and
   // the tab badge, so the three agree even when the list is cut at 50.
-  const count = useServiceErrorCount(project, service, since, env);
+  const count = useServiceErrorCount(project, service, range, env);
   const total = count.data?.occurrences ?? groups.reduce((a, g) => a + g.count, 0);
   const groupCount = count.data?.groups ?? groups.length;
   const builds = useBuilds(project, service);
-  const windowStart = Date.now() - (timeRangeMs(since) ?? 0);
-  const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${since}/${env}`);
+  const windowStart = Date.now() - (timeRangeMs(range) ?? 0);
+  const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${range}/${env}`);
 
   // ±30s around the occurrence: tight enough that the error's own lines
   // are on screen, wide enough for the request that caused it.
@@ -92,8 +108,8 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Errors</h3>
           <p className="text-xs text-[var(--text-secondary)]">
             {errors.isError || errors.isPending
-              ? `Last ${timeRangeSpan(since)}`
-              : `${errorCountLabel(total, since)} · ${plural(groupCount, "group")}${groupCount > groups.length ? ` · newest ${groups.length} shown` : ""}`}
+              ? rangeWords.charAt(0).toUpperCase() + rangeWords.slice(1)
+              : `${plural(total, "error")} ${rangeWords} · ${plural(groupCount, "group")}${groupCount > groups.length ? ` · newest ${groups.length} shown` : ""}`}
           </p>
           <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
             {announcement}
@@ -120,7 +136,34 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
               ))}
             </Select>
           )}
-          <TimeRangePicker presets={RANGES} value={since} onChange={setSince} ariaLabel="Errors time range" />
+          <button
+            type="button"
+            aria-pressed={sinceDeploy}
+            disabled={!deployedAt}
+            onClick={() => setSinceDeploy((v) => !v)}
+            title={
+              deployedAt
+                ? `Only errors since ${service} was last deployed (${relativeTime(deployedAt)})`
+                : "No deploy recorded for this environment"
+            }
+            className={cn(
+              "h-8 rounded-md border px-2.5 text-xs disabled:opacity-50",
+              sinceDeploy
+                ? "border-[var(--border-strong)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+            )}
+          >
+            Since current deploy
+          </button>
+          <TimeRangePicker
+            presets={RANGES}
+            value={since}
+            onChange={(v) => {
+              setSince(v);
+              setSinceDeploy(false);
+            }}
+            ariaLabel="Errors time range"
+          />
         </div>
       </div>
 
@@ -134,14 +177,22 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
         <QueryErrorState what="errors" error={errors.error} onRetry={() => void errors.refetch()} />
       ) : groups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-10 text-center">
-          <p className="text-sm font-medium text-[var(--text-primary)]">No errors in the last {timeRangeSpan(since)}</p>
+          <p className="text-sm font-medium text-[var(--text-primary)]">No unresolved errors {rangeWords}</p>
           <p className="mx-auto mt-1 max-w-md text-[13px] text-[var(--text-secondary)]">
             The scanner watches this service&apos;s runtime logs for ERROR, Exception, panic and Traceback lines. Build and
             release-hook output isn&apos;t counted (it&apos;s on Deployments), and errors logged in another shape won&apos;t
             appear here. Logs are kept for 7 days.
           </p>
-          {since !== "7d" && (
-            <Button size="sm" variant="outline" className="mt-3" onClick={() => setSince("7d")}>
+          {(since !== "7d" || sinceDeploy) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              onClick={() => {
+                setSince("7d");
+                setSinceDeploy(false);
+              }}
+            >
               Check the last 7 days
             </Button>
           )}
@@ -154,7 +205,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
               group={g}
               project={project}
               service={service}
-              since={since}
+              since={range}
               env={env}
               firstBuild={buildLiveAt(builds.data ?? [], g.firstSeen, windowStart)}
               isOpen={expanded === g.fingerprint}
@@ -250,14 +301,27 @@ function ErrorRow({
   );
   const fb = firstBuild?.build;
   const fbLabel = fb ? (fb.commitSha ? shortSha(fb.commitSha) : (fb.ref ?? fb.id)) : "";
+  const resolve = useResolveError(project, service);
+  const onResolve = () =>
+    resolve.mutate(
+      { fingerprint: group.fingerprint },
+      {
+        onSuccess: () => toast.success("Resolved", { description: "Hidden until it happens again." }),
+        onError: (e) =>
+          e instanceof ApiError && (e.status === 404 || e.status === 405)
+            ? toast.error("This server can't resolve errors yet")
+            : toastError(e, "Couldn't resolve"),
+      },
+    );
   return (
     <li ref={liRef} className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <div className="flex items-stretch">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls={panelId}
-        className="flex w-full items-start gap-3 px-3.5 py-3 text-left hover:bg-[var(--bg-tertiary)]/40"
+        className="flex min-w-0 flex-1 items-start gap-3 px-3.5 py-3 text-left hover:bg-[var(--bg-tertiary)]/40"
       >
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--error)]" aria-hidden />
         <div className="min-w-0 flex-1">
@@ -293,6 +357,11 @@ function ErrorRow({
               </span>
             )}
             {group.sampleEnv && <span>{group.sampleEnv}</span>}
+            {group.resolvedAt && (
+              <span className="text-[var(--warning)]" title={`Resolved ${new Date(group.resolvedAt).toLocaleString()}`}>
+                Recurred after being resolved {relativeTime(group.resolvedAt)}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -307,6 +376,18 @@ function ErrorRow({
           )}
         </div>
       </button>
+      <button
+        type="button"
+        onClick={onResolve}
+        disabled={resolve.isPending}
+        title="Resolve: hide this group until it happens again"
+        className="flex shrink-0 items-center gap-1 border-l border-[var(--border-subtle)] px-3 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/40 hover:text-[var(--text-primary)] disabled:opacity-50"
+      >
+        <CheckCircle2 aria-hidden className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Resolve</span>
+        <span className="sr-only sm:hidden">Resolve</span>
+      </button>
+      </div>
       {isOpen && (
         <ErrorDetail id={panelId} group={group} project={project} service={service} since={since} env={env} onViewLogs={onViewLogs} />
       )}

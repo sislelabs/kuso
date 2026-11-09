@@ -1376,3 +1376,43 @@ func shortRef(s string) string {
 	}
 	return s
 }
+
+// DeliveryResult is the outcome of one synchronous send.
+type DeliveryResult struct {
+	Channel string `json:"channel"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
+// DeliverNow sends e synchronously to every channel that would receive it
+// (same event, project and audience filters as the outbox) and reports
+// each send, with errors reduced to SafeDeliveryError categories. Used to test an alert rule end to end; muted reports whether
+// a project mute would have held the real event back.
+func (d *Dispatcher) DeliverNow(ctx context.Context, e Event) (results []DeliveryResult, muted bool, err error) {
+	notifs, err := d.cachedNotifications(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("notify: list channels: %w", err)
+	}
+	if e.Project != "" && !(e.Type == EventAlertFired && e.Severity == "error") {
+		if m, merr := d.cachedMutedProjects(ctx); merr == nil && m[e.Project] {
+			muted = true
+		}
+	}
+	results = []DeliveryResult{}
+	for _, n := range notifs {
+		if !channelAdmits(n, e) {
+			continue
+		}
+		r := DeliveryResult{Channel: n.ID, Name: n.Name, Type: n.Type, OK: true}
+		if serr := d.deliverViaChannel(ctx, n, e); serr != nil {
+			// The raw error can hold the channel URL or the receiver's
+			// reply; it stays in the server log.
+			d.logger.Warn("notify: test delivery failed", "channel", n.ID, "type", n.Type, "err", serr)
+			r.OK, r.Error = false, SafeDeliveryError(serr)
+		}
+		results = append(results, r)
+	}
+	return results, muted, nil
+}

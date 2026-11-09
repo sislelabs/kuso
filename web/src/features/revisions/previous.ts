@@ -44,3 +44,40 @@ export function previousConfig(revisions: readonly Revision[]): RevertPlan | nul
   });
   return target ? { change, target } : null;
 }
+
+// latestChange is the newest replayable revision: the change a failing
+// rollout started from.
+export function latestChange(revisions: readonly Revision[]): Revision | null {
+  const sorted = [...revisions]
+    .filter((r) => Number.isFinite(Date.parse(r.createdAt)))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return sorted.find((r) => changedKeys(r) !== null) ?? null;
+}
+
+// Fields a service starts without, and the PATCH that puts each back.
+const DEFAULTS: Record<string, { patch: Record<string, unknown>; label: string }> = {
+  healthcheck: { patch: { healthcheck: { path: "" } }, label: "the default TCP port check" },
+  command: { patch: { command: [] }, label: "the image's own start command" },
+  release: { patch: { release: { clear: true } }, label: "no release command" },
+};
+
+export interface DefaultPlan {
+  change: Revision;
+  patch: Record<string, unknown>;
+  // What the service goes back to, for the confirm copy.
+  label: string;
+}
+
+// defaultPlan is "Revert to default" for a change with no earlier
+// revision of the same fields: unset them. null when a changed field has
+// no default to go back to (an image, a port).
+export function defaultPlan(revisions: readonly Revision[]): DefaultPlan | null {
+  const change = latestChange(revisions);
+  const keys = change ? changedKeys(change) : null;
+  if (!change || !keys || keys.some((k) => !DEFAULTS[k])) return null;
+  return {
+    change,
+    patch: Object.assign({}, ...keys.map((k) => DEFAULTS[k].patch)) as Record<string, unknown>,
+    label: keys.map((k) => DEFAULTS[k].label).join(" and "),
+  };
+}

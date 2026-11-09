@@ -261,6 +261,8 @@ export interface ErrorGroup {
   sampleLine: string;
   sampleEnv?: string;
   samplePod?: string;
+  // Set when someone resolved the group and it has recurred since.
+  resolvedAt?: string;
 }
 
 // listErrors fetches the current error groups for a service. `since`

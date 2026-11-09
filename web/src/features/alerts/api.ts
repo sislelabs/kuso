@@ -69,3 +69,28 @@ export async function enableAlert(id: string): Promise<void> {
 export async function disableAlert(id: string): Promise<void> {
   return api(`/api/alerts/${encodeURIComponent(id)}/disable`, { method: "POST" });
 }
+
+// updateAlert rewrites a rule's definition (PUT; enabled is unchanged).
+export async function updateAlert(id: string, body: CreateAlertBody): Promise<AlertRule> {
+  return api(`/api/alerts/${encodeURIComponent(id)}`, { method: "PUT", body });
+}
+
+// One channel's result for a test send. error is a category ("timeout",
+// "receiver returned HTTP 401"), never the channel's URL.
+export interface AlertTestDelivery {
+  channel: string;
+  name: string;
+  type: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface AlertTestResult {
+  results: AlertTestDelivery[];
+  // The project is muted: real non-error firings wouldn't be delivered.
+  muted?: boolean;
+}
+
+export async function testAlert(id: string): Promise<AlertTestResult> {
+  return api(`/api/alerts/${encodeURIComponent(id)}/test`, { method: "POST" });
+}

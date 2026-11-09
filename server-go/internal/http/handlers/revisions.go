@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -320,7 +321,14 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	kind, err := h.replayRevision(projects.WithRevertOf(ctx, rev.ID), rev)
+	var kind string
+	if env := strings.TrimSpace(r.URL.Query().Get("env")); env != "" {
+		// Scoped rollback: only that environment moves to the revision's
+		// image. The default (no env) replays the service-wide change.
+		kind, err = "environment", h.revertImageToEnv(projects.WithRevertOf(ctx, rev.ID), rev, env)
+	} else {
+		kind, err = h.replayRevision(projects.WithRevertOf(ctx, rev.ID), rev)
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": kind})
@@ -335,6 +343,29 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 	default:
 		h.fail(w, "revert "+rev.Kind, err)
 	}
+}
+
+// revertImageToEnv replays the image of a service revision onto one
+// environment. Only a revision that set nothing but the image qualifies:
+// any other field lives on the service and can't be scoped to one env.
+func (h *ProjectsHandler) revertImageToEnv(ctx context.Context, rev *db.Revision, env string) error {
+	if rev.Kind != "service" {
+		return fmt.Errorf("%w: only image rollbacks can target one environment", projects.ErrNotRevertable)
+	}
+	var snap struct {
+		Patch map[string]json.RawMessage `json:"patch"`
+	}
+	if err := json.Unmarshal(rev.Snapshot, &snap); err != nil || len(snap.Patch) != 1 || snap.Patch["image"] == nil {
+		return fmt.Errorf("%w: only image rollbacks can target one environment", projects.ErrNotRevertable)
+	}
+	var img struct {
+		Repository string `json:"repository"`
+		Tag        string `json:"tag"`
+	}
+	if err := json.Unmarshal(snap.Patch["image"], &img); err != nil || img.Repository == "" {
+		return fmt.Errorf("%w: the revision has no image to roll back to", projects.ErrNotRevertable)
+	}
+	return h.Svc.SetEnvironmentImage(ctx, rev.Project, rev.Name, env, img.Repository, img.Tag)
 }
 
 var (

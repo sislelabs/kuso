@@ -15,7 +15,7 @@ import (
 // Bump refingerprintVersion whenever canonicalTitle or fingerprintFor
 // changes, and the rewrite runs again.
 const (
-	refingerprintVersion = "v2"
+	refingerprintVersion = "v3"
 	refingerprintCutoff  = "errorscan.refingerprint." + refingerprintVersion + ".cutoff"
 	refingerprintDone    = "errorscan.refingerprint." + refingerprintVersion + ".lastId"
 	refingerprintPerTick = 2000

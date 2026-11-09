@@ -84,3 +84,9 @@ func (k *KusoClient) EnableAlert(id string) (*resty.Response, error) {
 func (k *KusoClient) DisableAlert(id string) (*resty.Response, error) {
 	return k.client.Post("/api/alerts/" + esc(id) + "/disable")
 }
+
+// TestAlert sends the rule's alert card to every channel it would reach
+// and returns each channel's delivery result.
+func (k *KusoClient) TestAlert(id string) (*resty.Response, error) {
+	return k.client.Post("/api/alerts/" + esc(id) + "/test")
+}

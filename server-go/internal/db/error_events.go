@@ -38,6 +38,9 @@ type ErrorGroup struct {
 	SampleLine  string    `json:"sampleLine"`
 	SampleEnv   string    `json:"sampleEnv,omitempty"`
 	SamplePod   string    `json:"samplePod,omitempty"`
+	// ResolvedAt is set by the errors handler when someone resolved the
+	// group; not a column.
+	ResolvedAt *time.Time `json:"resolvedAt,omitempty"`
 }
 
 // Build and release-hook output that the error scanner stored before it

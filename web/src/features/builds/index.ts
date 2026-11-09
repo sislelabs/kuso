@@ -15,7 +15,7 @@ export {
   newerReleaseFailure,
   previousDeployTarget,
 } from "./live";
-export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog } from "./logs";
+export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog, hintLineNumber } from "./logs";
 export type { BuildLogLine, LiveLogState } from "./logs";
 export { githubRepoSlug, githubCommitUrl, githubCompareUrl } from "./github";
 export type { DeployBuild, BuildRowStatus } from "./types";

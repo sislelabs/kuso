@@ -7,7 +7,7 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
-import { deriveServiceStatus, useBuilds, useService } from "@/features/services";
+import { deriveServiceStatus, useBuilds, usePatchService, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
 import { isCurrentPod, listServicePods, useServicePods } from "@/features/pods";
@@ -38,6 +38,9 @@ import {
   collapseFlipFlops,
   imageReleases,
   interleaveTimeline,
+  defaultPlan,
+  liveImagesOf,
+  neverRan,
   previousConfig,
   shortDigest,
   useRevertRevision,
@@ -170,7 +173,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
       )}
 
       {env?.status?.state === "rollout_failing" && (
-        <RolloutFailingCard project={project} service={service} env={env} canDeploy={canDeploy} onNavigate={onNavigate} />
+        <RolloutFailingCard project={project} service={service} env={env} canDeploy={canDeploy} isImage={isImage} onNavigate={onNavigate} />
       )}
 
       {isImage ? (
@@ -228,31 +231,43 @@ function RolloutFailingCard({
   service,
   env,
   canDeploy,
+  isImage,
   onNavigate,
 }: {
   project: string;
   service: string;
   env: KusoEnvironment;
   canDeploy: boolean;
+  isImage: boolean;
   onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   const facts = rolloutFacts(env.status);
   const serviceRevs = useRevisions(project, "service", service);
   const revert = useRevertRevision(project);
+  const patch = usePatchService(project, service);
   const [confirm, setConfirm] = useState(false);
-  const plan = previousConfig(serviceRevs.data ?? []);
+  const revs = serviceRevs.data ?? [];
+  const plan = previousConfig(revs);
+  // No earlier value of the changed field: going back means unsetting it.
+  const toDefault = plan ? null : defaultPlan(revs);
+  const change = plan?.change ?? toDefault?.change;
   const cause = facts?.cause ?? env.status?.stateDetail ?? "the new version isn't becoming ready";
   const sentence = cause.charAt(0).toUpperCase() + cause.slice(1);
   const group = envGroupName(env);
+  const pending = revert.isPending || patch.isPending;
   const onConfirm = () => {
-    if (!plan) return;
-    revert.mutate(plan.target.id, {
-      onSuccess: () => toast.success("Reverting to the previous config"),
-      onError: (e) => toastError(e, "Revert failed"),
+    const done = {
+      onError: (e: unknown) => toastError(e, "Revert failed"),
       onSettled: () => setConfirm(false),
-    });
+    };
+    if (plan) {
+      revert.mutate(plan.target.id, { ...done, onSuccess: () => toast.success("Reverting to the previous config") });
+    } else if (toDefault) {
+      patch.mutate(toDefault.patch, { ...done, onSuccess: () => toast.success(`Reverting to ${toDefault.label}`) });
+    }
   };
-  const changeLabel = plan ? describeChange(plan.change) : "";
+  const changeLabel = change ? describeChange(change) : "";
+  const rollbackHint = isImage ? "roll back to an earlier image below" : "roll back to an earlier build below";
   return (
     <section
       role="status"
@@ -268,19 +283,19 @@ function RolloutFailingCard({
             {facts?.previousServing === false
               ? "Nothing else is serving."
               : "The previous version is still serving traffic; kuso keeps retrying the new one until you fix or revert the change."}
-            {plan && (
+            {change && (
               <>
                 {" "}
                 Started by <span className="text-[var(--text-primary)]">{changeLabel}</span>
-                {plan.change.actor ? ` by ${plan.change.actor}` : ""} {relativeTime(plan.change.createdAt)}.
+                {change.actor ? ` by ${change.actor}` : ""} {relativeTime(change.createdAt)}.
               </>
             )}
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-2">
-            {plan && canDeploy && (
-              <Button size="sm" onClick={() => setConfirm(true)} disabled={revert.isPending}>
+            {(plan || toDefault) && canDeploy && (
+              <Button size="sm" onClick={() => setConfirm(true)} disabled={pending}>
                 <Undo2 className="h-3.5 w-3.5" />
-                Revert to previous
+                {plan ? "Revert to previous" : "Revert to default"}
               </Button>
             )}
             {facts?.kind === "healthcheck" && onNavigate && (
@@ -294,25 +309,32 @@ function RolloutFailingCard({
               </Button>
             )}
           </div>
-          {!plan && serviceRevs.isSuccess && (
+          {!plan && !toDefault && serviceRevs.isSuccess && (
             <p className="pt-1 text-xs text-[var(--text-tertiary)]">
-              No earlier version of this change is recorded, so there&apos;s nothing to revert to automatically. Fix it in Settings, or roll back a build below.
+              {change
+                ? `kuso has no earlier value of this setting to go back to. Fix it in Settings, or ${rollbackHint}.`
+                : `Fix the cause in Settings, or ${rollbackHint}.`}
             </p>
           )}
         </div>
       </div>
       <ConfirmDialog
         open={confirm}
-        title="Revert to the previous config?"
+        title={plan ? "Revert to the previous config?" : "Revert to the default?"}
         destructive={false}
         confirmLabel="Revert"
         body={
           <span>
-            Undoes <strong>{changeLabel}</strong> by re-applying the config from{" "}
-            {plan ? relativeTime(plan.target.createdAt) : ""}. Every environment of {service} rolls again.
+            Undoes <strong>{changeLabel}</strong>{" "}
+            {plan ? (
+              <>by re-applying the config from {relativeTime(plan.target.createdAt)}.</>
+            ) : (
+              <>by going back to {toDefault?.label}.</>
+            )}{" "}
+            It&apos;s a service setting, so every environment of {service} rolls again.
           </span>
         }
-        pending={revert.isPending}
+        pending={pending}
         onConfirm={onConfirm}
         onCancel={() => setConfirm(false)}
       />
@@ -721,7 +743,10 @@ function ImageDeploymentCard({
   });
   const podList = pods.data ? ((pods.data.pods ?? []) as RolloutPod[]) : undefined;
   const state = imageRolloutState(envState, podList);
-  const ref = image?.repository ? `${image.repository}:${image.tag || "latest"}` : undefined;
+  // An env rolled back on its own runs a different image than the service.
+  const envImage = (env?.spec as { image?: { repository?: string; tag?: string } } | undefined)?.image;
+  const shown = envImage?.repository ? envImage : image;
+  const ref = shown?.repository ? `${shown.repository}:${shown.tag || "latest"}` : undefined;
   const deployedAt = env?.status?.lastDeployedAt;
 
   if (!state) {
@@ -801,7 +826,7 @@ function ImageDeploymentCard({
       project={project}
       service={service}
       env={env}
-      image={image}
+      image={shown}
       rollout={state}
       runningImageID={runningImageID}
       canDeploy={canDeploy}
@@ -848,9 +873,11 @@ function ImageReleaseHistory({
   if (serviceRevs.isError) {
     return <QueryErrorState what="release history" error={serviceRevs.error} onRetry={() => void serviceRevs.refetch()} />;
   }
-  const { releases: all, other } = imageReleases(serviceRevs.data ?? [], image);
+  // Env revisions carry this env's own image rollbacks.
+  const { releases: all, other: config } = imageReleases([...(serviceRevs.data ?? []), ...(envRevs.data ?? [])], image);
   const releases = collapseFlipFlops(all);
-  const config = [...other, ...(envRevs.data ?? [])];
+  const live = liveImagesOf(env?.metadata?.annotations);
+  const group = envGroupName(env);
   const outcome = configRolloutOutcome([...(serviceRevs.data ?? []), ...(envRevs.data ?? [])], env);
   // interleaveTimeline orders "builds" by startedAt; a release is placed by
   // the time its tag was saved.
@@ -925,6 +952,9 @@ function ImageReleaseHistory({
               outcome={r.current ? RELEASE_OUTCOME[rollout.status] : undefined}
               digest={r.current ? shortDigest(runningImageID) : ""}
               canRollBack={canDeploy && !r.current && r.ref !== currentRef}
+              neverRan={neverRan(r, live)}
+              neverRanOf={(f) => neverRan(f, live)}
+              envGroup={group}
             />
           );
         })}
@@ -948,22 +978,47 @@ function ImageReleaseRow({
   outcome,
   digest,
   canRollBack,
+  neverRan,
+  neverRanOf,
+  envGroup,
 }: {
   project: string;
   release: ImageRelease;
   outcome?: { label: string; dot: string };
   digest: string;
   canRollBack: boolean;
+  // The image never reached a ready rollout in this env.
+  neverRan: boolean;
+  neverRanOf: (r: ImageRelease) => boolean;
+  envGroup: string;
 }) {
   const [confirm, setConfirm] = useState(false);
+  const [allEnvs, setAllEnvs] = useState(false);
   const revert = useRevertRevision(project);
   const { revision } = release;
+  // Only a service revision can move every env; an env's own rollback row
+  // belongs to that env.
+  const canScopeAll = revision.kind === "service";
   const onConfirm = () =>
-    revert.mutate(revision.id, {
-      onSuccess: () => toast.success(`Rolling back to ${release.ref}`),
-      onError: (e) => toastError(e, "Rollback failed"),
-      onSettled: () => setConfirm(false),
-    });
+    revert.mutate(
+      { id: revision.id, env: canScopeAll && allEnvs ? undefined : envGroup },
+      {
+        onSuccess: (res) => {
+          if (!allEnvs && res.kind === "service") {
+            toast.success(`Rolling back to ${release.ref}`, {
+              description: "This server can't scope a rollback to one environment, so every environment rolls.",
+            });
+          } else {
+            toast.success(`Rolling ${allEnvs ? "every environment" : envGroup} back to ${release.ref}`);
+          }
+        },
+        onError: (e) => toastError(e, "Rollback failed"),
+        onSettled: () => {
+          setConfirm(false);
+          setAllEnvs(false);
+        },
+      },
+    );
   return (
     <li
       className={cn(
@@ -984,6 +1039,11 @@ function ImageReleaseRow({
               <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", outcome.dot)} />
               {outcome.label}
             </span>
+          ) : neverRan ? (
+            <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--danger)]" />
+              Never went live
+            </span>
           ) : (
             <span>Replaced</span>
           )}
@@ -1002,7 +1062,13 @@ function ImageReleaseRow({
         </p>
       </div>
       {canRollBack && (
-        <Button size="sm" variant="secondary" onClick={() => setConfirm(true)} disabled={revert.isPending}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => setConfirm(true)}
+          disabled={revert.isPending || neverRan}
+          title={neverRan ? `This image never became ready in ${envGroup}, so it isn't a safe rollback target` : undefined}
+        >
           <Undo2 className="h-3.5 w-3.5" />
           Roll back to this image
         </Button>
@@ -1017,7 +1083,8 @@ function ImageReleaseRow({
           <ul className="mt-1.5 space-y-1 pl-3">
             {release.folded.map((f) => (
               <li key={f.revision.id}>
-                <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span> · {releaseWhy(f)} ·{" "}
+                <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span>
+                {neverRanOf(f) ? " · never went live" : ""} · {releaseWhy(f)} ·{" "}
                 <time dateTime={f.revision.createdAt} title={new Date(f.revision.createdAt).toLocaleString()}>
                   {relativeTime(f.revision.createdAt)}
                 </time>
@@ -1032,10 +1099,27 @@ function ImageReleaseRow({
         destructive={false}
         confirmLabel="Roll back"
         body={
-          <span>
-            Sets the image to <span className="font-mono">{release.ref}</span> and rolls the pods in every environment
-            of this service. A release hook, if configured, runs first.
-          </span>
+          <div className="space-y-3">
+            <p>
+              Sets {allEnvs ? "every environment of this service" : <strong>{envGroup}</strong>} to{" "}
+              <span className="font-mono">{release.ref}</span> and rolls its pods.
+              {allEnvs ? "" : " Other environments keep the image they run."} A release hook, if configured, runs first.
+            </p>
+            {canScopeAll && (
+              <label className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={allEnvs}
+                  onChange={(e) => setAllEnvs(e.target.checked)}
+                />
+                <span>
+                  All environments
+                  <span className="block text-xs text-[var(--text-tertiary)]">Sets the service&apos;s image, so every environment rolls.</span>
+                </span>
+              </label>
+            )}
+          </div>
         }
         pending={revert.isPending}
         onConfirm={onConfirm}

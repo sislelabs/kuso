@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Revision } from "./api";
-import { collapseFlipFlops, imageReleases, shortDigest } from "./imageReleases";
+import { collapseFlipFlops, imageReleases, liveImagesOf, neverRan, shortDigest } from "./imageReleases";
 
 const rev = (id: string, createdAt: string, snapshot: unknown): Revision => ({
   id,
@@ -80,5 +80,31 @@ describe("shortDigest", () => {
   it("extracts a short sha", () => {
     expect(shortDigest("docker.io/library/nginx@sha256:0123456789abcdef0123")).toBe("sha256:0123456789ab");
     expect(shortDigest("")).toBe("");
+  });
+});
+
+describe("env-scoped rollbacks and never-ran releases", () => {
+  const revs = [
+    rev("a", "2026-11-01T00:00:00Z", { patch: { image: { repository: "nginx", tag: "1.27" } } }),
+    rev("b", "2026-11-05T00:00:00Z", { patch: { image: { repository: "nginx", tag: "does-not-exist" } } }),
+    { ...rev("e", "2026-11-06T00:00:00Z", { op: "environment.image", image: { repository: "nginx", tag: "1.27" }, revertOf: "a" }), kind: "environment" as const },
+  ];
+
+  it("lists an env image rollback as the env's current release", () => {
+    const { releases, other } = imageReleases(revs, { repository: "nginx", tag: "1.27" });
+    expect(releases.map((r) => [r.revision.id, r.current, r.source])).toEqual([
+      ["e", true, "rollback"],
+      ["b", false, "edit"],
+      ["a", false, "edit"],
+    ]);
+    expect(other).toEqual([]);
+  });
+
+  it("marks a release that never fully rolled out, but not ones from before the record", () => {
+    const live = liveImagesOf({ "kuso.sislelabs.com/live-images": JSON.stringify({ since: "2026-11-02T00:00:00Z", refs: ["nginx:1.27"] }) });
+    const { releases } = imageReleases(revs, { repository: "nginx", tag: "1.27" });
+    expect(releases.map((r) => neverRan(r, live))).toEqual([false, true, false]);
+    expect(releases.map((r) => neverRan(r, null))).toEqual([false, false, false]);
+    expect(liveImagesOf({ "kuso.sislelabs.com/live-images": "{oops" })).toBeNull();
   });
 });

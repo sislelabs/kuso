@@ -18,7 +18,8 @@ export function useRevertRevision(project: string) {
   return useMutation({
     // Callers pass a per-call onError; skip the global toast so failures toast once.
     meta: { skipGlobalErrorToast: true },
-    mutationFn: (id: string) => revertRevision(project, id),
+    mutationFn: (arg: string | { id: string; env?: string }) =>
+      typeof arg === "string" ? revertRevision(project, arg) : revertRevision(project, arg.id, arg.env),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project] });
     },

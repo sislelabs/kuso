@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Lock, Plus, Trash2 } from "lucide-react";
+import { Bell, Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -16,6 +16,7 @@ import {
   emptyRuleForm,
   prefillRuleForm,
   ruleStatus,
+  ruleToForm,
   alertRequestText,
   canManageAlertRule,
   editableAlertProjects,
@@ -85,6 +86,7 @@ function AlertsPageInner() {
         : undefined;
   // null = closed; a form = open with that starting state.
   const [adding, setAdding] = useState<RuleFormState | null>(null);
+  const [editing, setEditing] = useState<AlertRule | null>(null);
   const search = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -200,6 +202,7 @@ function AlertsPageInner() {
                 deliveryFailing={deliveryFailing}
                 deleting={del.isPending && del.variables === r.id}
                 onDelete={() => del.mutate(r.id)}
+                onEdit={() => setEditing(r)}
                 onToggle={(on) => toggle.mutate({ id: r.id, on })}
               />
             ))}
@@ -216,6 +219,21 @@ function AlertsPageInner() {
           onClose={() => setAdding(null)}
           onCreated={() => {
             setAdding(null);
+            qc.invalidateQueries({ queryKey: ["alerts"] });
+          }}
+        />
+      )}
+      {editing && (
+        <AlertRuleDialog
+          key={editing.id}
+          initial={ruleToForm(editing)}
+          editing={editing}
+          access={access}
+          projects={editable}
+          projectsLoading={projects.isPending}
+          onClose={() => setEditing(null)}
+          onCreated={() => {
+            setEditing(null);
             qc.invalidateQueries({ queryKey: ["alerts"] });
           }}
         />
@@ -249,6 +267,7 @@ function RuleRow({
   deliveryFailing,
   deleting,
   onDelete,
+  onEdit,
   onToggle,
 }: {
   rule: AlertRule;
@@ -256,6 +275,7 @@ function RuleRow({
   deliveryFailing: boolean;
   deleting: boolean;
   onDelete: () => void;
+  onEdit: () => void;
   onToggle: (on: boolean) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -322,6 +342,12 @@ function RuleRow({
             disabled={!manageable}
           />
         </span>
+        {manageable && (
+          <Button variant="ghost" size="sm" onClick={onEdit} aria-label={`Edit ${rule.name}`}>
+            <Pencil className="h-3.5 w-3.5" />
+            Edit
+          </Button>
+        )}
         {manageable && (
           <Button
             variant="ghost"

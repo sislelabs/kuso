@@ -4,8 +4,10 @@ export {
   deleteAlert,
   enableAlert,
   disableAlert,
+  updateAlert,
+  testAlert,
 } from "./api";
-export type { AlertKind, AlertRule, CreateAlertBody } from "./api";
+export type { AlertKind, AlertRule, AlertTestDelivery, AlertTestResult, CreateAlertBody } from "./api";
 export {
   ALERT_KINDS,
   DUR_UNITS,
@@ -21,6 +23,9 @@ export {
   parseDur,
   prefillRuleForm,
   ruleStatus,
+  ruleToForm,
+  testSummary,
+  secToDur,
   serviceRuleForm,
   splitDur,
 } from "./form";

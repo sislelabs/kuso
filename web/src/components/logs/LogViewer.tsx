@@ -276,21 +276,24 @@ export function LogViewer({
   const liveMatcher = useMemo(() => (live ? buildMatcher(view.q) : null), [live, view.q]);
   const highlightRe = useMemo(() => buildMatcher(view.q)?.re ?? null, [view.q]);
 
+  // Lines in view before the level filter: the counters split exactly
+  // these, so the buckets always add up to what the level chips filter.
+  const scoped = useMemo(
+    () => rows.filter((r) => (!view.pod || r.pod === view.pod) && (!liveMatcher || liveMatcher.test(r.line))),
+    [rows, view.pod, liveMatcher],
+  );
   const visible = useMemo(() => {
     const lv = new Set(view.levels);
-    return rows.filter(
-      (r) =>
-        (lv.size === 0 || lv.has(r.level)) &&
-        (!view.pod || r.pod === view.pod) &&
-        (!liveMatcher || liveMatcher.test(r.line)),
-    );
-  }, [rows, view.levels, view.pod, liveMatcher]);
+    return lv.size === 0 ? scoped : scoped.filter((r) => lv.has(r.level));
+  }, [scoped, view.levels]);
 
+  // Every line lands in exactly one bucket: a stack-trace continuation
+  // counts under its head's level, which is also what the filter keeps.
   const levelCounts = useMemo(() => {
     const c: Record<LogLevel, number> = { error: 0, warn: 0, info: 0, debug: 0, none: 0 };
-    for (const r of rows) if (!r.cont) c[r.level]++;
+    for (const r of scoped) c[r.level]++;
     return c;
-  }, [rows]);
+  }, [scoped]);
 
   const pods = useMemo(() => [...new Set(rows.map((r) => r.pod))].sort(), [rows]);
   // Live tail: lines from a draining old ReplicaSet (or a pod that's gone)
@@ -605,6 +608,14 @@ export function LogViewer({
             view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : view.range.kind === "abs" ? "custom window" : ""
           }
           query={view.q}
+          hasOlder={!live && !!archive.hasNextPage}
+          loadingOlder={archive.isFetchingNextPage}
+          onLoadOlder={() => {
+            const el = scrollerRef.current;
+            if (el) restoreRef.current = el.scrollHeight;
+            setFollow(false);
+            void archive.fetchNextPage();
+          }}
           approxTimes={approxTimes}
           refreshing={!live && archive.isFetching && !archive.isFetchingNextPage && !archive.isPending}
           onBackToLive={canStream && !live ? () => setRange("live") : undefined}
@@ -1200,10 +1211,16 @@ function StatusLine({
   total,
   rangeText,
   query,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
   approxTimes,
   refreshing,
   onBackToLive,
 }: {
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   approxTimes?: boolean;
   live: boolean;
   connection: StreamConnection;
@@ -1248,18 +1265,28 @@ function StatusLine({
     );
   }
   return (
-    <div className="flex min-w-0 items-center gap-2 whitespace-nowrap text-xs text-[var(--text-secondary)]">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--text-secondary)]">
       <Clock aria-hidden className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
       <span className="font-medium text-[var(--text-primary)]">History</span>
-      <span className="min-w-0 truncate text-[var(--text-tertiary)]" title={query ? `${rangeText} · matching ${query}` : rangeText}>
-        · {rangeText}
-        {query ? (
-          <>
-            {" "}· “<span className="font-mono text-[var(--text-secondary)]">{query}</span>”
-          </>
-        ) : null}
+      <span className="whitespace-nowrap text-[var(--text-tertiary)]">· {rangeText}</span>
+      {query ? (
+        <span className="min-w-0 break-all text-[var(--text-tertiary)]">
+          · matching “<span className="font-mono text-[var(--text-secondary)]">{query}</span>”
+        </span>
+      ) : null}
+      <span className="shrink-0 whitespace-nowrap text-[var(--text-tertiary)]">
+        · {hasOlder ? `newest ${shown}` : shown}
       </span>
-      <span className="shrink-0 text-[var(--text-tertiary)]">· {shown}</span>
+      {hasOlder && onLoadOlder && (
+        <button
+          type="button"
+          onClick={onLoadOlder}
+          disabled={loadingOlder}
+          className="shrink-0 rounded px-1 text-[var(--text-primary)] underline-offset-2 hover:underline disabled:opacity-60"
+        >
+          {loadingOlder ? "Loading older…" : "Load older"}
+        </button>
+      )}
       {refreshing && <RefreshCw aria-label="Refreshing" className="h-3 w-3 shrink-0 animate-spin text-[var(--text-tertiary)] motion-reduce:animate-none" />}
       {onBackToLive && (
         <button type="button" onClick={onBackToLive} className="inline-flex shrink-0 items-center gap-1 rounded px-1 text-[var(--text-primary)] underline-offset-2 hover:underline">

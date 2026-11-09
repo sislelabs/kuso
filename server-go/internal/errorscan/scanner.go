@@ -303,18 +303,24 @@ var (
 )
 
 // fingerprintFor returns a 16-char hex hash of the normalized line.
-// Truncates the line to 256 chars before normalizing — a 5KB stack
+// Caps the normalized form at 256 chars — a 5KB stack
 // trace would otherwise produce a different fingerprint for every
 // occurrence.
 func fingerprintFor(line string) string {
-	if len(line) > 256 {
-		line = line[:256]
+	// Normalize first, cut after: cutting the raw line made the cut point
+	// depend on how many digits the ids and IPs had ("*109" vs "*1320"),
+	// which could split a quoted string and give the same error two groups.
+	if len(line) > 2048 {
+		line = line[:2048]
 	}
 	n := strings.ToLower(line)
 	n = uuidRe.ReplaceAllString(n, "<id>")
 	n = hexRe.ReplaceAllString(n, "<n>")
 	n = numRe.ReplaceAllString(n, "<n>")
 	n = quoteRe.ReplaceAllString(n, "<str>")
+	if len(n) > 256 {
+		n = n[:256]
+	}
 	sum := sha256.Sum256([]byte(n))
 	return hex.EncodeToString(sum[:8])
 }
