@@ -32,6 +32,8 @@ export interface DetectRuntimeResponse {
   runtime: "dockerfile" | "nixpacks" | "buildpacks" | "static";
   port: number;
   reason: string;
+  // "Next.js", "Django", …; absent when the repo's own Dockerfile builds it.
+  framework?: string;
 }
 
 export interface AddonSuggestion {
