@@ -74,6 +74,16 @@ describe("buildCardModel", () => {
     expect(m.readyOf).toBe(0);
   });
 
+  it("counts a stuck service as needing attention, like the Health page", () => {
+    const m = buildCardModel(project, summary([svc("web"), svc("api")], [env("web", "running"), env("api", "stuck")]));
+    expect(m.status).toBe("failing");
+    expect(m.failingCount).toBe(1);
+    expect(m.liveCount).toBe(1);
+    expect(m.tone).toBe("danger");
+    expect(projectStatusSummary(m.counts, m.serviceCount)).toBe("1 of 2 live · 1 stuck");
+    expect(m.detail).toBe("api is stuck");
+  });
+
   it("surfaces the failing service's detail", () => {
     const m = buildCardModel(project, summary([svc("web"), svc("api")], [env("web", "running"), env("api", "build_failed")]));
     expect(m.status).toBe("failing");

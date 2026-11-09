@@ -1,9 +1,17 @@
 import { stripRepoCredentials } from "@/lib/format";
-import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
+import { isProductionGroup, isProductionResource } from "@/lib/env-group";
 import { projectLastDeployedAt, projectPrimaryDomain, type ProjectDomain } from "@/features/projects/facts";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
-import { SERVICE_STATUS, serviceStatusFromServerState, type ServiceStatus, type StatusTone } from "@/lib/status";
+import {
+  SERVICE_STATUS,
+  serviceBucket,
+  serviceStatusFromServerState,
+  tallyServices,
+  type ServiceBucket,
+  type ServiceStatus,
+  type StatusTone,
+} from "@/lib/status";
 
 // One health answer per project card. "pending" = services exist but none
 // has ever produced a running image; "empty" = no services yet.
@@ -73,29 +81,21 @@ export function envServiceStatus(svc: KusoService, env: KusoEnvironment | undefi
   return "not_deployed";
 }
 
-// cardHealth buckets a service status for the project rollup and the
-// status filter. Anything warning/danger toned (degraded, failing, stuck)
-// needs attention, so it lands in "failing".
-export function cardHealth(status: ServiceStatus): ServiceHealth {
-  switch (status) {
-    case "live":
-      return "live";
-    case "sleeping":
-      return "sleeping";
-    case "stopped":
-      return "stopped";
-    case "not_deployed":
-    case "unknown":
-      return "pending";
-  }
-  const tone = SERVICE_STATUS[status]?.tone;
-  if (tone === "danger" || tone === "warning") return "failing";
-  if (tone === "progress") return "building";
-  return "pending";
-}
+// The card's health per service is the shared bucket (lib/status
+// serviceBucket), the same one the Health page counts with. Failing,
+// stuck and degraded all need attention, so they land in "failing".
+const BUCKET_HEALTH: Record<ServiceBucket, ServiceHealth> = {
+  running: "live",
+  in_flight: "building",
+  attention: "failing",
+  sleeping: "sleeping",
+  stopped: "stopped",
+  not_deployed: "pending",
+  unknown: "pending",
+};
 
-export function classifyEnv(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
-  return cardHealth(envServiceStatus(svc, env));
+export function serviceHealth(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
+  return BUCKET_HEALTH[serviceBucket(svc.spec.stopped, env)];
 }
 
 const TONE_RANK: Record<StatusTone, number> = { danger: 5, warning: 4, progress: 3, success: 2, info: 1, neutral: 0 };
@@ -112,6 +112,7 @@ export function worstTone(statuses: ReadonlyArray<ServiceStatus>): StatusTone {
 // Order the non-live parts are listed in, most urgent first.
 const SUMMARY_ORDER: ReadonlyArray<ServiceStatus> = [
   "failing",
+  "stuck",
   "degraded",
   "deploying",
   "building",
@@ -211,23 +212,20 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
   const allServices = summary?.services ?? [];
   // Env-group clones (staging etc.) are separate KusoService CRs; the
   // card is a production rollup.
-  const services = allServices.filter((s) => {
-    const g = s.metadata.labels?.[ENV_GROUP_LABEL];
-    return !g || g === "production";
-  });
+  const services = allServices.filter((s) => isProductionResource(s.metadata.labels));
   const envs = summary?.environments ?? [];
 
   const perService = services.map((s) => {
     const env = prodEnvFor(s, envs);
-    const st = envServiceStatus(s, env);
-    return { svc: s, env, st, health: cardHealth(st) };
+    return { svc: s, env, st: envServiceStatus(s, env), health: serviceHealth(s, env) };
   });
   const health = perService.map((p) => p.health);
   const counts: Partial<Record<ServiceStatus, number>> = {};
   for (const p of perService) counts[p.st] = (counts[p.st] ?? 0) + 1;
   const status = summary ? rollupStatus(health) : "pending";
-  const count = (h: ServiceHealth) => health.filter((x) => x === h).length;
-  const stoppedCount = count("stopped");
+  // The Health page's tally, so the two pages never disagree.
+  const tally = tallyServices(services, envs);
+  const stoppedCount = tally.stopped;
   const attention = perService.find((p) => p.health === "failing") ?? perService.find((p) => p.health === "building");
   const detailText = attention?.env?.status?.stateDetail;
 
@@ -250,10 +248,10 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     createdAt: project.metadata.creationTimestamp,
     status,
     serviceCount: services.length,
-    liveCount: count("live"),
+    liveCount: tally.running,
     stoppedCount,
     readyOf: services.length - stoppedCount,
-    failingCount: count("failing"),
+    failingCount: tally.attention,
     counts,
     tone: summary ? worstTone(perService.map((p) => p.st)) : "neutral",
     detail: typeof detailText === "string" && detailText ? detailText : undefined,
