@@ -3442,7 +3442,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			req.BuildArgs = &masked
 		}
-		if snap, err := json.Marshal(map[string]any{"patch": req}); err == nil {
+		rec := map[string]any{"patch": req}
+		if id := revertOf(ctx); id != "" {
+			rec["revertOf"] = id
+		}
+		if snap, err := json.Marshal(rec); err == nil {
 			s.RecordRevision(ctx, project, "service", service, "patch", snap)
 		}
 	}

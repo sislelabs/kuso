@@ -320,7 +320,7 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	kind, err := h.replayRevision(ctx, rev)
+	kind, err := h.replayRevision(projects.WithRevertOf(ctx, rev.ID), rev)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": kind})
