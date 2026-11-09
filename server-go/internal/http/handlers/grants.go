@@ -264,8 +264,26 @@ func (h *GrantsHandler) GetUserAccess(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Grants outlive projects deleted before delete reclaimed them; list
+	// only projects that still exist. A failed lookup shows everything
+	// rather than hiding real access.
+	var exists map[string]bool
+	if h.Kube != nil {
+		if projects, err := h.Kube.ListKusoProjects(ctx, h.Namespace); err != nil {
+			h.Logger.Warn("user access: list projects", "err", err)
+		} else {
+			exists = make(map[string]bool, len(projects))
+			for _, p := range projects {
+				exists[p.Name] = true
+			}
+		}
+	}
+
 	byProject := map[string]int{}
 	for _, m := range tenancy.ProjectMemberships {
+		if exists != nil && !exists[m.Project] {
+			continue
+		}
 		byProject[m.Project] = len(out.Projects)
 		out.Projects = append(out.Projects, projectAccess{
 			Project: m.Project,
