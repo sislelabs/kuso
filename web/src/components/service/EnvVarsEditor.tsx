@@ -26,7 +26,10 @@ import {
 } from "lucide-react";
 import { danglingRef } from "./envvars/dangling";
 import { useService, useServiceEnv, useServiceEnvOverrides, useDetectedEnv, useDrift } from "@/features/services";
-import { setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
+import { unsetServiceEnvVar } from "@/features/services/api";
+import { stageEnv, useStagedService, type StagedEnv } from "@/features/staged";
+import { StagedChangesBar } from "@/components/staged/StagedChangesBar";
+import { StagedChip } from "@/components/staged/StagedChip";
 import { setSharedSecret } from "@/features/project-secrets/api";
 import { applySubscriptionDelta, putSubscriptionRebased } from "@/features/addons/subscriptionDelta";
 import { useProject, useAddons } from "@/features/projects";
@@ -38,7 +41,6 @@ import {
   ENV_NAME_RE,
   addonShortByConnSecret,
   buildTimePrefix,
-  envApplyFailureMessage,
   prefixGroups,
   reservedEnvWarning,
   rid,
@@ -48,7 +50,7 @@ import {
   type Row,
 } from "@/components/service/envVarTransforms";
 import { toast } from "sonner";
-import { toastError, describeError } from "@/lib/errors";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import {
   AddMenu,
@@ -63,17 +65,14 @@ import {
 } from "@/components/service/EnvVarParts";
 import { isSensitiveVar } from "@/components/service/envvars/sensitivity";
 import {
-  buildEnvDiff,
-  diffSize,
   HIDDEN_MARKER,
   parseRawEnv,
   reconcileRaw,
   rowsToRaw,
-  type EnvDiff,
   type RawIssue,
 } from "@/components/service/envvars/rawEnv";
+import { applyStagedEnv, sameStagedEnv, toStagedEnv } from "@/components/service/envvars/staging";
 import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envvars/RawEnvEditor";
-import { EnvDiffDialog } from "@/components/service/envvars/EnvDiffDialog";
 import { EnvExampleDialog } from "@/components/service/envvars/EnvExampleDialog";
 import { AddReferenceDialog, RefValueInput, type RefValueInputHandle } from "@/components/service/envvars/refCatalog";
 import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
@@ -82,16 +81,11 @@ import { restartNote, type RestartImpact } from "@/components/service/envvars/re
 // parsing, diffing and the sensitivity heuristic live in ./envvars. This
 // file keeps only the stateful editor.
 
-// PendingSave is the payload the review dialog applies as idempotent
-// per-key operations (no wholesale bulk overwrite → no partial-save gap):
-//   1. valueWrites — every create/change, written per-key via the unified
-//      {value, auto:true} PUT so the SERVER decides storage (CR literal /
-//      managed secret / secretKeyRef) and clears any stale prior form.
-//   2. deletes — every removed row (any form). The server's UnsetEnvVar
-//      removes a literal, a secretKeyRef, or a managed-secret key alike, so
-//      one per-key DELETE covers all removals.
-// Unchanged opaque secret-ref rows are in NEITHER channel — they're left
-// exactly as they are.
+// PendingSave is the staged plan for the rows: valueWrites are creates and
+// changes (the server picks storage, auto:true), deletes are removed rows
+// of any form. Unchanged opaque secret-ref rows are in neither. Edits are
+// staged (features/staged) and deploy from the StagedChangesBar together
+// with settings edits, so the pods roll once.
 interface PendingSave {
   valueWrites: { name: string; value: string }[];
   deletes: string[];
@@ -148,8 +142,6 @@ export function EnvVarsEditor({
   // with their real values and the eye only toggles masking.
   const env = useServiceEnv(project, service, true);
   const overrides = useServiceEnvOverrides(project, service, envScope);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const detected = useDetectedEnv(project, service);
 
   const drift = useDrift(project, service);
@@ -232,15 +224,18 @@ export function EnvVarsEditor({
   const canImportExample = canWriteEnv && !!svcSpec && svcSpec.runtime !== "image";
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
-  const saveRef = useRef<() => void>(() => {});
   const discardRef = useRef<() => void>(() => {});
-  // Registered without onSave: the editor renders its own save bar (it
-  // needs the restart note and the review step), the overlay still uses
-  // `dirty` for its close-confirm.
-  useOverlayDirty("variables", dirty && canWrite, {
+  // Why the current edits can't be staged (bad name, duplicate, malformed
+  // .env line); null when everything typed is staged.
+  const [stageError, setStageError] = useState<string | null>(null);
+  const stagedEnv = useStagedService(project, service)?.env;
+  // The staged value this editor last wrote, to tell its own writes from
+  // a discard/deploy made elsewhere (the bar, the review, another view).
+  const lastStagedRef = useRef<StagedEnv | undefined>(undefined);
+  // Staged edits survive closing the panel; only input that couldn't be
+  // staged is lost, so that's all the leave guard warns about.
+  useOverlayDirty("variables", dirty && !!stageError && canWrite, {
     onDiscard: () => discardRef.current(),
-    saving,
-    saveError,
   });
   // Last server-known row set: the save diff and the concurrent-edit
   // detector compare against this, not the local (possibly-edited) rows.
@@ -278,12 +273,29 @@ export function EnvVarsEditor({
       setConflictNotified(false);
       return;
     }
-    if (!conflictNotified && !rowsShallowEqual(incoming, baselineFromRows.current)) {
-      toast("Another edit landed on this service. Saving overwrites it; discard to load it.");
+    const byName = new Map(incoming.map((r) => [r.name, r]));
+    const ourDeployLanded =
+      !stagedEnv ||
+      (stagedEnv.set.every((e) => byName.get(e.name)?.value === e.value) &&
+        stagedEnv.unset.every((u) => !byName.has(u.name)));
+    if (!conflictNotified && !ourDeployLanded && !rowsShallowEqual(incoming, baselineFromRows.current)) {
+      toast("Another edit landed on this service. Deploying your staged changes overwrites it; discard to load it.");
       setConflictNotified(true);
     }
     baselineFromRows.current = incoming;
-  }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes]);
+  }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes, stagedEnv]);
+
+  // Load staged edits into the rows: on first load, and whenever they
+  // change from outside this editor (discarded or deployed elsewhere).
+  useEffect(() => {
+    if (!env.data || stagedEnv === lastStagedRef.current) return;
+    lastStagedRef.current = stagedEnv;
+    setRows(applyStagedEnv(baselineFromRows.current, stagedEnv));
+    setDirty(!!stagedEnv);
+    setEditing(new Set());
+    setRawErrors([]);
+    setStageError(null);
+  }, [env.data, stagedEnv]);
 
   // Raw text follows the rows whenever there's nothing unsaved in it
   // (first entry, after a save, after a remote change).
@@ -305,9 +317,9 @@ export function EnvVarsEditor({
     markDirty();
   };
 
-  // Validates + plans the save as per-key writes/deletes. Returns null
-  // (after a toast) when the rows can't be saved as they are.
-  const planSave = (current: Row[]): PendingSave | null => {
+  // Validates + plans the rows as per-key writes/deletes, or says why
+  // they can't be staged as they are.
+  const planRows = (current: Row[]): PendingSave | { error: string } => {
     const baselineByName = new Map<string, Row>();
     for (const b of baselineFromRows.current) {
       const n = b.name.trim();
@@ -320,14 +332,15 @@ export function EnvVarsEditor({
     const valueWrites: { name: string; value: string }[] = [];
     for (const r of current) {
       const name = r.name.trim();
-      if (!name) continue;
+      if (!name) {
+        if (r.value.trim()) return { error: "A variable needs a name before it can be staged" };
+        continue;
+      }
       if (!ENV_NAME_RE.test(name)) {
-        toast.error(`"${name}" isn't a valid name. Use letters, digits and _ only`);
-        return null;
+        return { error: `"${name}" isn't a valid name. Use letters, digits and _ only` };
       }
       if (seen.has(name)) {
-        toast.error(`${name} is listed twice`);
-        return null;
+        return { error: `${name} is listed twice` };
       }
       seen.add(name);
       // Opaque secret refs can only be kept or removed; removal goes
@@ -341,8 +354,7 @@ export function EnvVarsEditor({
       if (r.value === "") {
         const wasRenamed = r.secretBacked && !!r.origName && r.origName !== name && !present.has(r.origName);
         if (wasRenamed) {
-          toast.error(`Reveal and re-enter the value for "${name}": renaming a secret needs its value retyped.`);
-          return null;
+          return { error: `Reveal and re-enter the value for "${name}": renaming a secret needs its value retyped.` };
         }
         if (r.secretBacked) continue;
       }
@@ -359,8 +371,6 @@ export function EnvVarsEditor({
     return { valueWrites, deletes };
   };
 
-  const [pending, setPending] = useState<{ plan: PendingSave; diff: EnvDiff } | null>(null);
-
   // Brings the raw text into rows. Returns the reconciled rows, or null
   // when the text has errors (shown inline, cursor jumps to the first).
   const commitRaw = (): Row[] | null => {
@@ -375,96 +385,54 @@ export function EnvVarsEditor({
     return res.rows;
   };
 
-  const save = () => {
-    const current = view === "raw" ? commitRaw() : rows;
-    if (!current) return;
-    const plan = planSave(current);
-    if (!plan) return;
-    const diff = buildEnvDiff(plan, baselineFromRows.current, current);
-    if (diffSize(diff) === 0) {
-      toast("Nothing to save: every value matches what's deployed.");
-      setRows(baselineFromRows.current);
-      setEditing(new Set());
-      setDirty(false);
-      return;
-    }
-    setPending({ plan, diff });
-  };
   const discard = () => {
     setRows(baselineFromRows.current);
     setEditing(new Set());
     setRawErrors([]);
-    setSaveError(undefined);
+    setStageError(null);
     setDirty(false);
+    lastStagedRef.current = undefined;
+    stageEnv(project, service, undefined);
   };
-  saveRef.current = save;
   discardRef.current = discard;
 
-  // ⌘S / Ctrl+S saves while there's something to save.
+  // Stage every valid edit as it's made. Raw mode stages the parsed text
+  // without rewriting the rows under the cursor.
   useEffect(() => {
-    if (!dirty || !canWrite) return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        saveRef.current();
+    if (!dirty || !canWrite || !env.data) return;
+    let current = rows;
+    if (view === "raw") {
+      const res = reconcileRaw(rawText, rows);
+      if (res.errors.length) {
+        setStageError(`Line ${res.errors[0].line}: ${res.errors[0].message}`);
+        return;
       }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [dirty, canWrite]);
-
-  const refreshAfterApply = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "env"] }),
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] }),
-      qc.invalidateQueries({ queryKey: ["projects", project], exact: true }),
-    ]);
-
-  const applyPending = async () => {
-    if (!pending) return;
-    const { valueWrites, deletes } = pending.plan;
-    setSaving(true);
-    setSaveError(undefined);
-    const applied: string[] = [];
-    let current = "";
-    try {
-      // Idempotent per-key operations, upserts before deletes; a failure
-      // names the key and leaves already-applied keys correct.
-      for (const w of valueWrites) {
-        current = w.name;
-        await setServiceEnvValue(project, service, w.name, w.value);
-        applied.push(w.name);
-      }
-      for (const name of deletes) {
-        current = name;
-        try {
-          await unsetServiceEnvVar(project, service, name);
-        } catch (e) {
-          if (!(e instanceof ApiError && e.status === 404)) throw e;
-        }
-        applied.push(name);
-      }
-      // Await the refetch before dropping dirty, or the sync effect
-      // re-seeds the rows from the pre-save cache and they flash back.
-      await refreshAfterApply();
-      const n = applied.length;
-      toast.success(`Saved ${n} ${n === 1 ? "variable" : "variables"}. Pods are restarting.`);
-      setEditing(new Set());
-      setDirty(false);
-      setPending(null);
-    } catch (e) {
-      const reason = describeError(e, "request failed");
-      const msg = envApplyFailureMessage(applied, current, reason);
-      setSaveError(msg);
-      toast.error(msg);
-      setPending(null);
-      // Some keys may be live already; the refetch is ours, so don't warn
-      // about "another edit". Local edits stay dirty so Save retries.
-      setConflictNotified(true);
-      void refreshAfterApply();
-    } finally {
-      setSaving(false);
+      current = res.rows;
     }
+    const plan = planRows(current);
+    if ("error" in plan) {
+      setStageError(plan.error);
+      return;
+    }
+    setStageError(null);
+    const next = toStagedEnv(plan, baselineFromRows.current, current);
+    if (sameStagedEnv(next, lastStagedRef.current)) return;
+    lastStagedRef.current = next;
+    stageEnv(project, service, next);
+  }, [rows, rawText, view, dirty, canWrite, env.data, project, service]);
+
+  // Per-row undo: back to the deployed value, or gone if it's new.
+  const revertRow = (r: Row) => {
+    const base = baselineFromRows.current.find((b) => b.name === (r.origName ?? r.name).trim());
+    setRows((prev) => (base ? prev.map((x) => (x.id === r.id ? base : x)) : prev.filter((x) => x.id !== r.id)));
+    stopEdit(r.id);
+    markDirty();
+  };
+  const restoreRemoved = (name: string) => {
+    const base = baselineFromRows.current.find((b) => b.name === name);
+    if (!base) return;
+    setRows((prev) => [...prev, base]);
+    markDirty();
   };
 
   // ── Display model ────────────────────────────────────────────────────
@@ -658,7 +626,7 @@ export function EnvVarsEditor({
       ...fresh.map((e) => ({ id: rid(), name: e.name, value: e.value, fromSecret: false, secretBacked: false, visible: true })),
     ]);
     markDirty();
-    toast(`${fresh.length} ${fresh.length === 1 ? "variable" : "variables"} added from .env.example. Review and save to apply.`);
+    toast(`${fresh.length} ${fresh.length === 1 ? "variable" : "variables"} added from .env.example. They're staged for the next deploy.`);
   };
 
   const applyPaste = (text: string): string | null => {
@@ -670,7 +638,7 @@ export function EnvVarsEditor({
     if (entries.length === 0) return "No KEY=value lines found.";
     stageEntries(entries);
     setPasteOpen(false);
-    toast(`${entries.length} ${entries.length === 1 ? "variable" : "variables"} staged. Review and save to apply.`);
+    toast(`${entries.length} ${entries.length === 1 ? "variable" : "variables"} staged for the next deploy.`);
     return null;
   };
 
@@ -706,7 +674,7 @@ export function EnvVarsEditor({
   // on the pod until the last step, so there's no window without the value.
   const moveToShared = async (r: Row) => {
     if (dirty) {
-      toast.error("Save or discard your changes first");
+      toast.error("Deploy or discard your staged variable changes first");
       return;
     }
     if (sharedSourceOf.get(r.name) === "project") {
@@ -978,7 +946,7 @@ export function EnvVarsEditor({
               overridden
             </VarBadge>
           )}
-          {isChanged(r) && <span className="sr-only">(unsaved)</span>}
+          {isChanged(r) && !stageError && <StagedChip />}
         </>
       );
       const value = dangling ? (
@@ -1028,6 +996,7 @@ export function EnvVarsEditor({
             label={`Actions for ${r.name}`}
             items={[
               { label: "Edit", onSelect: () => startEdit(r.id), disabled: !canWrite },
+              ...(isChanged(r) ? [{ label: "Discard staged change", onSelect: () => revertRow(r) }] : []),
               { label: "Copy value", onSelect: () => copy(plaintext ?? "", r.name), disabled: masked || !plaintext },
               { label: "Copy name", onSelect: () => copy(r.name, "name") },
               {
@@ -1159,6 +1128,11 @@ export function EnvVarsEditor({
 
   const total = items.length;
   const empty = newRows.length === 0 && total === 0;
+  const removedNames = (() => {
+    if (view === "raw") return [];
+    const present = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
+    return baselineFromRows.current.map((b) => b.name.trim()).filter((n) => n && !present.has(n));
+  })();
   const pendingCount = (() => {
     if (view === "raw") return null;
     const present = new Set(rows.map((r) => r.name.trim()).filter(Boolean));
@@ -1391,41 +1365,59 @@ export function EnvVarsEditor({
         </div>
       )}
 
-      {dirty && canWrite && (
-        <div className="sticky bottom-3 z-30 pt-2">
-          <div
-            role="region"
-            aria-label="Unsaved variable changes"
-            className="flex flex-col gap-2 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2.5 shadow-[var(--shadow-lg)] sm:flex-row sm:items-center"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-primary)]">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]" />
-                {pendingCount === null
-                  ? "Unsaved edits in the .env"
-                  : pendingCount === 0
-                    ? "Unsaved edits"
-                    : `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`}
-              </p>
-              {saveError ? (
-                <p role="alert" className="mt-0.5 line-clamp-2 text-xs text-[var(--error)]" title={saveError}>
-                  {saveError}
-                </p>
-              ) : (
-                <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{restartNote(restartImpact)}</p>
-              )}
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={discard} disabled={saving}>
-                Discard
-              </Button>
-              <Button size="sm" onClick={save} disabled={saving} title="Review and save (⌘S)">
-                {saving ? "Saving…" : "Review and save"}
-              </Button>
-            </div>
+      {dirty && canWrite && (stageError || removedNames.length > 0 || (pendingCount ?? 0) > 0) && (
+        <div
+          role="status"
+          className={cn(
+            "rounded-md border px-3 py-2 text-xs",
+            stageError
+              ? "border-[var(--error)]/35 bg-[var(--error-subtle)] text-[var(--text-primary)]"
+              : "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--text-primary)]",
+          )}
+        >
+          {stageError ? (
+            <p>
+              <span className="font-medium">Not staged yet:</span> {stageError}
+            </p>
+          ) : (
+            <p>
+              {pendingCount === null
+                ? "Your .env edits are staged."
+                : `${pendingCount} variable ${pendingCount === 1 ? "change is" : "changes are"} staged.`}{" "}
+              They deploy with the service&apos;s other staged changes. {restartNote(restartImpact)}
+            </p>
+          )}
+          {removedNames.length > 0 && (
+            <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Staged removals">
+              {removedNames.map((n) => (
+                <li
+                  key={n}
+                  className="inline-flex items-center gap-1.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] py-0.5 pr-1 pl-2"
+                >
+                  <span className="font-mono line-through">{n}</span>
+                  <button
+                    type="button"
+                    onClick={() => restoreRemoved(n)}
+                    className="rounded px-1 text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:bg-[var(--bg-tertiary)]"
+                  >
+                    Undo
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-1.5">
+            <button
+              type="button"
+              onClick={discard}
+              className="text-xs font-medium text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+            >
+              Discard variable changes
+            </button>
           </div>
         </div>
       )}
+      <StagedChangesBar project={project} placement="sticky" />
 
       <SharedPickerDialog
         open={sharedOpen}
@@ -1456,14 +1448,6 @@ export function EnvVarsEditor({
         service={service}
         existingNames={rowNames}
         onInsert={insertReference}
-      />
-      <EnvDiffDialog
-        open={pending != null}
-        diff={pending?.diff ?? { added: [], changed: [], removed: [] }}
-        restartNote={restartNote(restartImpact)}
-        confirming={saving}
-        onCancel={() => setPending(null)}
-        onConfirm={applyPending}
       />
       <ConfirmDialog
         open={pendingUnsub != null}
