@@ -450,6 +450,7 @@ function DeployList({
                     project={project}
                     revision={item.revision}
                     canRevert={canDeploy}
+                    history={revisions}
                   />
                 );
               }

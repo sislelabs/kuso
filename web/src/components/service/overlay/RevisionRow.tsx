@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { describeRevision, useRevertRevision, type Revision } from "@/features/revisions";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { RevisionDiff } from "./RevisionChanges";
 
 // Config changes hang off a thin rail aligned with the build rows' status
 // icons, so builds read as the primary items. The rail runs through the
@@ -32,12 +33,16 @@ export function RevisionRow({
   project,
   revision,
   canRevert,
+  history,
 }: {
   project: string;
   revision: Revision;
   canRevert: boolean;
+  // history: the revision list for the same resource, used to show old → new.
+  history?: readonly Revision[];
 }) {
   const [open, setOpen] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const revert = useRevertRevision(project);
   const v = describeRevision(revision);
   const meta = [
@@ -52,7 +57,8 @@ export function RevisionRow({
       onSettled: () => setOpen(false),
     });
   return (
-    <li className={cn(RAIL, "group/rev flex min-h-7 items-center gap-3 py-0.5 pr-3 text-xs text-[var(--text-tertiary)] sm:pr-4")}>
+    <li>
+    <div className={cn(RAIL, "group/rev flex min-h-7 items-center gap-3 py-0.5 pr-3 text-xs text-[var(--text-tertiary)] sm:pr-4")}>
       <RailDot />
       <span className="min-w-0 truncate" title={revision.summary}>
         <span className="text-[var(--text-secondary)]">{v.label}</span>
@@ -75,6 +81,26 @@ export function RevisionRow({
           Revert
         </button>
       )}
+      {history && (
+        <button
+          type="button"
+          aria-expanded={showDiff}
+          onClick={() => setShowDiff((d) => !d)}
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
+            !(canRevert && v.revertable) && "ml-auto",
+          )}
+        >
+          Changes
+          <ChevronDown aria-hidden className={`h-3 w-3 transition-transform ${showDiff ? "rotate-180" : ""}`} />
+        </button>
+      )}
+    </div>
+    {showDiff && history && (
+      <div className="ml-8 mb-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <RevisionDiff revision={revision} history={history} />
+      </div>
+    )}
       <ConfirmDialog
         open={open}
         title={`Revert: ${v.label.toLowerCase()}?`}
@@ -137,7 +163,7 @@ export function RevisionGroup({
       {open && (
         <ul>
           {revisions.map((r) => (
-            <RevisionRow key={r.id} project={project} revision={r} canRevert={canRevert} />
+            <RevisionRow key={r.id} project={project} revision={r} canRevert={canRevert} history={revisions} />
           ))}
         </ul>
       )}
