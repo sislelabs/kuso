@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { errorGroupState, sinceDeployWindow } from "./resolve";
+import { errorGroupState, errorRowLabel, sinceDeployWindow } from "./resolve";
+
+describe("errorRowLabel", () => {
+  it("names the title, count and last-seen time", () => {
+    expect(errorRowLabel("payment webhook failed", 12, "3m ago", "open")).toBe("payment webhook failed · 12 occurrences · last seen 3m ago");
+    expect(errorRowLabel("boom", 1, "1h ago", "recurred")).toBe("boom · 1 occurrence · last seen 1h ago · recurred");
+  });
+  it("cuts a long title", () => {
+    const label = errorRowLabel("x".repeat(300), 2, "now", "open");
+    expect(label.startsWith(`${"x".repeat(119)}… · 2 occurrences`)).toBe(true);
+  });
+});
 
 describe("sinceDeployWindow", () => {
   const now = Date.parse("2026-11-09T12:00:00Z");

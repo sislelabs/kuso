@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMatcher, dayChange, detectLevel, parseAnsi, isCollectorNote, parseJsonLine, sortByTime, splitLeadingTimestamp, splitMatches, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, focusBlock, parseAnsi, isCollectorNote, parseJsonLine, sortByTime, splitLeadingTimestamp, splitMatches, stripAnsi } from "./logParse";
 
 describe("detectLevel", () => {
   it.each([
@@ -25,6 +25,27 @@ describe("detectLevel", () => {
     ["2026/11/09 12:00:00 [notice] 1#1: start worker processes", "info"],
   ])("%s → %s", (line, want) => {
     expect(detectLevel(line)).toBe(want);
+  });
+});
+
+describe("focusBlock", () => {
+  const r = (key: string, ts: string, line: string, cont = false) => ({ key, ts, line, cont });
+  const rows = [
+    r("a", "2026-11-09T10:00:00Z", "ERROR payment webhook failed: stripe order_id=1006"),
+    r("a1", "2026-11-09T10:00:00Z", "    at processWebhook (/app/jobs/payments.go:88)", true),
+    r("b", "2026-11-09T10:00:20Z", "INFO processed 3 orders"),
+    r("c", "2026-11-09T10:01:00Z", "ERROR payment webhook failed: stripe order_id=1012"),
+    r("c1", "2026-11-09T10:01:00Z", "    at processWebhook (/app/jobs/payments.go:88)", true),
+    r("d", "2026-11-09T10:01:00Z", "INFO next"),
+  ];
+  it("marks the matching occurrence nearest the time, with its continuation lines", () => {
+    expect([...focusBlock(rows, { ts: "2026-11-09T10:01:00Z", needle: "payment webhook failed" })]).toEqual(["c", "c1"]);
+    expect([...focusBlock(rows, { ts: "2026-11-09T10:00:01Z", needle: "Payment Webhook" })]).toEqual(["a", "a1"]);
+  });
+  it("marks nothing when no line near the time matches", () => {
+    expect(focusBlock(rows, { ts: "2026-11-09T10:00:20Z", needle: "smtp" }).size).toBe(0);
+    expect(focusBlock(rows, { ts: "2026-11-09T12:00:00Z", needle: "payment webhook" }).size).toBe(0);
+    expect(focusBlock(rows, null).size).toBe(0);
   });
 });
 

@@ -37,7 +37,8 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, dayChange, detectLevel, fmtClock, isCollectorNote, levelCountText, linesToText, LOG_FILTER_LEVELS, parseJsonLine, shortPod, sortByTime, splitLeadingTimestamp, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, fmtClock, focusBlock, isCollectorNote, levelCountText, linesToText, LOG_FILTER_LEVELS, parseJsonLine, shortPod, sortByTime, splitLeadingTimestamp, stripAnsi } from "./logParse";
+import { foldBlocks } from "./logLevel";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -106,8 +107,6 @@ function parsedOf(obj: object, line: string, rowHasTime: boolean): Parsed {
   }
   return p;
 }
-
-const CONT_SHAPE = /^(\s|at |File "|Caused by|\.\.\. \d+ more|goroutine \d+|\}|\])/;
 
 export interface LogViewerProps {
   project: string;
@@ -224,58 +223,45 @@ export function LogViewer({
   }, [live, stream.lines, archive.data]);
 
   const { rows, notes } = useMemo(() => {
-    let prev: Row | null = null;
     const notes: ViewLine[] = [];
-    const built: Row[] = [];
+    const kept: { l: ViewLine; p: Parsed }[] = [];
     for (const l of rawLines) {
       const p = parsedOf(l.src, l.line, !l.approx && !l.backlog);
       // Collector notes go to their own strip, never between app lines.
-      if (p.note) {
-        notes.push(l);
-        continue;
-      }
-      // A continuation (stack-trace line) shares its head's pod and
-      // instant, carries no level of its own, and either looks like a
-      // trace line or follows an error/warn head.
-      // Replayed lines carry no time, so only the trace shape can tie
-      // them to their head.
-      const bothBacklog = prev !== null && !!prev.backlog && !!l.backlog;
-      const traceShape = CONT_SHAPE.test(stripAnsi(l.line));
-      const gap = prev !== null ? Math.abs(Date.parse(prev.ts) - Date.parse(l.ts)) : NaN;
-      // A long trace is flushed over several writes, so a trace-shaped line
-      // still belongs to its head a moment later; anything else must share
-      // the head's instant.
-      const sameInstant =
-        prev !== null && prev.pod === l.pod && (bothBacklog || gap <= 2 || (traceShape && gap <= 1000));
-      const cont =
-        sameInstant &&
-        p.level === "none" &&
-        !p.json &&
-        (traceShape || (!bothBacklog && (prev?.level === "error" || prev?.level === "warn")));
+      if (p.note) notes.push(l);
+      else kept.push({ l, p });
+    }
+    // A continuation (stack frame, a printed object's fields) joins its
+    // head, and the block shares its most severe level.
+    const folded = foldBlocks(
+      kept.map(({ l, p }) => ({ pod: l.pod, t: Date.parse(l.ts), backlog: l.backlog, level: p.level, json: !!p.json, text: stripAnsi(l.line) })),
+    );
+    const built: Row[] = [];
+    kept.forEach(({ l, p }, i) => {
+      const f = folded[i];
       // The app's own time beats an arrival time; a precise collector
       // time is kept and the app's duplicate stamp just hidden.
       const ownTs = p.appTs ?? (l.approx || l.backlog ? p.lead?.ts : undefined);
       // A continuation takes its head's time (detail panel, copy, export
       // and sorting all read the head's instant, not a write a moment later).
-      const head = cont && prev ? prev : null;
-      const row: Row = {
+      const head = f.cont ? built[f.head] : null;
+      built.push({
         ...l,
         line: p.lead?.rest ?? l.line,
         ts: head ? head.ts : (ownTs ?? l.ts),
         approx: head ? head.approx : ownTs ? false : l.approx,
         backlog: head ? head.backlog : ownTs ? false : l.backlog,
-        level: cont && prev ? prev.level : p.level,
-        cont,
+        level: f.level,
+        cont: f.cont,
         json: p.json,
-      };
-      prev = row;
-      built.push(row);
-    }
+      });
+    });
     return { rows: sortByTime(built), notes };
   }, [rawLines]);
 
   const liveMatcher = useMemo(() => (live ? buildMatcher(view.q) : null), [live, view.q]);
-  const highlightRe = useMemo(() => buildMatcher(view.q)?.re ?? null, [view.q]);
+  const highlightRe = useMemo(() => buildMatcher(view.q || view.focus?.needle || "")?.re ?? null, [view.q, view.focus]);
+  const focusKeys = useMemo(() => focusBlock(rows, view.focus), [rows, view.focus]);
 
   // Lines in view before the level filter: the counters split exactly
   // these, so the buckets always add up to what the level chips filter.
@@ -285,8 +271,10 @@ export function LogViewer({
   );
   const visible = useMemo(() => {
     const lv = new Set(view.levels);
-    return lv.size === 0 ? scoped : scoped.filter((r) => lv.has(r.level));
-  }, [scoped, view.levels]);
+    // The occurrence the reader was sent to stays visible whatever the
+    // level filter says about it.
+    return lv.size === 0 ? scoped : scoped.filter((r) => lv.has(r.level) || focusKeys.has(r.key));
+  }, [scoped, view.levels, focusKeys]);
 
   // Every line lands in exactly one bucket: a stack-trace continuation
   // counts under its head's level, which is also what the filter keeps.
@@ -370,6 +358,20 @@ export function LogViewer({
     return () => ro.disconnect();
   }, []);
 
+  // Land on the focused occurrence once it has loaded (after the
+  // tail-follow above, which would otherwise pin the view to the end).
+  const focusedRef = useRef<LogViewState["focus"]>(null);
+  const focusHead = focusKeys.values().next().value;
+  useLayoutEffect(() => {
+    if (!focusHead || focusedRef.current === view.focus) return;
+    const row = document.getElementById(rowDomId(focusHead));
+    if (!row) return;
+    focusedRef.current = view.focus;
+    followRef.current = false;
+    setFollow(false);
+    row.scrollIntoView({ block: "center" });
+  }, [focusHead, view.focus, visible]);
+
   const jumpToLatest = () => {
     setFollow(true);
     setUnseen(0);
@@ -406,7 +408,7 @@ export function LogViewer({
   const commitQuery = (q: string, toArchive: boolean) => {
     const t = q.trim();
     if (t) setRecent(rememberQuery(t));
-    const patch: Partial<LogViewState> = { q: t };
+    const patch: Partial<LogViewState> = { q: t, focus: null };
     if (toArchive && live) patch.range = { kind: "preset", preset: "24h" };
     setView(patch);
     setShowRecent(false);
@@ -414,7 +416,7 @@ export function LogViewer({
 
   const setRange = (v: string) => {
     const range: LogRange = v === "live" ? { kind: "live" } : { kind: "preset", preset: v };
-    setView({ range, scrollTop: null });
+    setView({ range, scrollTop: null, focus: null });
   };
 
   const toggleLevel = (l: LogLevel) => {
@@ -641,7 +643,7 @@ export function LogViewer({
             <Select
               size="sm"
               value={view.env}
-              onChange={(e) => setView({ env: e.target.value })}
+              onChange={(e) => setView({ env: e.target.value, focus: null })}
               aria-label="Environment"
               wrapperClassName="w-auto"
             >
@@ -770,6 +772,7 @@ export function LogViewer({
                     serviceLabel={serviceLabel}
                     highlight={highlightRe}
                     selected={selected?.key === r.key}
+                    focused={focusKeys.has(r.key)}
                     onSelect={setSelected}
                   />
                 </Fragment>
@@ -927,6 +930,7 @@ const LogRow = memo(function LogRow({
   serviceLabel,
   highlight,
   selected,
+  focused,
   onSelect,
 }: {
   row: Row;
@@ -936,12 +940,15 @@ const LogRow = memo(function LogRow({
   serviceLabel?: (fqn: string) => string;
   highlight: RegExp | null;
   selected: boolean;
+  // The occurrence another tab sent the reader to.
+  focused?: boolean;
   onSelect: (r: Row) => void;
 }) {
   const meta = LEVEL_META[r.level];
   return (
     <div
       id={rowDomId(r.key)}
+      aria-current={focused && !r.cont ? "true" : undefined}
       onClick={() => {
         // Let a drag-select copy text without opening the panel.
         if (window.getSelection()?.toString()) return;
@@ -951,6 +958,7 @@ const LogRow = memo(function LogRow({
         "group relative flex cursor-pointer gap-x-3 pl-3 pr-3 max-sm:flex-wrap [contain-intrinsic-size:auto_1.55em] [content-visibility:auto] hover:bg-[var(--bg-tertiary)]/60",
         !r.cont && "mt-px max-sm:pt-1",
         meta.row,
+        focused && "bg-[var(--accent-subtle)]",
         selected && "bg-[var(--bg-tertiary)] outline outline-1 -outline-offset-1 outline-[var(--border-default)] hover:bg-[var(--bg-tertiary)]",
       )}
     >
