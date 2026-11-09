@@ -63,6 +63,7 @@ import { OverlayTabs, type OverlayTabItem } from "./overlay/OverlayTabs";
 import { useOverlayKeyboard } from "./overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "./overlay/ServiceHeaderActions";
 import { ServiceHealthStrip } from "./overlay/ServiceHealthStrip";
+import { trimRepeatedCause } from "./overlay/statusCopy";
 import { ExternalLink, X, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
@@ -1204,6 +1205,7 @@ function HealthBanner({
 }) {
   const label = (serverState && PROBLEM_LABEL[serverState]) || "Failed";
   const runtime = problem === "runtime";
+  const shown = trimRepeatedCause(label, detail);
   return (
     <div
       role="alert"
@@ -1218,9 +1220,9 @@ function HealthBanner({
         className={cn("h-3.5 w-3.5 shrink-0", runtime ? "text-[var(--error)]" : "text-[var(--warning)]")}
       />
       <span className="text-xs font-medium text-[var(--text-primary)]">{label}</span>
-      {detail ? (
-        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={detail}>
-          {detail}
+      {shown ? (
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={shown}>
+          {shown}
         </span>
       ) : (
         <span className="flex-1" />

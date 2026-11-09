@@ -15,9 +15,11 @@ import {
   backupsApplicable,
   backupsListState,
   type AddonConnection,
+  addonVersionLabel,
 } from "@/features/addons";
 import { copyText } from "@/lib/clipboard";
 import { StatusDot } from "@/components/ui/status-pill";
+import { addonLabel } from "@/components/addon/AddonIcon";
 import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { cn, serviceShortName } from "@/lib/utils";
@@ -481,7 +483,11 @@ function HealthStrip({
       ),
       d: health.detail,
     },
-    { k: "Version", v: cr?.spec.version || health.runningVersion || "Chart default", d: kind },
+    {
+      k: "Version",
+      v: addonVersionLabel(addonLabel(kind), cr?.spec.version, health.runningVersion),
+      d: health.runningVersion ? "running now" : cr?.spec.version ? "pinned" : "chart default",
+    },
     {
       k: "Size",
       v: <span className="capitalize">{tier}</span>,

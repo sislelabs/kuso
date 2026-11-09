@@ -12,6 +12,7 @@ import { X, ExternalLink, Plug, DatabaseBackup } from "lucide-react";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
   useAddonHealth,
+  addonVersionLabel,
   useAddonBackups,
   useBackupNow,
   backupNowState,
@@ -444,10 +445,7 @@ function AddonHeader({
             <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
             <span className="font-mono">{addon}</span>
             <span aria-hidden className="px-1 text-[var(--text-tertiary)]">·</span>
-            <span>
-              {addonLabel(kind)}
-              {version ? ` ${version}` : ""}
-            </span>
+            <span>{addonVersionLabel(addonLabel(kind), version, health.runningVersion)}</span>
           </span>
           {publicPort ? (
             <span className="rounded border border-[var(--warning)]/40 px-1.5 py-px text-[var(--warning)]">Public · port {publicPort}</span>

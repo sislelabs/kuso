@@ -28,3 +28,4 @@ export {
 export type { BackupNowState, BackupSummary, BackupsListState } from "./backups";
 export { useAddonHealth, runningImageOf } from "./status";
 export type { AddonHealth } from "./status";
+export { addonVersion, addonVersionLabel } from "./version";
