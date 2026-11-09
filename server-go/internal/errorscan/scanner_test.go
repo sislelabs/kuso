@@ -87,6 +87,10 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"time=2026-10-01T09:00:00Z level=ERROR msg=\"db down\"",
 		`{"level":"error","msg":"db down"}`,
 		"[error] upstream timed out",
+		// nginx fatal levels.
+		`2026/11/09 12:00:00 [emerg] 1#1: bind() to 0.0.0.0:80 failed (13: Permission denied)`,
+		`2026/11/09 12:00:00 [alert] 1#1: worker process 29 exited on signal 9`,
+		`2026/11/09 12:00:00 [crit] 1#1: *3 SSL_do_handshake() failed`,
 	}
 	for _, line := range matches {
 		if !matchesAnyPattern(line) {
@@ -108,6 +112,8 @@ func TestMatchesAnyPattern(t *testing.T) {
 		"time=2026-10-01T09:00:00Z level=INFO msg=request method=GET path=/manager.php/error.php status=404",
 		"GET /error.php 404 2ms",
 		`{"level":"info","msg":"request","path":"/error"}`,
+		"sent an alert to the on-call channel",
+		"critical path took 12ms",
 	}
 	for _, line := range nonMatches {
 		if matchesAnyPattern(line) {

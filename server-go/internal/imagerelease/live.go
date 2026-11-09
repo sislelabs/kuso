@@ -8,7 +8,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -81,29 +83,55 @@ func (w *Watcher) recordLiveImage(ctx context.Context, ns string, e *kube.KusoEn
 	if !rolledOut(dep, ref) {
 		return
 	}
-	_, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, e.Name, func(env *kube.KusoEnvironment) error {
+	if err := addLiveImage(ctx, w.Kube, ns, e.Name, ref, time.Now()); err != nil {
+		w.Logger.Warn("imagerelease: record live image", "env", e.Name, "image", ref, "err", err)
+	}
+}
+
+// FieldManagerAnnotations owns kuso-server's bookkeeping annotations on
+// env CRs. Drift reads the "kuso-server" managedFields time as the last
+// spec edit; this write lands right after a rollout finishes, and under
+// that name it re-armed the reconcile-pending grace, so the service said
+// "Applying changes…" for two minutes after it was already live.
+const FieldManagerAnnotations = "kuso-server-annotations"
+
+// addLiveImage appends ref to the env's AnnLiveImages with a
+// resourceVersion-guarded merge patch, retrying on conflict.
+func addLiveImage(ctx context.Context, kc *kube.Client, ns, name, ref string, now time.Time) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		var env *kube.KusoEnvironment
+		env, err = kc.GetKusoEnvironment(ctx, ns, name)
+		if err != nil {
+			return err
+		}
 		l := parseLiveImages(env.Annotations[AnnLiveImages])
 		if slices.Contains(l.Refs, ref) {
 			return nil
 		}
 		if l.Since == "" {
-			l.Since = time.Now().UTC().Format(time.RFC3339)
+			l.Since = now.UTC().Format(time.RFC3339)
 		}
 		l.Refs = append(l.Refs, ref)
 		if len(l.Refs) > maxLiveImages {
 			l.Refs = l.Refs[len(l.Refs)-maxLiveImages:]
 		}
-		b, err := json.Marshal(l)
-		if err != nil {
+		b, merr := json.Marshal(l)
+		if merr != nil {
+			return merr
+		}
+		patch, merr := json.Marshal(map[string]any{"metadata": map[string]any{
+			"resourceVersion": env.ResourceVersion,
+			"annotations":     map[string]string{AnnLiveImages: string(b)},
+		}})
+		if merr != nil {
+			return merr
+		}
+		_, err = kc.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: FieldManagerAnnotations})
+		if !apierrors.IsConflict(err) {
 			return err
 		}
-		if env.Annotations == nil {
-			env.Annotations = map[string]string{}
-		}
-		env.Annotations[AnnLiveImages] = string(b)
-		return nil
-	})
-	if err != nil {
-		w.Logger.Warn("imagerelease: record live image", "env", e.Name, "image", ref, "err", err)
 	}
+	return err
 }

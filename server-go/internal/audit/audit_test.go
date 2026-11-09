@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"kuso/server/internal/db"
 )
@@ -126,7 +127,7 @@ func TestAuditLogAndReadbacks(t *testing.T) {
 	}
 
 	// GetForApp — pipeline+phase+app.
-	web, webTotal, webMore, err := s.GetForApp(ctx, "proj-a", "production", "web", 100)
+	web, webTotal, webMore, err := s.GetForApp(ctx, "proj-a", "production", "web", time.Time{}, 100)
 	if err != nil {
 		t.Fatalf("GetForApp: %v", err)
 	}

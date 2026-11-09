@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildNeverReady,
+  previousDeployTarget,
   buildNote,
+  buildStall,
   buildRefLabel,
   classifyBuild,
   isBranchMismatch,
@@ -171,5 +174,41 @@ describe("newerReleaseFailure", () => {
     expect(newerReleaseFailure([other, running, rf, live], live)?.id).toBe("rf");
     const olderRf = b("orf", { status: "release-failed", finishedAt: at(1) });
     expect(newerReleaseFailure([live, olderRf], live)).toBeUndefined();
+  });
+});
+
+describe("buildStall", () => {
+  const stalled = { stalled: { kind: "image_pull", summary: "Builder image can't be pulled", detail: "ErrImagePull: denied", since: "2026-01-01T00:00:00Z" } };
+  it("explains an in-flight build whose pod can't start", () => {
+    expect(buildStall(stalled, "running")).toEqual({ summary: "Builder image can't be pulled", detail: "ErrImagePull: denied" });
+    expect(buildStall(stalled, "pending")?.summary).toBe("Builder image can't be pulled");
+  });
+  it("says nothing once the build is settled or not stalled", () => {
+    expect(buildStall(stalled, "failed")).toBeUndefined();
+    expect(buildStall({}, "running")).toBeUndefined();
+  });
+});
+
+describe("buildNeverReady", () => {
+  const repo = "registry/demo/api";
+  const live = { since: Date.parse("2026-11-01T00:00:00Z"), refs: new Set([`${repo}:good`]) };
+  const b = (id: string, tag: string, finishedAt: string): DeployBuild => ({ id, serviceName: "api", status: "succeeded", imageTag: tag, finishedAt });
+  it("flags a build that rolled out after recording began but never became ready", () => {
+    expect(buildNeverReady(b("bad", "bad", "2026-11-02T00:00:00Z"), live, repo, "cur")).toBe(true);
+    expect(buildNeverReady(b("good", "good", "2026-11-02T00:00:00Z"), live, repo, "cur")).toBe(false);
+  });
+  it("treats builds from before the record, the live build and unknowns as fine", () => {
+    expect(buildNeverReady(b("old", "old", "2026-10-01T00:00:00Z"), live, repo, "cur")).toBe(false);
+    expect(buildNeverReady(b("cur", "cur", "2026-11-02T00:00:00Z"), live, repo, "cur")).toBe(false);
+    expect(buildNeverReady(b("bad", "bad", "2026-11-02T00:00:00Z"), null, repo, "cur")).toBe(false);
+  });
+  it("is skipped as the previous deploy target", () => {
+    const builds: DeployBuild[] = [
+      { ...b("cur", "cur", "2026-11-03T00:00:00Z"), liveEnvs: ["production"], branch: "main", commitSha: "c3" },
+      { ...b("bad", "bad", "2026-11-02T00:00:00Z"), liveEnvs: [], branch: "main", commitSha: "c2" },
+      { ...b("good", "good", "2026-11-01T12:00:00Z"), liveEnvs: [], branch: "main", commitSha: "c1" },
+    ];
+    expect(previousDeployTarget(builds, "production")?.target.id).toBe("bad");
+    expect(previousDeployTarget(builds, "production", (x) => buildNeverReady(x, live, repo, "cur"))?.target.id).toBe("good");
   });
 });

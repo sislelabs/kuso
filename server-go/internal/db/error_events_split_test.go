@@ -51,7 +51,7 @@ func TestErrorReadersHideSplitContinuations(t *testing.T) {
 		}
 	}
 
-	sum, err := d.SummarizeProjectErrors(ctx, "p", "", since)
+	sum, err := d.SummarizeProjectErrors(ctx, "p", "", since, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

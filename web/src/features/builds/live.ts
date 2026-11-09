@@ -58,6 +58,14 @@ export function isRolledBack(builds: DeployBuild[], live: DeployBuild): boolean 
   });
 }
 
+// buildStall is the plain reason an in-flight build isn't progressing
+// (its pod can't be scheduled or can't pull the builder image), or
+// undefined while it's progressing.
+export function buildStall(b: Pick<DeployBuild, "stalled">, status: string): { summary: string; detail?: string } | undefined {
+  if (!b.stalled || (status !== "pending" && status !== "running")) return undefined;
+  return { summary: b.stalled.summary, detail: b.stalled.detail };
+}
+
 // buildNote is the one muted line explaining why a build is where it is.
 export function buildNote(b: DeployBuild, status: BuildRowStatus): string {
   if (status === "queued" || status === "pending") {
@@ -155,15 +163,43 @@ export function newerReleaseFailure(builds: DeployBuild[], live: DeployBuild): D
 export function previousDeployTarget(
   builds: DeployBuild[],
   group: string,
+  neverReady: (b: DeployBuild) => boolean = () => false,
 ): { live: DeployBuild; target: DeployBuild; sameCommit: boolean } | undefined {
   const liveId = liveBuildId(builds, group);
   const live = builds.find((b) => b.id === liveId);
   if (!live) return undefined;
   const older = builds
     .slice(builds.indexOf(live) + 1)
-    .filter((b) => lower(b.status) === "succeeded" && !!b.imageTag && (b.branch ?? "") === (live.branch ?? ""));
+    .filter(
+      (b) =>
+        lower(b.status) === "succeeded" && !!b.imageTag && (b.branch ?? "") === (live.branch ?? "") && !neverReady(b),
+    );
   const other = older.find((b) => !b.commitSha || b.commitSha !== live.commitSha);
   const target = other ?? older[0];
   if (!target) return undefined;
   return { live, target, sameCommit: !other };
+}
+
+// LiveImages is the env's record of images that reached a fully ready
+// rollout (the kuso.sislelabs.com/live-images annotation), recorded since
+// `since`.
+export interface LiveImages {
+  since: number;
+  refs: Set<string>;
+}
+
+// buildNeverReady: a succeeded build that went out after the env started
+// recording rollouts but never reached a ready rollout there (it crashed
+// on start or never passed its health check). Not a safe rollback target.
+// Builds older than the record, or without a known image, are unknown.
+export function buildNeverReady(
+  b: DeployBuild,
+  live: LiveImages | null,
+  repository: string | undefined,
+  liveId: string | undefined,
+): boolean {
+  if (!live || !repository || !b.imageTag || b.id === liveId || lower(b.status) !== "succeeded") return false;
+  const t = buildTime(b);
+  if (!Number.isFinite(t) || t < live.since) return false;
+  return !live.refs.has(`${repository}:${b.imageTag}`);
 }

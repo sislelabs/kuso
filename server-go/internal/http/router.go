@@ -711,7 +711,7 @@ func mountAuthenticatedRoutes(
 			}
 		}
 		if d.Audit != nil {
-			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
+			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			auditH.Mount(r)
 		}
 		// Incident-response agent — operator-facing endpoints (list,

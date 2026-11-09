@@ -105,8 +105,10 @@ export function TopNav() {
           </Crumb>
         )}
 
+        {/* Shown on phones too: every project and service view is scoped
+            to the env picked here. */}
         {projectScoped && (
-          <Crumb className="hidden sm:flex">
+          <Crumb className="flex shrink-0">
             <EnvironmentSwitcher project={currentProject} />
           </Crumb>
         )}
@@ -413,7 +415,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                 ? "Preview environment:"
                 : "Environment:"}
           </span>
-          <span className="truncate max-w-[160px] text-[13px]">{currentEnv}</span>
+          <span className="truncate max-w-[88px] text-[13px] sm:max-w-[160px]">{currentEnv}</span>
           <ChevronDown className="size-3.5 text-[var(--text-tertiary)]" aria-hidden />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">

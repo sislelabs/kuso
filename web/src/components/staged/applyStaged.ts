@@ -1,7 +1,14 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api-client";
 import { describeError } from "@/lib/errors";
-import { getService, patchService, setServiceEnvValue, unsetServiceEnvVar } from "@/features/services/api";
+import {
+  getService,
+  patchService,
+  setServiceEnvValue,
+  triggerBuild,
+  unsetServiceEnvVar,
+  type TriggerBuildResult,
+} from "@/features/services/api";
 import { applyServiceChanges, type ServiceChangesResult } from "@/features/staged";
 import type { StagedService } from "@/features/staged";
 import { planService } from "./plan";
@@ -14,6 +21,9 @@ export interface ServiceApplyOutcome {
   // The server predates the batch endpoint: items went one by one and the
   // pods may have restarted more than once.
   sequential: boolean;
+  // Set when the plan builds: the build the apply started, or why it
+  // couldn't start (the settings are applied either way).
+  build?: { ok: true; result: TriggerBuildResult } | { ok: false; error: string };
 }
 
 // applyStagedService applies one service's staged edits. It reads the
@@ -25,9 +35,10 @@ export async function applyStagedService(
   service: string,
   staged: StagedService,
   message: string,
+  opts: { neverDeployed?: boolean } = {},
 ): Promise<ServiceApplyOutcome> {
   const svc = await getService(project, service);
-  const plan = planService(svc, staged);
+  const plan = planService(svc, staged, opts);
   const errors: Record<string, string> = {};
   if (plan.settingsError) errors.settings = plan.settingsError;
   const settingsStaged = !!staged.settings && Object.keys(staged.settings.fields).length > 0;
@@ -72,7 +83,16 @@ export async function applyStagedService(
     // reporting a clean deploy.
     errors.rollout = `Saved, but the rollout didn't start: ${res.flushError}. Redeploy the service to apply.`;
   }
-  return { appliedEnv, settingsApplied, errors, sequential };
+  // Source changes are stored, not built: start the build that deploys them.
+  let build: ServiceApplyOutcome["build"];
+  if (plan.builds && Object.keys(errors).length === 0) {
+    try {
+      build = { ok: true, result: await triggerBuild(project, service) };
+    } catch (e) {
+      build = { ok: false, error: describeError(e, "Request failed") };
+    }
+  }
+  return { appliedEnv, settingsApplied, errors, sequential, build };
 }
 
 async function applySequentially(

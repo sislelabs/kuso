@@ -11,10 +11,11 @@ import (
 func TestSummarizeScheduling(t *testing.T) {
 	cases := map[string]string{
 		"0/1 nodes are available: 1 node(s) had untolerated taint {node.kubernetes.io/disk-pressure: }. preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.": "The node is low on disk, so the pod can't be scheduled",
-		"0/3 nodes are available: 3 Insufficient memory.":                               "No node has enough free memory for the pod's request",
-		"0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector.": "No node matches the placement labels",
-		"0/1 nodes are available: 1 node(s) had untolerated taint {dedicated: gpu}.":    "No node accepts the pod (every node is tainted)",
-		"something new from a future scheduler":                                         "No node can run the pod right now",
+		"0/3 nodes are available: 3 Insufficient memory.":                                                                                         "No node has enough free memory for the pod's request",
+		"0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector.":                                                           "No node matches the placement labels",
+		"0/1 nodes are available: 1 node(s) had untolerated taint {dedicated: gpu}.":                                                              "No node accepts the pod (every node is tainted)",
+		"0/1 nodes are available: 1 node(s) were unschedulable. preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.": "The node is cordoned, so the pod can't be scheduled",
+		"something new from a future scheduler":                                                                                                   "No node can run the pod right now",
 	}
 	for in, want := range cases {
 		if got := SummarizeScheduling(in); got != want {

@@ -30,6 +30,7 @@ import { buildTriggerMessage, cancelBuild, useTriggerBuild } from "@/features/se
 import type { BuildFailureClass } from "@/features/services/api";
 import {
   buildNote,
+  buildStall,
   buildTitle,
   buildRefLabel,
   failedStepFromBuild,
@@ -111,6 +112,8 @@ export interface BuildRowProps {
   pinActions?: boolean;
   // How the build started (Push / Manual / Retry …), shown as a chip.
   trigger?: BuildTrigger;
+  // It went out to this env but never reached a ready rollout there.
+  neverReady?: boolean;
 }
 
 export function BuildRow({
@@ -132,12 +135,14 @@ export function BuildRow({
   onNavigate,
   pinActions = false,
   trigger,
+  neverReady = false,
 }: BuildRowProps) {
   const m = STATUS[s];
   const Icon = m.icon;
   const sha = buildRefLabel(b, 7);
   const ts = b.startedAt ?? b.finishedAt;
   const note = buildNote(b, s);
+  const stall = buildStall(b, s);
   const who = actorLabel(b);
   const live = s === "running" || s === "pending" || s === "queued";
   const failed = s === "failed";
@@ -223,6 +228,18 @@ export function BuildRow({
               </span>
             )}
           </div>
+          {neverReady && s === "superseded" && (
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-[var(--warning)]">
+              <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span>Never became ready in {env || "production"}: it crashed on start or never passed its health check.</span>
+            </p>
+          )}
+          {stall && (
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-[var(--warning)]" title={stall.detail}>
+              <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span className="break-words">{stall.summary}</span>
+            </p>
+          )}
           {b.promoteHold && (s === "running" || s === "pending") && (
             <p className="mt-1 text-xs text-[var(--warning)]">Promotion held: {b.promoteHold}</p>
           )}
@@ -299,6 +316,7 @@ export function BuildRow({
             repoUrl={repoUrl}
             fatalLine={peek.errorLine}
             onNavigate={onNavigate}
+            neverReady={neverReady}
           />
           <RowMenu build={b} repoUrl={repoUrl} previous={previous} compareHref={compareHref} sha={sha} onToggleLog={onToggle} isOpen={isOpen} />
           <button
@@ -359,11 +377,13 @@ function PrimaryAction({
   repoUrl,
   fatalLine,
   onNavigate,
+  neverReady,
 }: {
   project: string;
   service: string;
   env: string;
   build: DeployBuild;
+  neverReady?: boolean;
   status: BuildRowStatus;
   sha: string;
   canDeploy: boolean;
@@ -401,6 +421,7 @@ function PrimaryAction({
         liveBuild={liveBuild}
         repoUrl={repoUrl}
         label={newerThanLive ? "Roll forward" : "Rollback"}
+        neverReady={neverReady}
       />
     );
   }
@@ -775,6 +796,7 @@ export function RollbackButton({
   liveBuild,
   repoUrl,
   label = "Rollback",
+  neverReady = false,
 }: {
   project: string;
   service: string;
@@ -783,6 +805,8 @@ export function RollbackButton({
   liveBuild?: DeployBuild;
   repoUrl?: string;
   label?: string;
+  // The build never reached a ready rollout here: confirm says so.
+  neverReady?: boolean;
 }) {
   const [step, setStep] = useState<"idle" | "confirm" | "mismatch">("idle");
   const [mismatch, setMismatch] = useState("");
@@ -834,9 +858,22 @@ export function RollbackButton({
               ? `Roll ${target} back to ${sha}?`
               : `Switch ${target} to ${sha}?`
         }
-        destructive={false}
-        confirmLabel={back ? "Roll back" : "Switch"}
-        body={<RollbackSummary target={target} build={b} liveBuild={liveBuild} repoUrl={repoUrl} back={back} />}
+        destructive={neverReady}
+        confirmLabel={neverReady ? (back ? "Roll back anyway" : "Switch anyway") : back ? "Roll back" : "Switch"}
+        body={
+          <span className="block space-y-3">
+            {neverReady && (
+              <span role="alert" className="flex items-start gap-1.5 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-3 py-2 text-xs text-[var(--text-primary)]">
+                <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />
+                <span>
+                  This build never became ready in {target}: it crashed on start or never passed its health check.
+                  Rolling back to it will likely fail the same way.
+                </span>
+              </span>
+            )}
+            <RollbackSummary target={target} build={b} liveBuild={liveBuild} repoUrl={repoUrl} back={back} />
+          </span>
+        }
         pending={m.isPending}
         onConfirm={() => run(false)}
         onCancel={() => setStep("idle")}

@@ -84,6 +84,21 @@ export function pushDeployState({
   return { on: true, repo: slug, branch, watchPaths: spec.watchPaths ?? [] };
 }
 
+// autoDeploySwitchCopy is the settings switch's word and reason for the
+// same state the Deployments banner shows, so "Enabled" never sits next
+// to a banner saying pushes can't deploy.
+export function autoDeploySwitchCopy(state: PushDeploy): { label: string; blocked?: string } {
+  if (state.on) return { label: "Enabled" };
+  if (state.paused) return { label: "Paused" };
+  if (state.instanceWide) {
+    return {
+      label: "Enabled · blocked",
+      blocked: "Blocked: connect the GitHub App (Settings → GitHub) so pushes reach kuso.",
+    };
+  }
+  return { label: "Enabled · blocked", blocked: state.reason };
+}
+
 export function AutoDeployBanner({
   state,
   onNavigate,

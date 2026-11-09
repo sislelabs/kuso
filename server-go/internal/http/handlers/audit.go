@@ -11,6 +11,7 @@ import (
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // AuditHandler exposes the /api/audit endpoints.
@@ -18,6 +19,10 @@ type AuditHandler struct {
 	Svc    *audit.Service
 	DB     *db.DB
 	Logger *slog.Logger
+	// Kube + Namespace scope ListForApp to the live service's lifetime.
+	// Optional.
+	Kube      *kube.Client
+	Namespace string
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -99,7 +104,11 @@ func (h *AuditHandler) ListForApp(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, pipeline, db.ProjectRoleViewer) {
 		return
 	}
-	rows, count, more, err := h.Svc.GetForApp(ctx, pipeline, chi.URLParam(r, "phase"), chi.URLParam(r, "app"), limit)
+	app := chi.URLParam(r, "app")
+	// Audit rows are keyed by name; a service re-created under a deleted
+	// one's name must not inherit its trail.
+	born := serviceBornAt(ctx, h.Kube, h.Namespace, pipeline, app)
+	rows, count, more, err := h.Svc.GetForApp(ctx, pipeline, chi.URLParam(r, "phase"), app, born, limit)
 	if err != nil {
 		h.Logger.Error("list audit for app", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")

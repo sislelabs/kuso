@@ -41,6 +41,10 @@ var errorPatterns = []*regexp.Regexp{
 	// matched. Must stay first — matchesAnyPattern skips it on lines
 	// with an explicit info/debug level.
 	regexp.MustCompile(`(?i)(?:^|[\s\[\("'=:|,{])(?:ERROR|FATAL|SEVERE|PANIC)(?:$|[\s\]\)"':,|}])`),
+	// nginx / syslog fatal levels, bracketed ("2026/11/09 12:00:00 [emerg]
+	// 1#1: bind() failed"). Bracketed only: the bare words are ordinary
+	// prose ("alert", "critical path").
+	regexp.MustCompile(`(?i)\[(?:emerg|alert|crit|critical)\]`),
 	// Go panic.
 	regexp.MustCompile(`^panic:\s`),
 	// Python traceback / exception.

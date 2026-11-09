@@ -6,6 +6,8 @@ import { useProject } from "@/features/projects";
 import { useService } from "@/features/services";
 import { useSetAutoDeployPaused } from "@/features/builds";
 import { useCanOnProject, Perms } from "@/features/auth";
+import { useSetupStatus } from "@/features/github";
+import { autoDeploySwitchCopy, pushDeployState } from "../AutoDeployBanner";
 import { toastError } from "@/lib/errors";
 import { Input } from "@/components/ui/input";
 import { Section, Field, SwitchField, Callout, Code, monoInputClass, type SectionProps } from "./_primitives";
@@ -24,6 +26,9 @@ export function DeploySection({
   const previewsOn = !!spec?.previews?.enabled;
   const ttlDays = spec?.previews?.ttlDays ?? 7;
   const branch = state.repoBranch.trim() || "main";
+  // Image services never build: no branch ships, CI gating and PR previews
+  // don't apply.
+  const isImage = state.runtime === "image";
 
   return (
     <Section
@@ -31,13 +36,17 @@ export function DeploySection({
       title="Deploy"
       icon={Cloud}
       description={
-        <>
-          Successful builds of <Code>{branch}</Code> ship to production.
-        </>
+        isImage ? (
+          "Saving a new image tag rolls it out to production. Pushes to a repository don't deploy this service."
+        ) : (
+          <>
+            Successful builds of <Code>{branch}</Code> ship to production.
+          </>
+        )
       }
       footerNote="A new start command rolls the pods in every environment."
     >
-      {service && <AutoDeploySwitch project={project} service={service} branch={branch} />}
+      {service && !isImage && <AutoDeploySwitch project={project} service={service} branch={branch} />}
       <Field
         label="Start command"
         hint="Overrides the image's CMD. Split on spaces. Blank uses the image default."
@@ -52,13 +61,15 @@ export function DeploySection({
           spellCheck={false}
         />
       </Field>
-      <SwitchField
-        label="Wait for CI"
-        hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."
-        on={state.waitForCI}
-        onChange={(v) => setState((s) => ({ ...s, waitForCI: v }))}
-      />
-      {previewsOn ? (
+      {!isImage && (
+        <SwitchField
+          label="Wait for CI"
+          hint="Hold builds from pushes and PR previews until the commit's GitHub checks pass. A failing check cancels the build."
+          on={state.waitForCI}
+          onChange={(v) => setState((s) => ({ ...s, waitForCI: v }))}
+        />
+      )}
+      {isImage ? null : previewsOn ? (
         <>
           <SwitchField
             label="Skip PR previews for this service"
@@ -88,16 +99,27 @@ export function DeploySection({
 // same field.
 function AutoDeploySwitch({ project, service, branch }: { project: string; service: string; branch: string }) {
   const svc = useService(project, service);
+  const proj = useProject(project);
+  const gh = useSetupStatus();
   const setPaused = useSetAutoDeployPaused(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const spec = svc.data?.spec;
   if (!spec || spec.runtime === "image" || (spec.runtime === "worker" && spec.fromService)) return null;
   const paused = !!spec.autoDeployPaused;
+  // The same verdict as the Deployments tab's banner.
+  const push = pushDeployState({
+    spec,
+    projectRepoUrl: proj.data?.project.spec.defaultRepo?.url,
+    githubConfigured: gh.isSuccess ? gh.data.configured : undefined,
+  });
+  const copy = push ? autoDeploySwitchCopy(push) : { label: paused ? "Paused" : "Enabled" };
   return (
     <SwitchField
       label="Auto-deploy on push"
       hint={
-        paused ? (
+        copy.blocked && !paused ? (
+          <>{copy.blocked} Until then pushes don&apos;t build; redeploy by hand.</>
+        ) : paused ? (
           <>
             Paused: pushes to <Code>{branch}</Code> don&apos;t build. Manual deploys and PR previews still run. Saves
             immediately.
@@ -109,7 +131,7 @@ function AutoDeploySwitch({ project, service, branch }: { project: string; servi
         )
       }
       on={!paused}
-      stateLabel={paused ? "Paused" : "Enabled"}
+      stateLabel={copy.label}
       disabled={!canWrite || setPaused.isPending}
       onChange={(on) =>
         setPaused.mutate(!on, {

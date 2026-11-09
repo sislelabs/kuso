@@ -74,22 +74,23 @@ func (h *ErrorsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		window = min(d, 30*24*time.Hour)
 	}
 	since := time.Now().Add(-window)
-	rows, err := h.DB.SummarizeProjectErrors(ctx, project, r.URL.Query().Get("env"), since)
+	live := projectServiceNames(ctx, h.Kube, h.Namespace, project)
+	rows, err := h.DB.SummarizeProjectErrors(ctx, project, r.URL.Query().Get("env"), since, live)
 	if err != nil {
 		h.Logger.Error("errors: summary", "err", err, "project", project)
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	live := projectServiceNames(ctx, h.Kube, h.Namespace, project)
 	out := errorSummaryResponse{Since: since.UTC(), Services: make(map[string]errorSummaryServiceResponse, len(rows))}
 	for _, s := range rows {
 		// A deleted service's errors linger until retention prunes them;
 		// counted here they made a project's total exceed the sum of its
 		// services' badges.
-		if live != nil && !live[s.Service] {
+		born, isLive := live[s.Service]
+		if live != nil && !isLive {
 			continue
 		}
-		if err := h.discountResolved(ctx, project, r.URL.Query().Get("env"), since, &s); err != nil {
+		if err := h.discountResolved(ctx, project, r.URL.Query().Get("env"), laterOf(since, born), &s); err != nil {
 			h.Logger.Warn("errors: summary resolved marks", "err", err, "project", project, "service", s.Service)
 		}
 		if s.Groups == 0 {
@@ -151,6 +152,7 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		since = time.Now().Add(-d)
 	}
+	since = laterOf(since, serviceBornAt(ctx, h.Kube, h.Namespace, project, service))
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
@@ -219,7 +221,7 @@ func (h *ErrorsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 		window = d
 	}
 	detail, err := h.DB.GetErrorGroupDetail(ctx, project, service, r.URL.Query().Get("env"), fingerprint,
-		time.Now().Add(-window), window/48, 20)
+		laterOf(time.Now().Add(-window), serviceBornAt(ctx, h.Kube, h.Namespace, project, service)), window/48, 20)
 	if err != nil {
 		h.Logger.Error("errors: detail", "err", err, "project", project, "service", service)
 		writeErr(w, http.StatusInternalServerError, "internal")
@@ -228,23 +230,20 @@ func (h *ErrorsHandler) Detail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detail)
 }
 
-// projectServiceNames returns the FQ names of the project's KusoServices,
-// or nil when they can't be listed (no kube client, transient error); the
-// caller then filters nothing.
-func projectServiceNames(ctx context.Context, kc *kube.Client, homeNS, project string) map[string]bool {
+// projectServiceNames maps the FQ names of the project's KusoServices to
+// their CR creation time, or returns nil when they can't be listed (no
+// kube client, transient error); the caller then filters nothing.
+//
+// The creation time is the service's identity for history: ErrorEvent,
+// Revision and Audit rows are keyed by name only, so a service re-created
+// under a deleted one's name would otherwise inherit its records.
+func projectServiceNames(ctx context.Context, kc *kube.Client, homeNS, project string) map[string]time.Time {
 	if kc == nil || kc.Dynamic == nil {
 		return nil
 	}
-	if homeNS == "" {
-		homeNS = "kuso"
-	}
-	p, err := lookupCR(ctx, kc, kube.GVRProjects, homeNS, project)
-	if err != nil {
+	ns := projectNamespace(ctx, kc, homeNS, project)
+	if ns == "" {
 		return nil
-	}
-	ns := homeNS
-	if v, _, _ := unstructured.NestedString(p.Object, "spec", "namespace"); v != "" {
-		ns = v
 	}
 	var items []*unstructured.Unstructured
 	cached := false
@@ -260,12 +259,52 @@ func projectServiceNames(ctx context.Context, kc *kube.Client, homeNS, project s
 			items = append(items, &list.Items[i])
 		}
 	}
-	out := make(map[string]bool, len(items))
+	out := make(map[string]time.Time, len(items))
 	prefix := project + "-"
 	for _, u := range items {
 		if strings.HasPrefix(u.GetName(), prefix) {
-			out[u.GetName()] = true
+			out[u.GetName()] = u.GetCreationTimestamp().Time
 		}
 	}
 	return out
+}
+
+// serviceBornAt is the live service CR's creation time, or zero when it
+// can't be read. Reads of per-service history clamp their window to it.
+func serviceBornAt(ctx context.Context, kc *kube.Client, homeNS, project, service string) time.Time {
+	if kc == nil || kc.Dynamic == nil {
+		return time.Time{}
+	}
+	ns := projectNamespace(ctx, kc, homeNS, project)
+	if ns == "" {
+		return time.Time{}
+	}
+	u, err := lookupCR(ctx, kc, kube.GVRServices, ns, project+"-"+strings.TrimPrefix(service, project+"-"))
+	if err != nil {
+		return time.Time{}
+	}
+	return u.GetCreationTimestamp().Time
+}
+
+// projectNamespace resolves the namespace a project's CRs live in, or ""
+// when the project can't be read.
+func projectNamespace(ctx context.Context, kc *kube.Client, homeNS, project string) string {
+	if homeNS == "" {
+		homeNS = "kuso"
+	}
+	p, err := lookupCR(ctx, kc, kube.GVRProjects, homeNS, project)
+	if err != nil {
+		return ""
+	}
+	if v, _, _ := unstructured.NestedString(p.Object, "spec", "namespace"); v != "" {
+		return v
+	}
+	return homeNS
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }

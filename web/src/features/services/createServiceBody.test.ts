@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildCreateServiceBody, followsProjectRepo } from "./createServiceBody";
+import { buildCreateServiceBody, createPortProblem, followsProjectRepo } from "./createServiceBody";
 import { createServiceWithEnv, type CreateServiceDeps } from "./createServiceFlow";
 
 const repo = { url: "https://github.com/acme/shop", branch: "main", installationId: 7 };
@@ -161,5 +161,16 @@ describe("createServiceWithEnv", () => {
     };
     await expect(createServiceWithEnv("p", repoBody, { envVars: [{ name: "A", value: "1" }] }, d)).rejects.toThrow("conflict");
     expect(d.setEnv).not.toHaveBeenCalled();
+  });
+});
+
+describe("createPortProblem", () => {
+  it("accepts blank (8080 default) and real ports", () => {
+    expect(createPortProblem("")).toBeUndefined();
+    expect(createPortProblem(" 3000 ")).toBeUndefined();
+    expect(createPortProblem("65535")).toBeUndefined();
+  });
+  it("rejects anything typed that isn't a port", () => {
+    for (const bad of ["0", "65536", "abc", "80.5", "-1", "1e3"]) expect(createPortProblem(bad)).toBeTruthy();
   });
 });

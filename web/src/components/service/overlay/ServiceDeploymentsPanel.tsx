@@ -18,6 +18,7 @@ import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import {
+  buildNeverReady,
   buildRefLabel,
   buildTrigger,
   classifyBuild,
@@ -469,8 +470,15 @@ function DeployList({
   const shownTimeline = timeline.slice(0, limit);
   // Newest older build that can still go live again: its Rollback stays
   // visible. Builds newer than live are roll-forwards, not rollbacks.
+  const liveImages = liveImagesOf(env?.metadata?.annotations);
+  const envRepo = (env?.spec as { image?: { repository?: string } } | undefined)?.image?.repository;
+  const neverReady = (b: DeployBuild) => buildNeverReady(b, liveImages, envRepo, liveId);
   const rollbackTargetId = history.find(
-    (b) => classifyBuild(b, liveId) === "superseded" && !!b.imageTag && (liveIdx < 0 || builds.indexOf(b) > liveIdx),
+    (b) =>
+      classifyBuild(b, liveId) === "superseded" &&
+      !!b.imageTag &&
+      (liveIdx < 0 || builds.indexOf(b) > liveIdx) &&
+      !neverReady(b),
   )?.id;
   // Peek at the stored log of every failed build on screen for the step it
   // failed in and its first error line (paged, so at most HISTORY_PAGE).
@@ -670,6 +678,7 @@ function DeployList({
                   isOpen={expanded === b.id}
                   canDeploy={canDeploy}
                   pinActions={b.id === rollbackTargetId}
+                  neverReady={neverReady(b)}
                   trigger={buildTrigger(b, builds)}
                   onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
                   onNavigate={onNavigate}
@@ -1162,7 +1171,7 @@ function ImageReleaseRow({
           ) : neverRan ? (
             <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--danger)]" />
-              Never went live
+              Never became ready
             </span>
           ) : (
             <span>Replaced</span>
@@ -1204,7 +1213,7 @@ function ImageReleaseRow({
             {release.folded.map((f) => (
               <li key={f.revision.id}>
                 <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span>
-                {neverRanOf(f) ? " · never went live" : ""} · {releaseWhy(f)} ·{" "}
+                {neverRanOf(f) ? " · never became ready" : ""} · {releaseWhy(f)} ·{" "}
                 <time dateTime={f.revision.createdAt} title={new Date(f.revision.createdAt).toLocaleString()}>
                   {relativeTime(f.revision.createdAt)}
                 </time>

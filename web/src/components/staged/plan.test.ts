@@ -39,4 +39,21 @@ describe("planService", () => {
     const passed = { settings, healthcheckTest: { ...test, passed: true, summary: "200 OK" } };
     expect(healthcheckCheck(planService(svc, passed), passed)?.kind).toBe("passed");
   });
+
+  it("builds when a source setting changes, never for image services", () => {
+    const repoSvc = { spec: { port: 8080, runtime: "dockerfile", repo: { url: "https://github.com/a/b", defaultBranch: "main" } } } as unknown as KusoService;
+    const branch = planService(repoSvc, { settings: { fields: { repoBranch: "dev" }, base: { repoBranch: "main" } } });
+    expect(branch.patchFields).toContain("repo");
+    expect(branch.builds).toBe(true);
+    expect(planService(repoSvc, { settings: { fields: { port: "9090" }, base: { port: "8080" } } }).builds).toBe(false);
+    const imageSvc = { spec: { port: 80, runtime: "image", image: { repository: "nginx", tag: "1" } } } as unknown as KusoService;
+    expect(planService(imageSvc, { settings: { fields: { port: "81" }, base: { port: "80" } } }, { neverDeployed: true }).builds).toBe(false);
+  });
+
+  it("builds any change to a service that has never deployed", () => {
+    const repoSvc = { spec: { port: 8080, runtime: "dockerfile", repo: { url: "https://github.com/a/b" } } } as unknown as KusoService;
+    const env = { env: { set: [{ name: "A", value: "1", before: null, sensitive: false }], unset: [] } };
+    expect(planService(repoSvc, env, { neverDeployed: true }).builds).toBe(true);
+    expect(planService(repoSvc, env).builds).toBe(false);
+  });
 });

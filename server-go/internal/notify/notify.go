@@ -454,6 +454,16 @@ func (d *Dispatcher) persistFeed(parent context.Context, e Event) {
 			classification = b
 		}
 	}
+	// The feed pairs a crash with its recovery per env, so the row keeps
+	// the env even though channel payloads carry it elsewhere.
+	extra := e.Extra
+	if e.Env != "" && extra["env"] == "" {
+		extra = make(map[string]string, len(e.Extra)+1)
+		for k, v := range e.Extra {
+			extra[k] = v
+		}
+		extra["env"] = e.Env
+	}
 	if err := d.db.InsertNotificationEvent(ctx, db.NotificationEvent{
 		Type:           string(e.Type),
 		Title:          e.Title,
@@ -462,7 +472,7 @@ func (d *Dispatcher) persistFeed(parent context.Context, e Event) {
 		Project:        e.Project,
 		Service:        e.Service,
 		URL:            e.URL,
-		Extra:          e.Extra,
+		Extra:          extra,
 		Classification: classification,
 	}); err != nil && d.logger != nil {
 		d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))

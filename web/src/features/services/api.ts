@@ -219,6 +219,19 @@ export interface BuildSummary {
   // with a copy-pasteable fix. Surfaces in the BuildErrorBanner above
   // the log viewer. Absent on non-failed builds.
   failureClass?: BuildFailureClass;
+  // stalled: why an in-flight build's pod hasn't started a minute in
+  // (no node fits, the builder image can't be pulled, …). Servers that
+  // predate it never send it.
+  stalled?: BuildStall;
+}
+
+export interface BuildStall {
+  // image_pull | unschedulable | config_error | no_pod | starting
+  kind: string;
+  summary: string;
+  // The scheduler's / kubelet's raw text.
+  detail?: string;
+  since: string;
 }
 
 export interface BuildFailureRemediation {
