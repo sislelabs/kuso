@@ -48,6 +48,107 @@ type Facts struct {
 	// NewPod is the failing new pod (for the probe-event lookup).
 	NewPod string
 	Since  time.Time
+	// NewImage is what the rollout moves to; PreviousImage what the
+	// version still serving runs. Either is "" when no pod says.
+	NewImage      string
+	PreviousImage string
+	// PullCause is the registry's answer for KindImagePull (Pull* consts).
+	PullCause string
+}
+
+// Registry answers for a failed image pull (status.rollout.pullCause).
+// Wire strings: add, never rename.
+const (
+	PullNotFound     = "not_found"
+	PullUnauthorized = "unauthorized"
+	PullUnreachable  = "unreachable"
+)
+
+var pullStatusRE = regexp.MustCompile(`\b40[13]\b`)
+
+// PullCause reads why a pull failed from the kubelet's ErrImagePull text
+// or a "Failed to pull image" event. ImagePullBackOff's own message
+// ("Back-off pulling image …") carries no cause, so it returns "".
+// Docker Hub answers a missing repository with "pull access denied …
+// may require authorization", which lands on unauthorized; the hint for
+// it names both possibilities.
+func PullCause(message string) string {
+	m := strings.ToLower(message)
+	has := func(needles ...string) bool {
+		for _, n := range needles {
+			if strings.Contains(m, n) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case pullStatusRE.MatchString(m), has("unauthorized", "forbidden", "access denied", "authorization failed", "insufficient_scope", "authentication required"):
+		return PullUnauthorized
+	case has("not found", "manifest unknown", "404"):
+		return PullNotFound
+	case has("no such host", "i/o timeout", "connection refused", "tls handshake", "deadline exceeded"):
+		return PullUnreachable
+	}
+	return ""
+}
+
+// PullFailureCause is the human cause of a failed pull of image, by the
+// registry's answer.
+func PullFailureCause(pullCause, image string) string {
+	switch pullCause {
+	case PullNotFound:
+		if tag := ImageTag(image); tag != "" {
+			return fmt.Sprintf("the new version's image tag %s wasn't found in the registry", tag)
+		}
+		return "the new version's image wasn't found in the registry"
+	case PullUnauthorized:
+		return "the registry refused to serve the new version's image (401/403)"
+	case PullUnreachable:
+		return "the registry for the new version's image can't be reached"
+	}
+	return "the new version's image can't be pulled"
+}
+
+// ImageTag is the tag of an image reference ("repo:tag" → "tag"), a
+// digest's first 12 hex characters, or "" for an untagged reference.
+func ImageTag(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i >= 0 {
+		d := strings.TrimPrefix(ref[i+1:], "sha256:")
+		if len(d) > 12 {
+			d = d[:12]
+		}
+		return d
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[i+1:]
+	}
+	return ""
+}
+
+// AppImage is the image of the env's app container (named "app" by the
+// kusoenvironment chart; the first container on anything older).
+func AppImage(spec *corev1.PodSpec) string {
+	if spec == nil || len(spec.Containers) == 0 {
+		return ""
+	}
+	for _, c := range spec.Containers {
+		if c.Name == "app" {
+			return c.Image
+		}
+	}
+	return spec.Containers[0].Image
+}
+
+// PendingApply: the env asks for want but the Deployment's template still
+// runs another image, so the operator hasn't applied the change yet and
+// every pod is still the previous version. Returns the template's image.
+func PendingApply(dep *appsv1.Deployment, want string) (string, bool) {
+	if dep == nil || want == "" {
+		return "", false
+	}
+	cur := AppImage(&dep.Spec.Template.Spec)
+	return cur, cur != "" && cur != want
 }
 
 // Analyze splits the env's pods by pod-template-hash. The newest
@@ -89,13 +190,14 @@ func Analyze(pods []*corev1.Pod, hc *kube.KusoHealthcheck, deadlineExceeded bool
 		hashes = append(hashes, h)
 	}
 	sort.Slice(hashes, func(i, j int) bool { return groups[hashes[i]].newest.After(groups[hashes[j]].newest) })
-	out := Facts{InFlight: true}
+	out := Facts{InFlight: true, NewImage: AppImage(&groups[hashes[0]].pods[0].Spec)}
 	for _, h := range hashes[1:] {
 		for _, p := range groups[h].pods {
 			if podIsReady(p) {
 				out.PreviousServing = true
-				if t := p.CreationTimestamp.Time; t.After(out.PreviousSince) {
+				if t := p.CreationTimestamp.Time; !t.Before(out.PreviousSince) {
 					out.PreviousSince = t
+					out.PreviousImage = AppImage(&p.Spec)
 				}
 			}
 		}
@@ -121,10 +223,12 @@ func Analyze(pods []*corev1.Pod, hc *kube.KusoHealthcheck, deadlineExceeded bool
 			}
 		}
 		issue := podreason.ForPod(p, now)
-		f := Facts{InFlight: true, PreviousServing: out.PreviousServing, PreviousSince: out.PreviousSince, NewPod: p.Name, Since: p.CreationTimestamp.Time}
+		f := out
+		f.NewPod, f.Since = p.Name, p.CreationTimestamp.Time
 		switch {
 		case issue != nil && issue.Kind == podreason.KindImagePull:
-			f.Kind, f.Cause = KindImagePull, "the new version's image can't be pulled"
+			f.PullCause = PullCause(issue.Message)
+			f.Kind, f.Cause = KindImagePull, PullFailureCause(f.PullCause, f.NewImage)
 		case issue != nil && (issue.Kind == podreason.KindConfig || issue.Kind == podreason.KindUnschedulable):
 			f.Kind, f.Cause = KindConfig, "the new version can't start: "+lowerFirst(issue.Summary)
 		case hcGrace > 0 && (restarts > 0 || age > hcGrace):

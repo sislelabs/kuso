@@ -35,6 +35,8 @@ type Issue struct {
 	Summary string
 	Message string
 	Since   time.Time
+	// Pod is the pod this is about, for an event lookup.
+	Pod string
 }
 
 // Summarize maps a waiting/condition reason plus its raw message to a
@@ -126,7 +128,7 @@ func ForPod(p *corev1.Pod, now time.Time) *Issue {
 				kind = KindCrashLoop
 			}
 			if kind != "" {
-				return &Issue{Kind: kind, Summary: Summarize(w.Reason, w.Message), Message: rawOf(w.Reason, w.Message), Since: sinceOf(p)}
+				return &Issue{Kind: kind, Summary: Summarize(w.Reason, w.Message), Message: rawOf(w.Reason, w.Message), Since: sinceOf(p), Pod: p.Name}
 			}
 		}
 	}
