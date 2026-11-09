@@ -138,13 +138,16 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 // attentionPredicate selects the events a person should act on:
 // failures and warnings, fired alerts, security findings and kuso
 // update notices. Successes (build succeeded, recovered, backup ok)
-// are activity, not attention. Keep in sync with web
-// lib/notification-attention.ts.
-const attentionPredicate = `("severity" IN ('warn','error') OR "type" = 'alert.fired' OR "type" = 'update.available' OR "type" LIKE 'security.%')`
+// are activity, not attention, and so is an alert's all-clear:
+// notify.AlertResolved keeps the alert.fired type and marks itself with
+// extra {"state":"resolved"} (stored as json.Marshal output, no spaces).
+// Keep in sync with web lib/notification-attention.ts.
+const attentionPredicate = `("severity" IN ('warn','error') OR ("type" = 'alert.fired' AND COALESCE("extra", '') NOT LIKE '%"state":"resolved"%') OR "type" = 'update.available' OR "type" LIKE 'security.%')`
 
 // IsAttentionEvent is attentionPredicate for an in-memory event.
-func IsAttentionEvent(eventType, severity string) bool {
-	return severity == "warn" || severity == "error" || eventType == "alert.fired" ||
+func IsAttentionEvent(eventType, severity string, extra map[string]string) bool {
+	return severity == "warn" || severity == "error" ||
+		(eventType == "alert.fired" && extra["state"] != "resolved") ||
 		eventType == "update.available" || strings.HasPrefix(eventType, "security.")
 }
 

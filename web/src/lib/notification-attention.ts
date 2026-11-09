@@ -4,11 +4,13 @@ import { useSyncExternalStore } from "react";
 // (internal/db/notification_events.go): failures and warnings, fired
 // alerts, security findings and kuso update notices. Applied client-side
 // too because servers older than the ?attention= filter ignore it.
-export function needsAttention(e: { type: string; severity?: string }): boolean {
+// An alert's all-clear keeps the alert.fired type with extra.state
+// "resolved"; it's a recovery, not something to act on.
+export function needsAttention(e: { type: string; severity?: string; extra?: Record<string, string> }): boolean {
   return (
     e.severity === "warn" ||
     e.severity === "error" ||
-    e.type === "alert.fired" ||
+    (e.type === "alert.fired" && e.extra?.state !== "resolved") ||
     e.type === "update.available" ||
     e.type.startsWith("security.")
   );
@@ -134,7 +136,7 @@ function writeLocal(next: readonly LocalRead[]) {
   readListeners.forEach((l) => l());
 }
 
-export function markLocallyRead(e: { id: number; type: string; severity?: string }) {
+export function markLocallyRead(e: { id: number; type: string; severity?: string; extra?: Record<string, string> }) {
   const cur = readLocal();
   if (cur.some((r) => r.id === e.id)) return;
   writeLocal([...cur, { id: e.id, attention: needsAttention(e) }]);
@@ -166,7 +168,8 @@ export function useLocalReads(): readonly LocalRead[] {
   return useSyncExternalStore(subscribeReads, readLocal, () => EMPTY_READS);
 }
 
-// Badge text: the count is capped so it stays a corner dot, not a pill.
+// Badge text: the exact count up to 99, so it matches the panel's
+// "42 unread"; past that the panel's number is the precise one.
 export function badgeCount(n: number): string {
-  return n > 9 ? "9+" : String(n);
+  return n > 99 ? "99+" : String(n);
 }

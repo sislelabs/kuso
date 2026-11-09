@@ -265,7 +265,9 @@ func (h *AlertsHandler) Test(w http.ResponseWriter, r *http.Request) {
 		extra["service"] = rule.Service
 	}
 	ev := notify.AlertFired(rule.Name, "Test notification for this alert rule, sent from the kuso dashboard. Nothing is wrong.", rule.Severity, extra)
-	ev.Title = "Test · " + ev.Title
+	// "✗ Alert · x" → "✗ Test alert · x": the glyph stays first like on
+	// every other card.
+	ev.Title = strings.Replace(ev.Title, "Alert · ", "Test alert · ", 1)
 	results, muted, err := h.Notify.DeliverNow(ctx, ev)
 	if err != nil {
 		h.fail(w, "test alert", err)

@@ -19,7 +19,8 @@ function renderWithFailedQuery(key: QueryKey, ui: ReactElement): string {
 describe("failed queries render an error, not an empty state", () => {
   it("Errors tab says it couldn't load instead of 'No errors detected'", () => {
     const html = renderWithFailedQuery(
-      errorsQueryKey("alpha", "web", "24h"),
+      // The Errors tab lists open and resolved groups in one query.
+      [...errorsQueryKey("alpha", "web", "24h"), "with-resolved"],
       <ServiceErrorsPanel project="alpha" service="web" />,
     );
     expect(html).not.toContain("No errors detected");

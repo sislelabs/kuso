@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sinceDeployWindow } from "./resolve";
+import { errorGroupState, sinceDeployWindow } from "./resolve";
 
 describe("sinceDeployWindow", () => {
   const now = Date.parse("2026-11-09T12:00:00Z");
@@ -11,5 +11,13 @@ describe("sinceDeployWindow", () => {
     expect(sinceDeployWindow("2026-01-01T00:00:00Z", now)).toBe(`${30 * 24 * 60}m`);
     expect(sinceDeployWindow(undefined, now)).toBeNull();
     expect(sinceDeployWindow("nope", now)).toBeNull();
+  });
+});
+
+describe("errorGroupState", () => {
+  it("tells open, recurred and resolved apart", () => {
+    expect(errorGroupState({ lastSeen: "2026-11-09T12:00:00Z" })).toBe("open");
+    expect(errorGroupState({ lastSeen: "2026-11-09T12:00:00Z", resolvedAt: "2026-11-09T11:00:00Z" })).toBe("recurred");
+    expect(errorGroupState({ lastSeen: "2026-11-09T10:00:00Z", resolvedAt: "2026-11-09T11:00:00Z" })).toBe("resolved");
   });
 });

@@ -52,11 +52,15 @@ func ServiceLink(project, service, tab, env string) string {
 	if u == "" {
 		return ""
 	}
+	q := url.Values{}
 	if tab != "" {
-		u += "&tab=" + url.QueryEscape(tab)
+		q.Set("tab", tab)
 	}
 	if env != "" {
-		u += "&env=" + url.QueryEscape(env)
+		q.Set("env", env)
+	}
+	if len(q) > 0 {
+		u += "?" + q.Encode()
 	}
 	return u
 }
@@ -94,13 +98,17 @@ func PodCrashed(c PodCrash) Event {
 	}
 	link := serviceURL(c.Project, c.Service)
 	if link != "" && c.Classification != nil && c.Classification.Tab != "" {
-		link += "&tab=" + string(c.Classification.Tab) + "&kind=" + string(c.Classification.Kind)
+		link += "?tab=" + string(c.Classification.Tab) + "&kind=" + string(c.Classification.Kind)
 		if c.Classification.LineNum > 0 {
 			link += "&highlight=" + strconv.Itoa(c.Classification.LineNum)
 		}
 	}
 	if link != "" && c.Env != "" {
-		link += "&env=" + url.QueryEscape(c.Env)
+		sep := "?"
+		if strings.Contains(link, "?") {
+			sep = "&"
+		}
+		link += sep + "env=" + url.QueryEscape(c.Env)
 	}
 	return Event{
 		Type:           EventPodCrashed,

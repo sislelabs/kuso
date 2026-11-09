@@ -87,6 +87,12 @@ func TestDeployFailedFinding(t *testing.T) {
 	if !strings.Contains(f.details["shop/job"], "release hook failed") {
 		t.Errorf("release detail = %q", f.details["shop/job"])
 	}
+	// The card names the build by branch + commit, never its CR name.
+	named := build("shop-api-c850e9b0ef35-mw883yzn", "shop", "api", "failed", wlNow.Add(-time.Minute))
+	named.Spec.Branch, named.Spec.Ref = "main", "c850e9b0ef35aa11"
+	if d := deployFailedFinding(r, []kube.KusoBuild{named}, wlNow).details["shop/api"]; d != "shop/api: build of main@c850e9b failed" {
+		t.Errorf("detail = %q", d)
+	}
 	// An already-firing target stays open past the window until a later build succeeds.
 	r.FiringTargets = []string{"shop/stale"}
 	f = deployFailedFinding(r, builds, wlNow)

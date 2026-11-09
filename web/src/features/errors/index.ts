@@ -9,5 +9,6 @@ export {
   useServiceErrorCount,
 } from "./errors";
 export type { ServiceErrorCount } from "./errors";
-export { errorTitle } from "./title";
-export { sinceDeployWindow, useResolveError } from "./resolve";
+export { errorTitle, groupTitle } from "./title";
+export { errorGroupState, sinceDeployWindow, useErrorGroupsWithResolved, useResolveError } from "./resolve";
+export type { ErrorGroupState } from "./resolve";

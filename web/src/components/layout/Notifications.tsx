@@ -41,6 +41,8 @@ interface FeedEvent {
   url?: string;
   createdAt: string;
   readAt?: string | null;
+  // alert.fired rows carry state "resolved" on the all-clear.
+  extra?: Record<string, string>;
   // classification rides on failure events (build.failed, pod.crashed)
   // when the server's internal/failures package matched a known kind;
   // its summary says *why* something failed.

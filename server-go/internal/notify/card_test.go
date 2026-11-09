@@ -60,7 +60,7 @@ func TestDiscordPayload_LinksSurviveTrim(t *testing.T) {
 	e := Event{
 		Type: EventBuildFailed, Severity: "error", Timestamp: time.Now(), Title: "x",
 		Description: strings.Repeat("d", 3400), Fields: fields,
-		Links: []EventLink{{Label: "Logs", URL: "/projects/p?service=s&tab=logs"}, {Label: "Nowhere", URL: "relative-no-slash"}},
+		Links: []EventLink{{Label: "Logs", URL: "/projects/p/services/s?tab=logs"}, {Label: "Nowhere", URL: "relative-no-slash"}},
 	}
 	em := embedOf(discordPayload(e, ""))
 	if desc, _ := em["description"].(string); strings.Contains(desc, "Logs") {
@@ -68,7 +68,7 @@ func TestDiscordPayload_LinksSurviveTrim(t *testing.T) {
 	}
 	fs := fieldsOf(em)
 	last := fs[len(fs)-1]
-	if last["name"] != blankFieldName || last["value"] != "[Logs](https://k.example.com/projects/p?service=s&tab=logs)" {
+	if last["name"] != blankFieldName || last["value"] != "[Logs](https://k.example.com/projects/p/services/s?tab=logs)" {
 		t.Errorf("link row missing as last field after trim: %+v", last)
 	}
 }

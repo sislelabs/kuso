@@ -250,6 +250,32 @@ export function describeRule(rule: AlertRule): string {
   }
 }
 
+// Kinds that notify once when the condition starts and once when it
+// clears (server db.IsEpisodicAlertKind); the rest re-notify while it holds.
+const EPISODIC_KINDS = new Set([
+  "http_5xx_rate",
+  "http_p95_latency",
+  "cert_expiry",
+  "dns_mismatch",
+  "crashloop",
+  "deploy_failed",
+  "healthcheck_failing",
+  "rollout_failing",
+]);
+
+// notifyCadence says how often a rule notifies, next to describeRule's
+// "fires when": the throttle is a different number from the window, and
+// reading "≥1 in 5m" next to a notice every 15 min looked like a bug.
+export function notifyCadence(rule: Pick<AlertRule, "kind" | "throttleSeconds">): string {
+  const every = rule.throttleSeconds > 0 ? formatSec(rule.throttleSeconds) : "";
+  if (EPISODIC_KINDS.has(rule.kind)) {
+    return every
+      ? `notifies when it starts and when it clears, at most once per ${every}`
+      : "notifies when it starts and when it clears";
+  }
+  return every ? `re-notifies at most every ${every} while it holds` : "notifies each time it matches";
+}
+
 // parseDur: "5m" / "30s" / "300" → seconds. Invalid → 0 (server applies default).
 export function parseDur(s: string): number {
   const m = s.trim().match(/^(\d+)\s*([smhd]?)$/);

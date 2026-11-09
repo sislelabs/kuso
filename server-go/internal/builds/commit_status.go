@@ -244,7 +244,7 @@ func (p *Poller) syncCommitStatuses(ctx context.Context, ns string, builds []kub
 			defer cancel()
 			statusCtx, env := p.commitStatusContext(sctx, ns, build)
 			short := strings.TrimPrefix(build.Spec.Service, build.Spec.Project+"-")
-			path := buildEventURL(build.Spec.Project, short) + "&tab=deployments"
+			path := buildEventURL(build.Spec.Project, short) + "?tab=deployments"
 			if env != "" {
 				path = withEnvParam(path, []buildTarget{{Env: env}})
 			}

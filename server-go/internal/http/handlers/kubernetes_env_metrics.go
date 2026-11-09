@@ -236,6 +236,97 @@ type timeseriesResponse struct {
 	Range  string                  `json:"range"`
 	Step   string                  `json:"step"`
 	Series map[string][][2]float64 `json:"series"` // metric name → [t, v] points
+	// Traffic says why the request series is empty, so the panel can tell
+	// "no traffic" from "nothing is measuring traffic". One of
+	// trafficOK, trafficIdle, trafficNever, trafficUnscraped,
+	// trafficUnavailable.
+	Traffic string `json:"traffic"`
+}
+
+const (
+	// trafficOK: requests were recorded in the range.
+	trafficOK = "ok"
+	// trafficIdle: the env has request counters, just none in the range.
+	trafficIdle = "idle"
+	// trafficNever: Prometheus scrapes the ingress, but no request has
+	// reached this env since the ingress's counters started.
+	trafficNever = "never"
+	// trafficUnscraped: Prometheus answers but holds no ingress request
+	// metrics at all.
+	trafficUnscraped = "unscraped"
+	// trafficUnavailable: Prometheus didn't answer.
+	trafficUnavailable = "unavailable"
+)
+
+// classifyTraffic explains an empty request series with two instant
+// queries; it only runs when the series is empty.
+func classifyTraffic(ctx context.Context, matcher string, requests [][2]float64, rangeErr error) string {
+	if rangeErr != nil {
+		return trafficUnavailable
+	}
+	if len(requests) > 0 {
+		return trafficOK
+	}
+	n, err := promInstantCount(ctx, fmt.Sprintf(`count(traefik_service_requests_total{service=~"%s"})`, matcher))
+	if err != nil {
+		return trafficUnavailable
+	}
+	if n > 0 {
+		return trafficIdle
+	}
+	n, err = promInstantCount(ctx, `count(traefik_service_requests_total)`)
+	if err != nil {
+		return trafficUnavailable
+	}
+	if n > 0 {
+		return trafficNever
+	}
+	return trafficUnscraped
+}
+
+// promInstantCount runs an instant query whose result is one scalar-ish
+// sample (a count()); an empty result is 0.
+func promInstantCount(ctx context.Context, query string) (float64, error) {
+	base := promBaseURL
+	if v := os.Getenv("KUSO_PROMETHEUS_URL"); v != "" {
+		base = v
+	}
+	u := base + "/api/v1/query?" + url.Values{"query": {query}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := promHTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0, fmt.Errorf("prometheus: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Value []any `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0, err
+	}
+	if body.Status != "success" {
+		return 0, fmt.Errorf("prometheus: status %q", body.Status)
+	}
+	if len(body.Data.Result) == 0 || len(body.Data.Result[0].Value) != 2 {
+		return 0, nil
+	}
+	v, _ := body.Data.Result[0].Value[1].(string)
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("prometheus: bad value %q", v)
+	}
+	return n, nil
 }
 
 // EnvTimeseries returns request rate / error rate / p95 latency for
@@ -308,8 +399,12 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
 
+	var requestsErr error
 	for name, q := range queries {
 		points, perr := promQueryRange(ctx, q, start, end, stepStr)
+		if name == "requests" {
+			requestsErr = perr
+		}
 		if perr != nil {
 			// Don't fail the whole response — return what we have and
 			// let the panel fall back to an empty series. Common case
@@ -319,6 +414,7 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 		}
 		out.Series[name] = points
 	}
+	out.Traffic = classifyTraffic(ctx, matcher, out.Series["requests"], requestsErr)
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -12,8 +12,7 @@ import {
   ruleStatus,
   ruleToForm,
   splitDur,
-  type RuleFormState,
-} from "./form";
+  type RuleFormState, notifyCadence } from "./form";
 import type { AlertRule } from "./api";
 
 function form(over: Partial<RuleFormState>): RuleFormState {
@@ -225,5 +224,15 @@ describe("ruleToForm", () => {
     expect(f.window).toBe("90s");
     expect(f.query).toBe("panic");
     expect(f.threshold).toBe("3");
+  });
+});
+
+describe("notifyCadence", () => {
+  it("separates how often a rule notifies from when it fires", () => {
+    expect(notifyCadence({ kind: "log_match", throttleSeconds: 900 })).toBe("re-notifies at most every 15m while it holds");
+    expect(notifyCadence({ kind: "crashloop", throttleSeconds: 600 })).toBe(
+      "notifies when it starts and when it clears, at most once per 10m",
+    );
+    expect(notifyCadence({ kind: "rollout_failing", throttleSeconds: 0 })).toBe("notifies when it starts and when it clears");
   });
 });

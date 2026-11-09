@@ -154,8 +154,9 @@ export function LogViewer({
     env: defaultEnv,
     levels: [],
     pod: "",
-    // Phones start unwrapped: one line per entry, tap a line for the full text.
-    wrap: !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 639px)").matches),
+    // Wrapped everywhere: on phones a truncated line hid the part that
+    // mattered (the error's tail); the toggle still unwraps.
+    wrap: true,
     scrollTop: null,
     ...takePendingLogView(project, service),
   }));
@@ -442,16 +443,24 @@ export function LogViewer({
     URL.revokeObjectURL(url);
   };
 
-  // Keyboard: ↑/↓ step through rows while the detail panel is open.
+  // Keyboard: from the focused list, ↓ (or Enter) opens the first line
+  // and ↑ the newest; with a line open ↑/↓ step through rows. Esc in the
+  // detail panel closes it and returns focus here.
   const onListKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!selected || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
-    e.preventDefault();
-    const i = visible.findIndex((r) => r.key === selected.key);
-    const next = visible[i + (e.key === "ArrowDown" ? 1 : -1)];
-    if (next) {
-      setSelected(next);
-      document.getElementById(rowDomId(next.key))?.scrollIntoView({ block: "nearest" });
+    if (e.target !== e.currentTarget && !selected) return;
+    const down = e.key === "ArrowDown";
+    if (!down && e.key !== "ArrowUp" && !(e.key === "Enter" && !selected)) return;
+    let next: Row | undefined;
+    if (!selected) {
+      next = e.key === "ArrowUp" ? visible[visible.length - 1] : visible[0];
+    } else {
+      const i = visible.findIndex((r) => r.key === selected.key);
+      next = visible[i + (down ? 1 : -1)];
     }
+    if (!next) return;
+    e.preventDefault();
+    setSelected(next);
+    document.getElementById(rowDomId(next.key))?.scrollIntoView({ block: "nearest" });
   };
 
   // ---- derived labels -----------------------------------------------------
@@ -697,7 +706,7 @@ export function LogViewer({
           tabIndex={0}
           role="log"
           aria-live="off"
-          aria-label="Log lines"
+          aria-label="Log lines. Press Down arrow to open the first line, Up arrow for the newest."
           className="h-full overflow-y-auto overflow-x-auto py-1 font-mono text-xs leading-[1.55] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/40"
         >
           <div ref={contentRef}>
@@ -1239,7 +1248,7 @@ function StatusLine({
     const state =
       connection === "live"
         ? follow
-          ? { dot: "bg-[var(--success)] animate-pulse motion-reduce:animate-none", text: "Live" }
+          ? { dot: "bg-[var(--success)] animate-pulse motion-reduce:animate-none", text: "Streaming" }
           : { dot: "bg-[var(--building)]", text: "Paused" }
         : connection === "connecting"
           ? { dot: "bg-[var(--text-tertiary)] animate-pulse motion-reduce:animate-none", text: "Connecting…" }

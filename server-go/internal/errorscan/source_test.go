@@ -87,7 +87,7 @@ func TestTick_SkipsNonRuntimePods(t *testing.T) {
 		{"proj-svc-main-q8w7e", "npm ERR! ERROR could not resolve"},
 	} {
 		if _, err := d.DB.Exec(`INSERT INTO "LogLine" (ts, pod, project, service, env, line) VALUES ($1, $2, 'proj', 'proj-svc', '', $3)`,
-			time.Now(), row.pod, row.line); err != nil {
+			time.Now().Add(-time.Minute), row.pod, row.line); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}

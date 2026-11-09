@@ -82,9 +82,25 @@ type Scanner struct {
 	// Pods is logship's record of which pods are builds/release hooks.
 	// Optional: nil, or a pod it hasn't seen, falls back to a heuristic.
 	Pods *PodKinds
+
+	// now is a test seam; nil means time.Now.
+	now func() time.Time
+	// g carries open error chains across batches and ticks (see hold.go).
+	g *grouper
+	// fedTo is the last LogLine id fed to g by this process.
+	fedTo int64
+	// replayTo is the scannedTo of a previous process: chains starting at
+	// or below it may have been recorded already and are deduplicated.
+	replayTo int64
+	matched  int
 }
 
-const watermarkKey = "errorscan.lastLogLineId"
+const (
+	watermarkKey = "errorscan.lastLogLineId"
+	// scannedToKey is the newest LogLine id fed to the grouper. The
+	// watermark trails it while a chain is held open.
+	scannedToKey = "errorscan.scannedTo"
+)
 
 // HeartbeatInterval is the scanner's default tick cadence, exported so
 // main.go can register errorscan in the serverstate liveness registry at
@@ -152,22 +168,44 @@ func (s *Scanner) tick(ctx context.Context) {
 	if err := s.refingerprintStep(ctx); err != nil {
 		s.Logger.Warn("errorscan: rewrite fingerprints", "err", err)
 	}
+	if err := s.initGrouper(ctx); err != nil {
+		s.Logger.Warn("errorscan: read scanned-to", "err", err)
+		return
+	}
+	prev := wm
 	wm, err = s.skipAhead(ctx, wm)
 	if err != nil {
 		s.Logger.Warn("errorscan: skip ahead", "err", err)
 		return
 	}
+	if wm > prev {
+		// Chains held from before the jump can't be continued by the
+		// lines it skipped; record them as they stand.
+		s.g.flush()
+	}
+	from := max(wm, s.fedTo)
 	deadline := time.Now().Add(s.TickBudget)
+	caughtUp := false
 	for i := 0; i < s.MaxBatchesPerTick && ctx.Err() == nil; i++ {
-		scanned, next, err := s.scanBatch(ctx, wm)
+		scanned, next, err := s.scanBatch(ctx, from)
 		if err != nil {
 			s.Logger.Warn("errorscan: batch", "err", err)
 			return
 		}
-		wm = next
-		if scanned < s.BatchSize || time.Now().After(deadline) {
-			return
+		from = next
+		if scanned < s.BatchSize {
+			caughtUp = true
+			break
 		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	if caughtUp {
+		s.g.flushSettled(s.clock(), settleWindow, maxHold)
+	}
+	if err := s.saveProgress(ctx); err != nil {
+		s.Logger.Warn("errorscan: save watermark", "err", err)
 	}
 }
 
@@ -190,9 +228,11 @@ func (s *Scanner) skipAhead(ctx context.Context, wm int64) (int64, error) {
 	return target, nil
 }
 
-// scanBatch scans up to BatchSize LogLine rows after wm, records matches
-// and saves the new watermark. Returns rows scanned and the new watermark.
-func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
+// scanBatch feeds up to BatchSize LogLine rows after `from` to the
+// grouper and returns rows scanned and the last id read. Chains stay open
+// across batches: a batch boundary falls anywhere, including inside a
+// traceback, so only flushSettled closes a chain nothing has extended.
+func (s *Scanner) scanBatch(ctx context.Context, from int64) (int, int64, error) {
 	// $N placeholders, NOT `?`. The driver is lib/pq (see internal/db),
 	// which passes `?` through as a literal — the query then fails to
 	// parse on EVERY tick, so this scanner silently never populated
@@ -205,33 +245,16 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 		WHERE id > $1
 		ORDER BY id ASC
 		LIMIT $2`,
-		wm, s.BatchSize,
+		from, s.BatchSize,
 	)
 	if err != nil {
-		return 0, wm, err
+		return 0, from, err
 	}
 	defer rows.Close()
 
-	matched := 0
+	s.matched = 0
 	scanned := 0
-	maxID := wm
-	g := newGrouper(func(c *errorChain) {
-		title := canonicalTitle(c.title, c.lines)
-		if err := s.DB.InsertErrorEvent(ctx, db.ErrorEvent{
-			Project:     c.head.project,
-			Service:     c.head.service,
-			Env:         c.head.env,
-			Pod:         c.head.pod,
-			Fingerprint: fingerprintFor(title),
-			Message:     truncateForMessage(title),
-			RawLine:     truncateForRaw(c.raw()),
-			Ts:          c.head.ts,
-		}); err != nil {
-			s.Logger.Warn("errorscan: insert", "err", err)
-			return
-		}
-		matched++
-	})
+	maxID := from
 	for rows.Next() {
 		var l scanLine
 		if err := rows.Scan(&l.id, &l.ts, &l.pod, &l.project, &l.service, &l.env, &l.line); err != nil {
@@ -245,23 +268,51 @@ func (s *Scanner) scanBatch(ctx context.Context, wm int64) (int, int64, error) {
 		if !s.runtimeLine(l.pod, l.line) {
 			continue
 		}
-		g.feed(l, matchesAnyPattern(l.line))
+		s.g.feed(l, matchesAnyPattern(l.line))
 	}
-	// A chain cut by the batch boundary is recorded as it stands; the
-	// watermark below moves past its lines either way.
-	g.flush()
 	if err := rows.Err(); err != nil {
-		return scanned, wm, err
+		return scanned, from, err
 	}
-	if maxID > wm {
-		if err := s.DB.SaveScannerWatermark(ctx, watermarkKey, maxID); err != nil {
-			return scanned, wm, err
-		}
+	s.fedTo = maxID
+	if err := s.saveProgress(ctx); err != nil {
+		return scanned, maxID, err
 	}
 	if scanned > 0 {
-		s.Logger.Debug("errorscan: batch", "scanned", scanned, "matched", matched, "watermark", maxID)
+		s.Logger.Debug("errorscan: batch", "scanned", scanned, "matched", s.matched, "scannedTo", maxID)
 	}
 	return scanned, maxID, nil
+}
+
+// record writes one finished error chain as an ErrorEvent.
+func (s *Scanner) record(ctx context.Context, c *errorChain) {
+	title := canonicalTitle(c.title, c.lines)
+	e := db.ErrorEvent{
+		Project:     c.head.project,
+		Service:     c.head.service,
+		Env:         c.head.env,
+		Pod:         c.head.pod,
+		Fingerprint: fingerprintFor(title),
+		Message:     truncateForMessage(title),
+		RawLine:     truncateForRaw(c.raw()),
+		Ts:          c.head.ts,
+	}
+	if c.head.id <= s.replayTo {
+		// A previous process may have recorded this chain before it
+		// stopped; the watermark only promised the held ones were not.
+		dup, err := s.DB.ErrorEventExists(ctx, e.Project, e.Service, e.Pod, e.Fingerprint, e.Ts)
+		if err != nil {
+			s.Logger.Warn("errorscan: dedupe", "err", err)
+			return
+		}
+		if dup {
+			return
+		}
+	}
+	if err := s.DB.InsertErrorEvent(ctx, e); err != nil {
+		s.Logger.Warn("errorscan: insert", "err", err)
+		return
+	}
+	s.matched++
 }
 
 // matchesAnyPattern returns true if any of the error regexes hits.

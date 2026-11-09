@@ -64,6 +64,8 @@ func TestNotificationAttentionFilter(t *testing.T) {
 		{Type: "build.failed", Title: "fail", Severity: "error", Project: "p"},
 		{Type: "pod.crashed", Title: "warn", Severity: "warn"},
 		{Type: "alert.fired", Title: "alert", Severity: "info"},
+		// The all-clear for that alert is activity, not attention.
+		{Type: "alert.fired", Title: "✓ Resolved · alert", Severity: "info", Extra: map[string]string{"state": "resolved", "rule": "r"}},
 		{Type: "update.available", Title: "update", Severity: "info"},
 		{Type: "security.vulnerabilities_found", Title: "vulns", Severity: "info", Project: "p"},
 	}
@@ -75,15 +77,15 @@ func TestNotificationAttentionFilter(t *testing.T) {
 	if n, _ := d.CountUnreadNotificationEventsForUser(ctx, "carol", true); n != 5 {
 		t.Errorf("attention unread = %d, want 5", n)
 	}
-	if n, _ := d.CountUnreadNotificationEventsForUser(ctx, "carol", false); n != 7 {
-		t.Errorf("all unread = %d, want 7", n)
+	if n, _ := d.CountUnreadNotificationEventsForUser(ctx, "carol", false); n != 8 {
+		t.Errorf("all unread = %d, want 8", n)
 	}
 	list, err := d.ListNotificationEventsForUser(ctx, "carol", 50, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range list {
-		if !IsAttentionEvent(e.Type, e.Severity) {
+		if !IsAttentionEvent(e.Type, e.Severity, e.Extra) {
 			t.Errorf("attention list carried %s/%s", e.Type, e.Severity)
 		}
 	}
@@ -102,18 +104,21 @@ func TestNotificationAttentionFilter(t *testing.T) {
 func TestIsAttentionEvent(t *testing.T) {
 	cases := []struct {
 		typ, sev string
+		extra    map[string]string
 		want     bool
 	}{
-		{"build.succeeded", "info", false},
-		{"pod.recovered", "info", false},
-		{"build.failed", "warn", true},
-		{"build.failed", "error", true},
-		{"alert.fired", "info", true},
-		{"update.available", "info", true},
-		{"security.scan_failed", "info", true},
+		{"build.succeeded", "info", nil, false},
+		{"pod.recovered", "info", nil, false},
+		{"build.failed", "warn", nil, true},
+		{"build.failed", "error", nil, true},
+		{"alert.fired", "info", nil, true},
+		{"alert.fired", "info", map[string]string{"state": "resolved"}, false},
+		{"alert.fired", "warn", map[string]string{"state": "resolved"}, true},
+		{"update.available", "info", nil, true},
+		{"security.scan_failed", "info", nil, true},
 	}
 	for _, c := range cases {
-		if got := IsAttentionEvent(c.typ, c.sev); got != c.want {
+		if got := IsAttentionEvent(c.typ, c.sev, c.extra); got != c.want {
 			t.Errorf("IsAttentionEvent(%q,%q) = %v, want %v", c.typ, c.sev, got, c.want)
 		}
 	}

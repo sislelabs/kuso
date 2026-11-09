@@ -233,7 +233,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
 
 const CONNECTION_META: Record<StreamConnection, { dot: string; label: string }> = {
   connecting: { dot: "bg-[var(--text-tertiary)] animate-pulse motion-reduce:animate-none", label: "Connecting…" },
-  live: { dot: "bg-[var(--success)]", label: "Live" },
+  live: { dot: "bg-[var(--success)]", label: "Streaming" },
   reconnecting: { dot: "bg-[var(--building)] animate-pulse motion-reduce:animate-none", label: "Reconnecting…" },
   ended: { dot: "bg-[var(--text-tertiary)]", label: "Ended" },
   failed: { dot: "bg-[var(--error)]", label: "Disconnected" },

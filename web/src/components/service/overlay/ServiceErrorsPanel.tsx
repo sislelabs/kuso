@@ -4,11 +4,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Link from "next/link";
-import { AlertTriangle, BellPlus, CheckCircle2, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, ScrollText } from "lucide-react";
-import { useBuilds, useErrors } from "@/features/services";
+import { AlertTriangle, BellPlus, CheckCircle2, ChevronDown, ChevronRight, Copy, GitCommitHorizontal, RotateCcw, ScrollText } from "lucide-react";
+import { useBuilds } from "@/features/services";
 import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
-import { errorTitle, sinceDeployWindow, useResolveError, useServiceErrorCount } from "@/features/errors";
+import {
+  errorGroupState,
+  errorTitle,
+  groupTitle,
+  sinceDeployWindow,
+  useErrorGroupsWithResolved,
+  useResolveError,
+  useServiceErrorCount,
+} from "@/features/errors";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { ApiError } from "@/lib/api-client";
 import { toastError } from "@/lib/errors";
@@ -72,13 +80,19 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
   }, [deployedAt, sinceDeploy]);
   const range = sinceDeploy && deployWindow ? deployWindow : since;
   const rangeWords = sinceDeploy && deployWindow ? "since the current deploy" : `in the last ${timeRangeSpan(since)}`;
-  const errors = useErrors(project, service, range, env);
-  const groups = errors.data ?? [];
+  const errors = useErrorGroupsWithResolved(project, service, range, env);
+  const [pickedView, setView] = useState<"open" | "resolved">("open");
+  const all = errors.data ?? [];
+  const openGroups = all.filter((g) => errorGroupState(g) !== "resolved");
+  const resolvedGroups = all.filter((g) => errorGroupState(g) === "resolved");
+  // Reopening the last resolved group drops the filter with it.
+  const view = resolvedGroups.length === 0 ? "open" : pickedView;
+  const groups = view === "open" ? openGroups : resolvedGroups;
   // The headline total comes from the same summary as the canvas badge and
   // the tab badge, so the three agree even when the list is cut at 50.
   const count = useServiceErrorCount(project, service, range, env);
-  const total = count.data?.occurrences ?? groups.reduce((a, g) => a + g.count, 0);
-  const groupCount = count.data?.groups ?? groups.length;
+  const total = count.data?.occurrences ?? openGroups.reduce((a, g) => a + g.count, 0);
+  const groupCount = count.data?.groups ?? openGroups.length;
   const builds = useBuilds(project, service);
   const windowStart = Date.now() - (timeRangeMs(range) ?? 0);
   const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${range}/${env}`);
@@ -106,10 +120,11 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Errors</h3>
-          <p className="text-xs text-[var(--text-secondary)]">
+          <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-secondary)]" title={ERRORS_MEANING}>
             {errors.isError || errors.isPending
               ? rangeWords.charAt(0).toUpperCase() + rangeWords.slice(1)
-              : `${plural(total, "error")} ${rangeWords} · ${plural(groupCount, "group")}${groupCount > groups.length ? ` · newest ${groups.length} shown` : ""}`}
+              : `${plural(groupCount, "error group")} · ${plural(total, "occurrence")} ${rangeWords}${groupCount > openGroups.length ? ` · newest ${openGroups.length} shown` : ""}`}
+            {errors.isSuccess && <LiveHint />}
           </p>
           <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
             {announcement}
@@ -167,6 +182,28 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
         </div>
       </div>
 
+      {resolvedGroups.length > 0 && (
+        <div role="group" aria-label="Show" className="inline-flex rounded-md border border-[var(--border-subtle)] p-0.5 text-xs">
+          {(["open", "resolved"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={view === v}
+              onClick={() => setView(v)}
+              className={cn(
+                "rounded px-2.5 py-1",
+                view === v
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+              )}
+            >
+              {v === "open" ? "Open" : "Resolved"}{" "}
+              <span className="tabular-nums text-[var(--text-tertiary)]">{(v === "open" ? openGroups : resolvedGroups).length}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {errors.isPending ? (
         <div className="space-y-2">
           <Skeleton className="h-16 w-full" />
@@ -175,6 +212,10 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
         </div>
       ) : errors.isError ? (
         <QueryErrorState what="errors" error={errors.error} onRetry={() => void errors.refetch()} />
+      ) : groups.length === 0 && view === "resolved" ? (
+        <p className="rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-8 text-center text-sm text-[var(--text-secondary)]">
+          Nothing resolved {rangeWords}. A resolved group moves back to Open, marked Recurred, when it happens again.
+        </p>
       ) : groups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-10 text-center">
           <p className="text-sm font-medium text-[var(--text-primary)]">No unresolved errors {rangeWords}</p>
@@ -216,6 +257,22 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
         </ul>
       )}
     </div>
+  );
+}
+
+// What the Errors tab counts, and what it doesn't, so its number isn't
+// read as the logs' level chips or the metrics' 5xx rate.
+const ERRORS_MEANING =
+  "Error groups: ERROR, Exception, panic and Traceback lines from this service's runtime logs, grouped by message. The Logs tab's error chip counts error lines in its current view; Metrics shows HTTP 5xx responses from the ingress.";
+
+// LiveHint: these counts refresh on their own, so a number that moves
+// between two looks isn't a bug.
+function LiveHint() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[var(--text-tertiary)]" title="Counts refresh on their own every 30–60 seconds">
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--success)] motion-safe:animate-pulse" />
+      live
+    </span>
   );
 }
 
@@ -302,15 +359,27 @@ function ErrorRow({
   const fb = firstBuild?.build;
   const fbLabel = fb ? (fb.commitSha ? shortSha(fb.commitSha) : (fb.ref ?? fb.id)) : "";
   const resolve = useResolveError(project, service);
+  const state = errorGroupState(group);
+  const title = group.message ? groupTitle(group.message) : "(empty error)";
+  const unsupported = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);
+  const reopen = () =>
+    resolve.mutate(
+      { fingerprint: group.fingerprint, reopen: true },
+      {
+        onSuccess: () => toast.success("Reopened", { description: title }),
+        onError: (e) => toastError(e, "Couldn't reopen"),
+      },
+    );
   const onResolve = () =>
     resolve.mutate(
       { fingerprint: group.fingerprint },
       {
-        onSuccess: () => toast.success("Resolved", { description: "Hidden until it happens again." }),
-        onError: (e) =>
-          e instanceof ApiError && (e.status === 404 || e.status === 405)
-            ? toast.error("This server can't resolve errors yet")
-            : toastError(e, "Couldn't resolve"),
+        onSuccess: () =>
+          toast.success("Resolved", {
+            description: "Moved to Resolved until it happens again.",
+            action: { label: "Undo", onClick: reopen },
+          }),
+        onError: (e) => (unsupported(e) ? toast.error("This server can't resolve errors yet") : toastError(e, "Couldn't resolve")),
       },
     );
   return (
@@ -326,7 +395,15 @@ function ErrorRow({
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--error)]" aria-hidden />
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 break-words font-mono text-[13px] text-[var(--text-primary)]" title={group.message}>
-            {group.message ? errorTitle(group.message) : "(empty error)"}
+            {state === "recurred" && (
+              <span
+                className="mr-1.5 inline-flex rounded border border-[var(--warning)]/40 px-1 align-[1px] font-sans text-[11px] font-medium text-[var(--warning)]"
+                title={`Resolved ${group.resolvedAt ? new Date(group.resolvedAt).toLocaleString() : ""}, then seen again`}
+              >
+                Recurred
+              </span>
+            )}
+            {title}
           </div>
           <div className="mt-0.5 text-xs text-[var(--text-secondary)] sm:hidden">
             <span className="font-semibold tabular-nums text-[var(--text-primary)]">{group.count.toLocaleString()}</span>{" "}
@@ -358,8 +435,8 @@ function ErrorRow({
             )}
             {group.sampleEnv && <span>{group.sampleEnv}</span>}
             {group.resolvedAt && (
-              <span className="text-[var(--warning)]" title={`Resolved ${new Date(group.resolvedAt).toLocaleString()}`}>
-                Recurred after being resolved {relativeTime(group.resolvedAt)}
+              <span className={state === "recurred" ? "text-[var(--warning)]" : undefined} title={new Date(group.resolvedAt).toLocaleString()}>
+                Resolved {relativeTime(group.resolvedAt)}
               </span>
             )}
           </div>
@@ -378,14 +455,13 @@ function ErrorRow({
       </button>
       <button
         type="button"
-        onClick={onResolve}
+        onClick={state === "resolved" ? reopen : onResolve}
         disabled={resolve.isPending}
-        title="Resolve: hide this group until it happens again"
+        title={state === "resolved" ? "Reopen: move this group back to Open" : "Resolve: move this group to Resolved until it happens again"}
         className="flex shrink-0 items-center gap-1 border-l border-[var(--border-subtle)] px-3 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/40 hover:text-[var(--text-primary)] disabled:opacity-50"
       >
-        <CheckCircle2 aria-hidden className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">Resolve</span>
-        <span className="sr-only sm:hidden">Resolve</span>
+        {state === "resolved" ? <RotateCcw aria-hidden className="h-3.5 w-3.5" /> : <CheckCircle2 aria-hidden className="h-3.5 w-3.5" />}
+        <span className="max-sm:sr-only">{state === "resolved" ? "Reopen" : "Resolve"}</span>
       </button>
       </div>
       {isOpen && (

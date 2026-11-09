@@ -9,7 +9,7 @@ import (
 //
 // Discord rejects embeds whose `url` field isn't a fully-qualified
 // http(s) URL with a cryptic 400 `{"embeds": ["0"]}`. Our event
-// emitters generate in-app paths ("/projects/foo?service=bar"), so
+// emitters generate in-app paths ("/projects/foo/services/bar"), so
 // absoluteURL must lift those to absolute using KUSO_PUBLIC_URL or
 // fall back to https://$KUSO_DOMAIN. When neither is set the field
 // MUST be empty so the caller drops it from the embed.

@@ -59,8 +59,9 @@ const (
 // hideSplitContinuation drops rows the error scanner wrote before it
 // grouped multi-line errors: a continuation line (indented frame, "at …")
 // or a sibling line from the same write ("… line one" / "… line two")
-// that became its own group. A row is such a split when an earlier row
-// from the same pod, with another fingerprint, sits just before it. The
+// that became its own group, or a bare "Traceback (most recent call
+// last):" header whose exception line went into another row. A row is
+// such a split when an earlier row from the same pod, with another fingerprint, sits just before it. The
 // sibling test mirrors errorscan's rule (same millisecond, a shared
 // prefix of at least 16 bytes and half the shorter first line). Every
 // reader below applies it to the row aliased e, so counts agree.
@@ -69,7 +70,7 @@ const hideSplitContinuation = `NOT EXISTS (
 		 WHERE sib.project = e.project AND sib.service = e.service AND sib.pod = e.pod
 		   AND sib.ts < e.ts AND sib.ts >= e.ts - interval '100 milliseconds'
 		   AND sib.fingerprint <> e.fingerprint
-		   AND (e."rawLine" ~ '^(\s|at\s)'
+		   AND (e."rawLine" ~ '^(\s|at\s|Traceback \(most recent call last\):?\s*$)'
 		        OR (sib.ts >= e.ts - interval '1 millisecond'
 		            AND length(split_part(e."rawLine", E'\n', 1)) >= 16
 		            AND left(sib."rawLine", greatest(16, least(length(split_part(sib."rawLine", E'\n', 1)), length(split_part(e."rawLine", E'\n', 1))) / 2))
@@ -387,4 +388,19 @@ func (d *DB) SetErrorEventFingerprint(ctx context.Context, id int64, fingerprint
 		return fmt.Errorf("SetErrorEventFingerprint: %w", err)
 	}
 	return nil
+}
+
+// ErrorEventExists reports whether an occurrence with this pod, start
+// time and fingerprint is already stored. The scanner uses it on the
+// lines a previous process may have recorded before it stopped.
+func (d *DB) ErrorEventExists(ctx context.Context, project, service, pod, fingerprint string, ts time.Time) (bool, error) {
+	var ok bool
+	err := d.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM "ErrorEvent"
+		 WHERE project = $1 AND service = $2 AND ts = $3 AND pod = $4 AND fingerprint = $5)`,
+		project, service, ts.UTC(), pod, fingerprint).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("ErrorEventExists: %w", err)
+	}
+	return ok, nil
 }

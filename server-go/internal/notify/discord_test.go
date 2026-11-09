@@ -25,7 +25,7 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 		Service:     "web",
 		Title:       "✓ Build succeeded · distill / web",
 		Description: "feat(brand): real Papelito mark",
-		URL:         "/projects/distill?service=web",
+		URL:         "/projects/distill/services/web",
 		Severity:    "info",
 		DurationMs:  84_000,
 		Fields: []EventField{
