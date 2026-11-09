@@ -10,7 +10,7 @@ import type { VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 import { addonVersionLabel } from "@/features/addons/version";
-import { ADDON_NODE_CHROME, smallNodeWidth } from "./geometry";
+import { addonNodeWidth } from "./geometry";
 import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
 
 export interface AddonNodeData extends CanvasNodeA11y {
@@ -43,7 +43,9 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
       aria-label={`${shortName}, ${addonLabel(data.addon.spec.kind)}, ${status.label}`}
       onContextMenu={data.__onContext}
       title={status.detail ? `${status.label}: ${status.detail}` : undefined}
-      style={{ width: smallNodeWidth(shortName, ADDON_NODE_CHROME) }}
+      style={{
+        width: addonNodeWidth(shortName, `${status.label} · ${meta.join(" · ")}`, (data.vulns?.fixableCritical ?? 0) > 0),
+      }}
       className={cn(
         // 3 grid units tall (services are 5) so addons read as supporting
         // pieces; both snap to the same 24px grid.

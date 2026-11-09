@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ADDON_NODE_CHROME, facingSides, nextInDirection, readingOrder, serviceNodeWidth, smallNodeWidth, type Box } from "./geometry";
+import { ADDON_NODE_CHROME, addonNodeWidth, facingSides, nextInDirection, readingOrder, serviceNodeWidth, smallNodeWidth, type Box } from "./geometry";
 
 const box = (id: string, x: number, y: number, w = 200, h = 100): Box => ({ id, x, y, w, h });
 
@@ -67,5 +67,12 @@ describe("smallNodeWidth", () => {
     // name text (~7.6px/char) plus the card chrome must fit.
     expect(w).toBeGreaterThanOrEqual(ADDON_NODE_CHROME + 20 * 7.6);
     expect(smallNodeWidth("x".repeat(80), ADDON_NODE_CHROME)).toBe(340);
+  });
+});
+
+describe("addonNodeWidth", () => {
+  it("widens for the CVE chip on the status row", () => {
+    const row = "Live · ClickHouse";
+    expect(addonNodeWidth("clickhouse", row, true)).toBeGreaterThan(addonNodeWidth("clickhouse", row, false));
   });
 });
