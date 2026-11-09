@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.1] — 2026-09-22
+
+### 🐛 Bug Fixes
+- Fix(netpol): target the project's workload namespace, not the release ns ([a81777b](https://github.com/sislelabs/kuso/commit/a81777bff555bf50e285d4aba57e8e0ca43c41ed))
+
 ## [0.26.0] — 2026-09-22
 
 ### 🐛 Bug Fixes

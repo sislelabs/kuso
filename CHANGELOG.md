@@ -19,6 +19,21 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.41.0] — 2026-11-09
+
+### Other
+- List every settings page instead of folding long groups ([798e29f](https://github.com/sislelabs/kuso/commit/798e29f36b5474fbc346bc7b3b31661897c070bd))
+- Stop calling databases on the shared instance Postgres failing ([53dbbbe](https://github.com/sislelabs/kuso/commit/53dbbbe065b7f11f8df3ab49d54893c0d3d89d2c))
+- Probe app readiness every second so a sleeping service wakes faster ([ed7058d](https://github.com/sislelabs/kuso/commit/ed7058d61f5f9ff11b0391863e8b22cccbd20a52))
+- Keep the groups list at its own height when a group is open ([4082915](https://github.com/sislelabs/kuso/commit/4082915567e00d2c05fe48554a085e4ab5192a7a))
+- Leave deleted projects out of a user's access view ([0a02de0](https://github.com/sislelabs/kuso/commit/0a02de0e1bacecdb91748b11435e9b3b8c1e7307))
+- Open a service's site when its host is clicked on the canvas ([e359d0a](https://github.com/sislelabs/kuso/commit/e359d0a9e199ad21e0bdcb17f9a72084dc238040))
+- Deselect the focused node and close its panel on an empty canvas click ([5e84f51](https://github.com/sislelabs/kuso/commit/5e84f515c30821ba60079dc09e5fd10320998728))
+- Redesign the projects home as fixed-size sheets and the top bar as a location capsule ([43a998a](https://github.com/sislelabs/kuso/commit/43a998a02724fd9bd24ff2a7369c6fbe45b72243))
+
+### ✨ Features
+- Add a shared database settings page with live databases and their users ([6fb9035](https://github.com/sislelabs/kuso/commit/6fb9035672da890abc162f835d135a2fa990ea79))
+
 ## [0.40.1] — 2026-11-09
 
 ### Other
@@ -1095,11 +1110,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): stop deletion leaking databases and conn secrets ([d86e609](https://github.com/sislelabs/kuso/commit/d86e60966c9edfa9b840ca7e28702c5d72c3934e))
-
-## [0.26.1] — 2026-09-22
-
-### 🐛 Bug Fixes
-- Fix(netpol): target the project's workload namespace, not the release ns ([a81777b](https://github.com/sislelabs/kuso/commit/a81777bff555bf50e285d4aba57e8e0ca43c41ed))
 
 
 ---
