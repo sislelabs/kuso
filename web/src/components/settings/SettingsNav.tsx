@@ -115,8 +115,6 @@ function SettingsNavList({
   const map = overrides.ctx === activeGroup ? overrides.map : {};
   const isOpen = (id: string) => map[id] ?? (activeGroup === null || id === activeGroup);
   const toggle = (id: string) => setOverrides({ ctx: activeGroup, map: { ...map, [id]: !isOpen(id) } });
-  // Long groups list their everyday pages first; the rest are one click.
-  const [showAll, setShowAll] = useState<Record<string, boolean>>({});
 
   return (
     <nav aria-label="Settings" className="flex flex-col gap-4">
@@ -193,21 +191,12 @@ function SettingsNavList({
               {open && (
                 <div id={`settings-group-${g.id}`}>
                   <ul className="space-y-0.5">
-                    {visibleGroupItems(g.items, !!showAll[g.id], active, badges).map((it) => (
+                    {g.items.map((it) => (
                       <li key={it.href}>
                         <NavLink item={it} active={it.href === active} onNavigate={onNavigate} badge={badges[it.href]} />
                       </li>
                     ))}
                   </ul>
-                  {visibleGroupItems(g.items, !!showAll[g.id], active, badges).length < g.items.length && (
-                    <button
-                      type="button"
-                      onClick={() => setShowAll((m) => ({ ...m, [g.id]: true }))}
-                      className="mt-0.5 px-2 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                    >
-                      Show {g.items.length - visibleGroupItems(g.items, false, active, badges).length} more
-                    </button>
-                  )}
                   {g.lockedCount > 0 && (
                     <div
                       className="mt-1 flex items-center gap-1.5 px-2 text-xs text-[var(--text-tertiary)]"
@@ -225,18 +214,6 @@ function SettingsNavList({
       )}
     </nav>
   );
-}
-
-// visibleGroupItems trims a long group to its primary pages, keeping the
-// active page and anything with a badge so nothing current is hidden.
-function visibleGroupItems(
-  items: SettingsNavItem[],
-  all: boolean,
-  active: string | null,
-  badges: Record<string, string | undefined>,
-): SettingsNavItem[] {
-  if (all || items.length <= 6 || !items.some((it) => it.primary)) return items;
-  return items.filter((it) => it.primary || it.href === active || badges[it.href]);
 }
 
 // useSettingsBadges marks nav items that have something waiting, kept
