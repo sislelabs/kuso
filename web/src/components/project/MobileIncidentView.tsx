@@ -2,7 +2,7 @@
 
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt, serviceIssues } from "@/features/projects/facts";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { KusoAddon, KusoEnvironment, KusoService, KusoEnvVar } from "@/types/projects";
 import { cn, serviceShortName } from "@/lib/utils";
@@ -40,7 +40,6 @@ import {
   KeyRound,
   Lock,
   AlertTriangle,
-  BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
@@ -52,6 +51,7 @@ import { useServiceBadges } from "@/components/canvas/useServiceBadges";
 import type { ErrorSummary, VulnSummary } from "@/components/canvas/badgeSummary";
 import { FirstDeployChecklist } from "./FirstDeployChecklist";
 import { sortBySeverity } from "./listSort";
+import { fetchProjectAlerts, groupRepeats, type FeedEvent } from "./projectAlerts";
 
 interface Props {
   project: string;
@@ -189,24 +189,10 @@ function StatusLabel({ status }: { status: NodeStatus }) {
   );
 }
 
-// Minimal feed shape — mirrors the fields TopNav's bell popover reads.
-// Kept local so the incident view doesn't couple to TopNav internals.
-interface FeedEvent {
-  id: number;
-  type: string;
-  title: string;
-  body?: string;
-  severity?: string;
-  project?: string;
-  service?: string;
-  createdAt: string;
-  classification?: { kind?: string; summary?: string };
-}
 
-// ProjectAlerts surfaces the recent notification feed filtered to THIS
-// project — "what fired" is the first question on-call asks. Uses the
-// my-feed path (scoped, available to every role; admins could see more
-// via /feed but the scoped view is the right default for triage).
+// ProjectAlerts surfaces the recent notification feed for THIS project:
+// "what fired" is the first question on-call asks. Collapsed to one line
+// with a count by default so the service cards stay above the fold.
 function ProjectAlerts({
   project,
   onSelectService,
@@ -214,9 +200,10 @@ function ProjectAlerts({
   project: string;
   onSelectService?: (svcName: string, tab?: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const feed = useQuery<FeedEvent[]>({
     queryKey: ["notifications", "my-feed", "mobile", project],
-    queryFn: () => api("/api/notifications/my-feed?limit=30"),
+    queryFn: () => fetchProjectAlerts(project, (p) => api<FeedEvent[]>(p)),
     // Poll while the view is open — an on-call user is watching for the
     // next event to land, not opening a stale snapshot.
     refetchInterval: 20_000,
@@ -225,70 +212,117 @@ function ProjectAlerts({
     throwOnError: false,
   });
 
-  const events = (feed.data ?? []).filter((e) => e.project === project);
+  const events = feed.data ?? [];
   const problems = events.filter((e) => e.severity === "error" || e.severity === "warn");
   // The same alert firing repeatedly reads as one row "×N", newest first.
   const shown = groupRepeats(problems.length > 0 ? problems : events).slice(0, 6);
+  const updated = feed.dataUpdatedAt ? relativeTime(new Date(feed.dataUpdatedAt).toISOString()) : undefined;
+  const failed = feed.isError;
+
+  let summary: ReactNode;
+  if (failed) {
+    summary = <span className="text-[var(--error)]">Alerts unavailable</span>;
+  } else if (feed.isPending) {
+    summary = <span className="text-[var(--text-tertiary)]">Loading…</span>;
+  } else if (problems.length > 0) {
+    summary = (
+      <span>
+        <span className="font-medium tabular-nums text-[var(--text-primary)]">{problems.length}</span>{" "}
+        {problems.length === 1 ? "problem" : "problems"}
+        <span className="text-[var(--text-tertiary)]"> · latest {relativeTime(problems[0].createdAt)}</span>
+      </span>
+    );
+  } else if (events.length > 0) {
+    summary = (
+      <span className="text-[var(--text-tertiary)]">
+        No problems · {events.length} {events.length === 1 ? "event" : "events"}
+      </span>
+    );
+  } else {
+    summary = <span className="text-[var(--text-tertiary)]">Nothing recent</span>;
+  }
 
   return (
-    <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
-      <div className="flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4 text-[var(--text-tertiary)]" aria-hidden />
-        <h2 className="text-sm font-medium text-[var(--text-secondary)]">Recent alerts</h2>
+    <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+      <div className="flex items-center gap-2 pr-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={`alerts-${project}`}
+          onClick={() => setOpen((v) => !v)}
+          disabled={!failed && shown.length === 0}
+          className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-4 py-2.5 text-left text-sm disabled:cursor-default"
+        >
+          <AlertTriangle
+            className={cn(
+              "h-4 w-4 shrink-0",
+              problems.length > 0 && !failed ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
+            )}
+            aria-hidden
+          />
+          <span className="shrink-0 font-medium text-[var(--text-secondary)]">Recent alerts</span>
+          <span className="min-w-0 truncate">{summary}</span>
+          {(failed || shown.length > 0) && (
+            <ChevronDown
+              aria-hidden
+              className={cn("ml-auto h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition-transform", open && "rotate-180")}
+            />
+          )}
+        </button>
+        {failed && (
+          <Button type="button" size="sm" variant="outline" className="h-9 shrink-0" onClick={() => void feed.refetch()}>
+            Retry
+          </Button>
+        )}
       </div>
-      {shown.length === 0 ? (
-        <div className="mt-2 flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
-          <BellOff className="h-4 w-4" aria-hidden />
-          {feed.isLoading ? "Loading…" : "Nothing recent for this project."}
+      {open && (
+        <div id={`alerts-${project}`} className="border-t border-[var(--border-subtle)] px-4 pb-3 pt-2.5">
+          {failed ? (
+            <p className="text-xs text-[var(--text-secondary)]">
+              {feed.error instanceof Error ? feed.error.message : "The alerts feed didn't answer."}
+              {updated ? ` Last loaded ${updated}.` : ""}
+            </p>
+          ) : (
+            <ul className="space-y-2.5">
+              {shown.map(({ event: e, count }) => (
+                <li key={e.id} className="flex items-start gap-2.5">
+                  <span
+                    className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                      e.severity === "error"
+                        ? "bg-[var(--error)]"
+                        : e.severity === "warn"
+                          ? "bg-[var(--warning)]"
+                          : "bg-[var(--text-tertiary)]"
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => e.service && onSelectService?.(serviceShortName(project, e.service), "logs")}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <AlertText event={e} />
+                    <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
+                      {relativeTime(e.createdAt)}
+                      {count > 1 && (
+                        <span className="ml-1.5 rounded bg-[var(--bg-tertiary)] px-1 font-medium tabular-nums text-[var(--text-secondary)]">
+                          ×{count}
+                        </span>
+                      )}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      ) : (
-        <ul className="mt-3 space-y-2.5">
-          {shown.map(({ event: e, count }) => (
-            <li key={e.id} className="flex items-start gap-2.5">
-              <span
-                className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                  e.severity === "error"
-                    ? "bg-[var(--error)]"
-                    : e.severity === "warn"
-                      ? "bg-[var(--warning)]"
-                      : "bg-[var(--text-tertiary)]"
-                }`}
-              />
-              <button
-                type="button"
-                onClick={() => e.service && onSelectService?.(serviceShortName(project, e.service), "logs")}
-                className="min-w-0 flex-1 text-left"
-              >
-                <AlertText event={e} />
-                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
-                  {relativeTime(e.createdAt)}
-                  {count > 1 && (
-                    <span className="ml-1.5 rounded bg-[var(--bg-tertiary)] px-1 font-medium tabular-nums text-[var(--text-secondary)]">
-                      ×{count}
-                    </span>
-                  )}
-                </p>
-              </button>
-            </li>
-          ))}
-        </ul>
+      )}
+      {failed && updated && !open && (
+        <p className="-mt-1.5 px-4 pb-2.5 text-xs text-[var(--text-tertiary)]">Last loaded {updated}</p>
       )}
     </section>
   );
 }
 
-export function groupRepeats<E extends { type: string; title: string; service?: string }>(
-  events: readonly E[],
-): { event: E; count: number }[] {
-  const byKey = new Map<string, { event: E; count: number }>();
-  for (const e of events) {
-    const k = [e.type, e.service ?? "", e.title].join("\u0000");
-    const g = byKey.get(k);
-    if (g) g.count++;
-    else byKey.set(k, { event: e, count: 1 });
-  }
-  return [...byKey.values()];
-}
 
 // Feed text is written for chat (backticks, Go durations, build CR names);
 // the shared humanizer turns it into dashboard copy.
