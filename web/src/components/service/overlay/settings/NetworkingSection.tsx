@@ -7,7 +7,14 @@ import { Section, Field, FieldGrid, SwitchField, Code, monoInputClass, type Sect
 // NetworkingSection: how the service is reachable and what it can reach.
 // Domains live in their own card (DomainsCard) because they apply
 // immediately instead of through Save.
-export function NetworkingSection({ state, setState }: SectionProps) {
+export function NetworkingSection({
+  state,
+  setState,
+  certIssuer,
+}: SectionProps & {
+  // Whether the cluster can issue certificates; undefined = unknown.
+  certIssuer?: boolean;
+}) {
   return (
     <Section
       id="networking"
@@ -42,7 +49,11 @@ export function NetworkingSection({ state, setState }: SectionProps) {
         hint={
           state.internal
             ? "No public URL. Other services in the project reach it over cluster DNS."
-            : "Public: served through the ingress with a generated domain and a Let's Encrypt certificate."
+            : certIssuer === true
+              ? "Public: served through the ingress with a generated domain and a Let's Encrypt certificate."
+              : certIssuer === false
+                ? "Public: served through the ingress with a generated domain, over plain HTTP. This cluster has no certificate issuer (cert-manager), so no certificate is requested."
+                : "Public: served through the ingress with a generated domain."
         }
         on={state.internal}
         onChange={(v) => setState((s) => ({ ...s, internal: v }))}

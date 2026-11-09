@@ -1,13 +1,12 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { CopyButton } from "@/components/ui/copy-button";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
-import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { restartImpactFromEnvs } from "@/components/service/envvars/restartImpact";
 import { useEnvironments } from "@/features/projects";
-import { envGroupName, isProductionGroup } from "@/lib/env-group";
+import { envGroupName } from "@/lib/env-group";
 
 type PanelProps = {
   project: string;
@@ -40,20 +39,7 @@ function WithHighlight(props: PanelProps) {
 }
 
 function VariablesPanelBody({ project, service, env, highlight }: PanelProps & { highlight: string | null }) {
-  // Host of the selected env-group's env, so the OAuth-app helper
-  // registers the callback URL of the env being edited (a staging
-  // clone needs the staging host, not production's). Falls back to the
-  // production env when the selected group has no env/host for this
-  // service. The KusoService spec doesn't carry the rendered hostname.
   const envs = useEnvironments(project);
-  const host = useMemo(() => {
-    const mine = (envs.data ?? []).filter(
-      (e) => e.spec.service === service || e.spec.service === `${project}-${service}`,
-    );
-    const selected = mine.find((e) => envGroupName(e) === env);
-    const prod = mine.find((e) => isProductionGroup(e));
-    return selected?.spec.host || prod?.spec.host || "";
-  }, [envs.data, project, service, env]);
   // Every env-group this service runs in reads the same variable list;
   // only the "<env> only" rows differ.
   const groups = useMemo(() => {
@@ -68,8 +54,6 @@ function VariablesPanelBody({ project, service, env, highlight }: PanelProps & {
     [envs.data, project, service],
   );
 
-  const [oauthOpen, setOauthOpen] = useState(false);
-
   return (
     <>
       {groups.length > 1 && <SharedScopeBanner groups={groups} env={env} project={project} service={service} />}
@@ -77,16 +61,8 @@ function VariablesPanelBody({ project, service, env, highlight }: PanelProps & {
         project={project}
         service={service}
         env={env}
-        onAddGithubSignIn={host ? () => setOauthOpen(true) : undefined}
         restartImpact={restartImpact}
         highlight={highlight}
-      />
-      <AddOauthAppDialog
-        open={oauthOpen}
-        onOpenChange={setOauthOpen}
-        project={project}
-        service={service}
-        serviceHost={host}
       />
     </>
   );

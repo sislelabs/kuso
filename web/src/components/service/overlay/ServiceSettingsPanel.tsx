@@ -30,6 +30,7 @@ import {
   GitBranch,
   HeartPulse,
   BellRing,
+  Puzzle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -58,7 +59,8 @@ import { getStagedState, stageSettings, useStagedService } from "@/features/stag
 import { StagedChangesBar } from "@/components/staged/StagedChangesBar";
 import { overlaySettings } from "@/components/staged/plan";
 import { SourceSection } from "./settings/SourceSection";
-import { DomainsCard } from "./settings/DomainsCard";
+import { DomainsCard, useCertIssuer } from "./settings/DomainsCard";
+import { IntegrationsSection } from "./settings/IntegrationsSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
 import { ScaleSection } from "./settings/ScaleSection";
 import { SleepSection } from "./settings/SleepSection";
@@ -99,6 +101,7 @@ const SECTIONS = [
   { id: "healthcheck", label: "Health check", icon: HeartPulse },
   { id: "uptime", label: "Uptime", icon: Activity },
   { id: "alerts", label: "Alerts", icon: BellRing },
+  { id: "integrations", label: "Integrations", icon: Puzzle },
   { id: "security", label: "Security", icon: ShieldAlert },
   { id: "danger", label: "Danger zone", icon: Trash2 },
 ] as const;
@@ -332,13 +335,17 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const domainsApply = !baseline.internal;
   // Workers have no port, so the chart renders no probes at all.
   const healthcheckApplies = state.runtime !== "worker";
+  // Sign-in helpers need a public URL for the OAuth callback.
+  const integrationsApply = state.runtime !== "worker" && !baseline.internal;
   const sections = SECTIONS.filter(
     (s) =>
       (s.id !== "uptime" || uptimeApplies) &&
+      (s.id !== "integrations" || integrationsApply) &&
       (s.id !== "domains" || domainsApply) &&
       (s.id !== "healthcheck" || healthcheckApplies),
   );
 
+  const certIssuer = useCertIssuer(project, service, envName, domainsApply && !!activeEnv);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = useScrollSpy(rootRef, sections.map((s) => s.id).join(","));
   const jump = (id: string) => {
@@ -365,7 +372,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
                 canWrite={canWrite}
               />
             )}
-            <NetworkingSection state={state} setState={setState} />
+            <NetworkingSection state={state} setState={setState} certIssuer={certIssuer} />
             <ScaleSection state={state} setState={setState} />
             <SleepSection state={state} setState={setState} />
             <PlacementSection state={state} setState={setState} />
@@ -378,6 +385,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             )}
             {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
             <AlertsSection project={project} service={service} env={envName} svc={svc} />
+            {integrationsApply && (
+              <IntegrationsSection project={project} service={service} host={activeEnv?.spec.host ?? ""} canWrite={canWrite} />
+            )}
             <SecuritySection state={state} setState={setState} />
             <DangerSection
               project={project}
@@ -481,8 +491,9 @@ function DirtyDot({ immediate }: { immediate: boolean }) {
   );
 }
 
-// useScrollSpy returns the id of the section nearest the top of the
-// overlay's scroll container. `idsKey` is the comma-joined section list.
+// useScrollSpy returns the id of the section whose top has passed the top
+// of the overlay's scroll container (the one being read), not the next
+// one coming up. `idsKey` is the comma-joined section list.
 function useScrollSpy(rootRef: React.RefObject<HTMLDivElement | null>, idsKey: string): string {
   const ids = useMemo(() => idsKey.split(","), [idsKey]);
   const [active, setActive] = useState(ids[0] ?? "");
@@ -497,7 +508,12 @@ function useScrollSpy(rootRef: React.RefObject<HTMLDivElement | null>, idsKey: s
       let current = ids[0] ?? "";
       for (const id of ids) {
         const el = document.getElementById(id);
-        if (el && el.getBoundingClientRect().top - top <= 96) current = id;
+        if (!el) continue;
+        // The section's scroll margin is the band a jump leaves above it
+        // (room for the sticky strip on phones); past that, it's the one
+        // being read. A few px of slack for subpixel layouts.
+        const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+        if (el.getBoundingClientRect().top - top <= margin + 8) current = id;
       }
       // At the very bottom the last short cards can't reach the top.
       if (scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) {
