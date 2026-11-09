@@ -221,7 +221,7 @@ function ProjectAlerts({
 
   let summary: ReactNode;
   if (failed) {
-    summary = <span className="text-[var(--error)]">Alerts unavailable</span>;
+    summary = <span className="text-[var(--error)]">Unavailable</span>;
   } else if (feed.isPending) {
     summary = <span className="text-[var(--text-tertiary)]">Loading…</span>;
   } else if (problems.length > 0) {

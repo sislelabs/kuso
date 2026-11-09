@@ -30,13 +30,13 @@ export function TemplateCard() {
     >
       <span className="flex items-center justify-between">
         {shown.length > 0 ? (
-          <span className="flex -space-x-1.5" title={titles}>
+          <span className="flex -space-x-1" title={titles}>
             {shown.map((a) => (
               <AppIcon
                 key={a.name}
                 app={a.name}
                 title={a.title}
-                className="h-5 w-5 rounded-md ring-2 ring-[var(--bg-secondary)] group-hover:ring-[var(--bg-tertiary)]"
+                className="h-6 w-6 rounded-md ring-2 ring-[var(--bg-secondary)] group-hover:ring-[var(--bg-tertiary)]"
               />
             ))}
           </span>

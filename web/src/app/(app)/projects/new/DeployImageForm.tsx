@@ -151,7 +151,6 @@ export function DeployImageForm({
       <FormField
         label="Environment variables"
         optional
-        hint="Paste a .env; secrets are stored encrypted."
         error={errors.env}
         htmlFor="image-env"
       >
