@@ -16,6 +16,7 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import type { FirstRun } from "./firstRun";
 import { buildLogAnchor, neverStartedCause } from "./firstRunContext";
 import { useRedeploy } from "./ServiceHeaderActions";
+import { unretryableReason } from "./BuildRow";
 
 export interface ServiceHealthStripProps {
   project: string;
@@ -62,7 +63,11 @@ function NeverRanBanner({
   const redeploy = useRedeploy(project, service, env);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const anchor = buildLogAnchor(firstRun);
-  const reason = firstRun.failed ? firstRun.lastBuild?.failureClass?.summary || firstRun.lastBuild?.errorMessage : undefined;
+  const lb = firstRun.lastBuild;
+  // The extracted fatal line beats the classifier's generic summary.
+  const reason = firstRun.failed ? lb?.failureClass?.lineHint || lb?.errorMessage || lb?.failureClass?.summary : undefined;
+  // A build that can't succeed as-is (missing branch) isn't retried.
+  const blocked = firstRun.failed && lb ? unretryableReason(lb) : undefined;
   const tone = firstRun.failed ? "danger" : firstRun.building ? "progress" : "info";
   return (
     <div
@@ -95,11 +100,11 @@ function NeverRanBanner({
             size="sm"
             className="h-7 px-2.5 text-xs"
             onClick={redeploy.request}
-            disabled={!canWrite || redeploy.pending}
-            disabledReason={!canWrite ? "Requires editor access on this project" : undefined}
+            disabled={!canWrite || redeploy.pending || !!blocked}
+            disabledReason={!canWrite ? "Requires editor access on this project" : blocked}
           >
             <Rocket className="h-3 w-3" aria-hidden />
-            {redeploy.pending ? "Starting…" : firstRun.failed ? "Retry deploy" : "Deploy"}
+            {redeploy.pending ? "Starting…" : firstRun.failed && !blocked ? "Retry deploy" : "Deploy"}
           </Button>
         )}
       </div>

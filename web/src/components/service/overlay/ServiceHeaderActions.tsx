@@ -1,6 +1,7 @@
 "use client";
 
 import { hasPublicIngress, stopConsequence } from "./stopCopy";
+import { firstRunState } from "./firstRun";
 import { cloneElement, useState } from "react";
 import Link from "next/link";
 import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
@@ -63,8 +64,11 @@ export function useRedeploy(project: string, service: string, env?: KusoEnvironm
     env?.spec?.branch || svc.data?.spec.repo?.defaultBranch || proj.data?.project.spec.defaultRepo?.defaultBranch || "";
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
   // "Deploy" until something has gone live, "Redeploy" after.
-  const neverDeployed =
-    env?.status?.state === "no_image" || (!!builds.data && !builds.data.some((b) => b.status?.toLowerCase() === "succeeded"));
+  // Same reading as the overlay's first-run state: a worker that reuses
+  // another service's image has no builds of its own but has run.
+  const neverDeployed = env
+    ? firstRunState(env, builds.data).kind === "never"
+    : !!builds.data && !builds.data.some((b) => b.status?.toLowerCase() === "succeeded");
   const verb = neverDeployed ? "Deploy" : "Redeploy";
 
   const run = async () => {
@@ -129,6 +133,7 @@ export function ServiceHeaderActions({
   stopped,
   showRestart,
   hideDeploy = false,
+  neverRan: neverRanProp = false,
 }: {
   project: string;
   service: string;
@@ -137,6 +142,8 @@ export function ServiceHeaderActions({
   showRestart: boolean;
   // The never-deployed banner carries Deploy itself.
   hideDeploy?: boolean;
+  // Nothing has ever run here (overlay's first-run state).
+  neverRan?: boolean;
 }) {
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const redeploy = useRedeploy(project, service, env);
@@ -177,7 +184,7 @@ export function ServiceHeaderActions({
 
   // A service that has never had an image has no pods to restart or stop,
   // so those actions aren't offered at all.
-  const neverRan = env?.status?.state === "no_image";
+  const neverRan = neverRanProp || env?.status?.state === "no_image";
   const restartBtn = showRestart && !stopped && !neverRan;
   const stopBtn = !stopped && !neverRan;
   const restartExplain = !canWrite ? NO_ACCESS : EXPLAIN.restart(group);

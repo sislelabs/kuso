@@ -706,9 +706,13 @@ export function ServiceOverlay({
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
             className={cn(
               "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:border-l sm:border-[var(--border-subtle)]",
-              !expanded && "sm:max-w-3xl",
-              // Logs and Settings need the room more than the rest.
-              !expanded && (tab === "logs" || tab === "settings") && "min-[1440px]:max-w-5xl",
+              // Logs and Settings need the room more than the rest: 64rem
+              // from 1440px up, 48rem below. One arbitrary value because a
+              // separate min-[1440px] class sorts before sm: and loses.
+              !expanded &&
+                (tab === "logs" || tab === "settings"
+                  ? "sm:max-w-[max(48rem,min(64rem,calc((100vw_-_1439px)*10000)))]"
+                  : "sm:max-w-3xl"),
             )}
           >
             <FirstRunProvider value={firstRunCtx}>
@@ -827,7 +831,7 @@ export function ServiceOverlay({
                       );
                     }
                     // Nothing has ever run, so there's nothing for a change to be pending against.
-                    if (specOff && env?.status?.state !== "no_image") {
+                    if (specOff && !neverRan) {
                       return (
                         <span
                           className="inline-flex items-center gap-1 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
@@ -837,7 +841,7 @@ export function ServiceOverlay({
                         </span>
                       );
                     }
-                    if (stale && restartNeeded && service) {
+                    if (stale && restartNeeded && service && !neverRan) {
                       return (
                         <RestartControl
                           project={project}
@@ -864,6 +868,7 @@ export function ServiceOverlay({
                       stopped={stopped}
                       showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
                       hideDeploy={neverRan}
+                      neverRan={neverRan}
                     />
                   ) : null}
                 </div>
@@ -965,7 +970,7 @@ export function ServiceOverlay({
                         re-opens after dismissal stay quiet. */}
                     {tab === "deployments" && (
                       <div className="p-5">
-                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={url} onNavigate={navigateTo} />
+                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={liveUrl} onNavigate={navigateTo} />
                       </div>
                     )}
                     {tab === "variables" && (
@@ -1165,6 +1170,7 @@ export function ServiceOverlay({
                   stopped={stopped}
                   showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
                   hideDeploy={neverRan}
+                      neverRan={neverRan}
                 />
               </div>
             ) : null}
