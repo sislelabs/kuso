@@ -1,14 +1,12 @@
 "use client";
 
-import { smoothScroll } from "@/lib/reduced-motion";
 import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Kbd } from "@/components/ui/kbd";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { X, ExternalLink, Plug, DatabaseBackup, Maximize2 } from "lucide-react";
+import { X, ExternalLink, DatabaseBackup, Maximize2 } from "lucide-react";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
   useAddonHealth,
@@ -260,15 +258,6 @@ export function AddonWorkspace({
         kind={kind}
         cr={data}
         page={page}
-        onConnect={() => {
-          guardedSetTab("overview");
-          // The overview mounts on the next frame after a tab switch.
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() =>
-              document.getElementById("addon-connection")?.scrollIntoView({ behavior: smoothScroll(), block: "start" }),
-            ),
-          );
-        }}
         onOpenBackups={() => guardedSetTab("backups")}
         onOpenPage={onOpenPage ? openPage : undefined}
         onClose={onClose ? guardedClose : undefined}
@@ -343,7 +332,6 @@ function AddonHeader({
   addon,
   kind,
   cr,
-  onConnect,
   onOpenBackups,
   onOpenPage,
   onClose,
@@ -353,7 +341,6 @@ function AddonHeader({
   addon: string;
   kind: string;
   cr?: KusoAddon;
-  onConnect: () => void;
   onOpenBackups: () => void;
   onOpenPage?: () => void;
   onClose?: () => void;
@@ -391,10 +378,14 @@ function AddonHeader({
         </div>
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
           <span className="min-w-0 truncate">
-            {project}
-            <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
-            <span className="font-mono">{addon}</span>
-            <span aria-hidden className="px-1 text-[var(--text-tertiary)]">·</span>
+            {page && (
+              <>
+                {project}
+                <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+                <span className="font-mono">{addon}</span>
+                <span aria-hidden className="px-1 text-[var(--text-tertiary)]">·</span>
+              </>
+            )}
             <span>{addonVersionLabel(addonLabel(kind), version, health.runningVersion)}</span>
           </span>
           {publicPort ? (
@@ -403,11 +394,8 @@ function AddonHeader({
             <span className="text-[var(--text-tertiary)]">Private network only</span>
           ) : null}
         </div>
+        {(backupsApplicable(cr) || cr?.spec.webUI?.enabled) && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <button type="button" onClick={onConnect} className={headerButtonClass}>
-            <Plug className="h-3 w-3" aria-hidden />
-            Connect
-          </button>
           {backupsApplicable(cr) && (
             <BackupNowButton project={project} addon={addon} cr={cr} onOpenBackups={onOpenBackups} />
           )}
@@ -426,17 +414,18 @@ function AddonHeader({
             </a>
           )}
         </div>
+        )}
       </div>
       {onOpenPage ? (
         <button
           type="button"
           onClick={onOpenPage}
           title="Open the full page (O)"
-          className="hidden h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-2 pr-1.5 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] sm:inline-flex"
+          aria-label="Open the full page"
+          aria-keyshortcuts="O"
+          className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
         >
-          <Maximize2 aria-hidden className="h-3.5 w-3.5" />
-          Open full page
-          <Kbd className="ml-0.5">O</Kbd>
+          <Maximize2 aria-hidden className="h-4 w-4" />
         </button>
       ) : null}
       {onClose ? (

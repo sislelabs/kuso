@@ -142,7 +142,7 @@ function MonitoredProjectsSection({
           {filter ? "No projects match." : "No projects yet."}
         </p>
       ) : (
-        <ul className="max-h-[28rem] divide-y divide-[var(--border-subtle)] overflow-y-auto rounded-sm border border-[var(--border-subtle)]">
+        <ul className="divide-y divide-[var(--border-subtle)] rounded-sm border border-[var(--border-subtle)]">
           {rows.map((r) => (
             <li
               key={r.name}

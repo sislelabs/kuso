@@ -346,6 +346,9 @@
 
 @layer base {
   * { @apply border-border; outline-color: var(--focus); }
+  /* Thin, theme-coloured scrollbars everywhere. In base so the
+     scrollbar-none / [scrollbar-width:none] utilities still win. */
+  * { scrollbar-width: thin; scrollbar-color: var(--text-placeholder) transparent; }
   body { @apply bg-background text-foreground; }
   html { @apply font-sans; font-feature-settings: "cv11", "ss01"; }
   button, a, input, textarea, select, [data-slot] {

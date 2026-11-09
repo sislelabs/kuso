@@ -168,7 +168,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         </div>
       ) : null}
       {!compact && hasBadges && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <div className="-ml-1 mt-1 flex flex-wrap items-center gap-1">
           {errorBadge}
           <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
         </div>
@@ -218,7 +218,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         </div>
       )}
 
-      <div className="flex-1" />
+      <div className="min-h-3 flex-1" />
 
       <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 text-xs">
         <span className="flex min-w-0 items-center gap-1.5">

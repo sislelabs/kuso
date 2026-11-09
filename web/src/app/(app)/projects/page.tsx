@@ -11,7 +11,7 @@ import { useGithubRepos } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { ProjectsList } from "@/components/project/list/ProjectsList";
-import { ProjectCardSkeleton } from "@/components/project/list/ProjectCard";
+import { ProjectRowSkeleton } from "@/components/project/list/ProjectRow";
 import { GettingStartedCard } from "@/components/project/list/GettingStartedCard";
 import { useGettingStartedDismissed } from "@/components/project/list/useListPrefs";
 
@@ -51,13 +51,13 @@ export default function ProjectsPage() {
   const count = data?.length ?? 0;
   const showGettingStarted = canCreate && !isPending && !isError && count > 0 && count <= 2 && !gettingStartedDismissed;
 
-  return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:p-8">
-      <PageHeader
-        className="mb-6 sm:mb-6"
-        title="Projects"
-        description="Each project is one product. Connect a repo and kuso builds it on every push."
-        actions={
+  const header = (description: string) => (
+    <>
+    <PageHeader
+      className="mb-6 sm:mb-6"
+      title="Projects"
+      description={description}
+      actions={
           canCreate && count > 0 ? (
             <div className="flex items-center gap-2">
               <Link href="/marketplace" className={secondaryLink} aria-label="Marketplace">
@@ -70,17 +70,28 @@ export default function ProjectsPage() {
               </Link>
             </div>
           ) : undefined
-        }
-      />
+      }
+    />
+    {showGettingStarted && <GettingStartedCard onDismiss={dismissGettingStarted} />}
+    </>
+  );
+  const hasList = !isPending && !isError && !!data && count > 0;
 
-      {showGettingStarted && <GettingStartedCard onDismiss={dismissGettingStarted} />}
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:p-8">
+      {!hasList && header("Each project is one product. Connect a repo and kuso builds it on every push.")}
+
 
       {isPending && (
         <>
           <div className="mb-5 h-9 w-full max-w-md rounded-md bg-[var(--bg-secondary)] motion-safe:animate-pulse" />
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading projects">
+          <ul
+            className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)]"
+            aria-busy="true"
+            aria-label="Loading projects"
+          >
             {[0, 1, 2, 3, 4, 5].map((i) => (
-              <ProjectCardSkeleton key={i} />
+              <ProjectRowSkeleton key={i} />
             ))}
           </ul>
         </>
@@ -142,7 +153,7 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {!isPending && !isError && data && count > 0 && <ProjectsList projects={data} />}
+      {hasList && <ProjectsList projects={data} header={header} />}
     </div>
   );
 }

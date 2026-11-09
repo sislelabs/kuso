@@ -6,6 +6,7 @@ export {
   errorsUnavailable,
   summaryUnsupported,
   useProjectErrorCounts,
+  useFleetErrorSummaries,
   useServiceErrorCount,
 } from "./errors";
 export type { ServiceErrorCount } from "./errors";

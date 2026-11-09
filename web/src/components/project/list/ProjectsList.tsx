@@ -11,14 +11,16 @@ import {
   type ProjectSummaryItem,
 } from "@/features/projects";
 import { useCan, Perms } from "@/features/auth";
-import { ERRORS_UNAVAILABLE, useProjectErrorCounts } from "@/features/errors";
+import { ERRORS_UNAVAILABLE, useFleetErrorSummaries } from "@/features/errors";
 import { Callout } from "@/components/ui/callout";
 import { useProjectPrefs, useSetProjectPref } from "@/features/userprefs";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CanvasContextMenu, type ContextMenuEntry } from "@/components/canvas/CanvasContextMenu";
 import { cn } from "@/lib/utils";
 import type { KusoProject } from "@/types/projects";
-import { ProjectCard } from "./ProjectCard";
+import { AttentionList, FleetPulse } from "./FleetPulse";
+import { attentionItems, fleetCells, headline, memoryFootprint, projectErrorTotal, recentDeploys } from "./fleetModel";
+import { BOARD_COLS, ProjectRow } from "./ProjectRow";
 import type { ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectsToolbar } from "./ProjectsToolbar";
 import {
@@ -37,7 +39,6 @@ interface Entry {
   folder: string;
 }
 
-const NO_SERVICES: readonly string[] = [];
 const COLLAPSED_KEY = "kuso.projects.collapsed";
 
 // Folded groups survive a reload (per browser). Read after mount so the
@@ -72,7 +73,14 @@ const EMPTY_COUNTS: Record<StatusFilter, number> = { all: 0, live: 0, failing: 0
 // ProjectsList renders the toolbar + grouped grid. Every card's health
 // comes from ONE batched /api/projects/summary poll (not a per-card
 // fan-out).
-export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject> }) {
+export function ProjectsList({
+  projects,
+  header,
+}: {
+  projects: ReadonlyArray<KusoProject>;
+  // The page header, given the one-line fleet summary as its subtitle.
+  header: (subtitle: string) => React.ReactNode;
+}) {
   const router = useRouter();
   // Only instance admins manage settings. services:write is project-scoped
   // and never in the session perm set useCan checks, so settings:admin is
@@ -119,10 +127,38 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
     [projects, byProject, summaryByName],
   );
 
-  // Error counts are a server capability: probe it through one project's
-  // summary (the cache entry its card reads anyway) and say so once.
-  const probe = entries.find((e) => e.model.serviceCount > 0)?.model.name ?? "";
-  const errorsUnavailable = useProjectErrorCounts(probe, NO_SERVICES).unavailable;
+  const names = useMemo(() => projects.map((p) => p.metadata.name), [projects]);
+  const fleetErrors = useFleetErrorSummaries(names);
+  const errorsUnavailable = fleetErrors.unavailable;
+
+  const fleet = useMemo(() => {
+    const models = entries.map((e) => e.model);
+    let errors: number | undefined;
+    let top: { name: string; count: number } | undefined;
+    let maxErrors = 0;
+    for (const m of models) {
+      const n = projectErrorTotal(fleetErrors.byProject.get(m.name));
+      if (n === undefined) continue;
+      errors = (errors ?? 0) + n;
+      if (n > maxErrors) {
+        maxErrors = n;
+        top = { name: m.name, count: n };
+      }
+    }
+    const attention = attentionItems(models);
+    const cells = fleetCells([...models].sort((a, b) => a.name.localeCompare(b.name)));
+    return {
+      cells,
+      attention,
+      errors,
+      top,
+      maxErrors,
+      maxMem: Math.max(0, ...models.map((m) => m.metrics?.memBytes ?? 0)),
+      footprint: memoryFootprint(models, 5),
+      deploys: recentDeploys(summaryQuery.data ?? [], 4),
+      headline: headline({ projects: models.length, services: cells.length, attention, errors }),
+    };
+  }, [entries, fleetErrors.byProject, summaryQuery.data]);
 
   const counts = useMemo(() => {
     if (!summaryQuery.data) return null;
@@ -202,12 +238,15 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
     return items;
   };
 
-  const renderGrid = (items: ReadonlyArray<Entry>) => (
-    <CardGrid>
+  const renderGrid = (items: ReadonlyArray<Entry>, header = true) => (
+    <CardGrid header={header}>
       {items.map((e) => (
-        <ProjectCard
+        <ProjectRow
           key={e.model.name}
           model={e.model}
+          errors={fleetErrors.byProject.get(e.model.name)}
+          maxErrors={fleet.maxErrors}
+          maxMem={fleet.maxMem}
           starred={e.starred}
           onToggleStar={() => setPref.mutate({ project: e.model.name, starred: !e.starred, folder: e.folder })}
           actions={actionsFor(e)}
@@ -232,6 +271,19 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
 
   return (
     <>
+      {header(summaryQuery.data ? fleet.headline : `${projects.length} project${projects.length === 1 ? "" : "s"}`)}
+      {summaryQuery.data && (
+        <>
+          <FleetPulse
+            cells={fleet.cells}
+            errors={fleet.errors}
+            topErrorProject={fleet.top}
+            footprint={fleet.footprint}
+            deploys={fleet.deploys}
+          />
+          <AttentionList items={fleet.attention} />
+        </>
+      )}
       <ProjectsToolbar
         query={query}
         onQuery={setQuery}
@@ -298,7 +350,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
                 open={!collapsed.has(`folder:${f}`)}
                 onToggle={() => toggleSection(`folder:${f}`)}
               >
-                {renderGrid(items)}
+                {renderGrid(items, starred.length === 0 && f === folderNames[0])}
               </Section>
             );
           })}
@@ -310,7 +362,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
               open={!collapsed.has("unfiled")}
               onToggle={() => toggleSection("unfiled")}
             >
-              {renderGrid(unfiled)}
+              {renderGrid(unfiled, starred.length === 0 && folderNames.length === 0)}
             </Section>
           )}
         </div>
@@ -409,12 +461,29 @@ function Section({
   );
 }
 
-// One tab stop per grid: arrows move between cards (see useRovingGrid).
-function CardGrid({ children }: { children: React.ReactNode }) {
+// One tab stop per board: arrows move between rows (see useRovingGrid).
+function CardGrid({ children, header }: { children: React.ReactNode; header: boolean }) {
   const ref = useRovingGrid<HTMLUListElement>();
   return (
-    <ul ref={ref} className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {children}
-    </ul>
+    <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-node">
+      <div
+        aria-hidden
+        className={cn(
+          !header && "lg:!hidden",
+          "hidden border-b border-[var(--border-subtle)] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]",
+          BOARD_COLS,
+        )}
+      >
+        <span>Project</span>
+        <span>Services</span>
+        <span className="text-right">Errors · 24h</span>
+        <span className="text-right">CPU · Memory</span>
+        <span className="text-right">Deployed</span>
+        <span />
+      </div>
+      <ul ref={ref} className="divide-y divide-[var(--border-subtle)]">
+        {children}
+      </ul>
+    </div>
   );
 }

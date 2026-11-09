@@ -91,6 +91,28 @@ export function collapseUpdates<T extends { type: string }>(events: T[], needsUp
   });
 }
 
+// bellRows is what the bell lists: one update notice at most, narrowed to
+// needsAttention for the "Needs attention" view. The badge counts the
+// unread subset of the same rows, so it can't light up for a row the
+// default view hides.
+export function bellRows<T extends { type: string; severity?: string; extra?: Record<string, string> }>(
+  events: T[],
+  needsUpdate: boolean | undefined,
+  attentionOnly: boolean,
+): T[] {
+  const rows = collapseUpdates(events, needsUpdate);
+  return attentionOnly ? rows.filter(needsAttention) : rows;
+}
+
+export function unreadBellCount(
+  events: { id: number; type: string; severity?: string; extra?: Record<string, string>; readAt?: string | null }[],
+  needsUpdate: boolean | undefined,
+  attentionOnly: boolean,
+  locallyRead: ReadonlySet<number>,
+): number {
+  return bellRows(events, needsUpdate, attentionOnly).filter((e) => !e.readAt && !locallyRead.has(e.id)).length;
+}
+
 // Per-row read state. The server only tracks a read watermark per user
 // (read-all), so a row opened from the bell is remembered here until the
 // next "Mark all read" moves the watermark past it. Browser-local on

@@ -55,6 +55,67 @@ func (d *DB) AddUserToPendingGroup(ctx context.Context, userID string) error {
 	return d.AddUserToGroup(ctx, userID, gid)
 }
 
+// PendingGroupName is the name of the group fresh sign-ups land in until
+// an admin grants them access. Matched by name, not id, because older
+// installs created it under different ids.
+const PendingGroupName = "kuso-pending"
+
+// ClearStalePending removes userID from the pending group once an admin
+// has approved them — i.e. they belong to some other group or carry a
+// direct admin/editor/viewer instance role. A user whose only access is
+// the pending group keeps it. Returns how many memberships were removed.
+func (d *DB) ClearStalePending(ctx context.Context, userID string) (int, error) {
+	if userID == "" {
+		return 0, errors.New("db: userID required")
+	}
+	return d.clearStalePending(ctx, userID)
+}
+
+// HealStalePendingMemberships is the boot-time sweep form of
+// ClearStalePending: it applies the same rule to every user.
+func (d *DB) HealStalePendingMemberships(ctx context.Context) (int, error) {
+	return d.clearStalePending(ctx, "")
+}
+
+// clearStalePending holds the one approval predicate both entry points
+// share. userID "" means every user.
+func (d *DB) clearStalePending(ctx context.Context, userID string) (int, error) {
+	rows, err := d.QueryContext(ctx, `
+DELETE FROM "_UserToUserGroup" m
+USING "UserGroup" pg
+WHERE m."B" = pg.id
+  AND pg.name = $1
+  AND ($2 = '' OR m."A" = $2)
+  AND (
+    EXISTS (
+      SELECT 1 FROM "_UserToUserGroup" o
+      JOIN "UserGroup" og ON og.id = o."B"
+      WHERE o."A" = m."A" AND og.name <> $1
+    )
+    OR EXISTS (
+      SELECT 1 FROM "User" u
+      WHERE u.id = m."A" AND u."instanceRole" IN ($3, $4, $5)
+    )
+  )
+RETURNING m."A"`,
+		PendingGroupName, userID,
+		string(InstanceRoleAdmin), string(InstanceRoleEditor), string(InstanceRoleViewer))
+	if err != nil {
+		return 0, fmt.Errorf("db: clear stale pending: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return n, fmt.Errorf("db: scan cleared pending user: %w", err)
+		}
+		d.EvictUserTenancy(uid)
+		n++
+	}
+	return n, rows.Err()
+}
+
 // UpdateGroup replaces name + description.
 func (d *DB) UpdateGroup(ctx context.Context, id, name, description string) error {
 	res, err := d.ExecContext(ctx, `
@@ -187,90 +248,155 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 //
 // The legacy UserGroup.projectMemberships JSON is no longer read.
 func (d *DB) ListUserTenancy(ctx context.Context, userID string) (GroupTenancy, error) {
-	// 1. Highest-wins instance role across the user's direct role + groups.
-	bestInstance := InstanceRole("")
-	consider := func(r InstanceRole) {
-		if rankInstance(r) > rankInstance(bestInstance) {
-			bestInstance = r
-		}
+	a, err := d.ListUserAccess(ctx, userID)
+	if err != nil {
+		return GroupTenancy{}, err
 	}
+	return a.Tenancy(), nil
+}
+
+// UserAccessGroup is one group a user belongs to, with the instance
+// role it carries.
+type UserAccessGroup struct {
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	InstanceRole InstanceRole `json:"instanceRole"`
+}
+
+// UserAccessGrant is one ProjectGrant that reaches a user, either
+// directly (GroupID == "") or through a group membership.
+type UserAccessGrant struct {
+	Project      string      `json:"project"`
+	RoleOverride ProjectRole `json:"roleOverride"`
+	GroupID      string      `json:"groupId,omitempty"`
+	GroupName    string      `json:"groupName,omitempty"`
+}
+
+// UserAccess is the raw material the tenancy resolver works from: every
+// source of access a user has, before the highest-wins union. Tenancy()
+// is the ONLY place that union happens, so the auth layer
+// (ListUserTenancy) and the "what can this user see" admin view read
+// the same answer.
+type UserAccess struct {
+	DirectInstanceRole InstanceRole      `json:"directInstanceRole"`
+	Groups             []UserAccessGroup `json:"groups"`
+	Grants             []UserAccessGrant `json:"grants"`
+}
+
+// ListUserAccess loads every access source for a user. An unknown user
+// yields an empty UserAccess (no error), matching ListUserTenancy's
+// long-standing behaviour.
+func (d *DB) ListUserAccess(ctx context.Context, userID string) (UserAccess, error) {
+	out := UserAccess{Groups: []UserAccessGroup{}, Grants: []UserAccessGrant{}}
 
 	var directRole sql.NullString
 	if err := d.QueryRowContext(ctx,
 		`SELECT "instanceRole" FROM "User" WHERE id = $1`, userID).Scan(&directRole); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			return GroupTenancy{}, fmt.Errorf("db: user instance role: %w", err)
+			return UserAccess{}, fmt.Errorf("db: user instance role: %w", err)
 		}
 	}
-	if directRole.Valid {
-		consider(InstanceRole(directRole.String))
-	}
+	out.DirectInstanceRole = InstanceRole(directRole.String)
 
 	grpRows, err := d.QueryContext(ctx, `
-SELECT g."instanceRole"
+SELECT g.id, g.name, g."instanceRole"
 FROM "UserGroup" g
 JOIN "_UserToUserGroup" m ON m."B" = g.id
-WHERE m."A" = $1`, userID)
+WHERE m."A" = $1
+ORDER BY g.name`, userID)
 	if err != nil {
-		return GroupTenancy{}, fmt.Errorf("db: list user groups: %w", err)
+		return UserAccess{}, fmt.Errorf("db: list user groups: %w", err)
 	}
 	for grpRows.Next() {
+		var g UserAccessGroup
 		var role sql.NullString
-		if err := grpRows.Scan(&role); err != nil {
+		if err := grpRows.Scan(&g.ID, &g.Name, &role); err != nil {
 			grpRows.Close()
-			return GroupTenancy{}, err
+			return UserAccess{}, err
 		}
-		consider(InstanceRole(role.String))
+		g.InstanceRole = InstanceRole(role.String)
+		out.Groups = append(out.Groups, g)
 	}
 	grpRows.Close()
 	if err := grpRows.Err(); err != nil {
-		return GroupTenancy{}, err
+		return UserAccess{}, err
 	}
 
-	// 2. Project grants: direct user grants + grants on the user's groups.
-	//    Each grant resolves to override, else inherited instance role,
-	//    else viewer. Highest-wins per project.
 	pgRows, err := d.QueryContext(ctx, `
-SELECT pg.project, pg."roleOverride"
+SELECT pg.project, pg."roleOverride", pg."groupId", g.name
 FROM "ProjectGrant" pg
+LEFT JOIN "UserGroup" g ON g.id = pg."groupId"
 WHERE pg."userId" = $1
-   OR pg."groupId" IN (SELECT m."B" FROM "_UserToUserGroup" m WHERE m."A" = $2)`,
+   OR pg."groupId" IN (SELECT m."B" FROM "_UserToUserGroup" m WHERE m."A" = $2)
+ORDER BY pg.project, g.name NULLS FIRST`,
 		userID, userID)
 	if err != nil {
-		return GroupTenancy{}, fmt.Errorf("db: list project grants: %w", err)
+		return UserAccess{}, fmt.Errorf("db: list project grants: %w", err)
 	}
 	defer pgRows.Close()
-
-	inherited := ProjectRole(bestInstance) // instance role as a project level
-	memByProject := map[string]ProjectRole{}
 	for pgRows.Next() {
-		var project string
-		var override sql.NullString
-		if err := pgRows.Scan(&project, &override); err != nil {
-			return GroupTenancy{}, err
+		var g UserAccessGrant
+		var override, groupID, groupName sql.NullString
+		if err := pgRows.Scan(&g.Project, &override, &groupID, &groupName); err != nil {
+			return UserAccess{}, err
 		}
-		role := ProjectRole(override.String)
-		if role == "" {
-			role = inherited
-		}
-		if role == "" {
-			// Inherited instance role is also absent → an explicit grant
-			// still confers at least read.
-			role = ProjectRoleViewer
-		}
-		if rankProject(role) > rankProject(memByProject[project]) {
-			memByProject[project] = role
-		}
+		g.RoleOverride = ProjectRole(override.String)
+		g.GroupID, g.GroupName = groupID.String, groupName.String
+		out.Grants = append(out.Grants, g)
 	}
 	if err := pgRows.Err(); err != nil {
-		return GroupTenancy{}, err
-	}
-
-	out := GroupTenancy{InstanceRole: bestInstance}
-	for project, role := range memByProject {
-		out.ProjectMemberships = append(out.ProjectMemberships, ProjectMembership{Project: project, Role: role})
+		return UserAccess{}, err
 	}
 	return out, nil
+}
+
+// InstanceRole is the highest-wins union of the direct role and every
+// group's role.
+func (a UserAccess) InstanceRole() InstanceRole {
+	best := a.DirectInstanceRole
+	for _, g := range a.Groups {
+		if rankInstance(g.InstanceRole) > rankInstance(best) {
+			best = g.InstanceRole
+		}
+	}
+	return best
+}
+
+// GrantRole is the project role one grant confers: its override, else
+// the user's resolved instance role (inherited), else viewer (an
+// explicit grant always confers at least read). A result that is not a
+// project role (a legacy direct "pending") confers nothing — Tenancy
+// skips it.
+func (a UserAccess) GrantRole(g UserAccessGrant) ProjectRole {
+	role := g.RoleOverride
+	if role == "" {
+		role = ProjectRole(a.InstanceRole())
+	}
+	if role == "" {
+		role = ProjectRoleViewer
+	}
+	return role
+}
+
+// Tenancy folds the sources into the effective tenancy the auth layer
+// enforces: highest-wins instance role, highest-wins role per project.
+func (a UserAccess) Tenancy() GroupTenancy {
+	out := GroupTenancy{InstanceRole: a.InstanceRole()}
+	memByProject := map[string]ProjectRole{}
+	var order []string
+	for _, g := range a.Grants {
+		role := a.GrantRole(g)
+		if rankProject(role) > rankProject(memByProject[g.Project]) {
+			if _, seen := memByProject[g.Project]; !seen {
+				order = append(order, g.Project)
+			}
+			memByProject[g.Project] = role
+		}
+	}
+	for _, project := range order {
+		out.ProjectMemberships = append(out.ProjectMemberships, ProjectMembership{Project: project, Role: memByProject[project]})
+	}
+	return out
 }
 
 // rankInstance orders instance roles for highest-wins union across a

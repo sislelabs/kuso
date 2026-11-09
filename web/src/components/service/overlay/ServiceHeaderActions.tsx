@@ -130,10 +130,10 @@ export function useRedeploy(project: string, service: string, env?: KusoEnvironm
   };
 }
 
-// ServiceHeaderActions is the overlay header's action row: Redeploy (the
-// primary), Restart and Stop/Start. Each explains itself in a tooltip.
-// Below 640px only Redeploy stays inline; Restart and Stop move into an
-// overflow menu so a mis-tap can't take the service down.
+// ServiceHeaderActions is the overlay header's action row: Redeploy is the
+// one visible action (Start too while stopped); Restart and Stop sit in
+// the ⋯ menu, each with its explanation, so a mis-tap can't take the
+// service down.
 export function ServiceHeaderActions({
   project,
   service,
@@ -268,78 +268,37 @@ export function ServiceHeaderActions({
         </Explained>
       )}
 
-      {/* ≥640px: inline secondary actions, Stop last and visually quiet. */}
-      <div className="hidden items-center gap-1.5 sm:flex">
-        {restartBtn && (
-          <Explained label="Restart" explain={restartExplain}>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setConfirm("restart")}
-              disabled={!canWrite || restart.isPending}
-              className="h-7 px-2.5 text-xs"
-            >
-              <RotateCw className={cn("h-3 w-3", restart.isPending && "motion-safe:animate-spin")} />
-              Restart
-            </Button>
-          </Explained>
-        )}
-        {stopped ? (
+      {/* Start stays inline (it's the way back); Restart, Stop and the
+          alert shortcuts live in the ⋯ menu at every width. */}
+      <div className="flex items-center gap-1.5">
+        {stopped && (
           <Explained label="Start" explain={canWrite ? EXPLAIN.start : NO_ACCESS}>
             <Button size="sm" variant="secondary" onClick={onStart} disabled={!canWrite || start.isPending} className="h-7 px-2.5 text-xs">
               <Play className="h-3 w-3" />
               {start.isPending ? "Starting…" : "Start"}
             </Button>
           </Explained>
-        ) : stopBtn ? (
-          <Explained label="Stop" explain={stopExplain}>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setConfirm("stop")}
-              disabled={!canWrite || stop.isPending}
-              className="h-7 px-2.5 text-xs hover:text-[var(--danger)]"
-            >
-              <Square className="h-3 w-3" />
-              Stop
-            </Button>
-          </Explained>
-        ) : null}
-      </div>
-
-      {/* <640px: Start stays inline (it's the way back) and Restart/Stop
-          fold into the ⋯ menu. The menu itself shows at every width: it
-          also carries the per-service alert shortcuts. */}
-      <div className="flex items-center gap-1.5">
-        {stopped && (
-          <Button size="sm" variant="secondary" onClick={onStart} disabled={!canWrite || start.isPending} className="h-7 px-2.5 text-xs sm:hidden">
-            <Play className="h-3 w-3" />
-            {start.isPending ? "Starting…" : "Start"}
-          </Button>
         )}
         {(restartBtn || stopBtn || canAlert) && (
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger
               aria-label="More service actions"
-              className={cn(
-                "inline-flex h-7 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-                !canAlert && "sm:hidden",
-              )}
+              className="inline-flex h-7 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
               <MoreHorizontal className="h-4 w-4" />
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-72 gap-0.5 rounded-lg p-1">
+            <PopoverContent align="end" className="w-72 gap-0.5 rounded-lg p-1">
               {restartBtn && (
                 <button
                   type="button"
-                  disabled={!canWrite}
-                  className={cn(menuItem, "sm:hidden")}
+                  disabled={!canWrite || restart.isPending}
+                  className={menuItem}
                   onClick={() => {
                     setMenuOpen(false);
                     setConfirm("restart");
                   }}
                 >
-                  <RotateCw className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+                  <RotateCw className={cn("mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]", restart.isPending && "motion-safe:animate-spin")} />
                   <span className="min-w-0">
                     <span className="block text-sm text-[var(--text-primary)]">Restart</span>
                     <span className="block text-xs text-[var(--text-secondary)]">
@@ -351,8 +310,8 @@ export function ServiceHeaderActions({
               {stopBtn && (
                 <button
                   type="button"
-                  disabled={!canWrite}
-                  className={cn(menuItem, "sm:hidden")}
+                  disabled={!canWrite || stop.isPending}
+                  className={menuItem}
                   onClick={() => {
                     setMenuOpen(false);
                     setConfirm("stop");
@@ -366,7 +325,7 @@ export function ServiceHeaderActions({
                 </button>
               )}
               {canAlert && (
-                <div role="group" aria-labelledby="svc-alert-menu-heading" className={cn((restartBtn || stopBtn) && "border-t border-[var(--border-subtle)] pt-1 sm:border-t-0 sm:pt-0")}>
+                <div role="group" aria-labelledby="svc-alert-menu-heading" className={cn((restartBtn || stopBtn) && "mt-0.5 border-t border-[var(--border-subtle)] pt-1")}>
                   <div id="svc-alert-menu-heading" className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-xs font-medium text-[var(--text-secondary)]">
                     <BellPlus aria-hidden className="h-3.5 w-3.5" />
                     Alert me when…

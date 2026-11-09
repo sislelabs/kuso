@@ -3,7 +3,8 @@
 import { SETTINGS_NAV } from "@/components/settings/nav";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import {
   Avatar,
   AvatarFallback,
@@ -54,6 +55,7 @@ import {
   Monitor,
   Moon,
   Sun,
+  AlertTriangle,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -87,7 +89,7 @@ export function TopNav() {
 
   return (
     <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:px-3 lg:px-4">
-      <nav aria-label="Location" className="flex min-w-0 flex-1 items-center gap-1">
+      <nav aria-label="Location" className="flex min-w-0 items-center gap-1">
         <Link
           href="/projects"
           aria-label="kuso — all projects"
@@ -110,6 +112,7 @@ export function TopNav() {
         {projectScoped && (
           <Crumb className="flex shrink-0">
             <EnvironmentSwitcher project={currentProject} />
+            <NonProdChip project={currentProject} />
           </Crumb>
         )}
 
@@ -143,8 +146,17 @@ export function TopNav() {
         ))}
       </nav>
 
+      {/* The current page's own controls (the project view's toggle and
+          stats), portalled in via <TopNavPortal>. */}
+      <div
+        ref={setSlot}
+        role="group"
+        aria-label="Page controls"
+        className="ml-1 hidden min-w-0 flex-1 items-center border-l border-[var(--border-subtle)] pl-2 sm:flex sm:empty:hidden"
+      />
+
       {/* One tab stop for the global actions; arrows move along the row. */}
-      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
         {/* Search + global actions live in the bottom bar on phones. */}
         <div className="hidden sm:flex">
           <CommandTrigger />
@@ -165,6 +177,77 @@ export function TopNav() {
         <UserMenu />
       </div>
     </header>
+  );
+}
+
+let slotEl: HTMLDivElement | null = null;
+const slotListeners = new Set<() => void>();
+function setSlot(el: HTMLDivElement | null) {
+  slotEl = el;
+  slotListeners.forEach((l) => l());
+}
+function subscribeSlot(l: () => void) {
+  slotListeners.add(l);
+  return () => {
+    slotListeners.delete(l);
+  };
+}
+
+// TopNavPortal renders a page's controls into the top bar, so a page can
+// add its toolbar without a second header row. Shown from sm up.
+export function TopNavPortal({ children }: { children: React.ReactNode }) {
+  const el = useSyncExternalStore(subscribeSlot, () => slotEl, () => null);
+  return el ? createPortal(children, el) : null;
+}
+
+// NonProdChip flags a non-production env next to the switcher; the full
+// reminder (what a clone did and didn't copy) opens in a popover.
+function NonProdChip({ project }: { project: string }) {
+  const search = useSearchParams();
+  const env = search?.get("env") ?? "production";
+  if (env === "production") return null;
+  const isPreview = env.startsWith("pr-") || env.startsWith("preview-");
+  const label = isPreview ? "Preview" : "Non-production";
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label={`${label} environment: what this means`}
+        className={cn(
+          "ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-md border px-1.5 text-xs font-medium",
+          isPreview
+            ? "border-[var(--info)]/30 bg-[var(--info-subtle)] text-[var(--info)]"
+            : "border-[var(--warning)]/30 bg-[var(--warning-subtle)] text-[var(--warning)]",
+        )}
+      >
+        {isPreview ? <GitPullRequest aria-hidden className="size-3" /> : <AlertTriangle aria-hidden className="size-3" />}
+        <span className="hidden md:inline">{label}</span>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 gap-2 rounded-md p-3 text-xs leading-relaxed text-[var(--text-secondary)]">
+        <p>
+          You&apos;re viewing <span className="font-mono text-[var(--text-primary)]">{env}</span> in{" "}
+          <span className="font-mono">{project}</span>.
+        </p>
+        {isPreview ? (
+          <p>This is a PR-driven preview env. It closes automatically when the PR is merged or closed.</p>
+        ) : (
+          <>
+            <p>
+              This env was cloned from production. Env vars were copied verbatim;{" "}
+              <span className="font-medium text-[var(--text-primary)]">addon refs were rewritten only for &quot;fresh&quot; addons</span>.
+            </p>
+            <p>
+              Fresh addons already lived in this env, so their conn-secrets point at its own databases. Addons it
+              didn&apos;t have were inherited and still point at production data: they read fine but are dangerous to
+              write to.
+            </p>
+            <p>
+              Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm they point at the right
+              secrets before sharing the URL.
+            </p>
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

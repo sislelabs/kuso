@@ -33,7 +33,6 @@ import type { KusoEnvironment } from "@/types/projects";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Kbd } from "@/components/ui/kbd";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { ServiceDeploymentsPanel } from "../overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "../overlay/ServiceVariablesPanel";
@@ -779,6 +778,7 @@ export function ServiceWorkspace({
       status={statusMeta}
       statusDetail={statusDetail}
       alert={alert}
+      lead={urlLine}
       firstRun={firstRun}
       fix={fix}
       onDeployments={tab === "deployments"}
@@ -786,9 +786,9 @@ export function ServiceWorkspace({
     />
   ) : null;
 
-  const envChip = <EnvChip env={envGroup} />;
-  // Same "project / service" line on the peek and the full page, so the
-  // two read as one header.
+  // Production is the default; only another env needs naming.
+  const envChip = envGroup && envGroup !== "production" ? <EnvChip env={envGroup} /> : null;
+  // The full page has no canvas behind it, so it keeps the project path.
   const pathLine = (
     <span className="min-w-0 truncate">
       {project}
@@ -819,12 +819,9 @@ export function ServiceWorkspace({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
               {titleRow}
               <SharedStatusPill status={statusMeta} detail={statusDetail} />
-            </div>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
-              {pathLine}
               {envChip}
-              {urlLine}
             </div>
+            <div className="mt-1 flex min-w-0 text-xs text-[var(--text-secondary)]">{pathLine}</div>
           </div>
         </div>
         <div className="hidden shrink-0 flex-wrap items-center gap-1.5 sm:flex lg:justify-end lg:pt-1">{actions}</div>
@@ -840,7 +837,7 @@ export function ServiceWorkspace({
   ) : (
     <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:px-5">
       <div className="flex items-start gap-2 sm:gap-3">
-        <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
+        <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
           <RuntimeIcon runtime={svc.data?.spec.runtime} />
         </span>
         <div className="min-w-0 flex-1">
@@ -848,27 +845,23 @@ export function ServiceWorkspace({
             <div className="flex min-w-0 items-center gap-2">
               {titleRow}
               <SharedStatusPill status={statusMeta} detail={statusDetail} />
+              {envChip}
             </div>
             {/* Actions share the title row; what doesn't fit lives in ⋯. */}
             <div className="ml-auto hidden flex-nowrap items-center gap-1.5 sm:flex">{actions}</div>
           </div>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
-            {pathLine}
-            {envChip}
-            {urlLine}
-          </div>
+          {strip}
         </div>
         {onOpenPage ? (
           <button
             type="button"
             onClick={openPage}
-            title="Open the full page (O)"
+            title="Open full page (O)"
             aria-label="Open full page"
-            className="hidden h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-2 pr-1.5 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] sm:inline-flex"
+            aria-keyshortcuts="O"
+            className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
           >
-            <Maximize2 aria-hidden className="h-3.5 w-3.5" />
-            <span className="hidden xl:inline">Open full page</span>
-            <Kbd className="ml-0.5">O</Kbd>
+            <Maximize2 aria-hidden className="h-4 w-4" />
           </button>
         ) : null}
         {onClose ? (
@@ -882,7 +875,6 @@ export function ServiceWorkspace({
           </button>
         ) : null}
       </div>
-      {strip}
       {firstLive}
       {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
     </header>
@@ -967,7 +959,7 @@ export function ServiceWorkspace({
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.12 }}
                   // Room for the staged-changes bar so it never covers the end of a tab.
-                  className="h-full overflow-y-auto pb-[var(--staged-bar-space,0px)]"
+                  className="h-full overflow-y-auto [scrollbar-gutter:stable] pb-[var(--staged-bar-space,0px)]"
                 >
                   {failureBannerVisible && (
                     <div className={cn(page ? "px-4 pt-5 sm:px-6 lg:px-8" : "px-5 pt-5", width)}>
@@ -1434,7 +1426,7 @@ function EnvChip({ env }: { env: string }) {
 function UrlPill({ url }: { url: string }) {
   const display = url.replace(/^https?:\/\//, "");
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] py-0.5 pl-2 pr-0.5">
+    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5">
       <a
         href={url}
         target="_blank"

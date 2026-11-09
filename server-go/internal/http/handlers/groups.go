@@ -201,10 +201,17 @@ func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
-	if err := h.DB.AddUserToGroup(ctx, chi.URLParam(r, "userId"), chi.URLParam(r, "id")); err != nil {
+	userID := chi.URLParam(r, "userId")
+	if err := h.DB.AddUserToGroup(ctx, userID, chi.URLParam(r, "id")); err != nil {
 		h.Logger.Error("add group member", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
+	}
+	// Joining a real group is the approval; drop the pending marker so
+	// the user stops showing as "Pending". Adding to the pending group
+	// itself is a no-op here (ClearStalePending needs another group).
+	if _, err := h.DB.ClearStalePending(ctx, userID); err != nil {
+		h.Logger.Warn("add member: clear pending", "user", userID, "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

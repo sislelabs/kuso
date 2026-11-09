@@ -122,7 +122,7 @@ function AddonBackupList({
       }
       flush
     >
-      <ul className="max-h-[480px] divide-y divide-[var(--border-subtle)] overflow-y-auto">
+      <ul className="divide-y divide-[var(--border-subtle)]">
         {sorted.map((a) => (
           <CoverageRow
             key={`${a.namespace}/${a.addon}`}

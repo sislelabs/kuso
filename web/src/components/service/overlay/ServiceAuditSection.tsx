@@ -44,7 +44,7 @@ export function ServiceAuditSection({
           No audit entries for {service}.
         </p>
       ) : (
-        <ul className="max-h-64 divide-y divide-[var(--border-subtle)] overflow-y-auto">
+        <ul className="divide-y divide-[var(--border-subtle)]">
           {rows.map((e) => (
             <li key={e.id} className="space-y-0.5 px-3 py-2 text-xs">
               <div className="flex min-w-0 items-center gap-2">

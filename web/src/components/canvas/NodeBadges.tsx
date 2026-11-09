@@ -80,22 +80,26 @@ export function ErrorBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className={cn(
-              badgeBase,
-              statusChipClass(hot ? "danger" : "neutral", { interactive: true, size: "sm" }),
-              !hot && "text-[var(--text-primary)]",
-            )}
+            className={
+              compact
+                ? cn(badgeBase, vulnClass, hot ? "text-[var(--error)] hover:text-[var(--error)]" : "text-[var(--text-secondary)]")
+                : cn(
+                    badgeBase,
+                    statusChipClass(hot ? "danger" : "neutral", { interactive: true, size: "sm" }),
+                    !hot && "text-[var(--text-primary)]",
+                  )
+            }
           />
         }
       >
         {/* A steady count stays a neutral chip, but the icon keeps the
             error hue so it still out-weighs the CVE marker beside it. */}
-        <AlertCircle className={cn(!hot && "text-[var(--error)]")} aria-hidden />
+        <AlertCircle className={cn((!hot || compact) && "text-[var(--error)]")} aria-hidden />
         {compact
           ? `${compactCount(summary.occurrences)} ${summary.occurrences === 1 ? "error" : "errors"}`
           : errorCountLabel(summary.occurrences)}
         {/* New or spiking reads from the arrow too, not only the red. */}
-        {hot && <TrendingUp aria-hidden />}
+        {hot && !compact && <TrendingUp aria-hidden />}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

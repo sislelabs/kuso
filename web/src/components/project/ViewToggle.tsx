@@ -14,7 +14,7 @@ export function ViewToggle({ value, onChange }: { value: ProjectViewMode; onChan
     <div
       role="radiogroup"
       aria-label="Project view"
-      className="inline-flex items-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5"
+      className="inline-flex shrink-0 items-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5"
       onKeyDown={(e) => {
         if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
         e.preventDefault();
@@ -34,16 +34,18 @@ export function ViewToggle({ value, onChange }: { value: ProjectViewMode; onChan
             aria-checked={on}
             data-value={v}
             tabIndex={on ? 0 : -1}
+            aria-label={label}
+            title={`${label} view`}
             onClick={() => onChange(v)}
             className={cn(
-              "inline-flex h-6 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors",
+              "inline-flex h-6 shrink-0 items-center gap-1.5 rounded px-1.5 text-xs lg:px-2 font-medium transition-colors",
               on
                 ? "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
                 : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
             )}
           >
             <Icon className="h-3.5 w-3.5" aria-hidden />
-            {label}
+            <span className="hidden lg:inline">{label}</span>
           </button>
         );
       })}

@@ -16,6 +16,7 @@ import { AddonOverlay } from "@/components/addon/AddonOverlay";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { MobileIncidentView } from "@/components/project/MobileIncidentView";
 import { ProjectStatusStrip } from "@/components/project/ProjectStatusStrip";
+import { TopNavPortal } from "@/components/layout/TopNav";
 import { EmptyProjectState } from "@/components/project/EmptyProjectState";
 import { ProjectNotFound } from "@/components/project/ProjectNotFound";
 import { ProjectListView } from "@/components/project/ProjectListView";
@@ -465,15 +466,6 @@ export function ProjectDetailView() {
       />
       <StagedChangesBar project={projectName} />
       <div ref={surfaceRef} className="relative hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
-        {!onProduction && (
-          // Sticky banner above the canvas. Reminds the user that the
-          // env they're looking at started as a clone — env vars copied
-          // verbatim, addon refs rewritten only for "fresh" addons.
-          // Click "Variables" on any service to review. Custom envs
-          // get amber; preview-pr envs get blue so the user can tell
-          // them apart at a glance.
-          <NonProdBanner project={projectName} env={selectedEnv} />
-        )}
         {addons.isError && (
           <div
             role="alert"
@@ -492,15 +484,19 @@ export function ProjectDetailView() {
           envs={envs}
           onOpenService={selectService}
         />
-        <ProjectStatusStrip
-          project={projectName}
-          selectedEnv={selectedEnv}
-          services={services}
-          envs={envs}
-          view={viewMode}
-          onViewChange={changeViewMode}
-          onOpenService={selectService}
-        />
+        {/* The view toggle, stats and log search live in the top bar;
+            the non-production reminder is the chip by the env switcher. */}
+        <TopNavPortal>
+          <ProjectStatusStrip
+            project={projectName}
+            selectedEnv={selectedEnv}
+            services={services}
+            envs={envs}
+            view={viewMode}
+            onViewChange={changeViewMode}
+            onOpenService={selectService}
+          />
+        </TopNavPortal>
         {viewMode === "list" ? (
           <ProjectListView
             project={projectName}
@@ -553,66 +549,5 @@ export function ProjectDetailView() {
         onClose={closeOverlay}
       />
     </>
-  );
-}
-
-// NonProdBanner is shown above the canvas when the user is viewing a
-// non-production env. The use case (per design): "I cloned production
-// to send a client a review URL — but env vars carried over and
-// secret-ref rewrites only apply to addons I picked 'fresh' for."
-// The banner is the gentle reminder. Click-through scrolls the user
-// to the env switcher if they wanted to switch back, or they can
-// dismiss it for the rest of the session via sessionStorage.
-function NonProdBanner({ project, env }: { project: string; env: string }) {
-  const isPreview = env.startsWith("pr-") || env.startsWith("preview-");
-  const cls = isPreview
-    ? "border-[var(--info)]/30 bg-[var(--info-subtle)] text-[var(--info)]"
-    : "border-[var(--warning)]/30 bg-[var(--warning-subtle)] text-[var(--warning)]";
-  const label = isPreview ? "Preview" : "Non-production";
-  return (
-    <div className={`shrink-0 border-b ${cls}`}>
-      {/* Outer padding matches the canvas header (px-6) so the pill
-          isn't flush to the viewport edge. Items-center keeps the
-          label vertically aligned with the (single-line) text on
-          wide screens; on narrow screens the text wraps under and
-          the label keeps its position. */}
-      <div className="flex items-center gap-3 px-6 py-2 text-xs">
-        <span className="shrink-0 inline-flex h-5 items-center rounded border border-current px-1.5 text-xs font-medium">
-          {label}
-        </span>
-        <p className="flex-1 leading-snug text-[var(--text-secondary)]">
-          You&apos;re viewing{" "}
-          <span className="font-mono text-[var(--text-primary)]">{env}</span> in{" "}
-          <span className="font-mono">{project}</span>.{" "}
-          {isPreview ? (
-            <>This is a PR-driven preview env. Closes automatically when the PR is merged or closed.</>
-          ) : (
-            <>
-              This env was cloned from production. Env vars were copied verbatim;{" "}
-              <span className="font-medium">addon refs were rewritten only for &quot;fresh&quot; addons</span>
-              {/* Popover is position:absolute so opening it doesn't
-                  push siblings down (the inline-block <details>
-                  default re-flowed the banner and broke the layout). */}
-              <span className="relative inline-block align-baseline ml-1">
-                <details className="group">
-                  <summary className="cursor-pointer list-none text-xs text-[var(--text-tertiary)] underline decoration-dotted underline-offset-2 hover:text-[var(--text-secondary)]">
-                    what&apos;s a &quot;fresh&quot; addon?
-                  </summary>
-                  <div className="absolute left-0 top-full z-20 mt-1 w-[28rem] max-w-[80vw] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 text-xs leading-relaxed text-[var(--text-secondary)] shadow-lg">
-                    When you cloned production, any addons that already lived in
-                    this env are <em>fresh</em>: their conn-secrets point at the
-                    cloned env&apos;s own databases. Addons the new env <em>didn&apos;t</em>{" "}
-                    have were inherited — those still point at production data.
-                    Inherited addons read fine but are dangerous to write to.
-                  </div>
-                </details>
-              </span>
-              . Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm
-              they point at the right secrets before sharing the URL.
-            </>
-          )}
-        </p>
-      </div>
-    </div>
   );
 }

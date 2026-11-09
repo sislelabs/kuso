@@ -15,6 +15,7 @@ import {
   type Connection,
   type ReactFlowInstance,
   type BuiltInEdge,
+  type Viewport,
   ConnectionMode,
   applyNodeChanges,
 } from "@xyflow/react";
@@ -583,15 +584,20 @@ export function ProjectCanvas({
   // like a hovered one does.
   const [focusedId, setFocusedId] = useState<string | null>(null);
 
-  // Edges sit quietly until you point at (or select) a node; then that
+  // Edges sit quietly until you point at (or open) a node; then that
   // node's connections light up in the accent and the rest step back.
+  // "Open" is the panel's selection, not React Flow's own `selected`
+  // flag: that one is set by every drag and click and only clears on a
+  // pane click, so lines stayed lit after a drag or a closed panel.
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const hotNodes = useMemo(() => {
-    const ids = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
+    const ids = new Set(nodes.filter((n) => n.dragging).map((n) => n.id));
+    if (selectedNodeId) ids.add(selectedNodeId);
+    if (editCronName) ids.add(`cron:${editCronName}`);
     if (hoveredNode) ids.add(hoveredNode);
     if (focusedId) ids.add(focusedId);
     return ids;
-  }, [nodes, hoveredNode, focusedId]);
+  }, [nodes, selectedNodeId, editCronName, hoveredNode, focusedId]);
 
   // Project-scoped write capabilities. The server enforces these
   // (403), but surfacing them here keeps viewers from clicking
@@ -665,11 +671,17 @@ export function ProjectCanvas({
   // left of the panel (Railway does the same); otherwise the user stares
   // at the grid while the card they clicked hides under the panel. Zoom
   // is kept; only an off-screen node moves, and only once per opening.
+  // Closing the panel pans back to where the canvas was before it opened,
+  // unless the user moved the viewport themselves in the meantime.
   const pannedFor = useRef<string | null>(null);
+  const restoreView = useRef<{ viewport: Viewport; autoPanned: boolean } | null>(null);
   const [rfReady, setRfReady] = useState(false);
   useEffect(() => {
     if (!selectedNodeId) {
       pannedFor.current = null;
+      const restore = restoreView.current;
+      restoreView.current = null;
+      if (restore?.autoPanned) void rf.current?.setViewport(restore.viewport, { duration: reducedMotion() ? 0 : 250 });
       return;
     }
     if (pannedFor.current === selectedNodeId) return;
@@ -677,6 +689,9 @@ export function ProjectCanvas({
     const inst = rf.current;
     const wrap = wrapperRef.current;
     if (!box || !inst || !wrap) return;
+    // Only the first node opened sets the restore target; switching
+    // nodes with the panel open keeps it.
+    if (pannedFor.current === null) restoreView.current = { viewport: inst.getViewport(), autoPanned: false };
     pannedFor.current = selectedNodeId;
     // Below sm the panel covers everything; there's no strip to use.
     if (window.innerWidth < 640) return;
@@ -695,6 +710,7 @@ export function ProjectCanvas({
     const nx = fitsX ? x : visibleW / 2 - (box.x + box.w / 2) * zoom;
     const ny = fitsY ? y : rect.height / 2 - (box.y + box.h / 2) * zoom;
     userMovedRef.current = true;
+    if (restoreView.current) restoreView.current.autoPanned = true;
     void inst.setViewport({ x: nx, y: ny, zoom }, { duration: reducedMotion() ? 0 : 250 });
   }, [selectedNodeId, boxById, rfReady]);
 
@@ -1316,7 +1332,7 @@ export function ProjectCanvas({
                   : undefined,
           },
         }))}
-        edges={visibleEdges.map((e) => styleEdge(e, hotNodes, ports))}
+        edges={litLast(visibleEdges, hotNodes).map((e) => styleEdge(e, hotNodes, ports))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
@@ -1331,7 +1347,9 @@ export function ProjectCanvas({
         // A non-null event means the user dragged or scrolled the
         // viewport (programmatic fits pass null).
         onMoveStart={(e) => {
-          if (e) userMovedRef.current = true;
+          if (!e) return;
+          userMovedRef.current = true;
+          restoreView.current = null;
         }}
         // Roving focus lives on our node cards: React Flow's own node
         // wrappers and edges would add a tab stop per element, and its
@@ -1733,7 +1751,6 @@ function styleEdge(e: Edge, hot: Set<string>, ports: Map<string, EdgePorts>): Bu
     sourceHandle: p?.sourceHandle,
     targetHandle: p?.targetHandle,
     animated: false,
-    zIndex: lit ? 1 : 0,
     style: {
       stroke: lit ? "var(--edge-lit)" : EDGE_COLOR[d.kind],
       strokeWidth: lit ? 2.25 : 1.5,
@@ -1742,6 +1759,14 @@ function styleEdge(e: Edge, hot: Set<string>, ports: Map<string, EdgePorts>): Bu
       strokeDasharray: d.pending ? "5 5" : undefined,
     },
   };
+}
+
+// Lit edges paint over the quiet ones by coming later in the array. A
+// raised zIndex would also lift them above every node (React Flow gives
+// each edge its own svg at that z), drawing them across card bodies.
+function litLast(edges: Edge[], hot: Set<string>): Edge[] {
+  const lit = (e: Edge) => hot.has(e.source) || hot.has(e.target);
+  return [...edges.filter((e) => !lit(e)), ...edges.filter(lit)];
 }
 
 const NODE_FALLBACK_SIZE: Record<string, { w: number; h: number }> = {

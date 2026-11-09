@@ -58,3 +58,39 @@ func (k *KusoClient) SetUserInstanceRole(id string, req SetUserInstanceRoleReque
 	k.client.SetBody(req)
 	return k.client.Put("/api/users/" + esc(id) + "/instance-role")
 }
+
+// UserAccessSource names where access comes from: "direct" (the user
+// row) or "group" (GroupID/GroupName set).
+type UserAccessSource struct {
+	Via          string `json:"via"`
+	GroupID      string `json:"groupId,omitempty"`
+	GroupName    string `json:"groupName,omitempty"`
+	Role         string `json:"role"`
+	RoleOverride string `json:"roleOverride,omitempty"`
+}
+
+// UserAccess mirrors GET /api/users/{id}/access.
+type UserAccess struct {
+	UserID              string             `json:"userId"`
+	Username            string             `json:"username"`
+	InstanceRole        string             `json:"instanceRole"`
+	InstanceRoleSources []UserAccessSource `json:"instanceRoleSources"`
+	Groups              []struct {
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		InstanceRole string `json:"instanceRole"`
+	} `json:"groups"`
+	AllProjects bool `json:"allProjects"`
+	Projects    []struct {
+		Project string             `json:"project"`
+		Role    string             `json:"role"`
+		Sources []UserAccessSource `json:"sources"`
+	} `json:"projects"`
+	Pending bool `json:"pending"`
+}
+
+// GetUserAccess returns a user's effective access and where each part
+// comes from. GET /api/users/{id}/access.
+func (k *KusoClient) GetUserAccess(id string) (*resty.Response, error) {
+	return k.client.Get("/api/users/" + esc(id) + "/access")
+}

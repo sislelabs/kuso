@@ -66,6 +66,7 @@ func (h *GrantsHandler) auditGrant(ctx context.Context, action, resource, messag
 func (h *GrantsHandler) Mount(r chi.Router) {
 	// Instance role on a principal.
 	r.Put("/api/users/{userId}/instance-role", h.SetUserInstanceRole)
+	r.Get("/api/users/{userId}/access", h.GetUserAccess)
 	r.Put("/api/groups/{id}/instance-role", h.SetGroupInstanceRole)
 	// Per-project access list.
 	r.Get("/api/projects/{project}/grants", h.ListGrants)
@@ -156,6 +157,11 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	if body.Role != "" {
+		if _, err := h.DB.ClearStalePending(ctx, userID); err != nil {
+			h.Logger.Warn("set user role: clear pending", "user", userID, "err", err)
+		}
+	}
 	// Role change → reissue the user's tokens with the new perm set.
 	if err := h.DB.InvalidateUserTokens(ctx, userID, "user.instance-role.update", time.Now()); err != nil {
 		h.Logger.Warn("set user role: invalidate tokens", "user", userID, "err", err)
@@ -163,6 +169,124 @@ func (h *GrantsHandler) SetUserInstanceRole(w http.ResponseWriter, r *http.Reque
 	h.auditGrant(ctx, "user.instance-role.update", "user",
 		fmt.Sprintf("set instance role of user id=%s to %q", userID, roleForAudit(string(body.Role))))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// accessSource names where a piece of a user's access comes from: the
+// user row itself ("direct") or one of their groups ("group").
+type accessSource struct {
+	Via       string `json:"via"`
+	GroupID   string `json:"groupId,omitempty"`
+	GroupName string `json:"groupName,omitempty"`
+}
+
+type instanceRoleSource struct {
+	accessSource
+	Role db.InstanceRole `json:"role"`
+}
+
+type projectGrantSource struct {
+	accessSource
+	// Role is what this grant confers on its own; RoleOverride is "" when
+	// the grant inherits the user's instance role.
+	Role         db.ProjectRole `json:"role"`
+	RoleOverride db.ProjectRole `json:"roleOverride"`
+}
+
+type projectAccess struct {
+	Project string               `json:"project"`
+	Role    db.ProjectRole       `json:"role"`
+	Sources []projectGrantSource `json:"sources"`
+}
+
+type userAccessResponse struct {
+	UserID              string               `json:"userId"`
+	Username            string               `json:"username"`
+	InstanceRole        db.InstanceRole      `json:"instanceRole"`
+	InstanceRoleSources []instanceRoleSource `json:"instanceRoleSources"`
+	Groups              []db.UserAccessGroup `json:"groups"`
+	AllProjects         bool                 `json:"allProjects"`
+	Projects            []projectAccess      `json:"projects"`
+	Pending             bool                 `json:"pending"`
+}
+
+// GetUserAccess reports what a user can see and do, and why.
+// GET /api/users/{userId}/access.
+//
+// Effective values come from db.UserAccess.Tenancy() and
+// auth.ProjectRoleFor / auth.IsPending — the same functions the request
+// authorizer uses — so this view can't drift from what is enforced.
+func (h *GrantsHandler) GetUserAccess(w http.ResponseWriter, r *http.Request) {
+	if !requireUserListRead(w, r) {
+		return
+	}
+	ctx, cancel := grantsCtx(r)
+	defer cancel()
+	userID := chi.URLParam(r, "userId")
+	u, err := h.DB.FindUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "user not found")
+			return
+		}
+		h.Logger.Error("user access: find user", "user", userID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	access, err := h.DB.ListUserAccess(ctx, userID)
+	if err != nil {
+		h.Logger.Error("user access: list", "user", userID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	tenancy := access.Tenancy()
+
+	out := userAccessResponse{
+		UserID:              u.ID,
+		Username:            u.Username,
+		InstanceRole:        tenancy.InstanceRole,
+		InstanceRoleSources: []instanceRoleSource{},
+		Groups:              access.Groups,
+		AllProjects:         tenancy.InstanceRole == db.InstanceRoleAdmin,
+		Projects:            []projectAccess{},
+		Pending:             auth.IsPending(tenancy),
+	}
+	if access.DirectInstanceRole != "" {
+		out.InstanceRoleSources = append(out.InstanceRoleSources, instanceRoleSource{
+			accessSource: accessSource{Via: "direct"}, Role: access.DirectInstanceRole,
+		})
+	}
+	for _, g := range access.Groups {
+		if g.InstanceRole == "" {
+			continue
+		}
+		out.InstanceRoleSources = append(out.InstanceRoleSources, instanceRoleSource{
+			accessSource: accessSource{Via: "group", GroupID: g.ID, GroupName: g.Name}, Role: g.InstanceRole,
+		})
+	}
+
+	byProject := map[string]int{}
+	for _, m := range tenancy.ProjectMemberships {
+		byProject[m.Project] = len(out.Projects)
+		out.Projects = append(out.Projects, projectAccess{
+			Project: m.Project,
+			Role:    auth.ProjectRoleFor(tenancy, m.Project),
+			Sources: []projectGrantSource{},
+		})
+	}
+	for _, g := range access.Grants {
+		i, ok := byProject[g.Project]
+		if !ok {
+			continue
+		}
+		src := accessSource{Via: "direct"}
+		if g.GroupID != "" {
+			src = accessSource{Via: "group", GroupID: g.GroupID, GroupName: g.GroupName}
+		}
+		out.Projects[i].Sources = append(out.Projects[i].Sources, projectGrantSource{
+			accessSource: src, Role: access.GrantRole(g), RoleOverride: g.RoleOverride,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // SetGroupInstanceRole sets a group's instance role, preserving the

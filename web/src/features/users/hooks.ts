@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Perms, useCan, useSession } from "@/features/auth";
-import { listUserDirectory } from "./api";
+import { getUserAccess, listUserDirectory, type UserAccess } from "./api";
 
 export interface ResolvedUser {
   id: string;
@@ -44,4 +44,18 @@ export function useUserDirectory(): {
     for (const u of byId.values()) byName.set(u.username, u);
     return { resolve: (id: string) => byId.get(id) ?? byName.get(id) ?? null, canList };
   }, [list.data, me, canList]);
+}
+
+// Nested under the users-list key so invalidating ["admin", "users"]
+// after a role or membership change refreshes an open access view too.
+export function userAccessQueryKey(userId: string) {
+  return [...userDirectoryQueryKey, userId, "access"] as const;
+}
+
+export function useUserAccess(userId: string | null) {
+  return useQuery<UserAccess>({
+    queryKey: userAccessQueryKey(userId ?? ""),
+    queryFn: () => getUserAccess(userId ?? ""),
+    enabled: userId !== null && userId !== "",
+  });
 }

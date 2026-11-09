@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, AlertCircle, Boxes, Cpu, MemoryStick, ScrollText } from "lucide-react";
+import { Activity, AlertCircle, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useProjectMetrics } from "@/features/project-overview";
-import { envScopeLabel, projectHealthLine, projectStatsLabel } from "@/features/projects/facts";
+import { projectHealthLine, projectStatsLabel } from "@/features/projects/facts";
 import { deriveServiceStatus, useLatestBuilds } from "@/features/services";
 import { isProductionGroup } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
@@ -15,10 +15,11 @@ import { ProjectLogsSheet } from "./ProjectLogsSheet";
 import { ViewToggle } from "./ViewToggle";
 import type { ProjectViewMode } from "./projectViewPref";
 
-// ProjectStatusStrip sits above the canvas: the selected env-group's
-// resource rollup (`kuso project metrics`), uptime summary (`kuso uptime
-// status`, production-only — checks don't run against other groups) and
-// the entry point to project-wide log search.
+// ProjectStatusStrip is the project page's toolbar in the top bar: the
+// view toggle, the selected env-group's resource rollup (`kuso project
+// metrics`), the health/uptime line (`kuso uptime status`, production-only
+// — checks don't run against other groups) and project-wide log search.
+// The numbers are short; the full wording is in each title tooltip.
 export function ProjectStatusStrip({
   project,
   selectedEnv,
@@ -43,9 +44,11 @@ export function ProjectStatusStrip({
   const [logsOpen, setLogsOpen] = useState(false);
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 text-xs text-[var(--text-secondary)]">
+    <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--text-secondary)]">
       {view && onViewChange && <ViewToggle value={view} onChange={onViewChange} />}
-      <MetricsSummary metrics={metrics} env={selectedEnv} />
+      <span className="hidden min-w-0 items-center gap-1.5 lg:inline-flex">
+        <MetricsSummary metrics={metrics} env={selectedEnv} />
+      </span>
       <HealthSummary
         project={project}
         selectedEnv={selectedEnv}
@@ -58,11 +61,13 @@ export function ProjectStatusStrip({
         type="button"
         variant="ghost"
         size="sm"
-        className="ml-auto h-7 gap-1.5 px-2 text-xs"
+        aria-label="Search logs"
+        title="Search logs across this project"
+        className="h-7 shrink-0 gap-1.5 px-2 text-xs"
         onClick={() => setLogsOpen(true)}
       >
-        <ScrollText className="h-3.5 w-3.5" />
-        Search logs
+        <ScrollText className="h-3.5 w-3.5" aria-hidden />
+        <span className="hidden xl:inline">Logs</span>
       </Button>
       {/* Keyed so the sheet's env filter (seeded once from defaultEnv) resets on env switch. */}
       <ProjectLogsSheet
@@ -77,7 +82,7 @@ export function ProjectStatusStrip({
 }
 
 function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjectMetrics>; env: string }) {
-  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">{envScopeLabel(env)}: …</span>;
+  if (metrics.isPending) return <span className="text-[var(--text-tertiary)]">…</span>;
   if (metrics.isError) {
     return (
       <span className="text-[var(--error)]" title={metrics.error instanceof Error ? metrics.error.message : undefined}>
@@ -86,34 +91,25 @@ function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjec
     );
   }
   const m = metrics.data;
-  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">{envScopeLabel(env)}: nothing deployed</span>;
+  if (m.envs === 0) return <span className="text-[var(--text-tertiary)]">nothing deployed</span>;
   if (m.pods === 0) {
     return (
       <span
         className="text-[var(--text-tertiary)]"
         title={`No pod metrics: ${env} is scaled to zero/asleep, or metrics-server isn't reporting.`}
       >
-        {envScopeLabel(env)}: no pod metrics
+        no pod metrics
       </span>
     );
   }
   const stats = projectStatsLabel({ env, cpuMillicores: m.cpuMillicores, memBytes: m.memBytes, pods: m.pods });
-  const ICON = { cpu: Cpu, mem: MemoryStick, pods: Boxes, uptime: Activity } as const;
+  const short = (p: (typeof stats.parts)[number]) => (p.key === "pods" ? `${m.pods} ${m.pods === 1 ? "pod" : "pods"}` : p.value);
   return (
-    <span className="inline-flex items-center gap-3" aria-label={stats.text}>
-      <span className="font-medium text-[var(--text-secondary)]" title={`Live usage of the ${stats.scope} environment`}>
-        {stats.scope}
-      </span>
-      {stats.parts.map((p) => {
-        const Icon = ICON[p.key];
-        return (
-          <span key={p.key} className="inline-flex items-center gap-1" title={p.title}>
-            <Icon aria-hidden className="h-3 w-3 text-[var(--text-tertiary)]" />
-            {p.label && <span className="text-[var(--text-tertiary)]">{p.label}</span>}
-            <span className="tabular-nums">{p.value}</span>
-          </span>
-        );
-      })}
+    <span
+      className="truncate whitespace-nowrap tabular-nums"
+      title={[`Live usage of ${stats.scope}`, ...stats.parts.map((p) => `${short(p)}: ${p.title}`)].join("\n")}
+    >
+      {stats.parts.map(short).join(" · ")}
     </span>
   );
 }
@@ -164,45 +160,39 @@ function HealthSummary({
   const title = rows
     .map((r) => {
       const c = checkOf(r.short);
-      const ping = c ? `uptime ${uptimeTitle(c)}` : "not checked";
+      const ping = c ? uptimeTitle(c) : "not checked";
       return `${r.name}: ${r.status.label}${r.status.detail ? ` (${r.status.detail})` : ""} · ${ping}`;
     })
     .join("\n");
   const tone =
     line.tone === "error" ? "text-[var(--error)]" : line.tone === "warning" ? "text-[var(--warning)]" : "text-[var(--success)]";
   const first = line.problems[0];
+  const fullTitle = [line.text, uptimeOff ? "uptime checks off" : "", title].filter(Boolean).join("\n");
   return (
-    <span className="inline-flex items-center gap-1.5" title={title}>
+    <span className="inline-flex min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap" title={fullTitle}>
+      <span aria-hidden className="hidden text-[var(--text-tertiary)] lg:inline">·</span>
       {line.tone === "ok" ? (
         <Activity aria-hidden className={cn("h-3 w-3", tone)} />
       ) : (
         <AlertCircle aria-hidden className={cn("h-3 w-3", tone)} />
       )}
-      {/* "Uptime:" says this is ping coverage, not a health rollup. */}
-      {line.coverage && (
-        <span className="tabular-nums">
-          <span className="text-[var(--text-tertiary)]">Uptime:</span> {line.coverage}
-        </span>
-      )}
-      {line.coverage && <span aria-hidden>·</span>}
       {!line.issues ? (
-        <span>all up</span>
+        <span>uptime ok</span>
       ) : first && onOpenService ? (
         <button
           type="button"
           onClick={() => onOpenService(first)}
           title={`Open ${first}`}
           className={cn(
-            "rounded-sm underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+            "rounded-sm font-medium underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
             tone,
           )}
         >
           {line.issues}
         </button>
       ) : (
-        <span className={tone}>{line.issues}</span>
+        <span className={cn("font-medium", tone)}>{line.issues}</span>
       )}
-      {uptimeOff && <span className="text-[var(--text-tertiary)]">· uptime checks off</span>}
     </span>
   );
 }

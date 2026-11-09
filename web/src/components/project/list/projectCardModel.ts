@@ -22,6 +22,13 @@ export type ServiceHealth = Exclude<ProjectStatus, "empty">;
 
 const SERVICE_LABEL = "kuso.sislelabs.com/service";
 
+export interface ServiceTile {
+  name: string;
+  status: ServiceStatus;
+  // stateDetail while it isn't simply live, for the tile's tooltip.
+  detail?: string;
+}
+
 export interface ProjectCardModel {
   name: string;
   description?: string;
@@ -53,6 +60,7 @@ export interface ProjectCardModel {
   repoHref?: string;
   publicURL?: string;
   serviceNames: string[];
+  services: ServiceTile[];
   metrics?: ProjectSummaryMetrics;
   // Every service incl. env-group clones — project stop/start acts on all.
   allServiceCount: number;
@@ -250,6 +258,10 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     repoHref: repoWebURL(repoRaw) ?? undefined,
     publicURL,
     serviceNames: services.map(serviceShortName),
+    services: perService.map((p) => {
+      const d = p.st === "live" ? undefined : p.env?.status?.stateDetail;
+      return { name: serviceShortName(p.svc), status: p.st, detail: typeof d === "string" && d ? d : undefined };
+    }),
     metrics: summary?.metrics,
     allServiceCount: allServices.length,
     hasSummary: summary !== undefined,

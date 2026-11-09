@@ -520,6 +520,14 @@ func (h *OAuthHandler) attachPendingIfGroupless(ctx context.Context, userID stri
 	if gerr == nil && len(groups) > 0 {
 		return nil
 	}
+	// A direct instance role is an approval too; re-pending such a user
+	// on every login would bring back the stale "Pending" tag.
+	if access, aerr := h.DB.ListUserAccess(ctx, userID); aerr == nil {
+		switch access.DirectInstanceRole {
+		case db.InstanceRoleAdmin, db.InstanceRoleEditor, db.InstanceRoleViewer:
+			return nil
+		}
+	}
 	gid := "grp-pending"
 	_ = h.DB.CreateGroup(ctx, gid, "kuso-pending", "users awaiting admin approval")
 	if err := h.DB.SetGroupTenancy(ctx, gid, db.GroupTenancy{

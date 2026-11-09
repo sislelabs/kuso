@@ -559,7 +559,7 @@ function ErrorDetail({
             <Copy className="h-3 w-3" /> Copy
           </button>
         </div>
-        <pre className="max-h-80 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-[12px] leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <pre className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 font-mono text-[12px] leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap [overflow-wrap:anywhere]">
           {traceLines.length > 1
             ? traceLines.map((l, i) => (
                 <div key={l.id} className={cn(i > 0 && "text-[var(--text-secondary)]")}>

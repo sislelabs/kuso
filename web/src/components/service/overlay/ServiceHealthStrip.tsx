@@ -1,11 +1,9 @@
 "use client";
 
 import { ApiError } from "@/lib/api-client";
-import { relativeTime } from "@/lib/format";
+import { formatLatency, relativeTime } from "@/lib/format";
 import { TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import { StatusDot } from "@/components/ui/status-pill";
-import { ERRORS_WINDOW, errorCountLabel, errorsEnvScope, useServiceErrorCount } from "@/features/errors";
 import { isCurrentPod, useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
@@ -32,6 +30,8 @@ export interface ServiceHealthStripProps {
   // The problem banner (cause + fixes), folded in as the strip's first
   // row so a failing service shows one block instead of two.
   alert?: React.ReactNode;
+  // Leads the meta line (the service URL).
+  lead?: React.ReactNode;
   // Never-run services collapse the strip into one banner.
   firstRun?: FirstRun;
   // A known failure's fix (Change branch, …): the banner's primary action.
@@ -41,24 +41,26 @@ export interface ServiceHealthStripProps {
   onNavigate: (tab: string, anchor?: string) => void;
 }
 
-interface Cell {
+interface Fact {
   id: string;
-  label: string;
-  value: string;
-  // Muted trailing text, e.g. "1/2 ready" next to the status.
-  secondary?: { text: string; tone: StatusTone | "plain" };
+  text: string;
   tone: StatusTone | "plain";
   title: string;
   tab: string;
   anchor?: string;
 }
 
-// ServiceHealthStrip is the at-a-glance row under the overlay title:
-// status, uptime ping, restarts, errors and last deploy. Every cell reads
-// the same query the tab it links to reads, so the numbers match.
+// ServiceHealthStrip is the one-line meta under the overlay title: ready
+// count, uptime ping, restarts and last deploy, each a link to the tab it
+// came from. A problem banner, when there is one, sits under it.
 export function ServiceHealthStrip(props: ServiceHealthStripProps) {
   if (props.firstRun?.kind === "never") {
-    return <NeverRanBanner {...props} firstRun={props.firstRun} />;
+    return (
+      <>
+        {props.lead ? <div className="mt-1 flex min-w-0 items-center text-xs text-[var(--text-secondary)]">{props.lead}</div> : null}
+        <NeverRanBanner {...props} firstRun={props.firstRun} />
+      </>
+    );
   }
   return <HealthCells {...props} />;
 }
@@ -131,10 +133,9 @@ function NeverRanBanner({
   );
 }
 
-function HealthCells({ project, service, env, envGroup, status, statusDetail, alert, onNavigate }: ServiceHealthStripProps) {
+function HealthCells({ project, service, env, envGroup, status, statusDetail, alert, lead, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
-  const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
 
   // Finished pods, a draining old ReplicaSet and release-hook pods aren't instances.
   const podList =
@@ -145,7 +146,7 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
   const hasRollup = typeof replicas?.desired === "number";
   const ready = hasRollup ? (replicas?.ready ?? 0) : (podList?.filter((p) => p.ready).length ?? 0);
   const total = hasRollup ? (replicas?.desired ?? 0) : (podList?.length ?? 0);
-  // While the status is a problem, "1/1 ready" or "Uptime: Up" next to it
+  // While the status is a problem, "1/1 ready" or "uptime ok" next to it
   // reads as a contradiction; the cause takes their place.
   const problem = status.tone === "danger" || status.tone === "warning";
   const httpService = !env || !!env.spec.host || (env.spec.additionalHosts?.length ?? 0) > 0;
@@ -153,182 +154,91 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
   const crashing = podList?.some((p) => /crashloop/i.test(p.reason ?? "")) ?? false;
   const deployedAt = lastDeployedAt(env);
 
-  const cells: Cell[] = [
-    {
-      id: "status",
-      label: "Status",
-      value: status.label,
-      secondary:
-        total > 0 && !problem
-          ? { text: `${ready}/${total} ready`, tone: ready === total ? "plain" : ready === 0 ? "danger" : "warning" }
-          : undefined,
+  // The status itself is the header pill and the error count is the Errors
+  // tab badge, so the line only carries what neither shows.
+  const facts: Fact[] = [];
+  if (problem && !alert) {
+    facts.push({
+      id: "reason",
+      text: statusDetail || status.label,
       tone: status.tone,
-      title: total > 0 ? `${ready} of ${total} instances ready` : status.label,
+      title: statusDetail || status.label,
       tab: "deployments",
-    },
-    ...(problem
-      ? alert
-        ? []
-        : [
-            {
-              id: "reason",
-              label: "Reason",
-              value: statusDetail || status.label,
-              tone: status.tone,
-              title: statusDetail || status.label,
-              tab: "deployments",
-            } satisfies Cell,
-          ]
-      : [
-          uptimeCell(
-            uptime.data?.enabled,
-            pickUptime(uptime.data?.services ?? null, service, env, envGroup),
-            uptime.error,
-            httpService,
-          ),
-        ]),
-    {
+    });
+  }
+  if (!problem && total > 0) {
+    facts.push({
+      id: "ready",
+      text: `${ready}/${total} ready`,
+      tone: ready === total ? "plain" : ready === 0 ? "danger" : "warning",
+      title: `${ready} of ${total} instances ready`,
+      tab: "deployments",
+    });
+  }
+  if (!problem) {
+    const up = uptimeFact(uptime.data?.enabled, pickUptime(uptime.data?.services ?? null, service, env, envGroup), uptime.error, httpService);
+    if (up) facts.push(up);
+  }
+  if (restarts > 0) {
+    facts.push({
       id: "restarts",
-      label: "Restarts",
-      value: pods.isPending ? "…" : podList ? restarts.toLocaleString() : "—",
-      tone: crashing ? "danger" : restarts > 0 ? "warning" : "plain",
+      text: `${restarts.toLocaleString()} ${restarts === 1 ? "restart" : "restarts"}`,
+      tone: crashing ? "danger" : "warning",
       title: "Container restarts across the running instances, counted since each instance started. Open logs to see why.",
       tab: "logs",
-    },
-    {
-      id: "errors",
-      label: `Errors · ${ERRORS_WINDOW}`,
-      value: errors.data ? errors.data.occurrences.toLocaleString() : errors.isError ? "—" : "…",
-      tone: (errors.data?.occurrences ?? 0) > 0 ? "danger" : "plain",
-      title: errors.data
-        ? `${errorCountLabel(errors.data.occurrences)} in ${errors.data.groups} ${errors.data.groups === 1 ? "group" : "groups"}`
-        : "Runtime errors in the last 24 hours",
-      tab: "errors",
-    },
-    {
+    });
+  }
+  if (deployedAt) {
+    facts.push({
       id: "deploy",
-      label: "Last deploy",
-      value: deployedAt ? relativeTime(deployedAt) : "Never",
+      text: `deployed ${relativeTime(deployedAt)}`,
       tone: "plain",
-      title: deployedAt ? `Current release went live ${new Date(deployedAt).toLocaleString()}` : "Nothing has been deployed to this environment",
+      title: `Current release went live ${new Date(deployedAt).toLocaleString()}`,
       tab: "deployments",
-    },
-  ];
+    });
+  }
 
-  const errorsN = errors.data?.occurrences;
-  const deploy = cells.find((c) => c.id === "deploy");
-  // 4 or 5 cells: fill the row at lg; two rows of 2 + 3 (or 2 + 2) below.
-  const lgCols = cells.length === 5 ? "lg:grid-cols-5" : "lg:grid-cols-4";
-  const span = (i: number) => (cells.length === 5 && i < 3 ? "col-span-2" : "col-span-3");
-  const grid = (
-    <ul
-      aria-label="Service health"
-      className={cn(
-        "hidden grid-cols-6 gap-px bg-[var(--border-subtle)] sm:grid",
-        lgCols,
-        alert ? "border-t border-[var(--border-subtle)]" : "mt-3 overflow-hidden rounded-lg border border-[var(--border-subtle)]",
-      )}
-    >
-      {cells.map((c, i) => (
-        <li key={c.id} className={cn("flex min-w-0 bg-[var(--bg-primary)] lg:col-span-1", span(i))}>
+  const line = (
+    <ul aria-label="Service health" className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--text-secondary)]">
+      {lead ? <li className="flex min-w-0 max-w-full items-center">{lead}</li> : null}
+      {facts.map((f, i) => (
+        <li key={f.id} className="flex min-w-0 items-center gap-1.5">
+          {(i > 0 || lead) && (
+            <span aria-hidden className="text-[var(--text-tertiary)]">
+              ·
+            </span>
+          )}
           <button
             type="button"
-            title={c.title}
-            aria-label={`${c.label}: ${c.value}${c.secondary ? `, ${c.secondary.text}` : ""}. ${c.title}`}
-            onClick={() => onNavigate(c.tab, c.anchor)}
+            title={f.title}
+            aria-label={`${f.text}. ${f.title}`}
+            onClick={() => onNavigate(f.tab, f.anchor)}
             className={cn(
-              "flex min-w-0 flex-1 text-left transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-offset-[-2px]",
-              // Folded under a problem banner the cells go single-line, so
-              // the block costs one row of height instead of two.
-              alert ? "items-baseline gap-2 px-3 py-1.5" : "flex-col items-start gap-0.5 px-3 py-2",
+              "min-w-0 truncate whitespace-nowrap rounded-sm hover:text-[var(--text-primary)] hover:underline max-sm:py-1.5",
+              f.tone === "plain" ? undefined : cn("font-medium", TONE_CLASSES[f.tone].text),
             )}
           >
-            <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
-              {c.id === "status" && <StatusDot status={status} />}
-              {c.label}
-            </span>
-            {/* The value never wraps mid-word; qualifiers go on the muted line below. */}
-            <span
-              className={cn(
-                "max-w-full truncate whitespace-nowrap text-sm font-medium",
-                c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
-              )}
-            >
-              {c.value}
-            </span>
-            {c.secondary && (
-              <span
-                className={cn(
-                  "truncate text-xs font-normal",
-                  c.secondary.tone === "plain" ? "text-[var(--text-secondary)]" : TONE_CLASSES[c.secondary.tone].text,
-                )}
-              >
-                {c.secondary.text}
-              </span>
-            )}
+            {f.text}
           </button>
         </li>
       ))}
     </ul>
   );
-  const phone = (
-    <ul aria-label="Service health" className={cn("flex flex-wrap items-center gap-1.5 sm:hidden", alert ? "border-t border-[var(--border-subtle)] p-2" : "mt-2")}>
-      <li>
-        <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
-          <StatusDot status={status} />
-          <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
-          {total > 0 && !problem && <span className="whitespace-nowrap">· {ready}/{total} ready</span>}
-        </button>
-      </li>
-      {errorsN !== undefined && errorsN > 0 && (
-        <li>
-          <button type="button" onClick={() => onNavigate("errors")} className={cn(phoneChip, "text-[var(--danger)]")}>
-            {errorsN.toLocaleString()} {errorsN === 1 ? "error" : "errors"} · {ERRORS_WINDOW}
-          </button>
-        </li>
-      )}
-      {restarts > 0 && (
-        <li>
-          <button type="button" onClick={() => onNavigate("logs")} className={cn(phoneChip, crashing ? "text-[var(--danger)]" : "text-[var(--warning)]")}>
-            {restarts.toLocaleString()} {restarts === 1 ? "restart" : "restarts"}
-          </button>
-        </li>
-      )}
-      {deploy && deploy.value !== "Never" && (
-        <li className="min-w-0">
-          <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
-            <span className="truncate">deployed {deploy.value}</span>
-          </button>
-        </li>
-      )}
-    </ul>
-  );
-  if (!alert) {
-    return (
-      <>
-        {/* Phones: one compact row, each fact its own tap target that opens
-            the tab it came from. */}
-        {phone}
-        {grid}
-      </>
-    );
-  }
+  if (!alert) return line;
   return (
-    <div
-      className={cn(
-        "mt-3 overflow-hidden rounded-lg border",
-        status.tone === "danger" ? "border-[var(--danger)]/35" : "border-[var(--warning)]/35",
-      )}
-    >
-      {alert}
-      {phone}
-      {grid}
-    </div>
+    <>
+      {line}
+      <div
+        className={cn(
+          "mt-2.5 overflow-hidden rounded-lg border",
+          status.tone === "danger" ? "border-[var(--danger)]/35" : "border-[var(--warning)]/35",
+        )}
+      >
+        {alert}
+      </div>
+    </>
   );
 }
-
-const phoneChip =
-  "inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-secondary)] active:bg-[var(--bg-secondary)]";
 
 // The checker reports one row per checked env, keyed by env CR name; it
 // only checks production today, which is also what older servers meant
@@ -339,66 +249,41 @@ function pickUptime(list: UptimeServiceStatus[] | null, service: string, env: Ku
   return byName ?? (envGroup === "production" ? mine.find((s) => !s.env) : undefined);
 }
 
-function uptimeCell(
+// uptimeFact is the uptime check in a few words, or nothing when there's
+// no check to report on (no endpoint, checker off, not set up, paused
+// alongside a sleeping or stopped status the pill already shows).
+function uptimeFact(
   enabled: boolean | undefined,
   s: UptimeServiceStatus | undefined,
   error: unknown,
   httpService: boolean,
-): Cell {
-  const base = { id: "uptime", label: "Uptime", tab: "settings", anchor: "uptime" } as const;
-  if (!httpService) {
-    return {
-      ...base,
-      value: "Not checked",
-      secondary: { text: "no public endpoint", tone: "plain" },
-      tone: "neutral",
-      title: "No public HTTP endpoint, so there's nothing for the uptime check to ping",
-    };
-  }
-  if (error instanceof ApiError && error.status === 404) {
-    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report uptime checks" };
-  }
-  if (enabled === false) {
-    return { ...base, value: "Checker off", tone: "neutral", title: "Uptime checks are switched off for this kuso instance" };
-  }
+): Fact | null {
+  if (!httpService || enabled === false) return null;
+  if (error instanceof ApiError && error.status === 404) return null;
   const v = uptimeView(s);
-  // "(last known)" is a qualifier, not part of the value.
-  const value = v.stale ? v.label.replace(/\s*\(last known\)$/, "") : v.label;
-  const staleNote = v.stale ? { text: "last known", tone: "plain" as const } : undefined;
+  const base = { id: "uptime", tab: "settings", anchor: "uptime" } as const;
   const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
+  const stale = v.stale ? "last known" : "";
   switch (v.state) {
-    case "not_set_up":
-      return { ...base, value: v.label, tone: "neutral", title: "No uptime check for this environment. Set one up in Settings → Uptime." };
     case "up":
       return {
         ...base,
-        value,
-        secondary: staleNote,
-        tone: "success",
-        title: `${s?.url ?? ""} answered${s?.statusCode ? ` HTTP ${s.statusCode}` : ""}, ${checked}`,
+        text: v.latencyMs ? `up ${formatLatency(v.latencyMs)}` : "uptime ok",
+        tone: "plain",
+        title: [`${s?.url ?? ""} answered${s?.statusCode ? ` HTTP ${s.statusCode}` : ""}`, checked, stale].filter(Boolean).join(" · "),
       };
     case "failing":
-      return { ...base, value, secondary: staleNote, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
+      return { ...base, text: "uptime failing", tone: "warning", title: [s?.reason || s?.error, checked, stale].filter(Boolean).join(" · ") };
     case "down":
       return {
         ...base,
-        value,
-        secondary: s?.since
-          ? { text: `for ${relativeTime(s.since).replace(/ ago$/, "")}${v.stale ? " · last known" : ""}`, tone: "plain" }
-          : staleNote,
+        text: s?.since ? `down for ${relativeTime(s.since).replace(/ ago$/, "")}` : "uptime down",
         tone: "danger",
-        title: [s?.reason || s?.error, s?.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked]
+        title: [s?.reason || s?.error, s?.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked, stale]
           .filter(Boolean)
           .join(" · "),
       };
-    case "paused":
-      return {
-        ...base,
-        value: v.label,
-        tone: "neutral",
-        title: s?.state === "disabled" ? "The uptime check for this service is off" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
-      };
     default:
-      return { ...base, value: v.label, tone: "neutral", title: s?.url ?? "" };
+      return null;
   }
 }

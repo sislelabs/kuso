@@ -8,6 +8,7 @@ describe("addonVersion", () => {
     expect(addonVersion(undefined, "7.2.4-bookworm")).toBe("7.2.4");
     expect(addonVersion(undefined, "v1.2")).toBe("1.2");
     expect(addonVersion()).toBe("");
+    expect(addonVersion(undefined, "RELEASE.2026-08-04T00-00-00Z")).toBe("2026-08-04");
   });
   it("labels with the kind", () => {
     expect(addonVersionLabel("Postgres", "", "16-alpine")).toBe("Postgres 16");

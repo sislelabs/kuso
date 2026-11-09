@@ -14,11 +14,11 @@ import { api } from "@/lib/api-client";
 import { describeError, toastError } from "@/lib/errors";
 import {
   badgeCount,
-  collapseUpdates,
+  bellRows,
   forgetLocalReads,
   markLocallyRead,
-  needsAttention,
   setBellPrefs,
+  unreadBellCount,
   useBellPrefs,
   useLocalReads,
   type BellView,
@@ -69,10 +69,13 @@ function useNotificationFeed() {
   const prefs = useBellPrefs();
   const [open, setOpen] = useState(false);
   const qc = useQueryClient();
-  const countKey = ["notifications", "unread-count", prefs.countAll ? "all" : "attention"] as const;
-  const unread = useQuery<{ unread: number }>({
-    queryKey: countKey,
-    queryFn: () => api(`/api/notifications/feed/unread-count${prefs.countAll ? "" : "?attention=true"}`),
+  // The badge polls the unread rows, not the server's count, so it runs
+  // them through the same bellRows filter as the panel (the server count
+  // also included update notices the panel hides once kuso is current).
+  const unreadKey = ["notifications", "unread", prefs.countAll ? "all" : "attention"] as const;
+  const unread = useQuery<FeedEvent[]>({
+    queryKey: unreadKey,
+    queryFn: () => api(`/api/notifications/feed?unread=true&limit=200${prefs.countAll ? "" : "&attention=true"}`),
     enabled: isAdmin,
     refetchInterval: 30_000,
     staleTime: 15_000,
@@ -94,10 +97,10 @@ function useNotificationFeed() {
   });
   const version = useSystemVersion();
   const localReads = useLocalReads();
-  const items = useMemo(() => {
-    const rows = collapseUpdates(feed.data ?? [], version.data?.needsUpdate);
-    return view === "attention" ? rows.filter(needsAttention) : rows;
-  }, [feed.data, version.data?.needsUpdate, view]);
+  const items = useMemo(
+    () => bellRows(feed.data ?? [], version.data?.needsUpdate, view === "attention"),
+    [feed.data, version.data?.needsUpdate, view],
+  );
   const locallyRead = useMemo(() => new Set(localReads.map((r) => r.id)), [localReads]);
   // Rows the server has since marked read no longer need a local entry.
   useEffect(() => {
@@ -110,24 +113,24 @@ function useNotificationFeed() {
   const markRead = useMutation({
     mutationFn: () => api("/api/notifications/feed/read-all", { method: "POST" }),
     onMutate: async () => {
-      await qc.cancelQueries({ queryKey: ["notifications", "unread-count"] });
-      const prevCount = qc.getQueryData<{ unread: number }>(countKey);
+      await qc.cancelQueries({ queryKey: ["notifications", "unread"] });
+      const prevUnread = qc.getQueryData<FeedEvent[]>(unreadKey);
       const prevFeed = qc.getQueryData<FeedEvent[]>(feedKey);
       const now = new Date().toISOString();
-      qc.setQueriesData({ queryKey: ["notifications", "unread-count"] }, { unread: 0 });
+      qc.setQueriesData<FeedEvent[]>({ queryKey: ["notifications", "unread"] }, []);
       if (prevFeed) qc.setQueryData(feedKey, prevFeed.map((e) => (e.readAt ? e : { ...e, readAt: now })));
-      return { prevCount, prevFeed };
+      return { prevUnread, prevFeed };
     },
     onSuccess: () => {
       forgetLocalReads();
     },
     onError: (e, _vars, ctx) => {
-      if (ctx?.prevCount) qc.setQueryData(countKey, ctx.prevCount);
+      if (ctx?.prevUnread) qc.setQueryData(unreadKey, ctx.prevUnread);
       if (ctx?.prevFeed) qc.setQueryData(feedKey, ctx.prevFeed);
       toastError(e, "Couldn't mark notifications read");
     },
     onSettled: () => {
-      void qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+      void qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
       void qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
     },
   });
@@ -142,7 +145,7 @@ function useNotificationFeed() {
     },
     onSuccess: () => {
       forgetLocalReads();
-      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+      qc.invalidateQueries({ queryKey: ["notifications", "unread"] });
       qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
     },
     onError: (e, _vars, ctx) => {
@@ -153,8 +156,7 @@ function useNotificationFeed() {
 
   // Opening or closing the feed never marks anything read: a row is read
   // once it's opened, or after "Mark all read".
-  const localDiscount = localReads.filter((r) => prefs.countAll || r.attention).length;
-  const unreadCount = Math.max(0, (unread.data?.unread ?? 0) - localDiscount);
+  const unreadCount = unreadBellCount(unread.data ?? [], version.data?.needsUpdate, !prefs.countAll, locallyRead);
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) void unread.refetch();

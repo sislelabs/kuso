@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { UserAccessDialog } from "@/components/users/UserAccessDialog";
 import { toGoDuration } from "./duration";
 import { INSTANCE_ROLE_GRANTS, roleLabel } from "./roles";
 import { toastError } from "@/lib/errors";
@@ -66,6 +67,7 @@ export default function UsersPage() {
   });
   const [showCreate, setShowCreate] = useState(false);
   const [resetting, setResetting] = useState<string | null>(null);
+  const [viewingAccess, setViewingAccess] = useState<UserRow | null>(null);
 
   const users = list.data ?? [];
 
@@ -117,7 +119,13 @@ export default function UsersPage() {
           </div>
           <div role="rowgroup" className="divide-y divide-[var(--border-subtle)]">
             {users.map((u) => (
-              <UserRowItem key={u.id} u={u} canWrite={canWrite} onReset={() => setResetting(u.id)} />
+              <UserRowItem
+                key={u.id}
+                u={u}
+                canWrite={canWrite}
+                onReset={() => setResetting(u.id)}
+                onShowAccess={() => setViewingAccess(u)}
+              />
             ))}
           </div>
         </div>
@@ -131,6 +139,13 @@ export default function UsersPage() {
           userId={resetting}
           username={users.find((u) => u.id === resetting)?.username ?? ""}
           onClose={() => setResetting(null)}
+        />
+      )}
+      {viewingAccess && (
+        <UserAccessDialog
+          userId={viewingAccess.id}
+          username={viewingAccess.username}
+          onClose={() => setViewingAccess(null)}
         />
       )}
     </SettingsPage>
@@ -395,10 +410,12 @@ function UserRowItem({
   u,
   canWrite,
   onReset,
+  onShowAccess,
 }: {
   u: UserRow;
   canWrite: boolean;
   onReset: () => void;
+  onShowAccess: () => void;
 }) {
   const qc = useQueryClient();
   const currentUserId = useSession().data?.user.id;
@@ -474,9 +491,17 @@ function UserRowItem({
         </span>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className={cn("truncate text-sm font-medium", u.isActive ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]")}>
+            <button
+              type="button"
+              onClick={onShowAccess}
+              title={`See what ${u.username} can access`}
+              className={cn(
+                "truncate rounded-sm text-left text-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+                u.isActive ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]",
+              )}
+            >
               {u.username}
-            </span>
+            </button>
             {!u.isActive && <Tag>Disabled</Tag>}
             {invited && (
               <Tooltip>

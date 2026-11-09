@@ -21,7 +21,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   // boundary per island so a slow page doesn't freeze the shell.
   return (
     <TooltipProvider delay={300}>
-      <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg-primary)]">
+      <div className="relative flex h-dvh flex-col overflow-hidden bg-[var(--bg-primary)]">
         <SkipLinks />
         <Suspense fallback={<div className="h-12 shrink-0 border-b border-[var(--border-subtle)]" />}>
           <TopNav />
@@ -29,7 +29,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         <main
           id="main"
           tabIndex={-1}
-          className="flex-1 overflow-y-auto bg-[var(--bg-primary)] pb-[max(var(--staged-bar-space,0px),calc(3.5rem+env(safe-area-inset-bottom)))] outline-none sm:pb-[var(--staged-bar-space,0px)]"
+          className="relative flex-1 overflow-y-auto [scrollbar-gutter:stable] bg-[var(--bg-primary)] pb-[max(var(--staged-bar-space,0px),calc(3.5rem+env(safe-area-inset-bottom)))] outline-none sm:pb-[var(--staged-bar-space,0px)]"
         >
           <Suspense fallback={null}>{children}</Suspense>
         </main>

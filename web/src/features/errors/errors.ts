@@ -157,3 +157,24 @@ export function useProjectErrorCounts(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fallback, services, listStamp, summary.data]);
 }
+
+// useFleetErrorSummaries reads the per-project summary for many projects
+// at once (the home board). Same cache entries and polling as the canvas
+// and the project page, so opening a project costs no extra request.
+export function useFleetErrorSummaries(projects: readonly string[]): {
+  byProject: ReadonlyMap<string, ProjectErrorSummary>;
+  unavailable: boolean;
+} {
+  const results = useQueries({ queries: projects.map((p) => summaryQuery(p, ERRORS_WINDOW, "", true)) });
+  const stamp = results.map((q) => q.dataUpdatedAt).join(",");
+  return useMemo(() => {
+    const byProject = new Map<string, ProjectErrorSummary>();
+    results.forEach((q, i) => {
+      if (q.data) byProject.set(projects[i], q.data);
+    });
+    const unavailable = results.length > 0 && results.every((q) => summaryUnsupported(q.error));
+    return { byProject, unavailable };
+    // results is a new array each render; stamp tracks the data that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stamp, projects]);
+}

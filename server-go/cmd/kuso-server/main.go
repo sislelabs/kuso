@@ -329,6 +329,17 @@ func main() {
 		}
 	}
 
+	// Approving a user (adding them to a group / giving them an instance
+	// role) never used to remove their kuso-pending membership, so
+	// approved users kept showing "Pending". New approvals clear it at
+	// write time; this one-shot sweep heals rows from before that.
+	// Idempotent — a clean DB deletes nothing.
+	if n, err := database.HealStalePendingMemberships(ctx); err != nil {
+		logger.Warn("users: heal stale pending memberships", "err", err)
+	} else if n > 0 {
+		logger.Info("users: healed stale pending memberships", "removed", n)
+	}
+
 	// Kube client is optional during early development — if config
 	// resolution fails (no kubeconfig and no in-cluster), boot without
 	// project routes rather than crash. The /healthz + /api/auth/login
