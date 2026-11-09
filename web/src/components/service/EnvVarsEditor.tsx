@@ -672,14 +672,21 @@ export function EnvVarsEditor({
 
   const insertReference = (name: string, ref: string) => {
     const i = rows.findIndex((r) => r.name.trim() === name);
+    let id: string;
     if (i >= 0) {
+      id = rows[i].id;
       update(i, { value: ref, fromSecret: false, origValueFrom: undefined, resolved: undefined });
     } else {
       const row: Row = { id: rid(), name, value: ref, fromSecret: false, secretBacked: false, visible: true };
+      id = row.id;
       setRows((prev) => [...prev, row]);
       markDirty();
     }
+    // Open the row and put the caret in its value once the dialog has
+    // closed (it skips its own focus return after an insert).
+    setEditing((prev) => new Set(prev).add(id));
     setFlashKey(name);
+    window.setTimeout(() => valueInputs.current.get(id)?.focus(), 0);
   };
 
   // Promote a service var to a project secret: write it to <project>-shared,

@@ -59,13 +59,34 @@ export function useRefTargets(project: string, excludeService: string): { target
   return { targets, loading: proj.isPending || addons.isPending };
 }
 
+export interface RefKey {
+  key: string;
+  hint?: string;
+  // Why the addon currently leaves this key empty (its pooler is off).
+  unavailable?: string;
+}
+
+// unavailableKeyReason says why an addon key resolves empty today. The
+// conn Secret always carries the POOLER_* keys; they're blank while the
+// pooler is off.
+export function unavailableKeyReason(addon: string, key: string, poolerEnabled: boolean): string | undefined {
+  if (/POOL|BOUNCER/i.test(key) && !poolerEnabled) return `Empty: ${addon}'s pooler is off`;
+  return undefined;
+}
+
 // useRefKeys returns the keys a target exposes. Addon keys come from the
-// conn Secret and are fetched only once a target is chosen.
+// conn Secret and are fetched only once a target is chosen; keys the
+// addon doesn't fill right now sort last with the reason.
 export function useRefKeys(
   project: string,
   target: RefTarget | null,
-): { keys: { key: string; hint?: string }[]; loading: boolean; error: boolean } {
+): { keys: RefKey[]; loading: boolean; error: boolean } {
   const isAddon = target?.kind === "addon";
+  const addons = useAddons(project);
+  const addonCR = isAddon
+    ? (addons.data ?? []).find((a) => a.metadata.name === target.name || a.metadata.name === `${project}-${target.name}`)
+    : undefined;
+  const poolerEnabled = !!addonCR?.spec.pooler?.enabled;
   const q = useQuery({
     queryKey: ["addons", project, target?.name ?? "", "secret-keys"],
     queryFn: () => listAddonSecretKeys(project, target?.name ?? ""),
@@ -75,7 +96,14 @@ export function useRefKeys(
   if (!target) return { keys: [], loading: false, error: false };
   if (!isAddon) return { keys: SERVICE_REF_KEYS, loading: false, error: false };
   return {
-    keys: (q.data?.keys ?? []).slice().sort().map((key) => ({ key })),
+    keys: (q.data?.keys ?? [])
+      .slice()
+      .sort()
+      .map((key): RefKey => {
+        const unavailable = unavailableKeyReason(target.name, key, poolerEnabled);
+        return unavailable ? { key, hint: unavailable, unavailable } : { key };
+      })
+      .sort((a, b) => Number(!!a.unavailable) - Number(!!b.unavailable)),
     loading: q.isPending,
     error: q.isError,
   };
@@ -118,8 +146,10 @@ export function AddReferenceDialog({
   const [name, setName] = useState("");
   const [filter, setFilter] = useState("");
   const keys = useRefKeys(project, target);
+  const inserted = useRef(false);
   useEffect(() => {
     if (!open) return;
+    inserted.current = false;
     setTarget(null);
     setKey(null);
     setName("");
@@ -145,7 +175,9 @@ export function AddReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      {/* After an insert the editor focuses the new row's value, so the
+          dialog mustn't hand focus back to its trigger. */}
+      <DialogContent className="sm:max-w-md" finalFocus={() => !inserted.current}>
         <DialogHeader>
           <DialogTitle>Add reference</DialogTitle>
         </DialogHeader>
@@ -213,7 +245,14 @@ export function AddReferenceDialog({
                 <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">No match.</p>
               ) : (
                 shownKeys.map((k) => (
-                  <PickRow key={k.key} onClick={() => pickKey(k.key)} label={k.key} hint={k.hint} mono />
+                  <PickRow
+                    key={k.key}
+                    onClick={() => pickKey(k.key)}
+                    label={k.key}
+                    hint={k.hint}
+                    mono
+                    disabled={!!k.unavailable}
+                  />
                 ))
               )}
             </div>
@@ -262,6 +301,7 @@ export function AddReferenceDialog({
             size="sm"
             disabled={!ref || !ENV_NAME_RE.test(name)}
             onClick={() => {
+              inserted.current = true;
               onInsert(name, ref);
               onOpenChange(false);
             }}
@@ -280,23 +320,33 @@ function PickRow({
   label,
   hint,
   mono,
+  disabled,
 }: {
   onClick: () => void;
   icon?: ReactNode;
   label: string;
   hint?: string;
   mono?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="option"
       aria-selected={false}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left last:border-b-0 hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none"
+      className="flex w-full items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left last:border-b-0 hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none disabled:cursor-not-allowed disabled:hover:bg-transparent"
     >
       {icon}
-      <span className={cn("min-w-0 flex-1 truncate text-xs text-[var(--text-primary)]", mono && "font-mono")}>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-xs",
+          disabled ? "text-[var(--text-tertiary)]" : "text-[var(--text-primary)]",
+          mono && "font-mono",
+        )}
+      >
         {label}
       </span>
       {hint && <span className="shrink-0 text-xs text-[var(--text-tertiary)]">{hint}</span>}
@@ -345,7 +395,13 @@ export const RefValueInput = forwardRef<
   }, [targets, trigger]);
   const keys = useRefKeys(project, target);
 
-  type Option = { label: string; hint?: string; kind?: RefTargetKind; pick: { target: string; key?: string } };
+  type Option = {
+    label: string;
+    hint?: string;
+    kind?: RefTargetKind;
+    unavailable?: boolean;
+    pick: { target: string; key?: string };
+  };
   const options: Option[] = !trigger
     ? []
     : trigger.key === null
@@ -359,6 +415,7 @@ export const RefValueInput = forwardRef<
         ? rankMatches(keys.keys, trigger.key, (k) => k.key).map((k) => ({
             label: k.key,
             hint: k.hint,
+            unavailable: !!k.unavailable,
             pick: { target: target.name, key: k.key },
           }))
         : [];
@@ -485,7 +542,14 @@ export const RefValueInput = forwardRef<
                 )}
               >
                 {o.kind && <TargetIcon kind={o.kind} />}
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-primary)]">{o.label}</span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate font-mono text-xs",
+                    o.unavailable ? "text-[var(--text-tertiary)]" : "text-[var(--text-primary)]",
+                  )}
+                >
+                  {o.label}
+                </span>
                 {o.hint && <span className="shrink-0 truncate text-xs text-[var(--text-tertiary)]">{o.hint}</span>}
               </button>
             ))
