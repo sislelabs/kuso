@@ -16,6 +16,7 @@ import { buildRefLabel } from "@/features/builds";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
+import { stuckFacts } from "@/lib/status";
 import { toast } from "sonner";
 import { ErrorBadge, VulnBadge } from "./NodeBadges";
 import type { ErrorSummary, VulnSummary } from "./badgeSummary";
@@ -142,7 +143,12 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
               Rolled back
             </span>
           )}
-          {deployedAt && (
+          {/* A stuck rollout isn't "deployed 1m ago"; its reason takes the slot. */}
+          {status.kind === "stuck" ? (
+            <span className="truncate text-[var(--text-secondary)]" title={status.detail}>
+              · {status.detail || stuckFacts(data.env?.status)?.summary || "Can't start"}
+            </span>
+          ) : deployedAt && (
             <span className="truncate text-[var(--text-tertiary)]" title={`Deployed ${new Date(deployedAt).toLocaleString()}`}>
               · {live?.rolledBack ? "" : "deployed "}{relativeTime(deployedAt)}
             </span>

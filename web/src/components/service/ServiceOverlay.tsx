@@ -17,7 +17,9 @@ import {
   pickRollbackTarget,
   healthProblem,
   needsRestart,
+  deriveServiceStatus,
   type HealthProblem,
+  type NodeStatusKind,
 } from "@/features/services";
 import { useServiceErrorCount } from "@/features/errors";
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
@@ -31,7 +33,6 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
-import { deployStatusFromServerState } from "@/components/service/DeployStatusPill";
 import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "./overlay/ServiceVariablesPanel";
 import { ServiceMetricsPanel } from "./overlay/ServiceMetricsPanel";
@@ -68,7 +69,7 @@ import { trimRepeatedCause } from "./overlay/statusCopy";
 import { ExternalLink, X, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
-import { SERVICE_STATUS, serverStateCause, type ServiceStatus } from "@/lib/status";
+import { SERVICE_STATUS, serverStateCause, stuckFacts, type ServiceStatus } from "@/lib/status";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
@@ -610,8 +611,6 @@ export function ServiceOverlay({
           : (env?.status?.url as string | undefined);
   // Same host the project card and canvas show while a custom domain is still pending.
   const liveUrl = useLiveServiceUrl(project, service ?? "", env, url) ?? url;
-  const ready = !!env?.status?.ready;
-  const phase = (env?.status?.phase as string | undefined)?.toLowerCase();
   // "rolling" is a real running state, not a diagnostic — the
   // overlay used to pack it into the drift chip alongside three
   // other meanings ("pending changes", "restart needed",
@@ -620,40 +619,31 @@ export function ServiceOverlay({
   // diagnostic.
   const rollingNow = !!drift.data?.rolloutPending;
   const rolloutSlow = useRolloutSlow(rollingNow, drift.data?.lastSpecMutation);
-  // Server-derived unified rollup (env.status.state) wins when
-  // present — it folds build + deployment + pod health into one
-  // answer (crashloops and degraded replica counts are invisible to
-  // the legacy phase chain below). "rolling" stays a client-side
-  // overlay on top of a healthy state since drift is fetched here.
-  const serverState = deployStatusFromServerState(env?.status?.state);
-  const stateDetail = env?.status?.stateDetail;
-  // With a server rollup the header follows it exactly, like the canvas
-  // node (deriveServiceStatus); an in-flight rollout is a chip next to
-  // it, not a different status.
+  // The same reading as the canvas node (deriveServiceStatus): the
+  // server rollup when present, client heuristics on older servers. An
+  // in-flight rollout on a healthy env is a chip next to it, not a
+  // different status.
+  const derived = deriveServiceStatus({ stopped: !!svc.data?.spec?.stopped, env });
+  const stateDetail = env?.status?.stateDetail || undefined;
   const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;
   // Live but short of replicas reads "Degraded", the same rule as the
   // health strip (ready < desired from the env's replica rollup).
   const shortOfReplicas =
     replicas?.desired !== undefined && replicas.desired > 0 && (replicas.ready ?? 0) < replicas.desired;
-  const status = serverState
-    ? serverState === "active" && shortOfReplicas
-      ? "degraded"
-      : serverState
-    : phase === "building" || phase === "deploying"
-      ? "building"
-      : ready && rollingNow
-        ? "rolling"
-        : ready
-          ? "active"
-          : phase === "failed" || phase === "error"
-            ? "failed"
-            : phase === "sleeping"
-              ? "sleeping"
-              : "unknown";
+  // Older servers have no rollup; a spec rollout on a ready env reads Deploying.
+  const rollingLegacy = !env?.status?.state && derived.kind === "live" && rollingNow;
+  const status: ServiceStatus =
+    derived.kind === "live" && shortOfReplicas ? "degraded" : rollingLegacy ? "deploying" : NODE_TO_STATUS[derived.kind];
+  const statusDetail =
+    status === "stuck"
+      ? stateDetail || stuckFacts(env?.status)?.summary || serverStateCause("stuck")
+      : rollingLegacy
+        ? "Rolling out a new spec"
+        : stateDetail || serverStateCause(env?.status?.state);
 
   const envGroup = env ? envGroupName(env) : envParam;
   const stopped = !!svc.data?.spec?.stopped;
-  const problem = healthProblem(env?.status?.state, status);
+  const problem = healthProblem(env?.status?.state, status === "failing" ? "failed" : status);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
   const failureBannerVisible = !!failureKind && tab === failureTab;
 
@@ -729,7 +719,7 @@ export function ServiceOverlay({
                       {service || ""}
                     </h2>
                   )}
-                  <StatusPill status={status} detail={stateDetail || serverStateCause(env?.status?.state)} />
+                  <SharedStatusPill status={SERVICE_STATUS[status]} detail={statusDetail} />
                 </div>
                 <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
                   <span className="min-w-0 truncate">
@@ -747,7 +737,7 @@ export function ServiceOverlay({
                   )}
                 </div>
                 {service ? (
-                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[OVERLAY_STATUS[status] ?? "unknown"]} onNavigate={navigateTo} />
+                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} onNavigate={navigateTo} />
                 ) : null}
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5 empty:hidden">
                   {/* Diagnostic chip. The "rolling out" state lives
@@ -1196,6 +1186,7 @@ const PROBLEM_LABEL: Record<string, string> = {
   degraded: "Degraded",
   build_failed: "Build failed",
   release_failed: "Release failed",
+  stuck: "Stuck",
 };
 
 function HealthBanner({
@@ -1223,19 +1214,20 @@ function HealthBanner({
 }) {
   const label = (serverState && PROBLEM_LABEL[serverState]) || "Failed";
   const runtime = problem === "runtime";
+  const danger = runtime || problem === "stuck";
   const shown = trimRepeatedCause(label, detail);
   return (
     <div
       role="alert"
       className={cn(
         "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-5",
-        runtime
+        danger
           ? "border-[var(--error)]/30 bg-[var(--error)]/5"
           : "border-[var(--warning)]/30 bg-[var(--warning)]/5",
       )}
     >
       <AlertTriangle
-        className={cn("h-3.5 w-3.5 shrink-0", runtime ? "text-[var(--error)]" : "text-[var(--warning)]")}
+        className={cn("h-3.5 w-3.5 shrink-0", danger ? "text-[var(--error)]" : "text-[var(--warning)]")}
       />
       <span className="text-xs font-medium text-[var(--text-primary)]">{label}</span>
       {shown ? (
@@ -1471,27 +1463,23 @@ function relativeAge(iso: string): string {
   return `${days}d ago`;
 }
 
-// The overlay's local status keys ("active", "rolling", …) predate the
-// shared vocabulary; this maps them onto it so the header says exactly
-// what the canvas and the Deployments card say.
-const OVERLAY_STATUS: Record<string, ServiceStatus> = {
-  active: "live",
-  rolling: "deploying",
+// The canvas node's kinds on the shared vocabulary; the specific cause
+// (crashloop, failed build) is the detail, not the label.
+const NODE_TO_STATUS: Record<NodeStatusKind, ServiceStatus> = {
+  live: "live",
+  degraded: "degraded",
   building: "building",
   deploying: "deploying",
-  failed: "failing",
-  crashed: "failing",
-  degraded: "degraded",
-  awaiting: "not_deployed",
-  stopped: "stopped",
+  build_failed: "failing",
+  crashing: "failing",
+  stuck: "stuck",
   sleeping: "sleeping",
+  stopped: "stopped",
+  not_deployed: "not_deployed",
+  provisioning: "deploying",
+  paused: "stopped",
   unknown: "unknown",
 };
-
-function StatusPill({ status, detail }: { status: string; detail?: string }) {
-  const meta = SERVICE_STATUS[OVERLAY_STATUS[status] ?? "unknown"];
-  return <SharedStatusPill status={meta} detail={detail || (status === "rolling" ? "Rolling out a new spec" : undefined)} />;
-}
 
 function UrlPill({ url }: { url: string }) {
   const display = url.replace(/^https?:\/\//, "");

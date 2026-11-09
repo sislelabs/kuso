@@ -81,6 +81,7 @@ describe("healthProblem", () => {
     expect(healthProblem("build_failed", "failed")).toBe("deploy");
     expect(healthProblem("running", "active")).toBeNull();
     expect(healthProblem(undefined, "failed")).toBe("runtime");
+    expect(healthProblem("stuck", "stuck")).toBe("stuck");
   });
 });
 

@@ -47,9 +47,12 @@ export function pickRollbackTarget(builds: BuildSummary[], live: LiveRef): Build
 // Server rollup states (env.status.state) that mean "the running pods
 // are unhealthy". build_failed / release_failed are different: the
 // last green version keeps serving, so restart/rollback don't apply.
-export type HealthProblem = "runtime" | "deploy" | null;
+// stuck: pods can't start (unschedulable, image pull, bad config); a
+// restart or rollback of the same spec won't help, the reason will.
+export type HealthProblem = "runtime" | "deploy" | "stuck" | null;
 
 export function healthProblem(serverState: string | undefined, uiStatus: string): HealthProblem {
+  if (serverState === "stuck") return "stuck";
   if (serverState === "build_failed" || serverState === "release_failed") return "deploy";
   if (serverState === "crashlooping" || serverState === "degraded") return "runtime";
   if (!serverState && uiStatus === "failed") return "runtime";
