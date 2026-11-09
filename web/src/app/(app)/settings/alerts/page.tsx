@@ -14,11 +14,16 @@ import {
   enableAlert,
   disableAlert,
   ALERT_KINDS,
+  DUR_UNITS,
   alertKindLabel,
+  autoRuleName,
   buildCreateBody,
   describeRule,
   emptyRuleForm,
+  joinDur,
   prefillRuleForm,
+  ruleStatus,
+  splitDur,
   alertKindsFor,
   alertRequestText,
   canManageAlertRule,
@@ -26,7 +31,9 @@ import {
   type AlertAccessSession,
   type AlertKind,
   type AlertRule,
+  type DurUnit,
   type RuleFormState,
+  type RuleStatus,
 } from "@/features/alerts";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
@@ -187,7 +194,7 @@ function AlertsPageInner() {
         <EmptyState
           icon={<Bell className="h-5 w-5" />}
           title="No rules yet"
-          description="Click New rule to watch 5xx rates, latency, certificates, DNS, logs or nodes."
+          description="Click New rule to watch crash loops, failed deploys, uptime, 5xx rates, latency, certificates, DNS, logs or nodes."
           className="p-8"
         />
       ) : (
@@ -196,6 +203,7 @@ function AlertsPageInner() {
           description={`${(list.data ?? []).length} ${(list.data ?? []).length === 1 ? "rule" : "rules"}. Disabled rules aren't evaluated.`}
           flush
         >
+          <StatusLegend />
           <ul className="divide-y divide-[var(--border-subtle)]">
             {(list.data ?? []).map((r) => (
               <RuleRow
@@ -265,29 +273,21 @@ function RuleRow({
 }) {
   const [confirming, setConfirming] = useState(false);
   const detail = describeRule(rule);
+  const status = ruleStatus(rule);
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
-      <span
-        aria-hidden
-        className={cn(
-          "mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full",
-          rule.severity === "error"
-            ? "bg-[var(--error)]"
-            : rule.severity === "warn"
-              ? "bg-[var(--warning)]"
-              : "bg-[var(--success)]"
-        )}
-        title={`Severity: ${rule.severity}`}
-      />
+      <StatusDot status={status} className="mt-1.5" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-sm font-medium text-[var(--text-primary)]">{rule.name}</p>
+          <span className="sr-only">Status: {STATUS_META[status].label}.</span>
           <span
             className="rounded-sm bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--text-secondary)]"
             title={rule.kind}
           >
             {alertKindLabel(rule.kind)}
           </span>
+          <span className="text-xs text-[var(--text-tertiary)]">{SEVERITY_LABEL[rule.severity]}</span>
           {rule.project && (
             <span className="font-mono text-xs text-[var(--text-secondary)]">
               {rule.project}
@@ -305,7 +305,7 @@ function RuleRow({
             )}
           </p>
         ) : rule.lastFiredAt && (
-          <p className="mt-0.5 text-xs text-[var(--warning)]">
+          <p className={cn("mt-0.5 text-xs", status === "firing" ? "text-[var(--error)]" : "text-[var(--text-secondary)]")}>
             Last fired {relativeTime(rule.lastFiredAt)}
             {deliveryFailing && (
               <>
@@ -367,6 +367,83 @@ function RuleRow({
 
 const KIND_GROUPS = ["Service", "Edge", "Logs", "Nodes"] as const;
 
+const SEVERITY_LABEL: Record<AlertRule["severity"], string> = { info: "Info", warn: "Warning", error: "Error" };
+
+const STATUS_META: Record<RuleStatus, { label: string; dot: string; hint: string }> = {
+  firing: { label: "Firing", dot: "bg-[var(--error)]", hint: "The condition holds right now" },
+  ok: { label: "OK", dot: "bg-[var(--success)]", hint: "Has fired before; quiet now" },
+  never: {
+    label: "Never fired",
+    dot: "border border-[var(--text-tertiary)] bg-transparent",
+    hint: "Evaluated every minute, hasn't fired yet",
+  },
+  disabled: { label: "Off", dot: "bg-[var(--border-strong)]", hint: "Not evaluated" },
+};
+
+function StatusDot({ status, className }: { status: RuleStatus; className?: string }) {
+  const m = STATUS_META[status];
+  return (
+    <span
+      aria-hidden
+      title={`${m.label}: ${m.hint}`}
+      className={cn("inline-block h-2 w-2 shrink-0 rounded-full", m.dot, className)}
+    />
+  );
+}
+
+function StatusLegend() {
+  return (
+    <ul
+      aria-label="Status legend"
+      className="flex flex-wrap gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-4 py-2 text-xs text-[var(--text-secondary)] sm:px-5"
+    >
+      {(Object.keys(STATUS_META) as RuleStatus[]).map((s) => (
+        <li key={s} className="flex items-center gap-1.5" title={STATUS_META[s].hint}>
+          <StatusDot status={s} />
+          {STATUS_META[s].label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// DurationInput is a whole number plus a unit, stored as "5m".
+function DurationInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { n, unit } = splitDur(value);
+  return (
+    <div className="flex gap-1.5">
+      <Input
+        type="number"
+        min={1}
+        inputMode="numeric"
+        aria-label={`${label} amount`}
+        value={n}
+        onChange={(e) => onChange(joinDur(e.target.value.replace(/\D/g, ""), unit))}
+        className="w-20 font-mono"
+      />
+      <SettingsSelect
+        aria-label={`${label} unit`}
+        value={unit}
+        onChange={(e) => onChange(joinDur(n, e.target.value as DurUnit))}
+      >
+        {DUR_UNITS.map((u) => (
+          <option key={u.value} value={u.value}>
+            {u.label}
+          </option>
+        ))}
+      </SettingsSelect>
+    </div>
+  );
+}
+
 function AddRuleDialog({
   initial,
   access,
@@ -395,7 +472,14 @@ function AddRuleDialog({
     // here would open a service's "New alert" as an unscoped rule.
     return projectsLoading || projects.includes(base.project) ? base : { ...base, project: "", service: "", env: "" };
   });
-  const [form, setForm] = useState<RuleFormState>(initialForm);
+  const [form, setFormRaw] = useState<RuleFormState>(initialForm);
+  // The name follows kind and scope until the user edits it.
+  const [nameAuto, setNameAuto] = useState(() => !initialForm.name || initialForm.name === autoRuleName(initialForm));
+  const setForm = (update: (f: RuleFormState) => RuleFormState) =>
+    setFormRaw((f) => {
+      const next = update(f);
+      return nameAuto ? { ...next, name: autoRuleName(next) } : next;
+    });
   const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
   const meta = ALERT_KINDS[form.kind];
   const set = <K extends keyof RuleFormState>(k: K, v: RuleFormState[K]) => setForm((f) => ({ ...f, [k]: v }));
@@ -493,8 +577,10 @@ function AddRuleDialog({
             <Field label="Name">
               <Input
                 value={form.name}
-                onChange={(e) => set("name", e.target.value)}
-                placeholder={meta.label}
+                onChange={(e) => {
+                  setNameAuto(false);
+                  setFormRaw((f) => ({ ...f, name: e.target.value }));
+                }}
               />
             </Field>
           </div>
@@ -601,24 +687,14 @@ function AddRuleDialog({
             </div>
           )}
 
-          <div className={cn("grid grid-cols-1 gap-3", meta.window ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {meta.window && (
-              <Field label="Window">
-                <Input
-                  value={form.window}
-                  onChange={(e) => set("window", e.target.value)}
-                  placeholder="5m"
-                  className="font-mono"
-                />
+              <Field label="Window" hint="How far back each check looks">
+                <DurationInput label="Window" value={form.window} onChange={(v) => set("window", v)} />
               </Field>
             )}
-            <Field label="Throttle">
-              <Input
-                value={form.throttle}
-                onChange={(e) => set("throttle", e.target.value)}
-                placeholder="10m"
-                className="font-mono"
-              />
+            <Field label="Throttle" hint="Minimum gap between two alerts">
+              <DurationInput label="Throttle" value={form.throttle} onChange={(v) => set("throttle", v)} />
             </Field>
             <Field label="Severity">
               <SettingsSelect

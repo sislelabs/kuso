@@ -8,7 +8,10 @@ export type AlertKind =
   | "http_5xx_rate"
   | "http_p95_latency"
   | "cert_expiry"
-  | "dns_mismatch";
+  | "dns_mismatch"
+  | "crashloop"
+  | "deploy_failed"
+  | "healthcheck_failing";
 
 export interface AlertRule {
   id: string;
@@ -25,7 +28,7 @@ export interface AlertRule {
   severity: "info" | "warn" | "error";
   throttleSeconds: number;
   lastFiredAt?: string;
-  // Set while an episodic rule (http_*, cert_expiry, dns_mismatch) is firing.
+  // Set while an episodic rule (every kind but log_match / node_*) is firing.
   firingSince?: string;
   firingTargets?: string[];
   createdAt: string;
