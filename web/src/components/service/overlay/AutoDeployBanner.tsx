@@ -58,6 +58,10 @@ export function pushDeployState({
       hint: "Redeploy by hand, or call the deploy hook (Settings → Deploy) from your CI.",
     };
   }
+  const branch = envBranch || spec.repo?.defaultBranch || "main";
+  // An explicit pause is the user's own switch: show it (with Resume) even
+  // when something else would also stop pushes.
+  if (spec.autoDeployPaused) return { on: false, paused: true, repo: slug, branch };
   if (githubConfigured === false) {
     return {
       on: false,
@@ -65,8 +69,6 @@ export function pushDeployState({
       hint: "An admin can connect it under Settings → GitHub.",
     };
   }
-  const branch = envBranch || spec.repo?.defaultBranch || "main";
-  if (spec.autoDeployPaused) return { on: false, paused: true, repo: slug, branch };
   return { on: true, repo: slug, branch, watchPaths: spec.watchPaths ?? [] };
 }
 
