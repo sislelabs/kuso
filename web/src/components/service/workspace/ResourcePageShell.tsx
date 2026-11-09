@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Check, ChevronDown, LayoutGrid, Search } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Clock, LayoutGrid, Search } from "lucide-react";
 import { useAddons, useProject } from "@/features/projects";
-import { STATUS_TONE, useLatestBuilds } from "@/features/services";
+import { STATUS_TONE, useLatestBuilds, useProjectCrons } from "@/features/services";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { AddonIcon } from "@/components/addon/AddonIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -13,10 +13,12 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { addonPageHref, projectCanvasHref, servicePageHref } from "./hrefs";
-import { railResources, type RailAddon, type RailService } from "./railResources";
+import { railCrons, railResources, type RailAddon, type RailCron, type RailService } from "./railResources";
 import { StagedChangesBar } from "@/components/staged";
 
 export type ActiveResource = { kind: "service" | "addon"; name: string };
+
+type Resources = { services: RailService[]; addons: RailAddon[]; crons: RailCron[] };
 
 const groupHeading =
   "px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]";
@@ -39,15 +41,23 @@ export function ResourcePageShell({
   const proj = useProject(project);
   const addons = useAddons(project);
   const latestBuilds = useLatestBuilds(project, env);
-  const resources = useMemo(
+  const crons = useProjectCrons(project);
+  const resources = useMemo<Resources | null>(
     () =>
       proj.data
-        ? railResources(project, env, proj.data.services, proj.data.environments, addons.data ?? [], latestBuilds.data)
+        ? {
+            ...railResources(project, env, proj.data.services, proj.data.environments, addons.data ?? [], latestBuilds.data),
+            crons: railCrons(project, env, crons.data ?? [], proj.data.services),
+          }
         : null,
-    [proj.data, addons.data, project, env, latestBuilds.data],
+    [proj.data, addons.data, project, env, latestBuilds.data, crons.data],
   );
   const hrefFor = (kind: ActiveResource["kind"], name: string) =>
     kind === "service" ? servicePageHref(project, name, { env }) : addonPageHref(project, name, { env });
+  // A cron has no page of its own: a service cron lives on its service's
+  // Crons tab, a project cron on the canvas.
+  const cronHref = (c: RailCron) =>
+    c.service ? servicePageHref(project, c.service, { env, tab: "crons" }) : projectCanvasHref(project, env);
 
   return (
     <div className="flex h-full min-h-0">
@@ -65,7 +75,7 @@ export function ResourcePageShell({
             <span className="ml-auto truncate font-mono text-xs text-[var(--text-tertiary)]">{project}</span>
           </Link>
         </div>
-        <ResourceRail resources={resources} loading={proj.isPending} active={active} hrefFor={hrefFor} />
+        <ResourceRail resources={resources} loading={proj.isPending} active={active} hrefFor={hrefFor} cronHref={cronHref} />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-2 sm:px-4 lg:hidden">
@@ -78,7 +88,7 @@ export function ResourcePageShell({
             <span className="max-w-[30vw] truncate">{project}</span>
           </Link>
           <span aria-hidden className="text-[var(--border-strong)] select-none">/</span>
-          <ResourceSwitcher resources={resources} active={active} hrefFor={hrefFor} />
+          <ResourceSwitcher resources={resources} active={active} hrefFor={hrefFor} cronHref={cronHref} />
         </div>
         <div className="min-h-0 flex-1">{children}</div>
       </div>
@@ -102,17 +112,20 @@ function ResourceRail({
   loading,
   active,
   hrefFor,
+  cronHref,
 }: {
-  resources: { services: RailService[]; addons: RailAddon[] } | null;
+  resources: Resources | null;
   loading: boolean;
   active: ActiveResource;
   hrefFor: (kind: ActiveResource["kind"], name: string) => string;
+  cronHref: (c: RailCron) => string;
 }) {
   const [q, setQ] = useState("");
   const match = (s: string) => s.toLowerCase().includes(q.trim().toLowerCase());
   const services = (resources?.services ?? []).filter((s) => match(s.display) || match(s.name));
   const addons = (resources?.addons ?? []).filter((a) => match(a.name) || match(a.kind));
-  const total = (resources?.services.length ?? 0) + (resources?.addons.length ?? 0);
+  const crons = (resources?.crons ?? []).filter((c) => match(c.display) || match(c.name) || match(c.service ?? ""));
+  const total = (resources?.services.length ?? 0) + (resources?.addons.length ?? 0) + (resources?.crons.length ?? 0);
 
   return (
     <nav aria-label="Switch resource" className="flex min-h-0 flex-1 flex-col">
@@ -165,7 +178,22 @@ function ResourceRail({
                 ))}
               </RailGroup>
             ) : null}
-            {q && services.length + addons.length === 0 ? (
+            {crons.length > 0 ? (
+              <RailGroup title="Cron jobs" count={crons.length}>
+                {crons.map((c) => (
+                  <RailRow
+                    key={`c:${c.name}`}
+                    href={cronHref(c)}
+                    active={false}
+                    icon={<Clock aria-hidden className="h-3.5 w-3.5" />}
+                    label={c.display}
+                    hint={[c.schedule, c.service ? `in ${c.service}` : ""].filter(Boolean).join(" · ")}
+                    status={c.status}
+                  />
+                ))}
+              </RailGroup>
+            ) : null}
+            {q && services.length + addons.length + crons.length === 0 ? (
               <p className="px-2 py-4 text-xs text-[var(--text-tertiary)]">Nothing matches “{q}”.</p>
             ) : null}
           </>
@@ -192,12 +220,15 @@ function RailRow({
   active,
   icon,
   label,
+  hint,
   status,
 }: {
   href: string;
   active: boolean;
   icon: React.ReactNode;
   label: string;
+  // Shown on hover; the row stays one line.
+  hint?: string;
   status: RailService["status"];
 }) {
   return (
@@ -205,6 +236,7 @@ function RailRow({
       <Link
         href={href}
         aria-current={active ? "page" : undefined}
+        title={hint ? `${label} · ${hint}` : undefined}
         className={cn(
           "group relative flex h-8 items-center gap-2 rounded-md pl-2.5 pr-2 text-[13px] transition-colors",
           active
@@ -225,10 +257,12 @@ function ResourceSwitcher({
   resources,
   active,
   hrefFor,
+  cronHref,
 }: {
-  resources: { services: RailService[]; addons: RailAddon[] } | null;
+  resources: Resources | null;
   active: ActiveResource;
   hrefFor: (kind: ActiveResource["kind"], name: string) => string;
+  cronHref: (c: RailCron) => string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -239,6 +273,10 @@ function ResourceSwitcher({
   const go = (kind: ActiveResource["kind"], name: string) => {
     setOpen(false);
     router.push(hrefFor(kind, name));
+  };
+  const goCron = (c: RailCron) => {
+    setOpen(false);
+    router.push(cronHref(c));
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -272,6 +310,17 @@ function ResourceSwitcher({
                     <StatusDot tone={a.status.tone} label={a.status.label} />
                     <span className="truncate text-[13px]">{a.name}</span>
                     {active.kind === "addon" && active.name === a.name ? <Check className="ml-auto h-3 w-3 text-[var(--accent)]" /> : null}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+            {resources && resources.crons.length > 0 ? (
+              <CommandGroup heading="Cron jobs" className={groupHeading}>
+                {resources.crons.map((c) => (
+                  <CommandItem key={c.name} value={`cron ${c.display} ${c.name} ${c.service ?? ""}`} onSelect={() => goCron(c)} className="px-2 py-1.5">
+                    <StatusDot tone={c.status.tone} label={c.status.label} />
+                    <span className="truncate text-[13px]">{c.display}</span>
+                    <span className="ml-auto truncate text-xs text-[var(--text-tertiary)]">{c.schedule}</span>
                   </CommandItem>
                 ))}
               </CommandGroup>

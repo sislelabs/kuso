@@ -13,6 +13,7 @@ import {
   serviceUrl,
   STATUS_TONE,
   useLatestBuilds,
+  useProjectCrons,
   useTriggerBuild,
   useStopService,
   useStartService,
@@ -40,7 +41,9 @@ import {
   KeyRound,
   Lock,
   AlertTriangle,
+  Clock,
 } from "lucide-react";
+import { railCrons } from "@/components/service/workspace/railResources";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -98,6 +101,8 @@ export function MobileIncidentView({
   );
   const { vulnSummaries, errorSummaries, errorHot } = useServiceBadges(project, selectedEnv, services);
   const live = rows.filter((r) => r.status.kind === "live").length;
+  const cronsQ = useProjectCrons(project);
+  const crons = railCrons(project, selectedEnv, cronsQ.data ?? [], services);
   const issues = serviceIssues(rows.map((r) => r.status));
 
   return (
@@ -157,7 +162,7 @@ export function MobileIncidentView({
                     <AddonIcon kind={a.spec.kind} className="h-5 w-5 shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{serviceShortName(project, a.metadata.name)}</span>
-                      <span className="block truncate text-xs text-[var(--text-tertiary)]">
+                      <span className="block truncate text-[13px] text-[var(--text-tertiary)]">
                         {addonLabel(a.spec.kind)}
                         {a.spec.version ? ` ${a.spec.version}` : ""}
                       </span>
@@ -172,9 +177,47 @@ export function MobileIncidentView({
         </section>
       )}
 
+      {crons.length > 0 && (
+        <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+          <h2 className="px-4 pb-1 pt-3 text-sm font-medium text-[var(--text-secondary)]">Cron jobs</h2>
+          <ul>
+            {crons.map((c) => {
+              const body = (
+                <>
+                  <Clock className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{c.display}</span>
+                    <span className="block truncate text-[13px] text-[var(--text-tertiary)]">
+                      {c.schedule}
+                      {c.service ? ` · runs in ${c.service}` : ""}
+                    </span>
+                  </span>
+                  <StatusLabel status={c.status} />
+                </>
+              );
+              return (
+                <li key={c.name} className="border-t border-[var(--border-subtle)] first:border-t-0">
+                  {c.service ? (
+                    <button
+                      type="button"
+                      onClick={() => c.service && onSelectService?.(c.service, "crons")}
+                      className="flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left"
+                    >
+                      {body}
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                    </button>
+                  ) : (
+                    <div className="flex min-h-12 items-center gap-3 px-4 py-2.5">{body}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
       <p className="px-1 pb-2 text-xs text-[var(--text-tertiary)]">
-        This is the on-call view: status, logs, stop/start and redeploy. Open kuso on a larger screen for the canvas and
-        full configuration.
+        Open a service for its logs, variables and settings. The canvas needs a larger screen.
       </p>
     </div>
   );
@@ -183,7 +226,7 @@ export function MobileIncidentView({
 function StatusLabel({ status }: { status: NodeStatus }) {
   const tone = STATUS_TONE[status.tone];
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs" title={status.detail}>
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[13px]" title={status.detail}>
       <span aria-hidden className={cn("h-2 w-2 rounded-full", tone.dot)} />
       <span className={status.tone === "muted" ? "text-[var(--text-secondary)]" : tone.text}>{status.label}</span>
     </span>
@@ -422,13 +465,14 @@ function MobileServiceCard({
               <VulnBadge summary={vulns} onOpen={() => onSelectService?.(shortName, "vulnerabilities")} />
             </div>
           ) : null}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+          {/* Operational facts get the 13px phone tier, not the 12px caption size. */}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]">
             <StatusLabel status={status} />
             {deployed && <span className="text-[var(--text-tertiary)]">deployed {relativeTime(deployed)}</span>}
           </div>
-          {status.detail && <p className="mt-1 text-xs text-[var(--text-secondary)]">{status.detail}</p>}
+          {status.detail && <p className="mt-1 text-[13px] text-[var(--text-secondary)]">{status.detail}</p>}
           {latestFailed && status.tone !== "error" && (
-            <p className="mt-1 text-xs text-[var(--error)]">Latest build failed; the previous build is still serving.</p>
+            <p className="mt-1 text-[13px] text-[var(--error)]">Latest build failed; the previous build is still serving.</p>
           )}
         </div>
         {url && (
@@ -444,7 +488,7 @@ function MobileServiceCard({
         )}
       </div>
       {url && (
-        <p className="mt-2 truncate font-mono text-xs text-[var(--text-tertiary)]">{url.replace(/^https?:\/\//, "")}</p>
+        <p className="mt-2 truncate font-mono text-[13px] text-[var(--text-tertiary)]">{url.replace(/^https?:\/\//, "")}</p>
       )}
 
       {/* Logs is the inline action: on a phone you're reading what broke.

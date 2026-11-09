@@ -1,4 +1,6 @@
-import { deriveAddonStatus, deriveServiceStatus, type BuildSummary, type NodeStatus } from "@/features/services";
+import { deriveAddonStatus, deriveCronStatus, deriveServiceStatus, type BuildSummary, type NodeStatus } from "@/features/services";
+import { cronsForEnv } from "@/features/projects/facts";
+import { describeCron } from "@/lib/format-time";
 import { serviceShortName } from "@/lib/utils";
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
 
@@ -82,4 +84,36 @@ export function railResources(
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return { services: railServices, addons: railAddons };
+}
+
+export interface RailCron {
+  name: string; // CR name minus the project prefix
+  display: string;
+  schedule: string; // in words ("Daily at 03:00 UTC")
+  // Short name of the service it runs in; its Crons tab is the cron's home.
+  service?: string;
+  status: NodeStatus;
+}
+
+// railCrons lists the env-group's cron jobs the way the canvas does
+// (cronsForEnv), so the rail, the canvas and the phone view agree on
+// what's in the project.
+export function railCrons(
+  project: string,
+  env: string,
+  crons: ReadonlyArray<{ metadata: { name: string }; spec: { service?: string; schedule?: string; suspend?: boolean; displayName?: string } }>,
+  services: KusoService[],
+): RailCron[] {
+  return cronsForEnv(crons, services, env, project)
+    .map((c) => {
+      const name = serviceShortName(project, c.metadata.name);
+      return {
+        name,
+        display: c.spec.displayName?.trim() || name,
+        schedule: c.spec.schedule ? describeCron(c.spec.schedule) : "",
+        service: c.spec.service ? serviceShortName(project, c.spec.service) : undefined,
+        status: deriveCronStatus(c.spec),
+      };
+    })
+    .sort((a, b) => a.display.localeCompare(b.display));
 }
