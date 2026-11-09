@@ -130,6 +130,7 @@ var (
 	// see rejectRetiredOutputFlag in backup.go for why it errors.
 	addonBackupDownloadLegacyOutput string
 	addonBackupDownloadForce        bool
+	addonBackupDownloadKey          string
 )
 
 var addonBackupDownloadCmd = &cobra.Command{
@@ -146,9 +147,13 @@ into place; it is not subject to the CLI's KUSO_CLI_TIMEOUT.
 Other addon kinds (redis, clickhouse, redpanda) aren't supported.
 
 The dump is the addon's entire dataset — treat the output like a
-credential. Editor role required.`,
+credential. Editor role required.
+
+--key downloads a stored scheduled backup (a key from 'addon-backup list')
+instead of taking a fresh dump; that needs the admin role.`,
 	Example: `  kuso addon-backup download myproj db
-  kuso addon-backup download myproj db --file /tmp/db.sql.gz`,
+  kuso addon-backup download myproj db --file /tmp/db.sql.gz
+  kuso addon-backup download myproj db --key myproj/myproj-db/2026-11-09T03-00-00Z.sql.gz`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Retired-flag check before the login gate — see backup.go.
@@ -158,7 +163,13 @@ credential. Editor role required.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.DownloadAddonBackup(args[0], args[1])
+		var resp *resty.Response
+		var err error
+		if addonBackupDownloadKey != "" {
+			resp, err = api.DownloadAddonBackupObject(args[0], args[1], addonBackupDownloadKey)
+		} else {
+			resp, err = api.DownloadAddonBackup(args[0], args[1])
+		}
 		if err := downloadRespErr(resp, err); err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
@@ -433,10 +444,37 @@ func init() {
 	addonBackupDownloadCmd.Flags().StringVar(&addonBackupDownloadOutput, "file", "", "output file (default: name from server, e.g. <project>-<addon>-<ts>.sql.gz)")
 	addonBackupDownloadCmd.Flags().StringVarP(&addonBackupDownloadLegacyOutput, "output", "o", "", "retired — use --file (elsewhere -o selects the output format)")
 	addonBackupDownloadCmd.Flags().BoolVar(&addonBackupDownloadForce, "force", false, "overwrite the output file if it already exists")
+	addonBackupDownloadCmd.Flags().StringVar(&addonBackupDownloadKey, "key", "", "download this stored backup (from 'addon-backup list') instead of a fresh dump")
+	addonBackupCmd.AddCommand(addonBackupRunCmd)
 	addonBackupCmd.AddCommand(addonBackupScheduleCmd)
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupSchedule, "schedule", "", "5-field cron expression (UTC); empty disables")
 	addonBackupScheduleCmd.Flags().IntVar(&addonBackupRetentionDays, "retention", 14, "delete S3 objects older than N days; 0 = keep forever")
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupBucket, "bucket", "", "override the instance-wide backup bucket for this addon; empty clears")
 	addonBackupCmd.AddCommand(addonBackupUnscheduleCmd)
 	addonBackupUnscheduleCmd.Flags().BoolVarP(&addonBackupUnscheduleYes, "yes", "y", false, "skip the confirmation prompt")
+}
+
+var addonBackupRunCmd = &cobra.Command{
+	Use:   "run <project> <addon>",
+	Short: "Run the addon's scheduled backup now",
+	Long: `Start the addon's scheduled backup immediately (the same job its cron
+schedule runs), writing a dump to the configured bucket. Needs a backup
+schedule ('addon-backup schedule'). Follow it with 'addon-backup list'.`,
+	Example: `  kuso addon-backup run myproj db`,
+	Args:    cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RunAddonBackup(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("run backup: %w", err)
+		}
+		var out struct {
+			Job string `json:"job"`
+		}
+		_ = json.Unmarshal(resp.Body(), &out)
+		fmt.Printf("backup started for %s/%s (job %s)\n", args[0], args[1], out.Job)
+		return nil
+	},
 }

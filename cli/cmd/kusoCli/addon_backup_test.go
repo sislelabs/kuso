@@ -183,3 +183,26 @@ func TestAddonBackupDownload_ErrorStatusSurfacesServerMessage(t *testing.T) {
 		t.Fatalf("error response left %s behind", out)
 	}
 }
+
+// --key streams the stored object instead of a fresh dump.
+func TestAddonBackupDownload_KeyFetchesStoredObject(t *testing.T) {
+	payload := gz(t, "CREATE TABLE a();", true)
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Path + "?" + r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	defer func() { api = nil; addonBackupDownloadKey = "" }()
+
+	out := filepath.Join(t.TempDir(), "x.sql.gz")
+	if _, err := runRoot(t, "addon-backup", "download", "p", "db", "--file", out, "--key", "p/p-db/2026 x.sql.gz"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/api/projects/p/addons/db/backups/object?key=p%2Fp-db%2F2026+x.sql.gz"; got != want {
+		t.Fatalf("requested %s, want %s", got, want)
+	}
+}

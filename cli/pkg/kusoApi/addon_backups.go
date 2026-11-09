@@ -5,7 +5,11 @@
 
 package kusoApi
 
-import "github.com/go-resty/resty/v2"
+import (
+	"net/url"
+
+	"github.com/go-resty/resty/v2"
+)
 
 type RestoreBackupRequest struct {
 	Key string `json:"key"`
@@ -32,4 +36,16 @@ func (k *KusoClient) RestoreAddonBackup(project, addon string, req RestoreBackup
 // filename off the response header.
 func (k *KusoClient) DownloadAddonBackup(project, addon string) (*resty.Response, error) {
 	return k.Download("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/download")
+}
+
+// DownloadAddonBackupObject streams one stored backup (an S3 key from
+// ListAddonBackups) instead of taking a fresh dump. Admin role required.
+func (k *KusoClient) DownloadAddonBackupObject(project, addon, key string) (*resty.Response, error) {
+	return k.Download("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/object?key=" + url.QueryEscape(key))
+}
+
+// RunAddonBackup starts the addon's scheduled backup now (a Job from its
+// backup CronJob). 202 {"job": "<name>"}; 409 when no schedule is set.
+func (k *KusoClient) RunAddonBackup(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/run")
 }
