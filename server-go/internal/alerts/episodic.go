@@ -208,10 +208,17 @@ func shortDuration(d time.Duration) string {
 
 // evaluateEpisodic dispatches an episodic rule to its evaluator.
 func (e *Engine) evaluateEpisodic(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error) {
+	if r.Kind == db.AlertKindHealthcheckFailing {
+		return e.evalHealthcheck(ctx, r, now)
+	}
 	if e.Kube == nil || e.Kube.Dynamic == nil {
 		return finding{}, nil
 	}
 	switch r.Kind {
+	case db.AlertKindCrashloop:
+		return e.evalCrashloop(ctx, r, now)
+	case db.AlertKindDeployFailed:
+		return e.evalDeployFailed(ctx, r, now)
 	case db.AlertKindHTTP5xxRate:
 		return e.evalHTTP5xx(ctx, r)
 	case db.AlertKindHTTPP95Latency:
