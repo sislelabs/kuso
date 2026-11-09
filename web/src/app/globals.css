@@ -160,7 +160,7 @@
   --canvas-bg: #F6F4EE;
   --grid-minor: rgba(25, 28, 43, 0.22);
   --grid-major: rgba(58, 66, 166, 0.34);
-  --edge-addon: #8A7A4E;
+  --edge-addon: #7A6B40;               /* 3.6:1 on canvas-bg at the 0.85 rest opacity */
   --edge-ref: #5A62B8;
   --edge-lit: var(--accent);
   --node-shadow: 0 1px 0 rgba(25, 28, 43, 0.04), 0 4px 12px -6px rgba(25, 28, 43, 0.14);

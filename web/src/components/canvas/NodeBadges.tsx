@@ -50,21 +50,24 @@ export function VulnBadge({
 }
 
 // Runtime errors seen in the logs over 24h, labelled in words so it
-// can't be confused with the vuln count.
+// can't be confused with the vuln count. Red only when `hot` (new or
+// spiking, see errorChipHot); a steady count stays neutral.
 export function ErrorBadge({
   summary,
   onOpen,
   tabIndex,
   compact = false,
+  hot = true,
 }: {
   summary?: ErrorSummary;
   onOpen?: () => void;
   tabIndex?: number;
+  hot?: boolean;
   // Canvas cards drop the "· 24h" (it's in the tooltip) so the name keeps room.
   compact?: boolean;
 }) {
   if (!summary || summary.occurrences <= 0) return null;
-  const label = errorBadgeLabel(summary);
+  const label = `${errorBadgeLabel(summary)}${hot ? "" : " Steady, not spiking."}`;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -79,12 +82,14 @@ export function ErrorBadge({
             }}
             className={cn(
               badgeBase,
-              "border-[var(--error)]/35 bg-[var(--error-subtle)] text-[var(--error)] hover:border-[var(--error)]/70",
+              hot
+                ? "border-[var(--error)]/35 bg-[var(--error-subtle)] text-[var(--error)] hover:border-[var(--error)]/70"
+                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]",
             )}
           />
         }
       >
-        <AlertCircle className="h-3 w-3" aria-hidden />
+        <AlertCircle className={cn("h-3 w-3", !hot && "text-[var(--text-tertiary)]")} aria-hidden />
         {compact
           ? `${compactCount(summary.occurrences)} ${summary.occurrences === 1 ? "error" : "errors"}`
           : errorCountLabel(summary.occurrences)}

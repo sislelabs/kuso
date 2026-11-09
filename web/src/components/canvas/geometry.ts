@@ -73,6 +73,10 @@ export function facingSides(source: Box, target: Box): { source: Side; target: S
 // tooltip). The estimate is ~7.6px per character of 14px medium text
 // plus the icon, padding and the actions button.
 export const SERVICE_NODE_MIN_WIDTH = 280;
+// Compact density: one size for every service card (3 grid units tall,
+// like an addon).
+export const COMPACT_SERVICE_NODE_WIDTH = 240;
+export const COMPACT_SERVICE_NODE_HEIGHT = 72;
 export const SERVICE_NODE_MAX_WIDTH = 380;
 export function serviceNodeWidth(name: string): number {
   const est = Math.round(76 + name.length * 7.6);

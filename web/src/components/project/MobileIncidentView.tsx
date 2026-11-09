@@ -96,7 +96,7 @@ export function MobileIncidentView({
       return { svc, env, short, build, status, name: svc.spec.displayName?.trim() || short };
     }),
   );
-  const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
+  const { vulnSummaries, errorSummaries, errorHot } = useServiceBadges(project, selectedEnv, services);
   const live = rows.filter((r) => r.status.kind === "live").length;
   const issues = serviceIssues(rows.map((r) => r.status));
 
@@ -135,6 +135,7 @@ export function MobileIncidentView({
           latest={r.build}
           status={r.status}
           errors={errorSummaries[r.short]}
+          errorsHot={errorHot[r.short]}
           vulns={vulnSummaries.services[r.short]}
           onSelectService={onSelectService}
         />
@@ -355,6 +356,7 @@ function MobileServiceCard({
   latest,
   status,
   errors,
+  errorsHot,
   vulns,
   onSelectService,
 }: {
@@ -364,6 +366,7 @@ function MobileServiceCard({
   latest?: BuildSummary;
   status: NodeStatus;
   errors?: ErrorSummary;
+  errorsHot?: boolean;
   vulns?: VulnSummary;
   onSelectService?: (svcName: string, tab?: string) => void;
 }) {
@@ -415,7 +418,7 @@ function MobileServiceCard({
           <h3 className="truncate text-base font-semibold">{displayName}</h3>
           {(errors?.occurrences || vulns?.fixableCritical) ? (
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <ErrorBadge summary={errors} onOpen={() => onSelectService?.(shortName, "errors")} />
+              <ErrorBadge summary={errors} hot={errorsHot} onOpen={() => onSelectService?.(shortName, "errors")} />
               <VulnBadge summary={vulns} onOpen={() => onSelectService?.(shortName, "vulnerabilities")} />
             </div>
           ) : null}
