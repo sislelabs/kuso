@@ -156,7 +156,8 @@ type Tab =
 // Crons and Runs always show for users who can create them (admin —
 // the server gates creation on secrets:read); for everyone else they
 // only appear once the service has at least one cron / run.
-// Order is priority: when the strip is narrow the tail moves into "More".
+// The strip keeps this order at every width (it scrolls when narrow);
+// secondary tabs always sit under "More".
 const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: boolean; secondary?: boolean }[] = [
   { id: "deployments", label: "Deployments", chord: "d", alwaysShow: true },
   { id: "variables", label: "Variables", chord: "v", alwaysShow: true },
@@ -166,8 +167,8 @@ const ALL_MAIN_TABS: { id: Tab; label: string; chord?: string; alwaysShow?: bool
   { id: "shell", label: "Shell", chord: "t", alwaysShow: true },
   // Always under More, so every service type shows the same strip.
   { id: "vulnerabilities", label: "Vulnerabilities", chord: "u", alwaysShow: true, secondary: true },
-  { id: "crons", label: "Crons", chord: "c" },
-  { id: "runs", label: "Runs", chord: "r" },
+  { id: "crons", label: "Crons", chord: "c", secondary: true },
+  { id: "runs", label: "Runs", chord: "r", secondary: true },
 ];
 const PINNED_TAB: { id: Tab; label: string; chord?: string } = { id: "settings", label: "Settings", chord: "s" };
 
@@ -817,7 +818,8 @@ export function ServiceOverlay({
                         </span>
                       );
                     }
-                    if (specOff) {
+                    // Nothing has ever run, so there's nothing for a change to be pending against.
+                    if (specOff && env?.status?.state !== "no_image") {
                       return (
                         <span
                           className="inline-flex items-center gap-1 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
@@ -840,6 +842,9 @@ export function ServiceOverlay({
                     }
                     return null;
                   })()}
+                </div>
+                {/* Actions keep one row; what doesn't fit lives in ⋯. */}
+                <div className="mt-2 flex flex-nowrap items-center gap-1.5 empty:hidden">
                   {service && status === "sleeping" && !stopped ? (
                     <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
                   ) : null}

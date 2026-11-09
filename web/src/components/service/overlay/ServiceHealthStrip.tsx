@@ -86,8 +86,8 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
     },
     {
       id: "errors",
-      label: "Errors",
-      value: errors.data ? errorCountLabel(errors.data.occurrences) : errors.isError ? "—" : "…",
+      label: `Errors · ${ERRORS_WINDOW}`,
+      value: errors.data ? errors.data.occurrences.toLocaleString() : errors.isError ? "—" : "…",
       tone: (errors.data?.occurrences ?? 0) > 0 ? "danger" : "plain",
       title: errors.data
         ? `${errorCountLabel(errors.data.occurrences)} in ${errors.data.groups} ${errors.data.groups === 1 ? "group" : "groups"}`
@@ -97,7 +97,7 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
     {
       id: "deploy",
       label: "Last deploy",
-      value: deployedAt ? relativeTime(deployedAt) : "Not deployed yet",
+      value: deployedAt ? relativeTime(deployedAt) : "Never",
       tone: "plain",
       title: deployedAt ? `Current release went live ${new Date(deployedAt).toLocaleString()}` : "Nothing has been deployed to this environment",
       tab: "deployments",
@@ -122,10 +122,10 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
               {c.id === "status" && <StatusDot status={status} />}
               {c.label}
             </span>
-            {/* Value and its note stack and wrap; never an ellipsis. */}
+            {/* The value never wraps mid-word; qualifiers go on the muted line below. */}
             <span
               className={cn(
-                "min-w-0 max-w-full text-sm font-medium",
+                "max-w-full whitespace-nowrap text-sm font-medium",
                 c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
               )}
             >
@@ -174,6 +174,9 @@ function uptimeCell(
     return { ...base, value: "Checker off", tone: "neutral", title: "Health checks are switched off for this kuso instance" };
   }
   const v = uptimeView(s);
+  // "(last known)" is a qualifier, not part of the value.
+  const value = v.stale ? v.label.replace(/\s*\(last known\)$/, "") : v.label;
+  const staleNote = v.stale ? { text: "last known", tone: "plain" as const } : undefined;
   const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
   switch (v.state) {
     case "not_set_up":
@@ -181,16 +184,20 @@ function uptimeCell(
     case "up":
       return {
         ...base,
-        value: v.label,
+        value,
+        secondary: staleNote,
         tone: "success",
         title: `${s?.url ?? ""} answered${s?.statusCode ? ` HTTP ${s.statusCode}` : ""}, ${checked}`,
       };
     case "failing":
-      return { ...base, value: v.label, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
+      return { ...base, value, secondary: staleNote, tone: "warning", title: [s?.reason || s?.error, checked].filter(Boolean).join(" · ") };
     case "down":
       return {
         ...base,
-        value: `${v.label}${s?.since ? ` · ${relativeTime(s.since).replace(/ ago$/, "")}` : ""}`,
+        value,
+        secondary: s?.since
+          ? { text: `for ${relativeTime(s.since).replace(/ ago$/, "")}${v.stale ? " · last known" : ""}`, tone: "plain" }
+          : staleNote,
         tone: "danger",
         title: [s?.reason || s?.error, s?.since ? `down since ${new Date(s.since).toLocaleString()}` : "", checked]
           .filter(Boolean)

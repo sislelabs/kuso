@@ -62,8 +62,10 @@ export function useRedeploy(project: string, service: string, env?: KusoEnvironm
   const branch =
     env?.spec?.branch || svc.data?.spec.repo?.defaultBranch || proj.data?.project.spec.defaultRepo?.defaultBranch || "";
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
-  const neverBuilt = !!builds.data && builds.data.length === 0;
-  const verb = neverBuilt ? "Deploy" : "Redeploy";
+  // "Deploy" until something has gone live, "Redeploy" after.
+  const neverDeployed =
+    env?.status?.state === "no_image" || (!!builds.data && !builds.data.some((b) => b.status?.toLowerCase() === "succeeded"));
+  const verb = neverDeployed ? "Deploy" : "Redeploy";
 
   const run = async () => {
     try {
@@ -170,12 +172,13 @@ export function ServiceHeaderActions({
     }
   };
 
-  const restartBtn = showRestart && !stopped;
-  // A service that has never had an image has no pods to restart or stop.
+  // A service that has never had an image has no pods to restart or stop,
+  // so those actions aren't offered at all.
   const neverRan = env?.status?.state === "no_image";
-  const NEVER_RAN = "Nothing is running yet: this service has never been deployed.";
-  const restartExplain = !canWrite ? NO_ACCESS : neverRan ? NEVER_RAN : EXPLAIN.restart(group);
-  const stopExplain = !canWrite ? NO_ACCESS : neverRan ? NEVER_RAN : EXPLAIN.stop;
+  const restartBtn = showRestart && !stopped && !neverRan;
+  const stopBtn = !stopped && !neverRan;
+  const restartExplain = !canWrite ? NO_ACCESS : EXPLAIN.restart(group);
+  const stopExplain = !canWrite ? NO_ACCESS : EXPLAIN.stop;
   const menuItem =
     "flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-[var(--bg-tertiary)] disabled:opacity-50";
 
@@ -198,7 +201,7 @@ export function ServiceHeaderActions({
               size="sm"
               variant="secondary"
               onClick={() => setConfirm("restart")}
-              disabled={!canWrite || neverRan || restart.isPending}
+              disabled={!canWrite || restart.isPending}
               className="h-7 px-2.5 text-xs"
             >
               <RotateCw className={cn("h-3 w-3", restart.isPending && "motion-safe:animate-spin")} />
@@ -213,20 +216,20 @@ export function ServiceHeaderActions({
               {start.isPending ? "Starting…" : "Start"}
             </Button>
           </Explained>
-        ) : (
+        ) : stopBtn ? (
           <Explained label="Stop" explain={stopExplain}>
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setConfirm("stop")}
-              disabled={!canWrite || neverRan || stop.isPending}
+              disabled={!canWrite || stop.isPending}
               className="h-7 px-2.5 text-xs hover:text-[var(--danger)]"
             >
               <Square className="h-3 w-3" />
               Stop
             </Button>
           </Explained>
-        )}
+        ) : null}
       </div>
 
       {/* <640px: Start stays inline (it's the way back) and Restart/Stop
@@ -239,7 +242,7 @@ export function ServiceHeaderActions({
             {start.isPending ? "Starting…" : "Start"}
           </Button>
         )}
-        {(restartBtn || !stopped || canAlert) && (
+        {(restartBtn || stopBtn || canAlert) && (
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger
               aria-label="More service actions"
@@ -254,7 +257,7 @@ export function ServiceHeaderActions({
               {restartBtn && (
                 <button
                   type="button"
-                  disabled={!canWrite || neverRan}
+                  disabled={!canWrite}
                   className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
@@ -270,10 +273,10 @@ export function ServiceHeaderActions({
                   </span>
                 </button>
               )}
-              {!stopped && (
+              {stopBtn && (
                 <button
                   type="button"
-                  disabled={!canWrite || neverRan}
+                  disabled={!canWrite}
                   className={cn(menuItem, "sm:hidden")}
                   onClick={() => {
                     setMenuOpen(false);
@@ -288,7 +291,7 @@ export function ServiceHeaderActions({
                 </button>
               )}
               {canAlert && (
-                <div role="group" aria-labelledby="svc-alert-menu-heading" className={cn((restartBtn || !stopped) && "border-t border-[var(--border-subtle)] pt-1 sm:border-t-0 sm:pt-0")}>
+                <div role="group" aria-labelledby="svc-alert-menu-heading" className={cn((restartBtn || stopBtn) && "border-t border-[var(--border-subtle)] pt-1 sm:border-t-0 sm:pt-0")}>
                   <div id="svc-alert-menu-heading" className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-xs font-medium text-[var(--text-secondary)]">
                     <BellPlus aria-hidden className="h-3.5 w-3.5" />
                     Alert me when…
