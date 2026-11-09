@@ -509,12 +509,13 @@ function BackupNowButton({
   const reasonId = `backup-now-reason-${addon}`;
   // The two blockers you can fix from here get the fix inline.
   const fixable = !state.enabled && canWrite && cr?.spec.kind === "postgres" && !cr.spec.external && !cr.spec.useInstanceAddon;
+  // S3 comes first: a schedule without it still backs up nothing.
   const fix = !fixable
     ? null
-    : !cr?.spec.backup?.schedule?.trim()
-      ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
-      : listState.kind === "no-s3"
-        ? { text: "S3 isn't set up", action: "Configure", href: "/settings/backups" }
+    : listState.kind === "no-s3"
+      ? { text: "S3 isn't set up", action: "Set up S3", href: "/settings/backups#s3-storage" }
+      : !cr?.spec.backup?.schedule?.trim()
+        ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
         : null;
   return (
     <>
@@ -542,6 +543,10 @@ function BackupNowButton({
           {state.reason}
         </TooltipContent>
       </Tooltip>
+      {/* A blocked button says why in plain sight, not only on hover. */}
+      {!fix && !state.enabled && !!cr && listState.kind !== "loading" && (
+        <span className="text-xs text-[var(--text-tertiary)]">{state.reason}</span>
+      )}
       {fix && (
         <span className="inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
           {fix.text}

@@ -28,6 +28,9 @@ interface HealthEntry {
 }
 interface AddonBackupRow {
   addon: string;
+  schedule?: string;
+  cronJobPresent?: boolean;
+  secretPresent?: boolean;
   project?: string;
   namespace: string;
   kind?: string;
@@ -52,18 +55,19 @@ interface BackupHealthResp {
   serviceVolumes?: ServiceVolumeRow[];
 }
 
-type CoverageBadge = "succeeded" | "failed" | "via-instance" | "not-covered";
+type CoverageBadge = "on-schedule" | "overdue" | "via-instance" | "not-covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
   if (!row.covered) return row.instanceShared ? "via-instance" : "not-covered";
-  return row.healthy ? "succeeded" : "failed";
+  return row.healthy ? "on-schedule" : "overdue";
 }
 
-// Run outcomes use the shared vocabulary; the two coverage states are
-// facts about the setup, not runs, so they stay neutral.
+// Green means the last scheduled run landed; overdue means a scheduled
+// run hasn't succeeded since (failed, or the job can't run). The two
+// coverage states are facts about the setup, so they stay neutral.
 const BADGE: Record<CoverageBadge, StatusMeta> = {
-  succeeded: RUN_STATUS.succeeded,
-  failed: RUN_STATUS.failed,
+  "on-schedule": { ...RUN_STATUS.succeeded, label: "On schedule" },
+  overdue: { ...RUN_STATUS.failed, label: "Overdue" },
   "via-instance": { label: "Via instance", tone: "neutral" },
   "not-covered": { label: "Not backed up", tone: "neutral" },
 };
@@ -102,7 +106,7 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { failed: 0, succeeded: 1, "via-instance": 2, "not-covered": 3 };
+  const rank: Record<CoverageBadge, number> = { overdue: 0, "not-covered": 1, "on-schedule": 2, "via-instance": 3 };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );
@@ -111,7 +115,7 @@ function AddonBackupList({
       title="Addon backups"
       description={
         <>
-          {addonBackupCoverageText(summarizeAddonBackups(addons))}. Failures first. Ages are the last run that succeeded.
+          Overdue first, then addons with no schedule. Ages are the last run that succeeded.
           {!complete && <span className="ml-1 text-[var(--warning)]">Partial list: some namespaces couldn&apos;t be read.</span>}
         </>
       }
@@ -173,7 +177,47 @@ function HealthRow({ title, h }: { title: string; h: HealthEntry }) {
 // suspends silently) and the registry GC (whose failure fills the
 // registry PVC until builds break). Separate from the addon-backup S3
 // config form below.
-function MaintenanceHealthBanners() {
+// CoverageHeadline leads the page: how many addons have no schedule and
+// how many scheduled ones are overdue. Green only when every addon is
+// covered, nothing is overdue and S3 is set up.
+function CoverageHeadline({ rows, complete, s3 }: { rows: AddonBackupRow[]; complete: boolean; s3: "yes" | "no" | "unknown" }) {
+  const c = summarizeAddonBackups(rows);
+  const good = c.uncovered === 0 && c.failing === 0 && s3 === "yes" && complete;
+  const parts = [c.total === 0 ? "No addons to back up" : addonBackupCoverageText(c)];
+  if (c.failing > 0) parts.push(`${c.failing} overdue`);
+  const Icon = good ? ShieldCheck : ShieldAlert;
+  return (
+    <div
+      role="status"
+      className={cn(
+        "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border px-4 py-3",
+        good ? "border-[var(--success)]/35 bg-[var(--success-subtle)]" : "border-[var(--warning)]/35 bg-[var(--warning-subtle)]",
+      )}
+    >
+      <Icon aria-hidden className={cn("h-5 w-5 shrink-0", good ? "text-[var(--success)]" : "text-[var(--warning)]")} />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-[var(--text-primary)]">{parts.join(" · ")}</p>
+        <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+          {s3 === "no"
+            ? "S3 storage isn't set up, so no scheduled backup can land anywhere."
+            : good
+              ? "Every addon's last scheduled backup landed."
+              : c.uncovered > 0
+                ? "Addons without a schedule aren't backed up. Set one on each addon's Backups tab."
+                : "A scheduled run hasn't succeeded since its last tick. Open the addon's Backups tab for the log."}
+          {!complete && " Some namespaces couldn't be read, so the counts may be low."}
+        </p>
+      </div>
+      {s3 === "no" && (
+        <Button size="sm" render={<a href="#s3-storage" />} nativeButton={false}>
+          Set up S3
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
   const health = useQuery({
     queryKey: ["admin", "backup-health"],
     queryFn: () => api<BackupHealthResp>("/api/admin/backup-health"),
@@ -194,6 +238,7 @@ function MaintenanceHealthBanners() {
   const { backup, registryGC } = health.data;
   return (
     <>
+      <CoverageHeadline rows={health.data.addonBackups ?? []} complete={health.data.addonBackupsComplete !== false} s3={s3} />
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />
@@ -258,7 +303,7 @@ export default function BackupSettingsPage() {
       title="Backups"
       description="Backup health across the cluster, the control-plane database, and the S3 bucket every addon backup uploads to."
     >
-      <MaintenanceHealthBanners />
+      <MaintenanceHealthBanners s3={settings.data ? (settings.data.hasSecret ? "yes" : "no") : "unknown"} />
 
       {isAdmin && <ControlPlaneBackupSection />}
 
@@ -286,6 +331,7 @@ export default function BackupSettingsPage() {
           }}
         >
           <SettingsSection
+            id="s3-storage"
             title="S3 storage"
             description="Credentials every addon backup job uses. Schedule backups per addon on its Backups tab (open the addon on the project canvas)."
             footerHint={
