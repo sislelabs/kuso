@@ -1,89 +1,16 @@
-// Pure helpers for the log viewer: level detection, ANSI SGR parsing,
-// JSON field extraction and text export. No React here so it's cheap to
-// unit-test.
+// Pure helpers for the log viewer: ANSI SGR parsing, JSON field
+// extraction and text export. Level detection lives in logLevel.ts. No
+// React here so it's cheap to unit-test.
 
-export type LogLevel = "error" | "warn" | "info" | "debug" | "none";
+import { ANSI_RE, LOG_LEVELS, stripAnsi } from "./logLevel";
+import type { LogLevel } from "./logLevel";
 
-export const LOG_LEVELS: Exclude<LogLevel, "none">[] = ["error", "warn", "info", "debug"];
+export { detectLevel, LOG_LEVELS, stripAnsi } from "./logLevel";
+export type { LogLevel } from "./logLevel";
 
 // The level filter's chips: the four levels plus "other" for lines with no
 // detectable level, so the chip counts add up to the lines in view.
 export const LOG_FILTER_LEVELS: LogLevel[] = [...LOG_LEVELS, "none"];
-
-const LEVEL_ALIASES: Record<string, LogLevel> = {
-  fatal: "error",
-  panic: "error",
-  crit: "error",
-  critical: "error",
-  emerg: "error",
-  alert: "error",
-  err: "error",
-  error: "error",
-  warning: "warn",
-  warn: "warn",
-  wrn: "warn",
-  notice: "info",
-  info: "info",
-  inf: "info",
-  information: "info",
-  debug: "debug",
-  dbg: "debug",
-  trace: "debug",
-  verbose: "debug",
-};
-
-// pino / bunyan numeric levels.
-function numericLevel(n: number): LogLevel {
-  if (n >= 50) return "error";
-  if (n >= 40) return "warn";
-  if (n >= 30) return "info";
-  return "debug";
-}
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
-
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, "");
-}
-
-const KV_LEVEL = /(?:^|[\s{,])"?(?:level|lvl|severity|loglevel)"?\s*[:=]\s*"?([A-Za-z]+|\d{2})"?/i;
-const BRACKET_LEVEL = /^\W{0,3}(?:\S+\s+){0,3}?[[(<]?(FATAL|PANIC|CRIT(?:ICAL)?|ERRO?R?|WARN(?:ING)?|WRN|INFO|INF|NOTICE|DEBUG|DBG|TRACE)\b[\])>:]?/;
-// nginx-style bracketed level after a timestamp: "2026/11/09 12:00:00
-// [emerg] 1#1: …". Lower-case, so the leading-token match misses it.
-const BRACKETED_LEVEL = /\[(emerg|alert|crit|critical|error|err|warn|warning|notice|info|debug)\]/i;
-const ERROR_SHAPES = /(^panic:|^Traceback \(most recent call last\)|\bUncaught\b|\bunhandled(?: promise)? rejection\b|^\s*at .+\(.+:\d+:\d+\)$|^\w*(?:Error|Exception)(?::|\s*$)|^\[?Error[:\]])/i;
-
-// An upper-case ERROR / FATAL / PANIC word anywhere near the start
-// ("worker | 12:00 ERROR …"), which the leading-token match misses.
-const SHOUTED_ERROR = /\b(?:ERROR|FATAL|PANIC)\b/;
-
-// detectLevel reads a level off structured fields first (JSON / logfmt),
-// then a leading LEVEL token, then well-known error shapes. Unknown → "none"
-// rather than guessing "info" so the level filter doesn't lie.
-export function detectLevel(raw: string): LogLevel {
-  const line = stripAnsi(raw);
-  const kv = KV_LEVEL.exec(line.slice(0, 400));
-  if (kv) {
-    const v = kv[1].toLowerCase();
-    if (/^\d+$/.test(v)) return numericLevel(parseInt(v, 10));
-    const hit = LEVEL_ALIASES[v];
-    if (hit) return hit;
-  }
-  const head = BRACKET_LEVEL.exec(line.slice(0, 120));
-  if (head) {
-    const tok = head[1].toLowerCase();
-    const hit = LEVEL_ALIASES[tok] ?? (tok.startsWith("err") ? "error" : undefined);
-    if (hit) return hit;
-  }
-  const bracketed = BRACKETED_LEVEL.exec(line.slice(0, 80));
-  if (bracketed) {
-    const hit = LEVEL_ALIASES[bracketed[1].toLowerCase()];
-    if (hit) return hit;
-  }
-  if (ERROR_SHAPES.test(line) || SHOUTED_ERROR.test(line.slice(0, 200))) return "error";
-  return "none";
-}
 
 // parseJsonLine returns the flattened top-level fields when the line is a
 // JSON object (optionally behind a short prefix), else null.
@@ -367,4 +294,32 @@ export function splitLeadingTimestamp(line: string, rowHasTime: boolean): { ts?:
   }
   if (!rowHasTime || Number.isNaN(Date.parse(base + "Z"))) return null;
   return { rest };
+}
+
+// focusBlock finds the occurrence another tab pointed at: the head line
+// nearest `focus.ts` (within a minute) whose text contains the needle,
+// plus its continuation lines. Empty when nothing matches, so a wrong
+// line is never marked.
+export function focusBlock<T extends { key: string; ts: string; cont: boolean; line: string }>(
+  rows: readonly T[],
+  focus: { ts: string; needle: string } | null | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  const needle = focus?.needle.trim().toLowerCase();
+  const at = Date.parse(focus?.ts ?? "");
+  if (!needle || Number.isNaN(at)) return out;
+  let best = -1;
+  let bestGap = 60_000;
+  rows.forEach((r, i) => {
+    if (r.cont) return;
+    const gap = Math.abs(Date.parse(r.ts) - at);
+    if (gap <= bestGap && stripAnsi(r.line).toLowerCase().includes(needle)) {
+      best = i;
+      bestGap = gap;
+    }
+  });
+  if (best < 0) return out;
+  out.add(rows[best].key);
+  for (let i = best + 1; i < rows.length && rows[i].cont; i++) out.add(rows[i].key);
+  return out;
 }

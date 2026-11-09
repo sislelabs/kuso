@@ -97,16 +97,12 @@ describe("followsProjectRepo", () => {
   });
 });
 
-function deps(created: unknown, opts: { failEnv?: string; failTrigger?: boolean } = {}) {
+function deps(created: unknown, opts: { failTrigger?: boolean } = {}) {
   const calls: string[] = [];
   const d: CreateServiceDeps = {
     post: vi.fn(async () => {
       calls.push("post");
       return created;
-    }),
-    setEnv: vi.fn(async (_p: string, _s: string, name: string) => {
-      calls.push(`env:${name}`);
-      if (name === opts.failEnv) throw new Error("nope");
     }),
     trigger: vi.fn(async () => {
       calls.push("trigger");
@@ -119,28 +115,46 @@ function deps(created: unknown, opts: { failEnv?: string; failTrigger?: boolean 
 const repoBody = buildCreateServiceBody({ source: "repo", name: "web", repo, kind: "web", runtime: "nixpacks" });
 
 describe("createServiceWithEnv", () => {
-  it("doesn't re-trigger a build the server already started, and reports failed vars", async () => {
-    const { d, calls } = deps({ firstBuild: { triggered: true } }, { failEnv: "B" });
+  it("sends variables and the addon subscription in the one create call", async () => {
+    const { d, calls } = deps({ firstBuild: { triggered: true } });
     const out = await createServiceWithEnv(
       "p",
       repoBody,
-      { envVars: [{ name: "A", value: "1" }, { name: "B", value: "2" }] },
+      { envVars: [{ name: "A", value: "1" }, { name: "B", value: "${{ db.DATABASE_URL }}" }], subscribedAddons: ["db"] },
       d,
     );
-    expect(calls).toEqual(["post", "env:A", "env:B"]);
-    expect(out).toEqual({ build: "started", envFailed: [{ name: "B", error: "nope" }] });
+    // One request: a follow-up write would roll the new env a second time.
+    expect(calls).toEqual(["post"]);
+    expect(d.post).toHaveBeenCalledWith("p", {
+      ...repoBody,
+      envValues: [
+        { name: "A", value: "1" },
+        { name: "B", value: "${{ db.DATABASE_URL }}" },
+      ],
+      subscribedAddons: ["db"],
+    });
+    expect(out).toEqual({ build: "started" });
+  });
+
+  it("keeps an empty subscription (mount no addon) and omits an absent one", async () => {
+    const none = deps({});
+    await createServiceWithEnv("p", repoBody, { subscribedAddons: [] }, none.d);
+    expect(none.d.post).toHaveBeenCalledWith("p", { ...repoBody, subscribedAddons: [] });
+    const all = deps({});
+    await createServiceWithEnv("p", repoBody, { envVars: [] }, all.d);
+    expect(all.d.post).toHaveBeenCalledWith("p", repoBody);
   });
 
   it("surfaces the server's first-build error without retrying", async () => {
     const { d, calls } = deps({ firstBuild: { triggered: false, error: "quota" } });
-    expect(await createServiceWithEnv("p", repoBody, {}, d)).toEqual({ build: "failed", buildError: "quota", envFailed: [] });
+    expect(await createServiceWithEnv("p", repoBody, {}, d)).toEqual({ build: "failed", buildError: "quota" });
     expect(calls).toEqual(["post"]);
   });
 
-  it("triggers the build itself on servers without firstBuild, after vars", async () => {
+  it("triggers the build itself on servers without firstBuild", async () => {
     const { d, calls } = deps({ metadata: {} });
     expect((await createServiceWithEnv("p", repoBody, { envVars: [{ name: "A", value: "1" }] }, d)).build).toBe("started");
-    expect(calls).toEqual(["post", "env:A", "trigger"]);
+    expect(calls).toEqual(["post", "trigger"]);
     expect(d.trigger).toHaveBeenCalledWith("p", "web", "main");
   });
 
@@ -156,11 +170,10 @@ describe("createServiceWithEnv", () => {
       post: async () => {
         throw new Error("conflict");
       },
-      setEnv: vi.fn(),
       trigger: vi.fn(),
     };
     await expect(createServiceWithEnv("p", repoBody, { envVars: [{ name: "A", value: "1" }] }, d)).rejects.toThrow("conflict");
-    expect(d.setEnv).not.toHaveBeenCalled();
+    expect(d.trigger).not.toHaveBeenCalled();
   });
 });
 

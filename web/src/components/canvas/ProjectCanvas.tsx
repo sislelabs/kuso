@@ -1663,7 +1663,7 @@ function EdgeLegend({
         className="canvas-float flex items-center gap-0.5 rounded-[10px] p-1"
       >
         <LegendToggle
-          label="Addon connections"
+          label="Addons"
           hint="A service reads the addon's connection secret. Fainter: mounted but not referenced by name. Dashed: the service hasn't deployed yet."
           swatch="var(--edge-addon)"
           on={filters.addon}

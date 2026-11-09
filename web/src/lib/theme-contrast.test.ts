@@ -43,7 +43,7 @@ const WIRES = ["edge-addon", "edge-ref", "edge-lit"];
 // it gets headroom on every surface, popovers and hovered rows included.
 const META = ["text-tertiary", "muted-foreground"];
 const META_SURFACES = [...SURFACES, "popover", "card"];
-// Status chips (error counts, CVEs, Rolled back) set 11px text in the tone
+// Status chips (error counts, CVEs, Rolled back) set 12px text in the tone
 // colour on its translucent tint, laid over a card or the canvas. Small
 // text, so the full 4.5:1 applies to the composited fill.
 const CHIPS: [string, string][] = [
@@ -86,6 +86,18 @@ for (const [theme, vars] of [["light", root], ["dark", { ...root, ...tokens(".da
     it.each(META)("--%s reaches 5.5:1 on every surface and 5:1 on a hovered row", (tok) => {
       for (const s of META_SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(5.5);
       expect(contrastRatio(get(tok), get("border-subtle")), `${tok} on border-subtle`).toBeGreaterThanOrEqual(5);
+    });
+    // Secondary text is body copy (descriptions, hints, inactive tabs), so
+    // it keeps AA on popovers, cards and hovered rows too, and always reads
+    // stronger than tertiary meta text so the hierarchy holds.
+    it("--text-secondary reaches 4.5:1 everywhere it's set and out-ranks --text-tertiary", () => {
+      for (const s of [...META_SURFACES, "border-subtle"]) {
+        expect(contrastRatio(get("text-secondary"), get(s)), `text-secondary on ${s}`).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(get("text-secondary"), get(s)),
+          `text-secondary vs text-tertiary on ${s}`,
+        ).toBeGreaterThan(contrastRatio(get("text-tertiary"), get(s)));
+      }
     });
     it.each(NON_TEXT)("--%s reaches 3:1 on every surface", (tok) => {
       for (const s of SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(3);

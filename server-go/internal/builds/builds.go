@@ -2447,6 +2447,11 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	if job.Status.Failed > 0 && job.Status.Active == 0 {
 		return p.markFailed(ctx, ns, b, "build pod failed")
 	}
+	// A pod that can't pull its builder image retries until the Job's 1h
+	// deadline; fail it sooner and say it's kuso's problem, not the code.
+	if failed, err := p.failStalledStart(ctx, ns, b, job.Status.Ready, time.Now()); failed {
+		return err
+	}
 	if job.Status.Active > 0 {
 		return p.markRunning(ctx, ns, b)
 	}
@@ -2599,7 +2604,7 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 	// blanket message and the user has to spelunk pod logs (which
 	// are gone after helm uninstalls the build) to find out what
 	// went wrong.
-	if phase == "failed" {
+	if phase == "failed" && !isPlatformFailure(b) {
 		// Priority: kubelet's terminated reason > log-pattern match.
 		// The kubelet sees signals + OOM kills the application stream
 		// can't observe; trust it first.
@@ -3053,6 +3058,12 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
+	return p.markFailedClassified(ctx, ns, b, msg, nil)
+}
+
+// markFailedClassified is markFailed with the classification decided by
+// the caller (class != nil) instead of read off the build log.
+func (p *Poller) markFailedClassified(ctx context.Context, ns string, b *kube.KusoBuild, msg string, class *failures.Classification) error {
 	// Re-read the CR right before stamping, mirroring markSucceeded's
 	// pre-patch guard. markFailed writes a non-CAS MergePatch off a stale
 	// poller snapshot; a user Cancel that lands between the Job-failed
@@ -3103,6 +3114,9 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		sig.Reason, sig.ExitCode = reason, exit
 	}
 	classification := failures.Classify(classifyLines, sig)
+	if class != nil {
+		classification = *class
+	}
 
 	// Divert clone-of-deleted-ref failures to cancelled: no build.failed,
 	// no @here. cancelBuild stamps phase=cancelled with a "ref deleted"
@@ -3161,6 +3175,13 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// the moment the build is terminal instead of leaving it for the
 	// Job TTL to harvest.
 	p.deleteCloneTokenSecret(ns, b.Name)
+	if class != nil {
+		// archiveLogs reads this to keep the platform message instead of
+		// "refining" it from the (clone-only) log.
+		if cj, mErr := json.Marshal(classification); mErr == nil {
+			b.Annotations[annClassification] = string(cj)
+		}
+	}
 	p.queueArchive(ctx, ns, b, "failed")
 	// Persist the classification (incl. any actionable Remediation) on
 	// the build CR so the Deployments tab can render the fix when the

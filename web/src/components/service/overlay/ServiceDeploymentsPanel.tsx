@@ -7,7 +7,7 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
-import { deriveServiceStatus, useBuilds, useService } from "@/features/services";
+import { deriveServiceStatus, podServingSplit, rolloutInFlight, useBuilds, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
 import { isCurrentPod, listServicePods, useServicePods } from "@/features/pods";
@@ -27,6 +27,7 @@ import {
   newerReleaseFailure,
   previousSucceeded,
   rollForwardTarget,
+  servingBuildId,
   useSetAutoDeployPaused,
   type DeployBuild,
 } from "@/features/builds";
@@ -52,7 +53,7 @@ import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { AlertTriangle, Check, ExternalLink, Loader2, Pin, Rocket, Undo2, X } from "lucide-react";
 import { StatusChip } from "@/components/ui/status-chip";
-import { rolloutFacts } from "@/lib/status";
+import { imageTag, pullProblem, rolloutFacts } from "@/lib/status";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
 import { buildDurationLabel } from "./deployParts";
@@ -218,7 +219,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         />
       )}
 
-      <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} />
+      <ServicePodsSection project={project} service={service} envName={env?.metadata?.name} env={env} />
       {env ? (
         <ServiceEventsSection project={project} service={service} envName={env?.metadata?.name} canSeeClusterEvents={canSeeClusterEvents} />
       ) : null}
@@ -256,6 +257,9 @@ function RolloutFailingCard({
   // The header's "Last deploy" reads the same stamp: the version still serving.
   const servingSince = lastDeployedAt(env);
   const rollbackHint = isImage ? "roll back to an earlier image below" : "roll back to an earlier build below";
+  // A pull that never got an image is stuck, not failing; the registry's
+  // answer picks the fix (a 404 is the tag, a 401/403 the credentials).
+  const pull = facts?.kind === "image_pull" ? pullProblem(facts.pullCause, imageTag(facts.newImage)) : undefined;
   if (revert.reverting) {
     return (
       <section
@@ -276,24 +280,33 @@ function RolloutFailingCard({
   return (
     <section
       role="status"
-      aria-label="Rollout failing"
+      aria-label={pull ? "Rollout stuck" : "Rollout failing"}
       className="rounded-lg border border-[var(--warning)]/45 bg-[var(--warning-subtle)] p-4"
     >
       <div className="flex items-start gap-3">
         <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" />
         <div className="min-w-0 flex-1 space-y-1">
-          <p className="text-sm font-semibold text-[var(--text-primary)]">Rollout failing in {group}</p>
+          <p className="text-sm font-semibold text-[var(--text-primary)]">
+            {pull ? "Rollout stuck" : "Rollout failing"} in {group}
+          </p>
           <p className="break-words text-sm text-[var(--text-primary)]">{sentence.endsWith(".") ? sentence : `${sentence}.`}</p>
+          {pull && <p className="text-sm text-[var(--text-primary)]">{pull.hint}</p>}
           <p className="text-xs text-[var(--text-secondary)]">
             {facts?.previousServing === false ? (
               "Nothing else is serving."
             ) : (
               <>
                 The previous version
+                {imageTag(facts?.previousImage) ? (
+                  <>
+                    {" "}
+                    <span className="font-mono">{imageTag(facts?.previousImage)}</span>
+                  </>
+                ) : null}
                 {servingSince ? (
                   <>
                     {" "}
-                    (deployed{" "}
+                    (rolled out{" "}
                     <time dateTime={servingSince} title={new Date(servingSince).toLocaleString()}>
                       {relativeTime(servingSince)}
                     </time>
@@ -353,6 +366,11 @@ function RolloutFailingCard({
 function useLiveHealth(project: string, service: string, env?: KusoEnvironment, uptimeDown?: boolean): LiveHealth | undefined {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const state = env?.status?.state;
+  const inFlight = rolloutInFlight(env);
+  if (inFlight && pods.data?.pods) {
+    const desired = (env?.status?.replicas as { desired?: number } | undefined)?.desired;
+    return { label: podServingSplit(pods.data.pods, desired), tone: inFlight.failing ? "warn" : "ok" };
+  }
   if (state === "crashlooping") return { label: "Crashlooping", tone: "bad" };
   if (state === "stuck") return { label: "Stuck", tone: "bad" };
   if (state === "rollout_failing") return { label: "New version failing · previous version serving", tone: "warn" };
@@ -418,9 +436,14 @@ function DeployList({
   );
   // liveEnvs is authoritative across branches (a forced rollback can leave
   // the env on another branch's image); old servers fall back to a guess.
-  const liveId = liveBuildId(hasLiveInfo(builds) ? builds : visible, group, envImage?.tag);
+  const promotedId = liveBuildId(hasLiveInfo(builds) ? builds : visible, group, envImage?.tag);
+  // Promoted isn't live: until the new pods are ready the previous build serves.
+  const inFlight = rolloutInFlight(env);
+  const liveId = servingBuildId(builds, promotedId, imageTag(inFlight?.previousImage));
   const live = builds.find((b) => b.id === liveId);
-  const rolledBackFrom = live ? rollForwardTarget(builds, live) : undefined;
+  const incoming = liveId !== promotedId ? builds.find((b) => b.id === promotedId) : undefined;
+  // A newer build rolling in over `live` isn't a rollback to undo.
+  const rolledBackFrom = live && !incoming ? rollForwardTarget(builds, live) : undefined;
   const releaseFailed = live ? newerReleaseFailure(builds, live) : undefined;
   const [filter, setFilter] = useHistoryFilter();
   // Builds of other branches (an old branch the env moved off, PR
@@ -528,6 +551,7 @@ function DeployList({
       failing={failing}
       canDeploy={canDeploy}
       releaseFailed={releaseFailed}
+      incoming={incoming ? { build: incoming, failing: !!inFlight?.failing } : undefined}
       onShowBuild={showBuild}
       trigger={buildTrigger(live, builds)}
     />
@@ -830,16 +854,29 @@ function ImageDeploymentCard({
     enabled: !!envName,
     refetchInterval: (q) => {
       const st = imageRolloutState(envState, (q.state.data?.pods ?? undefined) as RolloutPod[] | undefined);
-      return st && st.status === "active" ? 3_000 : 15_000;
+      return (st && st.status === "active") || envState === "deploying" ? 3_000 : 15_000;
     },
   });
   const podList = pods.data ? ((pods.data.pods ?? []) as RolloutPod[]) : undefined;
-  const state = imageRolloutState(envState, podList);
+  const inFlight = rolloutInFlight(env);
+  const podState = imageRolloutState(envState, podList);
+  // The env already names the new tag, but the operator hasn't rolled it
+  // into the pods yet: every ready pod still runs the previous image.
+  const state: RolloutState | undefined =
+    podState?.status === "done" && inFlight && !inFlight.failing
+      ? {
+          ...podState,
+          step: "scheduling",
+          status: "active",
+          title: `Rolling out ${imageTag(inFlight.newImage) ?? "the new image"}`,
+          detail: `${imageTag(inFlight.previousImage) ?? "The previous version"} keeps serving until the new pods are ready.`,
+        }
+      : podState;
   // An env rolled back on its own runs a different image than the service.
   const envImage = (env?.spec as { image?: { repository?: string; tag?: string } } | undefined)?.image;
   const shown = envImage?.repository ? envImage : image;
   const ref = shown?.repository ? `${shown.repository}:${shown.tag || "latest"}` : undefined;
-  const deployedAt = env?.status?.lastDeployedAt;
+  const deployedAt = lastDeployedAt(env);
 
   if (!state) {
     return pods.isError ? (
@@ -862,11 +899,12 @@ function ImageDeploymentCard({
     .filter((p) => isCurrentPod(p) && p.ready && !!ref && (p as { image?: string }).image === ref)
     .map((p) => (p as { imageID?: string }).imageID ?? "")
     .find(Boolean);
-  // Mid failing rollout, the older ReplicaSet's ready pods are what's live.
-  const servingRef =
-    envState === "rollout_failing"
-      ? (podList ?? []).map((p) => ({ ...p, image: (p as { image?: string }).image })).find((p) => !isCurrentPod(p) && p.ready && !!p.image)?.image
-      : undefined;
+  // Mid-rollout (failing or not), the older ReplicaSet's ready pods are
+  // what's live; before the change is applied that's the server's word.
+  const servingRef = inFlight
+    ? ((podList ?? []).map((p) => ({ ...p, image: (p as { image?: string }).image })).find((p) => !isCurrentPod(p) && p.ready && !!p.image)
+        ?.image ?? inFlight.previousImage)
+    : undefined;
 
   return (
     <div className="space-y-4">
@@ -877,14 +915,18 @@ function ImageDeploymentCard({
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <RolloutBadge state={state} />
         <span className="text-[var(--text-secondary)]">in {group}</span>
-        {state.total > 0 && (
+        {inFlight && podList ? (
+          <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[var(--text-secondary)]">
+            {podServingSplit(podList, (env?.status?.replicas as { desired?: number } | undefined)?.desired)}
+          </span>
+        ) : state.total > 0 ? (
           <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[var(--text-secondary)]">
             {state.ready}/{state.total} {state.total === 1 ? "instance" : "instances"} ready
           </span>
-        )}
+        ) : null}
         {live && deployedAt && (
           <time dateTime={deployedAt} title={new Date(deployedAt).toLocaleString()} className="text-[var(--text-tertiary)]">
-            deployed {relativeTime(deployedAt)}
+            rolled out {relativeTime(deployedAt)}
           </time>
         )}
       </div>
@@ -988,8 +1030,10 @@ function ImageReleaseHistory({
   }
   // Env revisions carry this env's own image rollbacks.
   const { releases: all, other: config } = imageReleases([...(serviceRevs.data ?? []), ...(envRevs.data ?? [])], image);
-  const releases = collapseFlipFlops(all);
   const live = liveImagesOf(env?.metadata?.annotations);
+  // A release that never became ready stays its own row: folding it into
+  // "N earlier switches" after a rollback would hide the failure.
+  const releases = collapseFlipFlops(all, (r) => neverRan(r, live));
   const group = envGroupName(env);
   const outcome = configRolloutOutcome([...(serviceRevs.data ?? []), ...(envRevs.data ?? [])], env);
   // interleaveTimeline orders "builds" by startedAt; a release is placed by
@@ -999,11 +1043,11 @@ function ImageReleaseHistory({
   const timeline = groupRevisionRuns(interleaveTimeline(items, filter === "builds" ? [] : config), 2);
   const shown = timeline.slice(0, limit);
   const currentRef = image?.repository ? imageRef(image.repository, image.tag) : "";
-  // While the newest image fails to roll out, the release before it still
-  // serves; it isn't "replaced" yet. Without pod info, the newest other
-  // image is the best reading.
+  // While the newest image rolls out (or fails to), the release before it
+  // still serves; it isn't "replaced" yet. Without pod info, the newest
+  // other image is the best reading.
   const servingId =
-    env?.status?.state === "rollout_failing"
+    rolloutInFlight(env)
       ? releases.find((r) => !r.current && (servingRef ? r.ref === servingRef : r.ref !== currentRef))?.revision.id
       : undefined;
 

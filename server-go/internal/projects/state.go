@@ -201,10 +201,11 @@ func deriveEnvState(in envStateInput) (string, string) {
 		}
 		return stateDeploying, fmt.Sprintf("0/%d replicas ready — rollout in progress", in.Desired)
 	}
-	// Old pods still around next to fully-updated new ones: the deployment
-	// arithmetic says done, but the previous version hasn't been replaced.
+	// Old pods still around next to fully-updated new ones (or a change
+	// the operator hasn't applied yet): the deployment arithmetic says
+	// done, but the previous version hasn't been replaced.
 	if in.Rollout.InFlight && in.Updated >= in.Desired {
-		return stateDeploying, failedNote + "rolling out — the previous version is serving until the new one is ready"
+		return stateDeploying, failedNote + rollingOutDetail(in.Rollout)
 	}
 	if in.Updated < in.Desired {
 		return stateDeploying, fmt.Sprintf("%srolling out — %d/%d replicas updated", failedNote, in.Updated, in.Desired)
@@ -216,6 +217,19 @@ func deriveEnvState(in envStateInput) (string, string) {
 		return stateRunning, "running on last green build; latest build failed"
 	}
 	return stateRunning, fmt.Sprintf("%d/%d replicas ready", in.Ready, in.Desired)
+}
+
+// rollingOutDetail names the versions when the pods say which they are:
+// "rolling out v2 — the previous version (v1) is serving until …".
+func rollingOutDetail(f rollout.Facts) string {
+	what, prev := "rolling out", "the previous version"
+	if t := rollout.ImageTag(f.NewImage); t != "" {
+		what += " " + t
+	}
+	if t := rollout.ImageTag(f.PreviousImage); t != "" {
+		prev += " (" + t + ")"
+	}
+	return what + " — " + prev + " is serving until the new one is ready"
 }
 
 // crashLoopSignal scans an env's pods (informer-served snapshot) for
@@ -339,12 +353,24 @@ func (s *Service) populateRollupState(ctx context.Context, ns string, e *kube.Ku
 		in.BuildPhase = builds.Phase(b)
 	}
 	if s.Kube != nil && s.Kube.Cache != nil {
+		dep, _ := s.Kube.Cache.GetDeployment(ns, e.Name)
 		sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": e.Name})
 		if pods, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
 			in.CrashLooping, in.CrashDetail = crashLoopSignal(pods)
 			in.Stuck = podreason.Worst(pods, time.Now())
-			dep, _ := s.Kube.Cache.GetDeployment(ns, e.Name)
 			in.Rollout = rollout.Analyze(pods, e.Spec.Healthcheck, rollout.DeadlineExceeded(dep), time.Now())
+		}
+		// The env already asks for a new image but the operator hasn't
+		// rendered it into the Deployment: every pod is still the old
+		// version, so this is a rollout in flight, not "running" the new tag.
+		if !in.Rollout.InFlight && e.Spec.Image != nil && e.Spec.Image.Repository != "" {
+			want := e.Spec.Image.Repository + ":" + e.Spec.Image.Tag
+			if e.Spec.Image.Tag == "" {
+				want += "latest"
+			}
+			if cur, pending := rollout.PendingApply(dep, want); pending {
+				in.Rollout = rollout.Facts{InFlight: true, PreviousServing: in.Ready > 0, NewImage: want, PreviousImage: cur}
+			}
 		}
 	}
 	probe := ""
@@ -353,8 +379,14 @@ func (s *Service) populateRollupState(ctx context.Context, ns string, e *kube.Ku
 			in.Rollout.Cause = fmt.Sprintf("the new version fails its health check (GET %s → %s)", e.Spec.Healthcheck.Path, probe)
 		}
 	}
+	if in.Rollout.Failing && in.Rollout.Kind == rollout.KindImagePull && in.Rollout.PullCause == "" {
+		if c := s.pullFailure(ctx, ns, in.Rollout.NewPod); c != "" {
+			in.Rollout.PullCause = c
+			in.Rollout.Cause = rollout.PullFailureCause(c, in.Rollout.NewImage)
+		}
+	}
 	state, detail := deriveEnvState(in)
-	if state == stateRolloutFailing {
+	if state == stateRolloutFailing || (state == stateDeploying && in.Rollout.InFlight) {
 		hcPath := ""
 		if e.Spec.Healthcheck != nil {
 			hcPath = e.Spec.Healthcheck.Path
@@ -366,7 +398,13 @@ func (s *Service) populateRollupState(ctx context.Context, ns string, e *kube.Ku
 		e.Status["stateDetail"] = detail
 	}
 	if state == stateStuck && in.Stuck != nil {
-		e.Status["stuck"] = stuckStatus(in.Stuck)
+		pull := ""
+		if in.Stuck.Kind == podreason.KindImagePull {
+			if pull = rollout.PullCause(in.Stuck.Message); pull == "" {
+				pull = s.pullFailure(ctx, ns, in.Stuck.Pod)
+			}
+		}
+		e.Status["stuck"] = stuckStatus(in.Stuck, pull)
 	}
 }
 
@@ -390,9 +428,12 @@ func statusInt32(m map[string]any, key string) (int32, bool) {
 
 // stuckStatus is the wire shape of status.stuck (additive):
 // {reason: podreason kind, summary, message: raw scheduler/kubelet
-// text, since: RFC3339}.
-func stuckStatus(is *podreason.Issue) map[string]any {
+// text, since: RFC3339, pullCause: rollout.Pull* for an image pull}.
+func stuckStatus(is *podreason.Issue, pullCause string) map[string]any {
 	out := map[string]any{"reason": is.Kind, "summary": is.Summary}
+	if pullCause != "" {
+		out["pullCause"] = pullCause
+	}
 	if is.Message != "" {
 		out["message"] = is.Message
 	}

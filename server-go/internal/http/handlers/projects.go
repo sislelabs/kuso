@@ -153,6 +153,10 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		out.SecurityContext = sc
 	}
 	out.Resources = in.Resources
+	for _, v := range in.EnvValues {
+		out.EnvValues = append(out.EnvValues, projects.EnvValue{Name: v.Name, Value: v.Value})
+	}
+	out.SubscribedAddons = in.SubscribedAddons
 	return out
 }
 

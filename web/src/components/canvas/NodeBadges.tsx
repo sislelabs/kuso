@@ -13,7 +13,7 @@ const badgeBase = "nodrag nopan";
 // error chip (no fill, no border, muted text) so a card's runtime errors
 // always out-rank its image CVEs. Clicking opens the Vulnerabilities tab.
 const vulnClass =
-  "inline-flex h-[18px] shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1 text-2xs font-medium tabular-nums leading-none text-[var(--text-tertiary)] transition-colors outline-none hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)] [&>svg]:size-3 [&>svg]:shrink-0";
+  "inline-flex h-[18px] shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1 text-xs font-medium tabular-nums leading-none text-[var(--text-tertiary)] transition-colors outline-none hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)] [&>svg]:size-3 [&>svg]:shrink-0";
 export function VulnBadge({
   summary,
   onOpen,

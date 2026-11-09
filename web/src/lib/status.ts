@@ -142,6 +142,8 @@ export interface StuckFacts {
   // Raw scheduler / kubelet text, for a details disclosure.
   message?: string;
   since?: string;
+  // For image_pull: the registry's answer (not_found | unauthorized | unreachable).
+  pullCause?: string;
 }
 
 export function stuckFacts(status: Record<string, unknown> | undefined): StuckFacts | undefined {
@@ -154,12 +156,15 @@ export function stuckFacts(status: Record<string, unknown> | undefined): StuckFa
     summary: o.summary,
     ...(typeof o.message === "string" && o.message ? { message: o.message } : {}),
     ...(typeof o.since === "string" && o.since ? { since: o.since } : {}),
+    ...(typeof o.pullCause === "string" && o.pullCause ? { pullCause: o.pullCause } : {}),
   };
 }
 
-// The server's failing-rollout facts (env.status.rollout, sent with
-// state "rollout_failing").
+// The server's rollout facts (env.status.rollout): sent with state
+// "rollout_failing", and with "deploying" while the previous version
+// still serves (failing false).
 export interface RolloutFacts {
+  failing: boolean;
   // healthcheck | crash | image_pull | config_error | stalled
   kind?: string;
   // "the new version fails its health check (GET /health → 404)"
@@ -168,6 +173,11 @@ export interface RolloutFacts {
   healthcheckPath?: string;
   // HTTP status code, "connection refused" or "timed out".
   probeResult?: string;
+  // The registry's answer to a failed pull: not_found | unauthorized | unreachable.
+  pullCause?: string;
+  // Image refs: what the rollout moves to, and what still serves.
+  newImage?: string;
+  previousImage?: string;
   since?: string;
   // When the version still serving started (its newest ready pod).
   previousSince?: string;
@@ -178,12 +188,61 @@ export function rolloutFacts(status: Record<string, unknown> | undefined): Rollo
   if (!r || typeof r !== "object") return undefined;
   const o = r as Record<string, unknown>;
   const str = (k: string) => (typeof o[k] === "string" && o[k] ? (o[k] as string) : undefined);
-  const out: RolloutFacts = { previousServing: o.previousServing === true };
-  for (const k of ["kind", "cause", "healthcheckPath", "probeResult", "since", "previousSince"] as const) {
+  // Older servers sent rollout only while failing, without the flag.
+  const failing = typeof o.failing === "boolean" ? o.failing : status?.state === "rollout_failing";
+  const out: RolloutFacts = { failing, previousServing: o.previousServing === true };
+  for (const k of [
+    "kind",
+    "cause",
+    "healthcheckPath",
+    "probeResult",
+    "pullCause",
+    "newImage",
+    "previousImage",
+    "since",
+    "previousSince",
+  ] as const) {
     const v = str(k);
     if (v) out[k] = v;
   }
   return out;
+}
+
+// imageTag is the tag of an image ref ("repo:tag" → "tag"), the short
+// digest of "repo@sha256:…", or undefined for an untagged ref.
+export function imageTag(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  const at = ref.lastIndexOf("@");
+  if (at >= 0) return ref.slice(at + 1).replace(/^sha256:/, "").slice(0, 12) || undefined;
+  const colon = ref.lastIndexOf(":");
+  return colon > ref.lastIndexOf("/") ? ref.slice(colon + 1) || undefined : undefined;
+}
+
+// pullProblem names a failed image pull by the registry's answer: a 404
+// is a typo'd or unpushed tag, a 401/403 is credentials.
+export function pullProblem(pullCause: string | undefined, tag?: string): { short: string; hint: string } {
+  switch (pullCause) {
+    case "not_found":
+      return {
+        short: tag ? `tag ${tag} not found` : "image not found",
+        hint: "The registry has no image with this tag. Check the tag for a typo, or push the image first.",
+      };
+    case "unauthorized":
+      return {
+        short: "registry denied access",
+        hint: "The registry refused the pull (401/403). Add registry credentials in the project settings, or check that the repository name is right.",
+      };
+    case "unreachable":
+      return {
+        short: "registry unreachable",
+        hint: "The cluster can't reach the registry. Check the registry host in the image name.",
+      };
+    default:
+      return {
+        short: tag ? `image ${tag} can't be pulled` : "image can't be pulled",
+        hint: "Check the image name and tag, and that the registry allows the pull.",
+      };
+  }
 }
 
 type HelmCondition = { type?: string; status?: string; message?: string };

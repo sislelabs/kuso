@@ -92,8 +92,8 @@ func TestApiv1CreateServiceCarriesRepoDefaultBranch(t *testing.T) {
 func TestApiv1CreateServiceCarriesResources(t *testing.T) {
 	var absent, empty, set apiv1.CreateServiceRequest
 	for body, dst := range map[string]*apiv1.CreateServiceRequest{
-		`{"name":"web"}`:                                         &absent,
-		`{"name":"web","resources":{}}`:                          &empty,
+		`{"name":"web"}`:                &absent,
+		`{"name":"web","resources":{}}`: &empty,
 		`{"name":"web","resources":{"limits":{"memory":"1Gi"}}}`: &set,
 	} {
 		if err := json.Unmarshal([]byte(body), dst); err != nil {
@@ -143,5 +143,34 @@ func TestApiv1CreateServiceCarriesGitHubInstallation(t *testing.T) {
 	})
 	if got.GitHub == nil || got.GitHub.InstallationID != 42 {
 		t.Fatalf("github.installationId not mapped: %+v", got.GitHub)
+	}
+}
+
+// The create wizard sends its variables and addon picks in the create
+// call; the mapper must carry both, keeping [] (mount none) apart from
+// absent (mount all).
+func TestApiv1CreateServiceCarriesEnvValuesAndSubscription(t *testing.T) {
+	var absent, none, set apiv1.CreateServiceRequest
+	for body, dst := range map[string]*apiv1.CreateServiceRequest{
+		`{"name":"web"}`:                       &absent,
+		`{"name":"web","subscribedAddons":[]}`: &none,
+		`{"name":"web","subscribedAddons":["db"],"envValues":[{"name":"A","value":"1"}]}`: &set,
+	} {
+		if err := json.Unmarshal([]byte(body), dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := apiv1CreateServiceToDomain(absent); out.SubscribedAddons != nil || out.EnvValues != nil {
+		t.Errorf("absent: subscribedAddons=%v envValues=%v, want both nil", out.SubscribedAddons, out.EnvValues)
+	}
+	if out := apiv1CreateServiceToDomain(none); out.SubscribedAddons == nil || len(*out.SubscribedAddons) != 0 {
+		t.Errorf("[] subscription mapped to %v, want non-nil empty", out.SubscribedAddons)
+	}
+	out := apiv1CreateServiceToDomain(set)
+	if out.SubscribedAddons == nil || len(*out.SubscribedAddons) != 1 || (*out.SubscribedAddons)[0] != "db" {
+		t.Errorf("subscription = %v, want [db]", out.SubscribedAddons)
+	}
+	if len(out.EnvValues) != 1 || out.EnvValues[0].Name != "A" || out.EnvValues[0].Value != "1" {
+		t.Errorf("envValues = %+v, want [{A 1}]", out.EnvValues)
 	}
 }

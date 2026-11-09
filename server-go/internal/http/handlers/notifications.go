@@ -39,6 +39,7 @@ import (
 type notifySink interface {
 	EmitEnvelope(notify.EmitEnvelope)
 	SendDirect(ctx context.Context, n *db.Notification, e notify.Event) error
+	DeliverNow(ctx context.Context, e notify.Event) ([]notify.DeliveryResult, bool, error)
 	InvalidateNotifications()
 }
 
@@ -83,6 +84,8 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		r.Put("/api/notifications/{id}", h.Update)
 		r.Delete("/api/notifications/{id}", h.Delete)
 		r.Post("/api/notifications/{id}/test", h.Test)
+		r.Post("/api/notifications/event-types/{type}/test", h.TestEventType)
+		r.Get("/api/notifications/deliveries/latest", h.LatestDeliveries)
 		// Admin-only in-app feed with per-user read tracking (a
 		// watermark per user). Non-admins use /my-feed, which has no
 		// read tracking.

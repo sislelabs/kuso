@@ -13,6 +13,7 @@ import {
   useShortcutsHelpOpen,
   type Shortcut,
 } from "@/lib/shortcuts";
+import { globalKeyBlocked } from "./globalKeyGuard";
 
 const GO_TO: Record<string, { href: string; label: string }> = {
   p: { href: "/projects", label: "Go to projects" },
@@ -34,9 +35,8 @@ export function KeyboardShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e.target)) return;
-      // Leave keys alone while another modal (palette, confirm) owns focus.
-      if (!open && document.querySelector("[role=dialog][data-open], [role=alertdialog]")) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (globalKeyBlocked(target, isTypingTarget(e.target), open, document)) return;
 
       if (pendingG.current !== null) {
         window.clearTimeout(pendingG.current);

@@ -18,6 +18,10 @@ export interface CreateServiceBody {
   scale?: SizingBody["scale"];
   // Request-only: create without starting the first build.
   skipFirstBuild?: boolean;
+  // Variables the server stores where they belong (secrets off the CR).
+  envValues?: { name: string; value: string }[];
+  // Addons whose connection variables the service mounts; absent = all.
+  subscribedAddons?: string[];
 }
 
 export interface CreateServiceRepoInput {

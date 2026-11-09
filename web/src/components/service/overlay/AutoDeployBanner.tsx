@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { GitBranch, Info, PauseCircle, X } from "lucide-react";
+import Link from "next/link";
+import { Github, GitBranch, Info, PauseCircle, X } from "lucide-react";
 import { useRouteParams } from "@/lib/dynamic-params";
 import type { KusoServiceSpec } from "@/types/projects";
 import { githubRepoSlug } from "@/features/builds";
 import { Button } from "@/components/ui/button";
+import { Perms, useCan } from "@/features/auth";
 
 export type PushDeploy =
   | { on: true; repo: string; branch: string; watchPaths: string[] }
@@ -182,11 +184,14 @@ export function AutoDeployBanner({
 
 const NOTICE_KEY = (project: string) => `kuso:instance-notice:github-app:${project}`;
 
+const GITHUB_SETTINGS = "/settings/github";
+
 // InstanceWideNotice is the "no GitHub App" notice. Every service in the
 // project has the same cause, so the full box shows on the first service
-// it's seen on; elsewhere it's one quiet line, and once dismissed it's gone
-// for the whole project.
+// it's seen on; elsewhere it's one quiet line, and once dismissed (from
+// either) it's gone for the whole project. Admins get the fix in place.
 function InstanceWideNotice({ reason, hint }: { reason: string; hint: string }) {
+  const canConnect = useCan(Perms.SettingsAdmin);
   const { project = "", service: routeService = "" } = useRouteParams<{ project: string; service: string }>([
     "project",
     "service",
@@ -207,14 +212,6 @@ function InstanceWideNotice({ reason, hint }: { reason: string; hint: string }) 
     }
   }, [project, routeService]);
   if (seen === undefined || seen === "dismissed") return null;
-  if (seen && service && seen !== service) {
-    return (
-      <p className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-        <Info aria-hidden className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
-        Auto-deploy is off: the GitHub App isn&apos;t set up on this instance.
-      </p>
-    );
-  }
   const dismiss = () => {
     setSeen("dismissed");
     try {
@@ -223,6 +220,31 @@ function InstanceWideNotice({ reason, hint }: { reason: string; hint: string }) 
       // Storage blocked: it shows again on the next visit.
     }
   };
+  const dismissButton = (className: string) => (
+    <button
+      type="button"
+      onClick={dismiss}
+      aria-label="Dismiss for this project"
+      title="Dismiss for this project"
+      className={`inline-flex shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] ${className}`}
+    >
+      <X className="h-4 w-4" />
+    </button>
+  );
+  if (seen && service && seen !== service) {
+    return (
+      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--text-secondary)]">
+        <Info aria-hidden className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+        Auto-deploy is off: the GitHub App isn&apos;t set up on this instance.
+        {canConnect && (
+          <Link href={GITHUB_SETTINGS} className="font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]">
+            Connect GitHub
+          </Link>
+        )}
+        {dismissButton("h-6 w-6")}
+      </p>
+    );
+  }
   return (
     <div
       role="note"
@@ -232,18 +254,16 @@ function InstanceWideNotice({ reason, hint }: { reason: string; hint: string }) 
       <div className="min-w-0 flex-1">
         <p className="font-medium text-[var(--text-primary)]">Auto-deploy is off</p>
         <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">
-          {reason} {hint} This applies to every service in the project.
+          {reason} {canConnect ? "" : `${hint} `}This applies to every service in the project.
         </p>
+        {canConnect && (
+          <Button size="sm" variant="secondary" className="mt-2" render={<Link href={GITHUB_SETTINGS} />} nativeButton={false}>
+            <Github aria-hidden className="h-3.5 w-3.5" />
+            Connect GitHub
+          </Button>
+        )}
       </div>
-      <button
-        type="button"
-        onClick={dismiss}
-        aria-label="Dismiss for this project"
-        title="Dismiss for this project"
-        className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-      >
-        <X className="h-4 w-4" />
-      </button>
+      {dismissButton("-mr-1 -mt-0.5 h-7 w-7")}
     </div>
   );
 }

@@ -401,7 +401,7 @@ type CommitMode = "staged" | "now";
 // CommitModeChip says, before anyone edits, how this card's changes land:
 // held for the review-and-deploy bar, or written as soon as you act.
 function CommitModeChip({ mode }: { mode: CommitMode }) {
-  const label = mode === "staged" ? "Deploys on review" : "Applies now";
+  const label = mode === "staged" ? "Staged until you deploy" : "Applies now";
   const title =
     mode === "staged"
       ? "Edits here are staged. They wait in the bar at the bottom and roll out together when you review and deploy."

@@ -117,7 +117,6 @@ export function MobileIncidentView({
             )}
           </p>
         </div>
-        <span className="shrink-0 font-mono text-xs text-[var(--text-tertiary)]">{selectedEnv}</span>
       </header>
 
       <FirstDeployChecklist

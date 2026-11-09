@@ -1,4 +1,11 @@
-import type { BuildSummary } from "@/features/services/api";
+import type { BuildStall, BuildSummary } from "@/features/services/api";
+
+export interface DeployStall extends BuildStall {
+  // The build pod container that's stuck (env-detect, buildkit, …).
+  container?: string;
+  // When the server fails the build if it's still stuck.
+  failsAt?: string;
+}
 
 // DeployBuild is BuildSummary plus the promotion fields newer servers
 // send. Every addition is optional so the UI still works against an
@@ -11,6 +18,7 @@ export interface DeployBuild extends BuildSummary {
   cancelReason?: string;
   releaseJob?: string;
   releaseLogTail?: string;
+  stalled?: DeployStall;
 }
 
 export type BuildRowStatus =

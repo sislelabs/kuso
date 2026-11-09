@@ -6,8 +6,28 @@ export {
   disableAlert,
   updateAlert,
   testAlert,
+  testEventType,
+  listLatestDeliveries,
+  listNotificationChannels,
 } from "./api";
-export type { AlertKind, AlertRule, AlertTestDelivery, AlertTestResult, CreateAlertBody } from "./api";
+export type {
+  AlertKind,
+  AlertRule,
+  AlertTestDelivery,
+  AlertTestResult,
+  CreateAlertBody,
+  LatestDelivery,
+  NotificationChannel,
+} from "./api";
+export {
+  RULE_EVENT_TYPE,
+  builtinAlertRows,
+  deliveriesForRule,
+  lastDelivery,
+  routeSummary,
+  routingFor,
+} from "./builtin";
+export type { AlertRoute, BuiltinAlertRow, DeliverySummary, Routing } from "./builtin";
 export {
   ALERT_KINDS,
   DUR_UNITS,

@@ -43,6 +43,11 @@ export function RuntimeExplainer({
       <p className="flex items-start gap-1.5 text-xs text-[var(--text-secondary)]">
         <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[var(--success)]" />
         <span>
+          {result.framework ? (
+            <>
+              <span className="font-medium text-[var(--text-primary)]">{result.framework}</span> ·{" "}
+            </>
+          ) : null}
           {result.reason.replace(/ detected$/, "")} found in {where(path)}, so kuso picked{" "}
           <span className="font-mono">{result.runtime}</span>
           {result.port ? (

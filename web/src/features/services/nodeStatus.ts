@@ -5,7 +5,16 @@
 
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
 import type { BuildSummary } from "./api";
-import { addonStatusFromServer, stuckFacts, type ServiceBucket, type StatusTone } from "@/lib/status";
+import {
+  addonStatusFromServer,
+  imageTag,
+  pullProblem,
+  rolloutFacts,
+  stuckFacts,
+  type RolloutFacts,
+  type ServiceBucket,
+  type StatusTone,
+} from "@/lib/status";
 import { promotedIfLive } from "@/features/projects/facts";
 
 export type NodeStatusKind =
@@ -103,8 +112,23 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
   const detail = env?.status?.stateDetail || undefined;
   const fromServer = serverState(env?.status?.state, detail);
   // Name the commonest stuck cause outright rather than "Stuck".
-  if (fromServer?.kind === "stuck" && stuckFacts(env?.status)?.reason === "image_pull") {
-    return { ...fromServer, label: "Image pull failed" };
+  const stuck = fromServer?.kind === "stuck" ? stuckFacts(env?.status) : undefined;
+  if (fromServer && stuck?.reason === "image_pull") {
+    const tag = (env?.spec as { image?: { tag?: string } } | undefined)?.image?.tag;
+    const named = stuck.pullCause ? capitalize(pullProblem(stuck.pullCause, tag).short) : fromServer.detail;
+    return { ...fromServer, label: "Image pull failed", ...(named ? { detail: named } : {}) };
+  }
+  const rollout = fromServer ? rolloutFacts(env?.status) : undefined;
+  // Until the new pods are ready the previous version is what serves:
+  // name both instead of a bare "Deploying" (or, earlier, "Live").
+  if (fromServer?.kind === "deploying" && rollout && !rollout.failing) {
+    return S("deploying", "Rolling out", "progress", rollingOutDetail(rollout));
+  }
+  // A pull that fails while the old pods serve is stuck, not crashing;
+  // the registry's answer says which kind of stuck.
+  if (fromServer?.kind === "rollout_failing" && rollout?.kind === "image_pull") {
+    const p = pullProblem(rollout.pullCause, imageTag(rollout.newImage));
+    return S("rollout_failing", "Rollout stuck", "warning", `${capitalize(p.short)} (${servingNote(rollout)})`);
   }
   if (fromServer) return fromServer;
 
@@ -128,6 +152,50 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
   if (phase === "failed" || phase === "error") return S("crashing", "Failing", "error", detail);
   if (phase === "sleeping") return S("sleeping", "Sleeping", "muted", detail);
   return S("unknown", "Unknown", "muted", detail);
+}
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// "v1.11.0 still serving" / "old version still serving".
+function servingNote(r: RolloutFacts): string {
+  if (!r.previousServing) return "nothing else is serving";
+  const prev = imageTag(r.previousImage);
+  return prev ? `${prev} still serving` : "old version still serving";
+}
+
+// "v9.9.9-nope · v1.11.0 still serving".
+function rollingOutDetail(r: RolloutFacts): string {
+  const next = imageTag(r.newImage);
+  if (!r.previousServing) return next ? `${next} starting` : "Starting the new version";
+  return next ? `${next} · ${servingNote(r)}` : capitalize(servingNote(r));
+}
+
+export interface PodSplitInput {
+  current?: boolean;
+  ready?: boolean;
+  phase?: string;
+}
+
+// rolloutInFlight: the server says a rollout is under way (or failing)
+// while the previous version still serves.
+export function rolloutInFlight(env: KusoEnvironment | undefined): RolloutFacts | undefined {
+  const state = env?.status?.state;
+  if (state !== "deploying" && state !== "rollout_failing") return undefined;
+  const r = rolloutFacts(env?.status);
+  return r?.previousServing ? r : undefined;
+}
+
+// podServingSplit tells the previous version's serving pods apart from
+// the new rollout's while one is in flight: "1 serving (previous) · 0/1
+// new", instead of a "0/1 ready" that hides the pod still serving. Before
+// the operator applies the change every pod is still the previous one.
+export function podServingSplit(pods: readonly PodSplitInput[], desired?: number): string {
+  const live = pods.filter((p) => p.phase !== "Succeeded" && p.phase !== "Failed");
+  const previous = live.filter((p) => p.current === false);
+  const prev = previous.length > 0 ? previous : live;
+  const fresh = previous.length > 0 ? live.filter((p) => p.current !== false) : [];
+  const want = Math.max(desired ?? 0, fresh.length);
+  return `${prev.filter((p) => p.ready).length} serving (previous) · ${fresh.filter((p) => p.ready).length}/${want} new`;
 }
 
 // deriveAddonStatus reads the server's addon rollup (helm conditions +

@@ -94,3 +94,47 @@ export interface AlertTestResult {
 export async function testAlert(id: string): Promise<AlertTestResult> {
   return api(`/api/alerts/${encodeURIComponent(id)}/test`, { method: "POST" });
 }
+
+// testEventType sends a built-in event (build.failed, pod.crashed, …),
+// marked as a test, through the routing a real one would get.
+export async function testEventType(type: string, project?: string): Promise<AlertTestResult> {
+  return api(`/api/notifications/event-types/${encodeURIComponent(type)}/test`, {
+    method: "POST",
+    body: project ? { project } : {},
+  });
+}
+
+// LatestDelivery is the newest delivery of one event type (or one alert
+// rule, for alert.fired) to one channel, read from the delivery queue.
+export interface LatestDelivery {
+  eventType: string;
+  ruleId?: string;
+  channel: string;
+  channelName: string;
+  channelType: string;
+  status: "delivered" | "pending" | "retrying" | "failed";
+  error?: string;
+  at: string;
+}
+
+export async function listLatestDeliveries(): Promise<LatestDelivery[]> {
+  return api("/api/notifications/deliveries/latest");
+}
+
+// NotificationChannel is the part of a Settings → Notifications channel
+// the alerts page reads to show where a built-in alert goes.
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  pipelines: string[];
+  events: string[];
+}
+
+// Shares the ["admin", "notifications"] cache entry with the notifications
+// page, so it unwraps the envelope to the same array.
+export async function listNotificationChannels(): Promise<NotificationChannel[]> {
+  const res = await api<{ data?: NotificationChannel[] } | NotificationChannel[]>("/api/notifications");
+  return Array.isArray(res) ? res : (res.data ?? []);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deployStage, failedStepFromBuild, failedStepTitle, firstErrorLine, formatStepDuration, parseBuildLog } from "./phases";
+import { deployStage, failedStep, failedStepFromBuild, failedStepTitle, firstErrorLine, formatStepDuration, parseBuildLog, stallStage } from "./phases";
 
 const SUCCESS = [
   "Cloning into '/workspace/src'...",
@@ -53,7 +53,7 @@ describe("parseBuildLog", () => {
     expect(p.structured).toBe(true);
     expect(p.truncated).toBe(false);
     expect(p.steps.map((s) => [s.title, s.status])).toEqual([
-      ["Clone and prepare", "done"],
+      ["Clone repository", "done"],
       ["Load build definition from Dockerfile", "done"],
       ["WORKDIR /src", "cached"],
       ["RUN CGO_ENABLED=0 go build -o /out/api .", "done"],
@@ -158,5 +158,36 @@ describe("failed step", () => {
     expect(failedStepFromBuild({ errorMessage: "container exited with code 1 (buildkit)" })).toBe("Run the build");
     expect(failedStepFromBuild({ failureClass: { kind: "lockfile_drift" } })).toBe("Install dependencies");
     expect(failedStepFromBuild({ errorMessage: "boom" })).toBeUndefined();
+  });
+
+  it("names the clone step the same from the log preamble and from the server", () => {
+    const fromLog = failedStepTitle(parseBuildLog(["Cloning into '/workspace/src'...", "fatal: Remote branch x not found"], { failed: true }));
+    expect(fromLog).toBe(failedStepFromBuild({ failureClass: { kind: "clone_ref_missing" } }));
+  });
+
+  it("trusts the server's container over the log's last printed step", () => {
+    // The clone printed and finished; env-detect never ran, so the log
+    // blames the clone.
+    const platform = {
+      errorMessage: "kuso couldn't start the build: builder image unavailable after 10m0s. ImagePullBackOff: … (env-detect)",
+      failureClass: { kind: "build_platform" },
+    };
+    expect(failedStep(platform, "Clone repository")).toBe("Detect environment variables");
+    expect(failedStep({ errorMessage: "container exited with code 1 (nixpacks-plan)" }, "Clone repository")).toBe("Plan nixpacks build");
+    // Inside the solve the log's vertex is more specific than "Run the build".
+    expect(failedStep({ errorMessage: "container exited with code 1 (buildkit)" }, "RUN npm ci · build · 4/7")).toBe("RUN npm ci · build · 4/7");
+    expect(failedStep({ errorMessage: "boom" }, "Clone repository")).toBe("Clone repository");
+    // A platform failure with no container never takes the log's guess.
+    expect(failedStep({ errorMessage: "kuso couldn't start the build: no node can run it after 20m0s" }, "Clone repository")).toBeUndefined();
+  });
+});
+
+describe("stallStage", () => {
+  it("puts a stuck builder container past the clone", () => {
+    expect(stallStage("env-detect")).toBe("build");
+    expect(stallStage("buildkit")).toBe("build");
+    expect(stallStage("clone")).toBe("clone");
+    expect(stallStage("cache-init")).toBe("clone");
+    expect(stallStage(undefined)).toBeUndefined();
   });
 });

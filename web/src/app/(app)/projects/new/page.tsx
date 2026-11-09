@@ -230,8 +230,7 @@ export default function NewProjectPage() {
       const out = await createServiceWithEnv(pName, sBody, { envVars: env.vars, deploy });
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
       reportCreateOutcome(out, `${pName}/${sBody.name}`, branch);
-      const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(servicePageHref(pName, sBody.name, { tab }));
+      router.replace(servicePageHref(pName, sBody.name, { tab: "deployments" }));
     } catch (err) {
       // The project exists; send the user to finish the service there
       // rather than leaving them on a form that would now 409.
@@ -306,8 +305,7 @@ export default function NewProjectPage() {
       const out = await createServiceWithEnv(pName, sBody, { envVars });
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
       reportCreateOutcome(out, `${pName}/${sBody.name}`);
-      const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(servicePageHref(pName, sBody.name, { tab }));
+      router.replace(servicePageHref(pName, sBody.name, { tab: "deployments" }));
     } catch (err) {
       toast.error(
         `Project ${pName} was created, but its service wasn't: ${friendlyApiError(err, "unknown error")}. Add the service again below.`,

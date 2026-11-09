@@ -358,18 +358,7 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	// Normalize: trim + dedupe + sort. Empty entries dropped.
-	seen := make(map[string]bool, len(addons))
-	clean := make([]string, 0, len(addons))
-	for _, a := range addons {
-		a = strings.TrimSpace(a)
-		if a == "" || seen[a] {
-			continue
-		}
-		seen[a] = true
-		clean = append(clean, a)
-	}
-	sort.Strings(clean)
+	clean := cleanAddonNames(addons)
 
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
@@ -416,6 +405,23 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 		return updated, nil
 	}
 	return updated, nil
+}
+
+// cleanAddonNames trims, dedupes and sorts a subscription list, dropping
+// empty entries. Never nil: an empty list means "mount no addon".
+func cleanAddonNames(addons []string) []string {
+	seen := make(map[string]bool, len(addons))
+	clean := make([]string, 0, len(addons))
+	for _, a := range addons {
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		clean = append(clean, a)
+	}
+	sort.Strings(clean)
+	return clean
 }
 
 // sameNameSet compares two name lists as sets, ignoring order, duplicates,

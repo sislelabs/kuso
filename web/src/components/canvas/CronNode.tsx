@@ -1,7 +1,6 @@
 "use client";
 
-import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { Clock, MoreHorizontal } from "lucide-react";
 import { describeCron, formatAbsoluteTime } from "@/lib/format-time";
 import { nextRuns } from "@/lib/cron-next";
 import { cn } from "@/lib/utils";
@@ -43,12 +42,6 @@ export interface CronNodeData extends CanvasNodeA11y {
   __onContext?: (e: React.MouseEvent) => void;
 }
 
-const KIND_ICONS: Record<string, LucideIcon> = {
-  http: Globe,
-  command: Terminal,
-  service: Box,
-};
-
 function shortName(project: string, fqn: string): string {
   // Project-scoped cron: "<project>-<short>"
   // Service-attached cron: "<project>-<svc>-<short>"
@@ -89,7 +82,6 @@ function summary(project: string, spec: CronNodeData["cron"]["spec"]): string {
 
 export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
   const kind = (data.cron.spec.kind || "service").toLowerCase();
-  const Icon = KIND_ICONS[kind] ?? Clock;
   const displayName =
     data.cron.spec.displayName?.trim() || shortName(data.project, data.cron.metadata.name);
   const schedule = data.cron.spec.schedule ?? "";
@@ -146,7 +138,8 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
       </button>
 
       <div className="flex items-center gap-1.5 pr-7">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+        {/* Always the clock, whatever it runs: the cube is the service glyph. */}
+        <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
         <span className={nodeNameClass} title={displayName}>{displayName}</span>
       </div>
 

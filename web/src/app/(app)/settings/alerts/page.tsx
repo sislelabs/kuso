@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import { Bell, Lock, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -21,12 +21,25 @@ import {
   alertRequestText,
   canManageAlertRule,
   editableAlertProjects,
+  builtinAlertRows,
+  deliveriesForRule,
+  lastDelivery,
+  listLatestDeliveries,
+  listNotificationChannels,
+  routeSummary,
+  routingFor,
+  testAlert,
+  RULE_EVENT_TYPE,
   type AlertAccessSession,
   type AlertKind,
   type AlertRule,
+  type DeliverySummary,
   type RuleFormState,
   type RuleStatus,
+  type Routing,
 } from "@/features/alerts";
+import { listNotificationEventTypes, notificationEventTypesQueryKey } from "@/features/notifications";
+import { BuiltinAlerts, DeliveryLine, TestResults, useSendTest } from "./BuiltinAlerts";
 import { toastError } from "@/lib/errors";
 import { Switch } from "@/components/ui/switch";
 import { relativeTime } from "@/lib/format";
@@ -44,11 +57,11 @@ import { useSession } from "@/features/auth";
 import { useProjects } from "@/features/projects";
 import { api, ApiError } from "@/lib/api-client";
 
-// /settings/alerts — manage alert rules. Engine evaluates them on a
-// 1-min ticker server-side and fires through the existing notify
-// dispatcher (Discord/webhook/Slack). UI surfaces the rule list +
-// add/delete/enable-disable + a tiny lastFired timestamp so the
-// user can see "this rule has been firing".
+// /settings/alerts — every alert in one place: the rules users define
+// (evaluated on a 1-min ticker server-side) and the built-in events kuso
+// emits on its own. Both deliver through the notify dispatcher's
+// channels, so each row shows where it goes, its last delivery and a
+// test send.
 export default function AlertsPage() {
   return (
     <Suspense fallback={null}>
@@ -100,7 +113,7 @@ function AlertsPageInner() {
     if (!prefill) return;
     setAdding(prefill);
     const next = new URLSearchParams(search.toString());
-    for (const k of ["new", "kind", "project", "service", "env"]) next.delete(k);
+    for (const k of ["new", "kind", "project", "service", "env", "query"]) next.delete(k);
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : (pathname ?? "/settings/alerts"), { scroll: false });
   }, [search, router, pathname]);
@@ -116,6 +129,36 @@ function AlertsPageInner() {
     refetchInterval: 30_000,
   });
   const deliveryFailing = (outbox.data?.pending ?? 0) + (outbox.data?.dead ?? 0) > 0;
+
+  // Channels, the event catalogue and delivery results are admin-only
+  // reads; members see rules without routing.
+  const channels = useQuery({
+    queryKey: ["admin", "notifications"],
+    queryFn: listNotificationChannels,
+    enabled: isAdmin,
+  });
+  const eventTypes = useQuery({
+    queryKey: notificationEventTypesQueryKey,
+    queryFn: listNotificationEventTypes,
+    enabled: isAdmin,
+    staleTime: 5 * 60_000,
+  });
+  // Older servers have no delivery endpoint; the rows then just omit it.
+  const deliveries = useQuery({
+    queryKey: ["admin", "notifications", "deliveries"],
+    queryFn: listLatestDeliveries,
+    enabled: isAdmin,
+    retry: false,
+    refetchInterval: 60_000,
+  });
+  const builtins = useMemo(
+    () => builtinAlertRows(eventTypes.data ?? [], channels.data ?? [], deliveries.data ?? []),
+    [eventTypes.data, channels.data, deliveries.data],
+  );
+  const ruleRouting = (r: AlertRule): Routing | undefined =>
+    channels.data ? routingFor(RULE_EVENT_TYPE, channels.data, r.project || undefined) : undefined;
+  const ruleDelivery = (r: AlertRule): DeliverySummary | null | undefined =>
+    deliveries.data ? lastDelivery(deliveriesForRule(deliveries.data, r.id)) : undefined;
 
   const del = useMutation({
     mutationFn: (id: string) => deleteAlert(id),
@@ -137,7 +180,7 @@ function AlertsPageInner() {
       title="Alert rules"
       description={
         <>
-          Evaluated every minute. Fires through your{" "}
+          Your rules, evaluated every minute, and the alerts kuso sends on its own. Both are delivered through your{" "}
           <Link href="/settings/notifications" className="text-[var(--text-primary)] underline underline-offset-2">
             notification channels
           </Link>
@@ -201,6 +244,8 @@ function AlertsPageInner() {
                 rule={r}
                 manageable={canManageAlertRule(access, r)}
                 deliveryFailing={deliveryFailing}
+                routing={ruleRouting(r)}
+                delivery={ruleDelivery(r)}
                 deleting={del.isPending && del.variables === r.id}
                 onDelete={() => del.mutate(r.id)}
                 onEdit={() => setEditing(r)}
@@ -209,6 +254,18 @@ function AlertsPageInner() {
             ))}
           </ul>
         </SettingsSection>
+      )}
+
+      {isAdmin && (
+        <BuiltinAlerts
+          rows={builtins}
+          pending={channels.isPending || eventTypes.isPending}
+          error={channels.error ?? eventTypes.error}
+          onRetry={() => {
+            void channels.refetch();
+            void eventTypes.refetch();
+          }}
+        />
       )}
 
       {adding && !adminOnlyServer && (
@@ -266,6 +323,8 @@ function RuleRow({
   rule,
   manageable,
   deliveryFailing,
+  routing,
+  delivery,
   deleting,
   onDelete,
   onEdit,
@@ -274,6 +333,9 @@ function RuleRow({
   rule: AlertRule;
   manageable: boolean;
   deliveryFailing: boolean;
+  /** Where its alerts go; undefined when the caller can't read channels. */
+  routing: Routing | undefined;
+  delivery: DeliverySummary | null | undefined;
   deleting: boolean;
   onDelete: () => void;
   onEdit: () => void;
@@ -282,6 +344,8 @@ function RuleRow({
   const [confirming, setConfirming] = useState(false);
   const detail = describeRule(rule);
   const status = ruleStatus(rule);
+  const test = useSendTest(rule.name);
+  const routed = !routing || routing.routes.length > 0;
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 sm:flex-nowrap sm:px-5">
       <StatusDot status={status} className="mt-1.5" />
@@ -308,6 +372,11 @@ function RuleRow({
           {detail}
           <span className="text-[var(--text-tertiary)]"> · {notifyCadence(rule)}</span>
         </p>
+        {routing && (
+          <p className={cn("mt-0.5 text-xs", routed ? "text-[var(--text-secondary)]" : "text-[var(--warning)]")}>
+            {routed ? <>To {routeSummary(routing)}</> : routeSummary(routing)}
+          </p>
+        )}
         {rule.firingSince ? (
           <p className="mt-0.5 text-xs text-[var(--error)]">
             Firing since {relativeTime(rule.firingSince)}
@@ -334,6 +403,8 @@ function RuleRow({
             View only · changing it needs editor access on {rule.project}
           </p>
         )}
+        <DeliveryLine summary={delivery} />
+        <TestResults result={test.result} />
       </div>
       <div className="flex w-full items-center justify-end gap-3 sm:w-auto">
         <span className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
@@ -346,6 +417,19 @@ function RuleRow({
             disabled={!manageable}
           />
         </span>
+        {manageable && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!routed || test.pending}
+            disabledReason={!routed ? "No channel receives this rule's alerts" : undefined}
+            onClick={() => test.send(() => testAlert(rule.id))}
+            aria-label={`Send a test alert for ${rule.name}`}
+          >
+            <Send aria-hidden className="h-3.5 w-3.5" />
+            {test.pending ? "Sending…" : "Send test"}
+          </Button>
+        )}
         {manageable && (
           <Button variant="ghost" size="sm" onClick={onEdit} aria-label={`Edit ${rule.name}`}>
             <Pencil className="h-3.5 w-3.5" />

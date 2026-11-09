@@ -3,3 +3,7 @@ export type { PodMetric, EnvMetricsResponse, TimeseriesResponse, UsageHistoryRes
 export { getSamples, mergeSamples, recordSample } from "./history";
 export type { ResourceSample } from "./history";
 export { useEnvPodMetrics, useEnvTimeseries, useServiceUsageHistory } from "./hooks";
+export { deployMarkers } from "./deployMarkers";
+export type { DeployMarker } from "./deployMarkers";
+export { fmtRequestCount, requestScale } from "./requestRate";
+export type { RequestScale } from "./requestRate";

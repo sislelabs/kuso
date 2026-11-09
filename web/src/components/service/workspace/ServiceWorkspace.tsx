@@ -155,14 +155,12 @@ function EditableTitle({
   project,
   service,
   displayName,
-  size = "md",
 }: {
   project: string;
   service: string;
   displayName: string;
-  size?: "md" | "lg";
 }) {
-  const text = size === "lg" ? "text-2xl" : "text-lg";
+  const text = "text-lg";
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(displayName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -741,7 +739,6 @@ export function ServiceWorkspace({
       project={project}
       service={service}
       displayName={svc.data?.spec.displayName?.trim() || ""}
-      size={page ? "lg" : "md"}
     />
   ) : null;
 
@@ -808,34 +805,15 @@ export function ServiceWorkspace({
     />
   ) : null;
 
-  const header = page ? (
-    <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40">
-      <div className="flex flex-col gap-3 px-4 pt-4 pb-2 sm:px-6 lg:flex-row lg:items-start lg:gap-6 lg:px-8">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <span className="mt-0.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]">
-            <RuntimeIcon runtime={svc.data?.spec.runtime} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-              {titleRow}
-              <SharedStatusPill status={statusMeta} detail={statusDetail} />
-              {envChip}
-            </div>
-            <div className="mt-1 flex min-w-0 text-xs text-[var(--text-secondary)]">{pathLine}</div>
-          </div>
-        </div>
-        <div className="hidden shrink-0 flex-wrap items-center gap-1.5 sm:flex lg:justify-end lg:pt-1">{actions}</div>
-      </div>
-      {service ? (
-        <div className="px-4 pb-3 sm:px-6 lg:px-8">
-          {strip}
-          {firstLive}
-          {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
-        </div>
-      ) : null}
-    </header>
-  ) : (
-    <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:px-5">
+  // One header for both shells. The full page has no canvas behind it, so
+  // it adds the project path; the peek adds open-full-page and close.
+  const header = (
+    <header
+      className={cn(
+        "shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 py-3",
+        page ? "px-4 sm:px-6 lg:px-8" : "px-3 sm:px-5",
+      )}
+    >
       <div className="flex items-start gap-2 sm:gap-3">
         <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
           <RuntimeIcon runtime={svc.data?.spec.runtime} />
@@ -850,6 +828,8 @@ export function ServiceWorkspace({
             {/* Actions share the title row; what doesn't fit lives in ⋯. */}
             <div className="ml-auto hidden flex-nowrap items-center gap-1.5 sm:flex">{actions}</div>
           </div>
+          {/* Below lg the shell's breadcrumb already names project / service. */}
+          {page ? <div className="mt-0.5 hidden min-w-0 text-xs text-[var(--text-secondary)] lg:flex">{pathLine}</div> : null}
           {strip}
         </div>
         {onOpenPage ? (
@@ -1098,7 +1078,6 @@ const PROBLEM_LABEL: Record<string, string> = {
   build_failed: "Build failed",
   release_failed: "Release failed",
   stuck: "Stuck",
-  rollout_failing: "Rollout failing",
 };
 
 function HealthBanner({

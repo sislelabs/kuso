@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -159,6 +160,9 @@ type DetectedRuntime struct {
 	Runtime string `json:"runtime"`
 	Port    int    `json:"port"`
 	Reason  string `json:"reason"`
+	// Framework names the stack for the import preview ("Next.js",
+	// "Django"); empty when the build is the repo's own Dockerfile.
+	Framework string `json:"framework,omitempty"`
 }
 
 // DetectRuntime applies the auto-detect rules:
@@ -213,7 +217,7 @@ func DetectFromFiles(names []string, read func(rel string) string) *DetectedRunt
 	staticOnly := has("index.html") && !has("package.json") && !has("go.mod") && !has("Cargo.toml") &&
 		!has("requirements.txt") && !has("pyproject.toml")
 	if staticOnly {
-		return &DetectedRuntime{Runtime: "static", Port: 80, Reason: "index.html only"}
+		return &DetectedRuntime{Runtime: "static", Port: 80, Reason: "index.html only", Framework: "Static site"}
 	}
 	// Checked before package.json: ASP.NET templates often carry one for
 	// front-end tooling. Not nixpacks: its C# provider defaults to the
@@ -224,29 +228,90 @@ func DetectFromFiles(names []string, read func(rel string) string) *DetectedRunt
 			continue
 		}
 		if !strings.Contains(n, "/") {
-			return &DetectedRuntime{Runtime: "buildpacks", Port: 8080, Reason: ".NET project detected"}
+			return &DetectedRuntime{Runtime: "buildpacks", Port: 8080, Reason: ".NET project detected", Framework: ".NET"}
 		}
 		if nestedCsproj == "" {
 			nestedCsproj = n
 		}
 	}
 	if has("package.json") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: guessNodePort(read("package.json")), Reason: "package.json detected"}
+		pkg := read("package.json")
+		return &DetectedRuntime{Runtime: "nixpacks", Port: guessNodePort(pkg), Reason: "package.json detected", Framework: nodeFramework(pkg)}
 	}
 	if has("go.mod") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "go.mod detected"}
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "go.mod detected", Framework: "Go"}
 	}
 	if has("Cargo.toml") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Cargo.toml detected"}
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Cargo.toml detected", Framework: "Rust"}
 	}
 	if has("requirements.txt") || has("pyproject.toml") {
-		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Python project detected"}
+		manifest := "requirements.txt"
+		if !has(manifest) {
+			manifest = "pyproject.toml"
+		}
+		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "Python project detected", Framework: pythonFramework(read(manifest))}
 	}
 	if nestedCsproj != "" {
 		dir := nestedCsproj[:strings.LastIndex(nestedCsproj, "/")]
 		return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: ".NET project found in " + dir + "/ — re-run with --path " + dir}
 	}
 	return &DetectedRuntime{Runtime: "nixpacks", Port: 8080, Reason: "fallback"}
+}
+
+// nodeFrameworks is checked in order: meta-frameworks before the bundler
+// or server they're built on (Next.js ships with React, Nuxt with Vite).
+var nodeFrameworks = []struct{ dep, name string }{
+	{"next", "Next.js"},
+	{"nuxt", "Nuxt"},
+	{"@remix-run/node", "Remix"},
+	{"@sveltejs/kit", "SvelteKit"},
+	{"astro", "Astro"},
+	{"@nestjs/core", "NestJS"},
+	{"@angular/core", "Angular"},
+	{"vite", "Vite"},
+	{"express", "Express"},
+	{"fastify", "Fastify"},
+	{"hono", "Hono"},
+	{"koa", "Koa"},
+}
+
+// nodeFramework names a Node app's framework from its package.json
+// dependencies, falling back to "Node.js".
+func nodeFramework(pkgJSON string) string {
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if json.Unmarshal([]byte(pkgJSON), &pkg) == nil {
+		for _, f := range nodeFrameworks {
+			if _, ok := pkg.Dependencies[f.dep]; ok {
+				return f.name
+			}
+			if _, ok := pkg.DevDependencies[f.dep]; ok {
+				return f.name
+			}
+		}
+	}
+	return "Node.js"
+}
+
+var pythonFrameworkRE = regexp.MustCompile(`(?im)^\s*"?(django|fastapi|flask)\b`)
+
+// pythonFramework names a Python app's framework from requirements.txt or
+// pyproject.toml, falling back to "Python".
+func pythonFramework(manifest string) string {
+	m := pythonFrameworkRE.FindStringSubmatch(manifest)
+	if m == nil {
+		return "Python"
+	}
+	switch strings.ToLower(m[1]) {
+	case "django":
+		return "Django"
+	case "fastapi":
+		return "FastAPI"
+	default:
+		return "Flask"
+	}
 }
 
 var exposeRE = regexp.MustCompile(`(?im)^\s*EXPOSE\s+(\d+)`)
