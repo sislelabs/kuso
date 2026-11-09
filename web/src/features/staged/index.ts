@@ -2,6 +2,7 @@ export * from "./types";
 export {
   clearApplied,
   countServiceChanges,
+  hasUnpersistedStaged,
   discardProject,
   discardService,
   getStagedState,

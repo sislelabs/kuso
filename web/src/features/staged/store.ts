@@ -158,6 +158,16 @@ export function discardProject(project: string) {
   for (const l of listeners) l();
 }
 
+// hasUnpersistedStaged: some of the project's staged edits exist only in
+// memory (secret values, write-only fields) and a reload would drop them.
+export function hasUnpersistedStaged(project: string): boolean {
+  hydrate();
+  const live = state[project];
+  if (!live) return false;
+  const kept = persistable({ [project]: live })[project] ?? {};
+  return Object.entries(live).some(([service, svc]) => countServiceChanges(svc) !== countServiceChanges(kept[service]));
+}
+
 export function countServiceChanges(s: StagedService | undefined): number {
   if (!s) return 0;
   return (s.env?.set.length ?? 0) + (s.env?.unset.length ?? 0) + Object.keys(s.settings?.fields ?? {}).length;

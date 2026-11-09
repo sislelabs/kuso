@@ -418,6 +418,12 @@ export function EnvVarsEditor({
       }
       current = res.rows;
     }
+    // A new row still open with no value yet is a placeholder, not a
+    // change: it stages once it has a value or the user commits it.
+    if (view !== "raw") {
+      const deployed = new Set(baselineFromRows.current.map((b) => b.name.trim()));
+      current = current.filter((r) => !(editing.has(r.id) && !r.value && !deployed.has(r.name.trim())));
+    }
     const plan = planRows(current);
     if ("error" in plan) {
       setStageError(plan.error);
@@ -438,7 +444,7 @@ export function EnvVarsEditor({
     if (sameStagedEnv(next, lastStagedRef.current)) return;
     lastStagedRef.current = next;
     stageEnv(project, service, next);
-  }, [rows, rawText, view, dirty, canWrite, env.data, project, service]);
+  }, [rows, rawText, view, dirty, canWrite, env.data, project, service, editing]);
 
   // Per-row undo: back to the deployed value, or gone if it's new.
   const revertRow = (r: Row) => {

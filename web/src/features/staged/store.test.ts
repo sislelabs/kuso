@@ -4,6 +4,7 @@ import {
   clearApplied,
   countServiceChanges,
   getStagedState,
+  hasUnpersistedStaged,
   persistable,
   recordHealthcheckTest,
   stageEnv,
@@ -61,5 +62,22 @@ describe("staged store", () => {
     expect(getStagedState().p?.api?.healthcheckTest).toEqual(test);
     clearApplied("p", "api", { env: [], settings: true });
     expect(getStagedState().p).toBeUndefined();
+  });
+});
+
+describe("hasUnpersistedStaged", () => {
+  it("is true only when a reload would drop something", () => {
+    __resetStagedForTests();
+    stageEnv("p", "api", { set: [{ name: "PORT_HINT", value: "1", before: null, sensitive: false }], unset: [] });
+    expect(hasUnpersistedStaged("p")).toBe(false);
+    stageEnv("p", "api", {
+      set: [
+        { name: "PORT_HINT", value: "1", before: null, sensitive: false },
+        { name: "API_TOKEN", value: "s3cret", before: null, sensitive: true },
+      ],
+      unset: [],
+    });
+    expect(hasUnpersistedStaged("p")).toBe(true);
+    expect(hasUnpersistedStaged("other")).toBe(false);
   });
 });

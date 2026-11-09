@@ -4,7 +4,11 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { countServiceChanges, discardProject, useStagedProject } from "@/features/staged";
+import { useQueries } from "@tanstack/react-query";
+import { discardProject, hasUnpersistedStaged, useStagedProject } from "@/features/staged";
+import { getService } from "@/features/services/api";
+import { serviceQueryKey } from "@/features/services/hooks";
+import { reviewItemCount } from "./plan";
 import { cn } from "@/lib/utils";
 import { StagedReviewDialog } from "./StagedReviewDialog";
 
@@ -84,8 +88,19 @@ export function StagedChangesBar({
   }, [placement]);
   const [fixedEl, setFixedEl] = useState<HTMLDivElement | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const services = Object.keys(staged ?? {});
-  const changes = services.reduce((n, s) => n + countServiceChanges(staged?.[s]), 0);
+  const services = Object.keys(staged ?? {}).sort();
+  // The same count the review shows (rows, not raw form fields).
+  const svcQueries = useQueries({
+    queries: services.map((s) => ({
+      queryKey: serviceQueryKey(project, s),
+      queryFn: () => getService(project, s),
+      staleTime: 30_000,
+    })),
+  });
+  const counts = services.map((s, i) => reviewItemCount(svcQueries[i]?.data, staged?.[s]));
+  const changes = counts.reduce((n, c) => n + c, 0);
+  const changedServices = services.filter((_, i) => (counts[i] ?? 0) > 0);
+  useWarnOnUnload(project);
   const failed = services.some((s) => Object.keys(staged?.[s]?.errors ?? {}).length > 0);
 
   // ⌘⇧Enter / Ctrl⇧Enter opens the review from anywhere on the page.
@@ -133,10 +148,10 @@ export function StagedChangesBar({
                 <span className="font-medium">
                   {changes} staged {changes === 1 ? "change" : "changes"}
                 </span>
-                {services.length > 1 && (
-                  <span className="text-[var(--text-secondary)]"> across {services.length} services</span>
+                {changedServices.length > 1 && (
+                  <span className="text-[var(--text-secondary)]"> across {changedServices.length} services</span>
                 )}
-                {services.length === 1 && <span className="text-[var(--text-secondary)]"> to {services[0]}</span>}
+                {changedServices.length === 1 && <span className="text-[var(--text-secondary)]"> to {changedServices[0]}</span>}
                 {failed && <span className="text-[var(--error)]"> · some failed</span>}
               </span>
             </span>
@@ -159,7 +174,7 @@ export function StagedChangesBar({
       <ConfirmDialog
         open={confirmDiscard}
         title="Discard all staged changes?"
-        body={`${changes} ${changes === 1 ? "change" : "changes"} across ${services.length} ${services.length === 1 ? "service" : "services"} will be dropped. Nothing deployed changes.`}
+        body={`${changes} ${changes === 1 ? "change" : "changes"} across ${changedServices.length} ${changedServices.length === 1 ? "service" : "services"} will be dropped. Nothing deployed changes.`}
         confirmLabel="Discard all"
         destructive
         onCancel={() => setConfirmDiscard(false)}
@@ -170,4 +185,22 @@ export function StagedChangesBar({
       />
     </>
   );
+}
+
+// useWarnOnUnload asks before a reload or tab close would drop staged
+// edits. Most survive a reload (sessionStorage); secret values and
+// write-only fields are never stored, so those would be lost.
+function useWarnOnUnload(project: string) {
+  const staged = useStagedProject(project);
+  const atRisk = !!staged && hasUnpersistedStaged(project);
+  useEffect(() => {
+    if (!atRisk) return;
+    const onUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Chrome < 119 needs returnValue set.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, [atRisk]);
 }
