@@ -91,6 +91,7 @@ import { projectCanvasHref } from "./hrefs";
 import { opensInPage, setComplexTabsInPage } from "./peekPref";
 import { PackageX } from "lucide-react";
 import { useReverting } from "@/features/revisions";
+import { revealSettingsTarget } from "@/components/service/overlay/settings/reveal";
 
 type Tab =
   | "deployments"
@@ -371,8 +372,10 @@ export function ServiceWorkspace({
     setTab(next);
     onTabChangeRef.current?.(next);
     if (anchor) {
+      // reveal focuses and outlines a field target (e.g. "branch");
+      // plain section anchors fall back to a scroll.
       window.setTimeout(() => {
-        document.getElementById(anchor)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
+        if (!revealSettingsTarget(anchor)) document.getElementById(anchor)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
       }, 250);
       // Cards above the target (domains, pods) can still be loading and
       // push it down after the first scroll; settle it once more.

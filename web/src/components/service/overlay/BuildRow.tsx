@@ -412,7 +412,7 @@ function PrimaryAction({
     return (
       <>
         {missingBranch && onNavigate && (
-          <button type="button" onClick={() => onNavigate("settings", "source")} className={ACTION_BTN}>
+          <button type="button" onClick={() => onNavigate("settings", "branch")} className={ACTION_BTN}>
             <GitBranch className="h-3.5 w-3.5" />
             <span>Change branch</span>
           </button>

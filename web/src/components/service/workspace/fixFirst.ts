@@ -44,7 +44,7 @@ export function fixFirstAction({
   if (pullFailed && isImage) return { id: "image", label: "Change image", tab: "settings", anchor: "build" };
   const failed = ["failed", "error"].includes((latestBuild?.status ?? "").toLowerCase());
   if (!isImage && failed && buildMissingBranch(latestBuild)) {
-    return { id: "branch", label: "Change branch", tab: "settings", anchor: "source" };
+    return { id: "branch", label: "Change branch", tab: "settings", anchor: "branch" };
   }
   return undefined;
 }
