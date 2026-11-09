@@ -411,9 +411,8 @@ export function ServiceWorkspace({
       guard("opening the full page", () => {
         setPanels({});
         onOpenPage(next);
-        toast(`${next === "logs" ? "Logs" : "Settings"} opened in the full page`, {
-          description: "It needs more room than the side panel has.",
-          action: { label: "Keep in panel next time", onClick: () => setComplexTabsInPage(false) },
+        toast(`${next === "logs" ? "Logs" : "Settings"} opens in the full page`, {
+          action: { label: "Use side panel", onClick: () => setComplexTabsInPage(false) },
         });
       });
     },

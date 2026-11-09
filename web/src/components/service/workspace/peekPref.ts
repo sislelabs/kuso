@@ -1,6 +1,6 @@
 // Settings and Logs need room the side panel doesn't have (a settings
 // rail, wide log lines), so from the peek they open in the full page by
-// default. One remembered choice per browser; "Keep in panel" on the toast
+// default. One remembered choice per browser; "Use side panel" on the toast
 // that announces the jump turns it off.
 
 const KEY = "kuso.peek.complex-tabs";
