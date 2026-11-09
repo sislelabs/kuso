@@ -8,24 +8,29 @@ import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
-// Contract (served by server-go, stream G1):
-//   GET /api/projects/{p}/services/{s}/events?env=<env CR name>
-//   → { events: [{ type, reason, message, object, count, lastSeen }] }
-// Recent kube events for the service's current pods, newest first.
-// Older servers 404; the section then falls back to the cluster-wide
-// events list on Settings → Health.
+// GET /api/projects/{p}/services/{s}/events?env=<env CR name>
+//   → { namespace, events: [{ type, reason, message, summary?, object,
+//        count, firstSeen?, lastSeen }] }   (projects.PodEventList)
+// Recent kube events for the service's current pods and its Deployment,
+// newest first. Older servers 404; the section then points at the
+// cluster-wide events list on Settings → Health.
 export interface ServicePodEvent {
   type: string; // "Normal" | "Warning"
   reason: string;
+  // Raw kube text.
   message: string;
-  object: string; // e.g. "Pod/api-7d9c-xk2p"
+  // message in plain words; only set where the raw text is unreadable
+  // (FailedScheduling).
+  summary?: string;
+  object: string; // "pod/<name>" or "deployment/<name>"
   count: number;
-  lastSeen: string;
+  firstSeen?: string;
+  lastSeen?: string;
 }
 
 async function listServiceEvents(project: string, service: string, env: string): Promise<ServicePodEvent[]> {
   const qs = env ? `?env=${encodeURIComponent(env)}` : "";
-  const res = await api<{ events?: ServicePodEvent[] }>(
+  const res = await api<{ namespace?: string; events?: ServicePodEvent[] | null }>(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/events${qs}`,
   );
   return res.events ?? [];
@@ -110,7 +115,7 @@ export function ServiceEventsSection({
             const warn = e.type === "Warning";
             const Icon = warn ? AlertTriangle : Info;
             return (
-              <li key={`${e.object}-${e.reason}-${e.lastSeen}-${i}`} className="flex gap-2 px-3 py-2 text-xs">
+              <li key={`${e.object}-${e.reason}-${e.lastSeen ?? e.firstSeen ?? ""}-${i}`} className="flex gap-2 px-3 py-2 text-xs">
                 <Icon aria-hidden className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", warn ? "text-[var(--warning)]" : "text-[var(--text-tertiary)]")} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-1.5">
@@ -119,13 +124,31 @@ export function ServiceEventsSection({
                     <span className="truncate font-mono text-[var(--text-tertiary)]" title={e.object}>
                       {e.object}
                     </span>
-                    {e.lastSeen && (
-                      <time dateTime={e.lastSeen} title={new Date(e.lastSeen).toLocaleString()} className="ml-auto text-[var(--text-tertiary)]">
-                        {relativeTime(e.lastSeen)}
+                    {(e.lastSeen || e.firstSeen) && (
+                      <time
+                        dateTime={e.lastSeen || e.firstSeen}
+                        title={eventWhen(e)}
+                        className="ml-auto text-[var(--text-tertiary)]"
+                      >
+                        {relativeTime(e.lastSeen || e.firstSeen || "")}
                       </time>
                     )}
                   </div>
-                  <p className="mt-0.5 break-words text-[var(--text-secondary)]">{e.message}</p>
+                  {e.summary ? (
+                    <>
+                      <p className="mt-0.5 break-words text-[var(--text-primary)]">{e.summary}</p>
+                      {e.message && e.message !== e.summary && (
+                        <details className="mt-0.5">
+                          <summary className="cursor-pointer text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+                            Details
+                          </summary>
+                          <p className="mt-0.5 break-words font-mono text-[var(--text-secondary)]">{e.message}</p>
+                        </details>
+                      )}
+                    </>
+                  ) : (
+                    <p className="mt-0.5 break-words text-[var(--text-secondary)]">{e.message}</p>
+                  )}
                 </div>
               </li>
             );
@@ -134,4 +157,12 @@ export function ServiceEventsSection({
       )}
     </section>
   );
+}
+
+// Repeated events say when they started as well as when they last fired.
+function eventWhen(e: ServicePodEvent): string {
+  const last = e.lastSeen ? new Date(e.lastSeen).toLocaleString() : "";
+  const first = e.firstSeen ? new Date(e.firstSeen).toLocaleString() : "";
+  if (e.count > 1 && first && last && first !== last) return `First ${first}, last ${last}`;
+  return last || first;
 }
