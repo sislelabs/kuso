@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 
@@ -8,22 +8,63 @@ import { cn } from "@/lib/utils";
 // canvas node, which opens the full page. The backdrop lets it through.
 const DOUBLE_CLICK_GRACE_MS = 350;
 
+// One width for every tab (switching tabs never makes the panel jump);
+// the user can drag the left edge and the width is remembered.
+const WIDTH_KEY = "kuso.peek.width";
+export const PEEK_DEFAULT_WIDTH = 896;
+const PEEK_MIN_WIDTH = 600;
+// Always leave a strip of canvas visible to click back to.
+const CANVAS_GUTTER = 96;
+const KEY_STEP = 48;
+
+function maxWidth(): number {
+  return typeof window === "undefined" ? PEEK_DEFAULT_WIDTH : Math.max(PEEK_MIN_WIDTH, window.innerWidth - CANVAS_GUTTER);
+}
+
+export function clampPeekWidth(w: number, max: number): number {
+  return Math.round(Math.min(Math.max(w, PEEK_MIN_WIDTH), Math.max(PEEK_MIN_WIDTH, max)));
+}
+
+function loadWidth(): number {
+  try {
+    const v = Number(window.localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(v) && v > 0 ? v : PEEK_DEFAULT_WIDTH;
+  } catch {
+    return PEEK_DEFAULT_WIDTH;
+  }
+}
+
+function saveWidth(w: number) {
+  try {
+    window.localStorage.setItem(WIDTH_KEY, String(w));
+  } catch {
+    // Storage blocked: the width lasts for this page view.
+  }
+}
+
 // PeekFrame is the side-panel chrome around a workspace: dimmed backdrop
 // (click to close), a panel sliding in from the right, body scroll lock.
 export function PeekFrame({
   open,
   label,
   requestClose,
-  wide,
   children,
 }: {
   open: boolean;
   label: string;
   requestClose: () => void;
-  wide: boolean;
   children: React.ReactNode;
 }) {
   const [settled, setSettled] = useState(false);
+  const [width, setWidth] = useState(PEEK_DEFAULT_WIDTH);
+  const [dragging, setDragging] = useState(false);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+
+  useEffect(() => {
+    setWidth(loadWidth());
+  }, []);
+
   useEffect(() => {
     if (!open) {
       setSettled(false);
@@ -37,6 +78,41 @@ export function PeekFrame({
       document.body.style.overflow = prevOverflow;
     };
   }, [open]);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    setDragging(true);
+    const move = (ev: PointerEvent) => setWidth(clampPeekWidth(window.innerWidth - ev.clientX, maxWidth()));
+    const up = () => {
+      setDragging(false);
+      saveWidth(widthRef.current);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  }, []);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const max = maxWidth();
+    let next: number | null = null;
+    // The handle is on the left edge: Left widens, Right narrows.
+    if (e.key === "ArrowLeft") next = width + KEY_STEP;
+    else if (e.key === "ArrowRight") next = width - KEY_STEP;
+    else if (e.key === "Home") next = PEEK_MIN_WIDTH;
+    else if (e.key === "End") next = max;
+    if (next === null) return;
+    e.preventDefault();
+    const w = clampPeekWidth(next, max);
+    setWidth(w);
+    saveWidth(w);
+  };
+
+  const shown = clampPeekWidth(width, maxWidth());
 
   return (
     <AnimatePresence>
@@ -53,7 +129,7 @@ export function PeekFrame({
             transition={{ duration: 0.15 }}
             className={cn(
               "absolute inset-0 bg-[var(--scrim)] backdrop-blur-[2px] lg:bg-[var(--scrim-wide)] lg:backdrop-blur-none",
-              !settled && "pointer-events-none",
+              (!settled || dragging) && "pointer-events-none",
             )}
           />
           {/* relative z-10 lifts the panel above the absolutely-positioned
@@ -63,14 +139,33 @@ export function PeekFrame({
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
+            style={{ "--peek-w": `${shown}px` } as React.CSSProperties}
             className={cn(
-              "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] sm:border-l sm:border-[var(--border-subtle)]",
-              // Logs and Settings need the room more than the rest: 64rem
-              // from 1440px up, 48rem below. One arbitrary value because a
-              // separate min-[1440px] class sorts before sm: and loses.
-              wide ? "sm:max-w-[max(48rem,min(64rem,calc((100vw_-_1439px)*10000)))]" : "sm:max-w-3xl",
+              "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] sm:max-w-[var(--peek-w)] sm:border-l sm:border-[var(--border-subtle)]",
+              dragging && "select-none",
             )}
           >
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize panel"
+              aria-valuenow={shown}
+              aria-valuemin={PEEK_MIN_WIDTH}
+              aria-valuemax={maxWidth()}
+              tabIndex={0}
+              title="Drag to resize (← → with the keyboard)"
+              onPointerDown={onPointerDown}
+              onKeyDown={onKeyDown}
+              onDoubleClick={() => {
+                setWidth(PEEK_DEFAULT_WIDTH);
+                saveWidth(PEEK_DEFAULT_WIDTH);
+              }}
+              className={cn(
+                "absolute inset-y-0 -left-1 z-20 hidden w-2 cursor-col-resize touch-none sm:block",
+                "after:absolute after:inset-y-0 after:left-[3px] after:w-0.5 after:transition-colors hover:after:bg-[var(--focus)] focus-visible:outline-offset-[-2px]",
+                dragging && "after:bg-[var(--focus)]",
+              )}
+            />
             {children}
           </motion.div>
         </div>
