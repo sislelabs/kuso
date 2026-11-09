@@ -1,5 +1,7 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
+import { errorsQueryKey } from "@/features/services";
+import type { ErrorGroup } from "@/features/services";
 
 function resolvePath(project: string, service: string, fingerprint: string): string {
   return `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/errors/${encodeURIComponent(fingerprint)}/resolve`;
@@ -30,4 +32,33 @@ export function sinceDeployWindow(deployedAt: string | undefined, now: number): 
   if (!Number.isFinite(t)) return null;
   const minutes = Math.min(MAX_WINDOW_MIN, Math.max(1, Math.ceil((now - t) / 60_000)));
   return `${minutes}m`;
+}
+
+// ErrorGroupState: open (never resolved), recurred (resolved, then seen
+// again — the server stamps resolvedAt on it) or resolved (no occurrence
+// since it was resolved).
+export type ErrorGroupState = "open" | "recurred" | "resolved";
+
+export function errorGroupState(g: { lastSeen: string; resolvedAt?: string }): ErrorGroupState {
+  if (!g.resolvedAt) return "open";
+  return Date.parse(g.lastSeen) > Date.parse(g.resolvedAt) ? "recurred" : "resolved";
+}
+
+function listWithResolved(project: string, service: string, since: string, env: string): Promise<ErrorGroup[]> {
+  const q = new URLSearchParams({ since, resolved: "include" });
+  if (env) q.set("env", env);
+  return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/errors?${q}`);
+}
+
+// useErrorGroupsWithResolved lists a service's error groups including the
+// resolved ones (?resolved=include), so the Errors tab can show them under
+// a Resolved filter. Servers without the parameter return open groups only.
+export function useErrorGroupsWithResolved(project: string, service: string, since: string, env = "") {
+  return useQuery({
+    queryKey: [...errorsQueryKey(project, service, since, env), "with-resolved"],
+    queryFn: () => listWithResolved(project, service, since, env),
+    enabled: !!project && !!service,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
 }
