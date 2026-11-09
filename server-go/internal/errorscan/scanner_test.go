@@ -196,3 +196,21 @@ func TestFingerprintFor_IgnoresVolatileTokens(t *testing.T) {
 		}
 	}
 }
+
+// An nginx error line whose raw length straddles the 256-char cap: ids and
+// IPs of different digit counts moved the cut point into or out of the
+// quoted request, which used to give one probe 404 two groups.
+func TestFingerprintFor_NginxIDsAcrossTheCap(t *testing.T) {
+	t.Parallel()
+	line := func(conn, ip string) string {
+		return `2026/11/08 19:40:05 [error] 29#29: *` + conn + ` open() "/usr/share/nginx/html/healthz-does-not-exist" failed (2: No such file or directory), client: ` + ip +
+			`, server: localhost.localdomain, request: "GET /healthz-does-not-exist HTTP/1.1", host: "` + ip + `:8080"`
+	}
+	a, b := line("109", "10.42.0.1"), line("13210", "10.42.100.123")
+	if len(a) > 256 || len(b) <= 256 {
+		t.Fatalf("fixture must straddle the cap: %d, %d", len(a), len(b))
+	}
+	if fingerprintFor(a) != fingerprintFor(b) {
+		t.Errorf("same nginx error split into two groups:\n  %s\n  %s", a, b)
+	}
+}

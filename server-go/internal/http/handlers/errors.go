@@ -34,6 +34,8 @@ type ErrorsHandler struct {
 func (h *ErrorsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}/errors", h.List)
 	r.Get("/api/projects/{project}/services/{service}/errors/{fingerprint}", h.Detail)
+	r.Post("/api/projects/{project}/services/{service}/errors/{fingerprint}/resolve", h.Resolve)
+	r.Delete("/api/projects/{project}/services/{service}/errors/{fingerprint}/resolve", h.Resolve)
 	r.Get("/api/projects/{project}/errors/summary", h.Summary)
 }
 
@@ -87,6 +89,12 @@ func (h *ErrorsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		if live != nil && !live[s.Service] {
 			continue
 		}
+		if err := h.discountResolved(ctx, project, r.URL.Query().Get("env"), since, &s); err != nil {
+			h.Logger.Warn("errors: summary resolved marks", "err", err, "project", project, "service", s.Service)
+		}
+		if s.Groups == 0 {
+			continue
+		}
 		out.Services[strings.TrimPrefix(s.Service, project+"-")] = errorSummaryServiceResponse{
 			Occurrences: s.Occurrences,
 			Groups:      s.Groups,
@@ -102,6 +110,7 @@ func (h *ErrorsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 //	?limit=50    — max groups returned (1–200, default 50).
 //	?offset=0    — groups to skip (offset paging, newest-first order).
 //	?env=staging — only that environment's errors (default: all).
+//	?resolved=include — also list resolved groups that haven't recurred.
 //
 // Truncation signal (agent-use W4): the wire shape is a bare JSON
 // array and MUST stay that way, so a cut response is signalled via
@@ -165,6 +174,13 @@ func (h *ErrorsHandler) List(w http.ResponseWriter, r *http.Request) {
 		groups = groups[:limit]
 		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(offset+limit))
 	}
+	// Resolved groups stay hidden until they recur; ?resolved=include
+	// lists them too (each carries resolvedAt).
+	marks, err := h.loadResolved(ctx, project, service)
+	if err != nil {
+		h.Logger.Warn("errors: resolved marks", "err", err, "project", project, "service", service)
+	}
+	groups = applyResolved(groups, marks, r.URL.Query().Get("resolved") == "include")
 	writeJSON(w, http.StatusOK, groups)
 }
 
