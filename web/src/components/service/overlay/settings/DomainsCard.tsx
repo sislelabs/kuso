@@ -16,6 +16,7 @@ import { useEnvDomainMutations } from "@/features/services";
 import { api, ApiError } from "@/lib/api-client";
 import { hostScheme } from "@/lib/host-scheme";
 import { cn } from "@/lib/utils";
+import { clashingHosts, useIngressDomains } from "@/features/host-clash";
 import type { KusoEnvironment } from "@/types/projects";
 import { Section, Callout, Code, monoInputClass } from "./_primitives";
 import {
@@ -693,12 +694,22 @@ function AddDomainForm({
   const wildcard = host.startsWith("*.");
   const validationError = raw.trim() ? hostError(host) : null;
   const duplicate = !!host && existing.includes(host);
-  const ready = !!host && !validationError && !duplicate && (!wildcard || !!secret.trim());
+  // Another ingress already serving the host is blocking: the second one
+  // would race it for traffic.
+  const ingressHosts = useIngressDomains();
+  const clash = !!host && !validationError && !duplicate && clashingHosts([host], ingressHosts.data ?? []).length > 0;
+  const ready = !!host && !validationError && !duplicate && !clash && (!wildcard || !!secret.trim());
   const recent = host && !validationError ? recentDomainAdds(registrableDomain(host)) : 0;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const err = hostError(host) ?? (duplicate ? `${host} is already on this environment` : null);
+    const err =
+      hostError(host) ??
+      (duplicate
+        ? `${host} is already on this environment`
+        : clash
+          ? `${host} is already served by another ingress in this cluster`
+          : null);
     if (err) {
       setError(err);
       return;
@@ -802,7 +813,9 @@ function AddDomainForm({
                   ? validationError
                   : duplicate
                     ? "This domain is already on this service"
-                    : "Wildcard domains need a TLS secret"
+                    : clash
+                      ? "Another ingress already serves this host. Pick another name"
+                      : "Wildcard domains need a TLS secret"
           }
         >
           {pending ? "Adding…" : "Add domain"}
