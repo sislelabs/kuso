@@ -1,5 +1,6 @@
 "use client";
 
+import { hasPublicIngress, stopConsequence } from "./stopCopy";
 import { cloneElement, useState } from "react";
 import Link from "next/link";
 import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
@@ -46,7 +47,6 @@ const EXPLAIN = {
     `Builds the latest commit on ${branch} and rolls it out. The current version keeps serving until the new one is ready.`,
   restart: (group: string) =>
     `Replaces the ${group} pods with fresh ones on the same image. No build, no code change.`,
-  stop: "Scales the service to zero. Visitors get a 503 until you start it again.",
   start: "Brings the service back online on its current image.",
 };
 
@@ -128,12 +128,15 @@ export function ServiceHeaderActions({
   env,
   stopped,
   showRestart,
+  hideDeploy = false,
 }: {
   project: string;
   service: string;
   env?: KusoEnvironment;
   stopped: boolean;
   showRestart: boolean;
+  // The never-deployed banner carries Deploy itself.
+  hideDeploy?: boolean;
 }) {
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const redeploy = useRedeploy(project, service, env);
@@ -178,13 +181,15 @@ export function ServiceHeaderActions({
   const restartBtn = showRestart && !stopped && !neverRan;
   const stopBtn = !stopped && !neverRan;
   const restartExplain = !canWrite ? NO_ACCESS : EXPLAIN.restart(group);
-  const stopExplain = !canWrite ? NO_ACCESS : EXPLAIN.stop;
+  const svcSpec = useService(project, service).data?.spec;
+  const stopText = stopConsequence(hasPublicIngress(env, !!svcSpec?.internal, svcSpec?.runtime));
+  const stopExplain = !canWrite ? NO_ACCESS : stopText;
   const menuItem =
     "flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-[var(--bg-tertiary)] disabled:opacity-50";
 
   return (
     <>
-      {!redeploy.isImage && (
+      {!redeploy.isImage && !hideDeploy && (
         <Explained label={redeploy.verb} explain={canWrite ? redeploy.explain : NO_ACCESS}>
           <Button size="sm" onClick={redeploy.request} disabled={!canWrite || redeploy.pending} className="h-7 px-2.5 text-xs">
             <Rocket className="h-3 w-3" />
@@ -330,7 +335,7 @@ export function ServiceHeaderActions({
       <ConfirmDialog
         open={confirm === "stop"}
         title={`Stop ${service}?`}
-        body={EXPLAIN.stop}
+        body={stopText}
         confirmLabel="Stop service"
         destructive
         pending={stop.isPending}

@@ -1,6 +1,7 @@
 "use client";
 
 import { LogViewer } from "@/components/logs/LogViewer";
+import { NeverStartedState, useFirstRun } from "./firstRunContext";
 
 interface Props {
   project: string;
@@ -19,6 +20,8 @@ interface Props {
 // same search box / range picker switch it to the 7-day archive. View
 // state (query, range, filters, scroll) survives tab switches.
 export function ServiceLogsPanel({ project, service, defaultEnv = "", streamEnv, onOpenDeployments }: Props) {
+  const { firstRun } = useFirstRun();
+  if (firstRun.kind === "never") return <NeverStartedState title="This service has never started, so there are no logs yet." />;
   return (
     <LogViewer
       project={project}

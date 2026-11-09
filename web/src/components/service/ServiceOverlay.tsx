@@ -75,6 +75,8 @@ import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
+import { firstRunState } from "./overlay/firstRun";
+import { FirstRunProvider } from "./overlay/firstRunContext";
 import { useLeaveGuard, dirtyPanelKeys, type DirtyPanel } from "./overlay/leaveGuard";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { hostScheme } from "@/lib/host-scheme";
@@ -654,6 +656,9 @@ export function ServiceOverlay({
   const problem = healthProblem(env?.status?.state, status === "failing" ? "failed" : status);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
   const failureBannerVisible = !!failureKind && tab === failureTab;
+  const firstRun = useMemo(() => firstRunState(env, builds.data), [env, builds.data]);
+  const neverRan = firstRun.kind === "never";
+  const isWorker = svc.data?.spec?.runtime === "worker";
 
   // Jump to another tab, optionally scrolling a Settings section into
   // view once the tab's fade-in has mounted it.
@@ -665,6 +670,7 @@ export function ServiceOverlay({
     },
     [guardedSetTab],
   );
+  const firstRunCtx = useMemo(() => ({ firstRun, onNavigate: navigateTo }), [firstRun, navigateTo]);
 
   return (
     <AnimatePresence>
@@ -705,6 +711,7 @@ export function ServiceOverlay({
               !expanded && (tab === "logs" || tab === "settings") && "min-[1440px]:max-w-5xl",
             )}
           >
+            <FirstRunProvider value={firstRunCtx}>
             {/* Sticky header. Tighter padding on small screens so the
                 overlay's title row uses the full width of a phone. */}
             <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
@@ -742,12 +749,16 @@ export function ServiceOverlay({
                   </span>
                   {liveUrl ? (
                     <UrlPill url={liveUrl} />
+                  ) : isWorker ? (
+                    <span className="text-[var(--text-tertiary)]">Background worker · no public endpoint</span>
+                  ) : svcInternal ? (
+                    <span className="text-[var(--text-tertiary)]">Internal only · no public endpoint</span>
                   ) : (
                     <span className="text-[var(--text-tertiary)]">No public URL yet</span>
                   )}
                 </div>
                 {service ? (
-                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} onNavigate={navigateTo} />
+                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} firstRun={firstRun} onNavigate={navigateTo} />
                 ) : null}
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5 empty:hidden">
                   {/* Diagnostic chip. The "rolling out" state lives
@@ -852,6 +863,7 @@ export function ServiceOverlay({
                       env={env}
                       stopped={stopped}
                       showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                      hideDeploy={neverRan}
                     />
                   ) : null}
                 </div>
@@ -876,7 +888,7 @@ export function ServiceOverlay({
               </button>
             </header>
 
-            {service && problem && !failureBannerVisible ? (
+            {service && problem && !failureBannerVisible && !neverRan ? (
               <HealthBanner
                 project={project}
                 service={service}
@@ -1150,9 +1162,11 @@ export function ServiceOverlay({
                   env={env}
                   stopped={stopped}
                   showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                  hideDeploy={neverRan}
                 />
               </div>
             ) : null}
+            </FirstRunProvider>
           </motion.div>
           {leave.dialog}
         </div>

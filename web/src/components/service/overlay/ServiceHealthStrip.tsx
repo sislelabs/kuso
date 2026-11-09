@@ -10,6 +10,12 @@ import { isCurrentPod, useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
+import { Rocket } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useCanOnProject, Perms } from "@/features/auth";
+import type { FirstRun } from "./firstRun";
+import { buildLogAnchor, neverStartedCause } from "./firstRunContext";
+import { useRedeploy } from "./ServiceHeaderActions";
 
 export interface ServiceHealthStripProps {
   project: string;
@@ -19,6 +25,8 @@ export interface ServiceHealthStripProps {
   envGroup: string;
   // The same status the header pill shows, so the two never disagree.
   status: StatusMeta;
+  // Never-run services collapse the strip into one banner.
+  firstRun?: FirstRun;
   onNavigate: (tab: string, anchor?: string) => void;
 }
 
@@ -37,7 +45,70 @@ interface Cell {
 // ServiceHealthStrip is the at-a-glance row under the overlay title:
 // status, uptime ping, restarts, errors and last deploy. Every cell reads
 // the same query the tab it links to reads, so the numbers match.
-export function ServiceHealthStrip({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
+export function ServiceHealthStrip(props: ServiceHealthStripProps) {
+  if (props.firstRun?.kind === "never") {
+    return <NeverRanBanner {...props} firstRun={props.firstRun} />;
+  }
+  return <HealthCells {...props} />;
+}
+
+function NeverRanBanner({
+  project,
+  service,
+  env,
+  firstRun,
+  onNavigate,
+}: ServiceHealthStripProps & { firstRun: Extract<FirstRun, { kind: "never" }> }) {
+  const redeploy = useRedeploy(project, service, env);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
+  const anchor = buildLogAnchor(firstRun);
+  const reason = firstRun.failed ? firstRun.lastBuild?.failureClass?.summary || firstRun.lastBuild?.errorMessage : undefined;
+  const tone = firstRun.failed ? "danger" : firstRun.building ? "progress" : "info";
+  return (
+    <div
+      role={firstRun.failed ? "alert" : "status"}
+      className={cn(
+        "mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5",
+        tone === "danger"
+          ? "border-[var(--error)]/35 bg-[var(--error)]/5"
+          : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-[var(--text-primary)]">
+          Never deployed here · <span className={firstRun.failed ? "text-[var(--error)]" : undefined}>{neverStartedCause(firstRun).replace(/\.$/, "")}</span>
+        </p>
+        {reason && (
+          <p className="mt-0.5 line-clamp-2 break-words text-xs text-[var(--text-secondary)]" title={reason}>
+            {reason}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {firstRun.lastBuild && (
+          <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => onNavigate("deployments", anchor)}>
+            {firstRun.building ? "Follow the build" : "View build log"}
+          </Button>
+        )}
+        {!redeploy.isImage && !firstRun.building && (
+          <Button
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={redeploy.request}
+            disabled={!canWrite || redeploy.pending}
+            disabledReason={!canWrite ? "Requires editor access on this project" : undefined}
+          >
+            <Rocket className="h-3 w-3" aria-hidden />
+            {redeploy.pending ? "Starting…" : firstRun.failed ? "Retry deploy" : "Deploy"}
+          </Button>
+        )}
+      </div>
+      {redeploy.dialog}
+    </div>
+  );
+}
+
+function HealthCells({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
   const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
