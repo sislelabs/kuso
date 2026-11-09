@@ -98,6 +98,6 @@ export function smallNodeWidth(name: string, chrome: number): number {
 // addonNodeWidth also leaves room for the status row ("Live · ClickHouse
 // · 10Gi") and, when shown, the CVE chip that rides at its end.
 export function addonNodeWidth(name: string, statusRow: string, cveChip: boolean): number {
-  const row = Math.round(ADDON_NODE_CHROME - 8 + statusRow.length * 6.4 + (cveChip ? 76 : 0));
+  const row = Math.round(ADDON_NODE_CHROME - 8 + statusRow.length * 7 + (cveChip ? 84 : 0));
   return Math.min(SMALL_NODE_MAX_WIDTH, Math.max(smallNodeWidth(name, ADDON_NODE_CHROME), row));
 }
