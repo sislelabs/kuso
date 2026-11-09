@@ -51,6 +51,7 @@ import { ErrorBadge, VulnBadge } from "@/components/canvas/NodeBadges";
 import { useServiceBadges } from "@/components/canvas/useServiceBadges";
 import type { ErrorSummary, VulnSummary } from "@/components/canvas/badgeSummary";
 import { FirstDeployChecklist } from "./FirstDeployChecklist";
+import { sortBySeverity } from "./listSort";
 
 interface Props {
   project: string;
@@ -86,12 +87,15 @@ export function MobileIncidentView({
   // Same latest-builds query (and key) as the canvas, so the status
   // shown here matches the desktop node for the same service.
   const latestBuilds = useLatestBuilds(project, selectedEnv);
-  const rows = services.map((svc) => {
-    const env = envFor(envs, svc);
-    const short = serviceShortName(project, svc.metadata.name);
-    const build = latestBuilds.data?.[short];
-    return { svc, env, short, build, status: deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: build }) };
-  });
+  const rows = sortBySeverity(
+    services.map((svc) => {
+      const env = envFor(envs, svc);
+      const short = serviceShortName(project, svc.metadata.name);
+      const build = latestBuilds.data?.[short];
+      const status = deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: build });
+      return { svc, env, short, build, status, name: svc.spec.displayName?.trim() || short };
+    }),
+  );
   const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
   const live = rows.filter((r) => r.status.kind === "live").length;
   const issues = serviceIssues(rows.map((r) => r.status));

@@ -23,6 +23,7 @@ import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { isProductionGroup } from "@/lib/env-group";
 import { relativeTime } from "@/lib/format";
 import { cn, serviceShortName } from "@/lib/utils";
+import { sortBySeverity } from "./listSort";
 
 interface Props {
   project: string;
@@ -51,6 +52,18 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
   const crons = useProjectCrons(project);
   const cronRows = cronsForEnv(crons.data ?? [], services, selectedEnv, project);
   const [editCron, setEditCron] = useState<string | null>(null);
+  const serviceRows = sortBySeverity(
+    services.map((s) => {
+      const short = serviceShortName(project, s.metadata.name);
+      const forSvc = envs.filter((e) => e.spec.service === s.metadata.name);
+      const env = forSvc.find((e) => isProductionGroup(e)) ?? forSvc[0];
+      const status = deriveServiceStatus({ stopped: !!s.spec.stopped, env, latestBuild: latestBuilds.data?.[short] });
+      return { s, short, env, status, name: s.spec.displayName?.trim() || short };
+    }),
+  );
+  const addonRows = sortBySeverity(
+    addons.map((a) => ({ a, status: deriveAddonStatus(a), name: serviceShortName(project, a.metadata.name) })),
+  );
 
   return (
     <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
@@ -70,16 +83,10 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
         {services.length > 0 && (
           <tbody>
             <GroupRow label="Services" count={services.length} />
-            {services.map((s) => {
-              const short = serviceShortName(project, s.metadata.name);
-              const forSvc = envs.filter((e) => e.spec.service === s.metadata.name);
-              const env = forSvc.find((e) => isProductionGroup(e)) ?? forSvc[0];
-              const build = latestBuilds.data?.[short];
-              const status = deriveServiceStatus({ stopped: !!s.spec.stopped, env, latestBuild: build });
+            {serviceRows.map(({ s, short, env, status, name }) => {
               const url = serviceUrl(s, env);
               const deployed = lastDeployedAt(env);
               const r = env?.status?.replicas as { ready?: number; desired?: number; max?: number } | undefined;
-              const name = s.spec.displayName?.trim() || short;
               const runtime = s.spec.runtime || "dockerfile";
               return (
                 <Row key={s.metadata.name} onOpen={() => onSelectService(short)}>
@@ -131,9 +138,7 @@ export function ProjectListView({ project, selectedEnv, services, addons, envs, 
         {addons.length > 0 && (
           <tbody>
             <GroupRow label="Addons" count={addons.length} />
-            {addons.map((a) => {
-              const short = serviceShortName(project, a.metadata.name);
-              const status = deriveAddonStatus(a);
+            {addonRows.map(({ a, status, name: short }) => {
               const kind = addonLabel(a.spec.kind) + (a.spec.version ? ` ${a.spec.version}` : "");
               return (
                 <Row key={a.metadata.name} onOpen={() => onSelectAddon(a.metadata.name)}>
