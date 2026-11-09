@@ -46,7 +46,7 @@ export function statusChipClass(
   const t = TONE[tone];
   return cn(
     "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border font-medium tabular-nums leading-none [&>svg]:size-3 [&>svg]:shrink-0",
-    opts.size === "sm" ? "h-[18px] px-1.5 text-2xs" : "h-5 px-2 text-xs",
+    opts.size === "sm" ? "h-[18px] px-1.5 text-xs" : "h-5 px-2 text-xs",
     t.chip,
     opts.interactive &&
       cn(
