@@ -49,7 +49,8 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { KusoEnvironment } from "@/types/projects";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
-import { AlertTriangle, Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Loader2, Pin, Rocket, Undo2, X } from "lucide-react";
+import { StatusChip } from "@/components/ui/status-chip";
 import { rolloutFacts } from "@/lib/status";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
@@ -670,7 +671,7 @@ function RollbackMarker({
           </>
         )}
       </span>
-      <span className="rounded border border-[var(--border-default)] px-1.5 py-px text-[var(--text-secondary)]">Pinned</span>
+      <StatusChip icon={Pin}>Pinned</StatusChip>
     </li>
   );
 }

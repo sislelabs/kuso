@@ -1,13 +1,13 @@
 "use client";
 
-import { AlertCircle, ShieldAlert } from "lucide-react";
+import { AlertCircle, ShieldAlert, TrendingUp } from "lucide-react";
+import { statusChipClass } from "@/components/ui/status-chip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { errorCountLabel } from "@/features/errors";
 import { compactCount, errorBadgeLabel, vulnBadgeLabel, type ErrorSummary, type VulnSummary } from "./badgeSummary";
 
-const badgeBase =
-  "nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 text-2xs font-medium tabular-nums transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus)]";
+const badgeBase = "nodrag nopan";
 
 // Security finding marker: shield + count in a neutral/warning style so
 // it never reads as a runtime error. Clicking opens the Vulnerabilities tab.
@@ -34,14 +34,11 @@ export function VulnBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className={cn(
-              badgeBase,
-              "border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:border-[var(--warning)]/60 hover:text-[var(--text-primary)]",
-            )}
+            className={cn(badgeBase, statusChipClass("neutral", { interactive: true, size: "sm" }))}
           />
         }
       >
-        <ShieldAlert className="h-3 w-3 text-[var(--warning)]" aria-hidden />
+        <ShieldAlert className="text-[var(--warning)]" aria-hidden />
         {compactCount(summary.fixableCritical)} {summary.fixableCritical === 1 ? "CVE" : "CVEs"}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -80,19 +77,16 @@ export function ErrorBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className={cn(
-              badgeBase,
-              hot
-                ? "border-[var(--error)]/35 bg-[var(--error-subtle)] text-[var(--error)] hover:border-[var(--error)]/70"
-                : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]",
-            )}
+            className={cn(badgeBase, statusChipClass(hot ? "danger" : "neutral", { interactive: true, size: "sm" }))}
           />
         }
       >
-        <AlertCircle className={cn("h-3 w-3", !hot && "text-[var(--text-tertiary)]")} aria-hidden />
+        <AlertCircle className={cn(!hot && "text-[var(--text-tertiary)]")} aria-hidden />
         {compact
           ? `${compactCount(summary.occurrences)} ${summary.occurrences === 1 ? "error" : "errors"}`
           : errorCountLabel(summary.occurrences)}
+        {/* New or spiking reads from the arrow too, not only the red. */}
+        {hot && <TrendingUp aria-hidden />}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

@@ -3,7 +3,8 @@
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Layers, MoreHorizontal } from "lucide-react";
+import { Check, Copy, ExternalLink, Layers, MoreHorizontal, Undo2 } from "lucide-react";
+import { StatusChip } from "@/components/ui/status-chip";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
   deriveServiceStatus,
@@ -176,12 +177,9 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           <span aria-hidden className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
           <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
           {live?.rolledBack && (
-            <span
-              className="shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-1.5 font-medium text-[var(--text-secondary)]"
-              title="Rolled back to an older build. The next deploy replaces it."
-            >
+            <StatusChip size="sm" icon={Undo2} title="Rolled back to an older build. The next deploy replaces it.">
               Rolled back
-            </span>
+            </StatusChip>
           )}
           {/* A stuck rollout isn't "deployed 1m ago"; its reason takes the slot. */}
           {status.kind === "stuck" ? (

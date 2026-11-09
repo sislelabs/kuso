@@ -5,6 +5,7 @@ import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
 import { ERRORS_UNAVAILABLE, errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { useLiveProjectDomain } from "@/features/projects/liveDomain";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusChip } from "@/components/ui/status-chip";
 import { formatCpu, relativeTime } from "@/lib/format";
 import type { StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
@@ -72,13 +73,9 @@ function ErrorsChip({ project }: { project: string }) {
   if (!total) return null;
   const label = errorCountLabel(total);
   return (
-    <span
-      title={`${label}: logged in the last 24 hours`}
-      className="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-[var(--error)]/35 bg-[var(--error-subtle)] px-1.5 text-2xs font-medium tabular-nums text-[var(--error)]"
-    >
-      <AlertCircle className="h-3 w-3" aria-hidden />
+    <StatusChip tone="danger" icon={AlertCircle} title={`${label}: logged in the last 24 hours`}>
       {label}
-    </span>
+    </StatusChip>
   );
 }
 
