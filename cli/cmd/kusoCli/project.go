@@ -918,6 +918,7 @@ Settings → Source / Networking flow.
   --static-build-cmd 'npm run build' --static-output-dir dist   # runtime=static
   --buildpacks-builder paketobuildpacks/builder-jammy-full      # runtime=buildpacks
   --image-repo ghcr.io/acme/app --image-tag v2                 # runtime=image
+  --healthcheck-path /healthz --healthcheck-period 10          # HTTP health check ('' = TCP check)
 
 Volumes and node placement have their own commands:
 'kuso service volume' and 'kuso service placement'.

@@ -36,6 +36,12 @@ var (
 	serviceSetImageRepo         string
 	serviceSetImageTag          string
 	serviceSetTargetCPU         int
+	serviceSetHCPath            string
+	serviceSetHCPort            int32
+	serviceSetHCInitialDelay    int32
+	serviceSetHCPeriod          int32
+	serviceSetHCTimeout         int32
+	serviceSetHCFailures        int32
 )
 
 // addServiceSetFieldFlags registers the flags read by applyServiceSetFields.
@@ -60,6 +66,12 @@ func addServiceSetFieldFlags(cmd *cobra.Command) {
 	f.StringVar(&serviceSetImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	f.StringVar(&serviceSetImageTag, "image-tag", "", "(runtime=image) image tag ('' = latest)")
 	f.IntVar(&serviceSetTargetCPU, "target-cpu", 0, "autoscaler CPU target in percent of the request")
+	f.StringVar(&serviceSetHCPath, "healthcheck-path", "", "HTTP health-check path, e.g. /healthz ('' = back to the default TCP port check); try it first with 'kuso service test-healthcheck'")
+	f.Int32Var(&serviceSetHCPort, "healthcheck-port", 0, "health-check port (default: the service port)")
+	f.Int32Var(&serviceSetHCInitialDelay, "healthcheck-initial-delay", 0, "seconds before the first probe (max 3600)")
+	f.Int32Var(&serviceSetHCPeriod, "healthcheck-period", 0, "seconds between probes (max 300)")
+	f.Int32Var(&serviceSetHCTimeout, "healthcheck-timeout", 0, "probe timeout in seconds (max 60, at most the period)")
+	f.Int32Var(&serviceSetHCFailures, "healthcheck-failure-threshold", 0, "failed probes before a pod is marked unready (max 30)")
 }
 
 // currentServiceSpec is the subset of GET .../services/{s} that the
@@ -76,8 +88,9 @@ type currentServiceSpec struct {
 			Repository string `json:"repository"`
 			Tag        string `json:"tag"`
 		} `json:"image"`
-		Placement *kusoApi.PatchPlacementRequest `json:"placement"`
-		Volumes   []kusoApi.VolumePatch          `json:"volumes"`
+		Placement   *kusoApi.PatchPlacementRequest `json:"placement"`
+		Volumes     []kusoApi.VolumePatch          `json:"volumes"`
+		Healthcheck *kusoApi.Healthcheck           `json:"healthcheck"`
 	} `json:"spec"`
 }
 
@@ -161,6 +174,12 @@ func applyServiceSetFields(cmd *cobra.Command, req *kusoApi.PatchServiceRequest,
 			return fmt.Errorf("--release-timeout needs a release hook; this service has none, so pass --release-cmd too")
 		}
 		req.Release = rel
+	}
+
+	if hc, err := healthcheckPatch(changed, current); err != nil {
+		return err
+	} else if hc != nil {
+		req.Healthcheck = hc
 	}
 
 	if changed("snapshot-before-deploy") {
@@ -380,4 +399,58 @@ func applyServiceAddFields(cmd *cobra.Command, req *kusoApi.CreateServiceRequest
 		req.Buildpacks = &kusoApi.ServiceBuildpacks{BuilderImage: serviceAddBuildpacksBuilder}
 	}
 	return nil
+}
+
+// healthcheckPatch builds the health-check patch from the --healthcheck-*
+// flags. The server replaces the block wholesale, so a flag left out keeps
+// its current value; --healthcheck-path ” drops the whole check.
+func healthcheckPatch(changed func(string) bool, current func() (*currentServiceSpec, error)) (*kusoApi.Healthcheck, error) {
+	tuning := []string{"healthcheck-port", "healthcheck-initial-delay", "healthcheck-period", "healthcheck-timeout", "healthcheck-failure-threshold"}
+	anyTuning := false
+	for _, f := range tuning {
+		anyTuning = anyTuning || changed(f)
+	}
+	if !changed("healthcheck-path") && !anyTuning {
+		return nil, nil
+	}
+	if changed("healthcheck-path") && strings.TrimSpace(serviceSetHCPath) == "" {
+		if anyTuning {
+			return nil, fmt.Errorf("--healthcheck-path '' removes the health check; drop the other --healthcheck-* flags")
+		}
+		return &kusoApi.Healthcheck{Path: ""}, nil
+	}
+	hc := kusoApi.Healthcheck{}
+	c, err := current()
+	if err != nil {
+		return nil, err
+	}
+	if c.Spec.Healthcheck != nil {
+		hc = *c.Spec.Healthcheck
+	}
+	if changed("healthcheck-path") {
+		hc.Path = strings.TrimSpace(serviceSetHCPath)
+	}
+	if hc.Path == "" {
+		return nil, fmt.Errorf("this service has no HTTP health check; pass --healthcheck-path too")
+	}
+	set := map[string]*int32{
+		"healthcheck-port":              &hc.Port,
+		"healthcheck-initial-delay":     &hc.InitialDelaySeconds,
+		"healthcheck-period":            &hc.PeriodSeconds,
+		"healthcheck-timeout":           &hc.TimeoutSeconds,
+		"healthcheck-failure-threshold": &hc.FailureThreshold,
+	}
+	vals := map[string]int32{
+		"healthcheck-port":              serviceSetHCPort,
+		"healthcheck-initial-delay":     serviceSetHCInitialDelay,
+		"healthcheck-period":            serviceSetHCPeriod,
+		"healthcheck-timeout":           serviceSetHCTimeout,
+		"healthcheck-failure-threshold": serviceSetHCFailures,
+	}
+	for name, dst := range set {
+		if changed(name) {
+			*dst = vals[name]
+		}
+	}
+	return &hc, nil
 }

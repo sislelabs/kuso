@@ -232,6 +232,20 @@ type PatchServiceRequest struct {
 	Placement *PatchPlacementRequest `json:"placement,omitempty"`
 	// Volumes replaces the whole volume list; an empty list drops all.
 	Volumes *[]VolumePatch `json:"volumes,omitempty"`
+	// Healthcheck replaces the HTTP health check wholesale; an empty path
+	// drops it (the pods fall back to a TCP port check).
+	Healthcheck *Healthcheck `json:"healthcheck,omitempty"`
+}
+
+// Healthcheck mirrors the server's kube.KusoHealthcheck. Zero fields take
+// the chart defaults.
+type Healthcheck struct {
+	Path                string `json:"path"`
+	Port                int32  `json:"port,omitempty"`
+	InitialDelaySeconds int32  `json:"initialDelaySeconds,omitempty"`
+	PeriodSeconds       int32  `json:"periodSeconds,omitempty"`
+	TimeoutSeconds      int32  `json:"timeoutSeconds,omitempty"`
+	FailureThreshold    int32  `json:"failureThreshold,omitempty"`
 }
 
 // PatchReleaseRequest mirrors the server's projects.PatchReleaseRequest.
