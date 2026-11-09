@@ -60,6 +60,8 @@ type errorChain struct {
 	python  bool
 	pyDone  bool
 	goPanic bool
+	// heldSince is when a scan first left this chain open (wall clock).
+	heldSince time.Time
 }
 
 func (c *errorChain) raw() string {
