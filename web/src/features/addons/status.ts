@@ -1,7 +1,7 @@
 "use client";
 
-import { useAddonPods } from "@/features/pods";
-import { ADDON_STATUS, addonStatusFromPods, type StatusMeta } from "@/lib/status";
+import { useAddonPods, type AddonPod } from "@/features/pods";
+import { ADDON_STATUS, addonStatusFromPods, addonStatusFromServer, type StatusMeta } from "@/lib/status";
 import type { KusoAddon } from "@/types/projects";
 
 export interface AddonHealth {
@@ -26,26 +26,55 @@ export function runningImageOf(data: unknown): { runningVersion?: string; runnin
   };
 }
 
-// useAddonHealth is the overlay's answer to "is this addon up": pod
-// readiness folded through the shared vocabulary, with the helm release
-// conditions breaking ties (a wedged upgrade fails even with old pods up).
+// useAddonHealth is the overlay's answer to "is this addon up". The
+// server's rollup (addonStatusFromServer: helm conditions + pod readiness
+// + stuck) decides the status so the header, overview, canvas and Health
+// page agree; the pod list only adds counts, restarts and the running
+// version. Older servers without a rollup fold the pod list here.
 export function useAddonHealth(project: string, addon: string, cr: KusoAddon | undefined): AddonHealth {
   const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
   const pods = useAddonPods(project, external ? "" : addon);
+  return addonHealthFrom(cr, {
+    pending: !external && pods.isPending,
+    error: pods.isError,
+    pods: pods.data?.pods ?? undefined,
+    raw: pods.data,
+  });
+}
+
+export function addonHealthFrom(
+  cr: KusoAddon | undefined,
+  q: { pending: boolean; error: boolean; pods: readonly AddonPod[] | undefined; raw?: unknown },
+): AddonHealth {
+  const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
   if (external) return { status: ADDON_STATUS.external, detail: "Managed outside kuso", pending: false };
-  if (pods.isPending) return { status: ADDON_STATUS.unknown, detail: "Checking pods…", pending: true };
-  if (pods.isError) return { status: ADDON_STATUS.unknown, detail: "Couldn't read pods", pending: false };
+  const list = q.pods ?? [];
+  const ready = list.filter((p) => p.ready).length;
+  const restarts = list.reduce((n, p) => n + (p.restarts ?? 0), 0);
+  const restartsNote = restarts ? ` · ${restarts} restart${restarts === 1 ? "" : "s"}` : "";
+  const image = runningImageOf(q.raw);
+
+  const hasRollup = typeof cr?.status?.state === "string" && cr.status.state !== "";
+  if (cr && hasRollup) {
+    const server = addonStatusFromServer(cr);
+    const counts = server.pods ?? (q.pods ? { ready, total: list.length } : undefined);
+    const countNote = counts && counts.total > 0 ? `${counts.ready}/${counts.total} pods ready${restartsNote}` : undefined;
+    // A problem's reason leads; a healthy addon shows its pod counts.
+    const detail = server.status === "live" ? (countNote ?? server.detail) : (server.detail ?? countNote);
+    return { status: ADDON_STATUS[server.status], ...(detail ? { detail } : {}), pending: false, ...image };
+  }
+
+  if (q.pending) return { status: ADDON_STATUS.unknown, detail: "Checking pods…", pending: true };
+  if (q.error) return { status: ADDON_STATUS.unknown, detail: "Couldn't read pods", pending: false };
 
   const conditions = (cr?.status?.conditions ?? []) as Array<{ type?: string; status?: string; message?: string }>;
   const failure = conditions.find(
     (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
   );
   const deployed = conditions.some((c) => c.type === "Deployed" && c.status === "True");
-  const list = pods.data?.pods ?? [];
-  const ready = list.filter((p) => p.ready).length;
-  const restarts = list.reduce((n, p) => n + (p.restarts ?? 0), 0);
   const kind = addonStatusFromPods({ failed: !!failure, deployed, total: list.length, ready });
-  const firstProblem = list.find((p) => !p.ready && p.message)?.message;
+  const firstProblem = list.find((p) => !p.ready && (p.summary || p.message));
+  const problemText = firstProblem?.summary || firstProblem?.message;
   const detail =
     kind === "failing" && failure?.message
       ? failure.message
@@ -53,8 +82,6 @@ export function useAddonHealth(project: string, addon: string, cr: KusoAddon | u
         ? deployed
           ? "No pods running"
           : "Waiting for the first pod"
-        : `${ready}/${list.length} pods ready${restarts ? ` · ${restarts} restart${restarts === 1 ? "" : "s"}` : ""}${
-            firstProblem && ready < list.length ? ` · ${firstProblem}` : ""
-          }`;
-  return { status: ADDON_STATUS[kind], detail, pending: false, ...runningImageOf(pods.data) };
+        : `${ready}/${list.length} pods ready${restartsNote}${problemText && ready < list.length ? ` · ${problemText}` : ""}`;
+  return { status: ADDON_STATUS[kind], detail, pending: false, ...image };
 }
