@@ -11,7 +11,7 @@ import { useGithubRepos } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { ProjectsList } from "@/components/project/list/ProjectsList";
-import { ProjectRowSkeleton } from "@/components/project/list/ProjectRow";
+import { ProjectTileSkeleton } from "@/components/project/list/ProjectTile";
 import { GettingStartedCard } from "@/components/project/list/GettingStartedCard";
 import { useGettingStartedDismissed } from "@/components/project/list/useListPrefs";
 
@@ -51,11 +51,11 @@ export default function ProjectsPage() {
   const count = data?.length ?? 0;
   const showGettingStarted = canCreate && !isPending && !isError && count > 0 && count <= 2 && !gettingStartedDismissed;
 
-  const header = (description: string) => (
+  const header = (title: React.ReactNode, description: React.ReactNode) => (
     <>
     <PageHeader
       className="mb-6 sm:mb-6"
-      title="Projects"
+      title={title}
       description={description}
       actions={
           canCreate && count > 0 ? (
@@ -79,19 +79,15 @@ export default function ProjectsPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:p-8">
-      {!hasList && header("Each project is one product. Connect a repo and kuso builds it on every push.")}
+      {!hasList && header("Projects", "Each project is one product. Connect a repo and kuso builds it on every push.")}
 
 
       {isPending && (
         <>
           <div className="mb-5 h-9 w-full max-w-md rounded-md bg-[var(--bg-secondary)] motion-safe:animate-pulse" />
-          <ul
-            className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)]"
-            aria-busy="true"
-            aria-label="Loading projects"
-          >
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading projects">
             {[0, 1, 2, 3, 4, 5].map((i) => (
-              <ProjectRowSkeleton key={i} />
+              <ProjectTileSkeleton key={i} wide={i === 0} />
             ))}
           </ul>
         </>

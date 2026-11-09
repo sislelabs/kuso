@@ -1140,7 +1140,7 @@ export function CommandPalette() {
   );
 }
 
-export function CommandTrigger() {
+export function CommandTrigger({ wide = false }: { wide?: boolean }) {
   // Server render and first paint say "Ctrl K"; swap to ⌘ after mount so
   // the static export doesn't hydrate-mismatch on Macs.
   const [mod, setMod] = useState("Ctrl");
@@ -1151,13 +1151,16 @@ export function CommandTrigger() {
       onClick={() => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
       }}
-      className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]"
+      className={cn(
+        "inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]",
+        wide && "w-full max-w-md text-[13px]",
+      )}
       aria-label="Open command palette"
       aria-keyshortcuts="Meta+K Control+K"
     >
-      <Search className="h-3.5 w-3.5" />
-      <span className="hidden sm:inline">Search</span>
-      <span className="ml-2 hidden items-center gap-0.5 sm:inline-flex">
+      <Search className="h-3.5 w-3.5 shrink-0" />
+      <span className="hidden truncate sm:inline">{wide ? "Search projects, services and actions" : "Search"}</span>
+      <span className={cn("hidden items-center gap-0.5 sm:inline-flex", wide ? "ml-auto" : "ml-2")}>
         <Kbd>{mod}</Kbd>
         <Kbd>K</Kbd>
       </span>

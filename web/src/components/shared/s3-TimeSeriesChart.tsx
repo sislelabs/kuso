@@ -275,31 +275,32 @@ export function TimeSeriesChart({
       {tipLeft !== null && showTip && (
         <div
           role="status"
-          className="pointer-events-none absolute top-0 z-10 min-w-[8rem] max-w-[16rem] rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-md)]"
-          style={tipLeft > width / 2 ? { right: width - tipLeft + 10 } : { left: tipLeft + 10 }}
+          // A strip over the card's headline row, never on the plot: while
+          // the pointer is on the chart, the headline reads the hovered point.
+          className="pointer-events-none absolute inset-x-0 bottom-full z-10 mb-1.5 flex h-8 min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 text-xs shadow-[var(--shadow-md)]"
         >
           {nearest ? (
             <>
-              <div className="font-semibold tabular-nums text-[var(--text-primary)]">{format(nearest[1])}</div>
-              <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearest[0])}</div>
+              <span className="shrink-0 font-semibold tabular-nums text-[var(--text-primary)]">{format(nearest[1])}</span>
+              <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearest[0])}</span>
             </>
           ) : (
-            !nearMarker &&
             hairT !== null && (
               <>
-                <div className="text-[var(--text-secondary)]">No data</div>
-                <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(hairT)}</div>
+                {!nearMarker && <span className="shrink-0 text-[var(--text-secondary)]">No data</span>}
+                <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearMarker ? nearMarker.t : hairT)}</span>
               </>
             )
           )}
           {nearMarker && (
-            <div className={cn("text-[var(--text-secondary)]", nearest && "mt-1 border-t border-[var(--border-subtle)] pt-1")}>
-              <div className="font-medium text-[var(--text-primary)]">◆ {nearMarker.label}</div>
-              {nearMarker.detail && <div className="line-clamp-2">{nearMarker.detail}</div>}
-              {!nearest && <div className="tabular-nums text-[var(--text-tertiary)]">{fmtFull(nearMarker.t)}</div>}
-            </div>
+            <span className="min-w-0 truncate text-[var(--text-secondary)]" title={nearMarker.detail}>
+              <span className="font-medium text-[var(--text-primary)]">◆ {nearMarker.label}</span>
+              {nearMarker.detail && <> {nearMarker.detail}</>}
+            </span>
           )}
-          {onPick && pickHint && owner && <div className="mt-1 border-t border-[var(--border-subtle)] pt-1 text-[var(--text-tertiary)]">{pickHint}</div>}
+          {onPick && pickHint && owner && !nearMarker && (
+            <span className="ml-auto min-w-0 truncate text-[var(--text-tertiary)]">{pickHint}</span>
+          )}
         </div>
       )}
     </div>

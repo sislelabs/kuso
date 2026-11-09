@@ -18,9 +18,9 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CanvasContextMenu, type ContextMenuEntry } from "@/components/canvas/CanvasContextMenu";
 import { cn } from "@/lib/utils";
 import type { KusoProject } from "@/types/projects";
-import { AttentionList, FleetPulse } from "./FleetPulse";
-import { attentionItems, fleetCells, headline, memoryFootprint, projectErrorTotal, recentDeploys } from "./fleetModel";
-import { BOARD_COLS, ProjectRow } from "./ProjectRow";
+import { attentionItems, lastDeployedProject, projectErrorTotal, wallTitle } from "./fleetModel";
+import { ProjectTile } from "./ProjectTile";
+import { ProblemList, WallSummary } from "./WallSummary";
 import type { ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectsToolbar } from "./ProjectsToolbar";
 import {
@@ -78,8 +78,8 @@ export function ProjectsList({
   header,
 }: {
   projects: ReadonlyArray<KusoProject>;
-  // The page header, given the one-line fleet summary as its subtitle.
-  header: (subtitle: string) => React.ReactNode;
+  // The page header: the fleet's verdict as the title, the summary under it.
+  header: (title: React.ReactNode, description: React.ReactNode) => React.ReactNode;
 }) {
   const router = useRouter();
   // Only instance admins manage settings. services:write is project-scoped
@@ -135,30 +135,27 @@ export function ProjectsList({
     const models = entries.map((e) => e.model);
     let errors: number | undefined;
     let top: { name: string; count: number } | undefined;
-    let maxErrors = 0;
     for (const m of models) {
       const n = projectErrorTotal(fleetErrors.byProject.get(m.name));
       if (n === undefined) continue;
       errors = (errors ?? 0) + n;
-      if (n > maxErrors) {
-        maxErrors = n;
-        top = { name: m.name, count: n };
-      }
+      if (n > 0 && (!top || n > top.count)) top = { name: m.name, count: n };
     }
     const attention = attentionItems(models);
-    const cells = fleetCells([...models].sort((a, b) => a.name.localeCompare(b.name)));
+    const stopped = models.filter((m) => m.status === "stopped" || m.status === "empty").length;
+    const running = models.length - stopped;
     return {
-      cells,
       attention,
       errors,
       top,
-      maxErrors,
-      maxMem: Math.max(0, ...models.map((m) => m.metrics?.memBytes ?? 0)),
-      footprint: memoryFootprint(models, 5),
-      deploys: recentDeploys(summaryQuery.data ?? [], 4),
-      headline: headline({ projects: models.length, services: cells.length, attention, errors }),
+      running,
+      stopped,
+      memBytes: models.reduce((n, m) => n + (m.metrics?.memBytes ?? 0), 0),
+      cpuMillicores: models.reduce((n, m) => n + (m.metrics?.cpuMillicores ?? 0), 0),
+      lastDeploy: lastDeployedProject(models),
+      title: wallTitle({ attention, running }),
     };
-  }, [entries, fleetErrors.byProject, summaryQuery.data]);
+  }, [entries, fleetErrors.byProject]);
 
   const counts = useMemo(() => {
     if (!summaryQuery.data) return null;
@@ -238,15 +235,13 @@ export function ProjectsList({
     return items;
   };
 
-  const renderGrid = (items: ReadonlyArray<Entry>, header = true) => (
-    <CardGrid header={header}>
+  const renderGrid = (items: ReadonlyArray<Entry>) => (
+    <CardGrid>
       {items.map((e) => (
-        <ProjectRow
+        <ProjectTile
           key={e.model.name}
           model={e.model}
           errors={fleetErrors.byProject.get(e.model.name)}
-          maxErrors={fleet.maxErrors}
-          maxMem={fleet.maxMem}
           starred={e.starred}
           onToggleStar={() => setPref.mutate({ project: e.model.name, starred: !e.starred, folder: e.folder })}
           actions={actionsFor(e)}
@@ -271,19 +266,23 @@ export function ProjectsList({
 
   return (
     <>
-      {header(summaryQuery.data ? fleet.headline : `${projects.length} project${projects.length === 1 ? "" : "s"}`)}
-      {summaryQuery.data && (
-        <>
-          <FleetPulse
-            cells={fleet.cells}
-            errors={fleet.errors}
-            topErrorProject={fleet.top}
-            footprint={fleet.footprint}
-            deploys={fleet.deploys}
-          />
-          <AttentionList items={fleet.attention} />
-        </>
-      )}
+      {summaryQuery.data
+        ? header(
+            <span className="block pb-1 font-display text-[28px] font-semibold leading-[1.1] tracking-[-0.01em] [font-stretch:108%] sm:text-[34px]">
+              {fleet.title}
+            </span>,
+            <WallSummary
+              running={fleet.running}
+              stopped={fleet.stopped}
+              errors={fleet.errors}
+              topErrorProject={fleet.top}
+              memBytes={fleet.memBytes}
+              cpuMillicores={fleet.cpuMillicores}
+              lastDeploy={fleet.lastDeploy}
+            />,
+          )
+        : header("Projects", `${projects.length} project${projects.length === 1 ? "" : "s"}`)}
+      {summaryQuery.data && <ProblemList items={fleet.attention} />}
       <ProjectsToolbar
         query={query}
         onQuery={setQuery}
@@ -350,7 +349,7 @@ export function ProjectsList({
                 open={!collapsed.has(`folder:${f}`)}
                 onToggle={() => toggleSection(`folder:${f}`)}
               >
-                {renderGrid(items, starred.length === 0 && f === folderNames[0])}
+                {renderGrid(items)}
               </Section>
             );
           })}
@@ -362,7 +361,7 @@ export function ProjectsList({
               open={!collapsed.has("unfiled")}
               onToggle={() => toggleSection("unfiled")}
             >
-              {renderGrid(unfiled, starred.length === 0 && folderNames.length === 0)}
+              {renderGrid(unfiled)}
             </Section>
           )}
         </div>
@@ -461,29 +460,13 @@ function Section({
   );
 }
 
-// One tab stop per board: arrows move between rows (see useRovingGrid).
-function CardGrid({ children, header }: { children: React.ReactNode; header: boolean }) {
+// One tab stop per wall: arrows move between tiles (see useRovingGrid).
+// Dense packing lets single tiles fill the gaps wide ones leave.
+function CardGrid({ children }: { children: React.ReactNode }) {
   const ref = useRovingGrid<HTMLUListElement>();
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-node">
-      <div
-        aria-hidden
-        className={cn(
-          !header && "lg:!hidden",
-          "hidden border-b border-[var(--border-subtle)] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]",
-          BOARD_COLS,
-        )}
-      >
-        <span>Project</span>
-        <span>Services</span>
-        <span className="text-right">Errors · 24h</span>
-        <span className="text-right">CPU · Memory</span>
-        <span className="text-right">Deployed</span>
-        <span />
-      </div>
-      <ul ref={ref} className="divide-y divide-[var(--border-subtle)]">
-        {children}
-      </ul>
-    </div>
+    <ul ref={ref} className="grid grid-flow-row-dense grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+      {children}
+    </ul>
   );
 }

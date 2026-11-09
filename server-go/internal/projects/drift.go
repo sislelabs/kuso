@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/scaledown"
 )
 
 // driftGetDeployment reads a Deployment for the drift path, preferring the
@@ -330,7 +332,7 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// 1 replica with no HPA. Drift only inspects the production env, so
 	// the effective-min + autoscaling projection is the right comparison.
 	if env.Spec.Kind != "preview" {
-		if env.Spec.ReplicaCountValue() != effectiveScaleMin(svc) ||
+		if envRestingReplicas(env) != effectiveScaleMin(svc) ||
 			!reflect.DeepEqual(env.Spec.Autoscaling, autoscalingFromScale(svc.Spec.Scale)) {
 			out.SpecPending = append(out.SpecPending, "scale")
 		}
@@ -742,4 +744,19 @@ func fqService(project, service string) string {
 		return service
 	}
 	return project + "-" + service
+}
+
+// envRestingReplicas is the replica count an env holds when it isn't
+// asleep. Sleep zeroes replicaCount and stashes the prior count on the
+// CR; comparing that 0 against the service's scale flagged every slept
+// service as "Pending changes" until it woke.
+func envRestingReplicas(env kube.KusoEnvironment) int {
+	n := env.Spec.ReplicaCountValue()
+	if n != 0 {
+		return n
+	}
+	if prior, err := strconv.Atoi(env.Annotations[scaledown.PreSleepReplicasAnnotation]); err == nil && prior > 0 {
+		return prior
+	}
+	return n
 }

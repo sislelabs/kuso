@@ -95,8 +95,7 @@ export function TopNav() {
           aria-label="kuso — all projects"
           className="mr-0.5 flex shrink-0 items-center rounded-md p-1 sm:mr-1"
         >
-          <Logo showText={false} className="sm:hidden" />
-          <Logo className="hidden sm:inline-flex" />
+          <Logo showText={false} />
         </Link>
 
         {/* No project picker on /settings/* — it would claim a project
@@ -152,28 +151,34 @@ export function TopNav() {
         ref={setSlot}
         role="group"
         aria-label="Page controls"
-        className="ml-1 hidden min-w-0 flex-1 items-center border-l border-[var(--border-subtle)] pl-2 sm:flex sm:empty:hidden"
+        className="ml-1 hidden min-w-0 shrink items-center border-l border-[var(--border-subtle)] pl-2 sm:flex sm:empty:hidden"
       />
 
+      {/* Search is the main way around: wide and centred in the free space. */}
+      <div className="hidden min-w-0 flex-1 justify-center px-3 md:flex">
+        <CommandTrigger wide />
+      </div>
+
       {/* One tab stop for the global actions; arrows move along the row. */}
-      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div ref={toolbarRef} role="toolbar" aria-label="Global actions" className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
         {/* Search + global actions live in the bottom bar on phones. */}
-        <div className="hidden sm:flex">
+        <div className="hidden sm:flex md:hidden">
           <CommandTrigger />
         </div>
         <Link
           href="/settings"
           aria-label="Settings"
           title="Settings"
-          className="relative hidden h-8 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
+          className="relative hidden size-8 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
         >
           <Settings className="size-4" aria-hidden />
-          <span className="hidden xl:inline">Settings</span>
         </Link>
-        <div className="hidden sm:flex">
+        {/* Cluster health and what needs you, read together. */}
+        <div className="hidden items-center gap-px rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-0.5 sm:flex">
           <ServersPopover />
+          <span aria-hidden className="h-4 w-px bg-[var(--border-subtle)]" />
+          <NotificationsButton className="size-7 rounded-full" />
         </div>
-        <NotificationsButton className="hidden sm:inline-flex" />
         <UserMenu />
       </div>
     </header>
