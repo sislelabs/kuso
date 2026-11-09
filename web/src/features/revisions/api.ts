@@ -29,12 +29,17 @@ export async function listRevisions(
   );
 }
 
+// revertRevision replays a revision. env scopes an image rollback to that
+// environment (the server answers kind "environment"); servers without
+// env scoping ignore it and replay service-wide (kind "service").
 export async function revertRevision(
   project: string,
   id: string,
+  env?: string,
 ): Promise<{ status: string; kind: string }> {
+  const qs = env ? `?env=${encodeURIComponent(env)}` : "";
   return api(
-    `/api/projects/${encodeURIComponent(project)}/revisions/${encodeURIComponent(id)}/revert`,
+    `/api/projects/${encodeURIComponent(project)}/revisions/${encodeURIComponent(id)}/revert${qs}`,
     { method: "POST" },
   );
 }

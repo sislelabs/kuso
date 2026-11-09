@@ -25,13 +25,46 @@ function sourceOf(rev: Revision): ImageRelease["source"] {
 
 function patchImage(snapshot: unknown): { repository: string; tag: string } | null {
   if (!snapshot || typeof snapshot !== "object") return null;
-  const patch = (snapshot as Record<string, unknown>).patch;
+  const o = snapshot as Record<string, unknown>;
+  // An env-scoped rollback records {op:"environment.image", image}.
+  if (o.op === "environment.image") return imageOf(o.image);
+  const patch = o.patch;
   if (!patch || typeof patch !== "object") return null;
-  const image = (patch as Record<string, unknown>).image;
+  return imageOf((patch as Record<string, unknown>).image);
+}
+
+function imageOf(image: unknown): { repository: string; tag: string } | null {
   if (!image || typeof image !== "object") return null;
   const { repository, tag } = image as Record<string, unknown>;
   if (typeof repository !== "string" || !repository.trim()) return null;
   return { repository: repository.trim(), tag: typeof tag === "string" && tag.trim() ? tag.trim() : "latest" };
+}
+
+export const LIVE_IMAGES_ANNOTATION = "kuso.sislelabs.com/live-images";
+
+// liveImagesOf reads the env's record of images that fully rolled out
+// (written by newer servers). null = no record, so nothing is "never ran".
+export function liveImagesOf(annotations: Record<string, string> | undefined): { since: number; refs: Set<string> } | null {
+  const raw = annotations?.[LIVE_IMAGES_ANNOTATION];
+  if (!raw) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!v || typeof v !== "object") return null;
+    const { since, refs } = v as Record<string, unknown>;
+    const t = typeof since === "string" ? Date.parse(since) : NaN;
+    if (!Number.isFinite(t) || !Array.isArray(refs)) return null;
+    return { since: t, refs: new Set(refs.filter((r): r is string => typeof r === "string")) };
+  } catch {
+    return null;
+  }
+}
+
+// neverRan: a release saved after the env started recording that never
+// reached a fully ready rollout there (a tag that never pulled, a crash on
+// start). Releases from before the record began are unknown, not failed.
+export function neverRan(release: ImageRelease, live: { since: number; refs: Set<string> } | null): boolean {
+  if (!live || release.current) return false;
+  return Date.parse(release.revision.createdAt) >= live.since && !live.refs.has(release.ref);
 }
 
 export function imageRef(repository: string, tag: string | undefined): string {

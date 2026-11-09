@@ -33,6 +33,7 @@ const OP_LABEL: Record<string, string> = {
   "environment.domains": "Domains changed",
   "environment.overrides": "Env vars changed",
   "environment.branch": "Branch changed",
+  "environment.image": "Image changed in one environment",
 };
 
 const ENV_PREFIX = /^env [^\s:]+: /;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previousConfig } from "./previous";
+import { defaultPlan, previousConfig } from "./previous";
 import type { Revision } from "./api";
 
 const rev = (id: string, minutesAgo: number, snapshot: unknown): Revision => ({
@@ -39,5 +39,20 @@ describe("previousConfig", () => {
     ]);
     expect(plan?.change.id).toBe("vars2");
     expect(plan?.target.id).toBe("vars1");
+  });
+});
+
+describe("defaultPlan", () => {
+  it("unsets a first-ever health check", () => {
+    const plan = defaultPlan([rev("hc", 1, { patch: { healthcheck: { path: "/healthz-does-not-exist" } } }), rev("p", 9, { patch: { port: 80 } })]);
+    expect(plan?.change.id).toBe("hc");
+    expect(plan?.patch).toEqual({ healthcheck: { path: "" } });
+    expect(plan?.label).toBe("the default TCP port check");
+  });
+
+  it("has nothing to reset for a field without a default", () => {
+    expect(defaultPlan([rev("img", 1, { patch: { image: { repository: "nginx", tag: "x" } } })])).toBeNull();
+    expect(defaultPlan([rev("mix", 1, { patch: { healthcheck: { path: "/h" }, port: 80 } })])).toBeNull();
+    expect(defaultPlan([])).toBeNull();
   });
 });
