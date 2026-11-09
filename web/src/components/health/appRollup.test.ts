@@ -67,6 +67,17 @@ describe("buildAppRollup", () => {
     expect(r.services.problems[0]).toMatchObject({ cause: "Crashlooping", detail: "back-off restarting" });
   });
 
+  it("lists a failing rollout with the same label the canvas card shows", () => {
+    const r = buildAppRollup(
+      [item("shop", [svc("shop", "api")], [env("shop", "api", "rollout_failing", "production", "the new version fails its health check (GET /health → 404)")])],
+      [],
+    );
+    expect(r.services.attention).toBe(1);
+    expect(r.services.problems.map((p) => [p.status.label, p.status.tone, p.href])).toEqual([
+      ["Rollout failing", "warning", "/projects/shop?service=api&tab=deployments"],
+    ]);
+  });
+
   it("folds probes: uptime, errors (404 = unsupported), addons by release condition", () => {
     const probes: ProjectProbe[] = [
       {

@@ -219,6 +219,8 @@ func (e *Engine) evaluateEpisodic(ctx context.Context, r *db.AlertRule, now time
 		return e.evalCrashloop(ctx, r, now)
 	case db.AlertKindDeployFailed:
 		return e.evalDeployFailed(ctx, r, now)
+	case db.AlertKindRolloutFailing:
+		return e.evalRolloutFailing(ctx, r, now)
 	case db.AlertKindHTTP5xxRate:
 		return e.evalHTTP5xx(ctx, r)
 	case db.AlertKindHTTPP95Latency:
@@ -237,6 +239,7 @@ type envTarget struct {
 	project, service, env string
 	hosts                 []string
 	internal              bool
+	healthcheck           *kube.KusoHealthcheck
 }
 
 func (t envTarget) scope() string { return notify.Scope(t.project, t.service, t.env) }
@@ -244,10 +247,11 @@ func (t envTarget) scope() string { return notify.Scope(t.project, t.service, t.
 func toEnvTarget(k *kube.KusoEnvironment) envTarget {
 	t := envTarget{
 		name: k.Name, namespace: k.Namespace,
-		project:  k.Spec.Project,
-		service:  k.Labels[kube.LabelService],
-		env:      k.Labels[kube.LabelEnv],
-		internal: k.Spec.Internal,
+		project:     k.Spec.Project,
+		service:     k.Labels[kube.LabelService],
+		env:         k.Labels[kube.LabelEnv],
+		internal:    k.Spec.Internal,
+		healthcheck: k.Spec.Healthcheck,
 	}
 	if t.project == "" {
 		t.project = k.Labels[kube.LabelProject]

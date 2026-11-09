@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Revision } from "./api";
-import { imageReleases, shortDigest } from "./imageReleases";
+import { collapseFlipFlops, imageReleases, shortDigest } from "./imageReleases";
 
 const rev = (id: string, createdAt: string, snapshot: unknown): Revision => ({
   id,
@@ -34,6 +34,45 @@ describe("imageReleases", () => {
     const again = [...revs, rev("f", "2026-11-06T00:00:00Z", { patch: { image: { repository: "nginx", tag: "1.27" } } })];
     const { releases } = imageReleases(again, { repository: "nginx", tag: "1.27" });
     expect(releases.filter((r) => r.current).map((r) => r.revision.id)).toEqual(["f"]);
+  });
+});
+
+describe("release source", () => {
+  it("tells a rollback from a hand edit and the create-time image", () => {
+    const { releases } = imageReleases(
+      [
+        rev("r", "2026-11-03T00:00:00Z", { patch: { image: { repository: "nginx", tag: "1.27" } }, revertOf: "x" }),
+        rev("m", "2026-11-02T00:00:00Z", { patch: { image: { repository: "nginx", tag: "1.28" } } }),
+        { ...rev("c", "2026-11-01T00:00:00Z", { patch: { image: { repository: "nginx", tag: "1.27" } } }), summary: "create" },
+      ],
+      undefined,
+    );
+    expect(releases.map((r) => r.source)).toEqual(["rollback", "edit", "create"]);
+  });
+});
+
+describe("collapseFlipFlops", () => {
+  const tags = (ts: string[]) =>
+    imageReleases(
+      ts.map((t, i) => rev(`r${i}`, new Date(Date.UTC(2026, 10, 1, 0, ts.length - i)).toISOString(), { patch: { image: { repository: "nginx", tag: t } } })),
+      { repository: "nginx", tag: ts[0] },
+    ).releases;
+
+  it("folds a back-and-forth between two tags into its newest step", () => {
+    const out = collapseFlipFlops(tags(["1.28", "1.27", "1.28", "1.27", "1.28", "1.26"]));
+    expect(out.map((r) => [r.tag, r.folded?.length ?? 0])).toEqual([
+      ["1.28", 4],
+      ["1.26", 0],
+    ]);
+    expect(out[0].current).toBe(true);
+  });
+
+  it("leaves a plain upgrade path alone", () => {
+    expect(collapseFlipFlops(tags(["1.29", "1.28", "1.27"])).map((r) => r.folded)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("needs three steps to fold", () => {
+    expect(collapseFlipFlops(tags(["1.28", "1.27"])).length).toBe(2);
   });
 });
 

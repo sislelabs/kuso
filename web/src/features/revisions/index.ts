@@ -5,5 +5,9 @@ export { describeRevision, summaryItems, envRevisionName, namedKeys } from "./de
 export type { RevisionView } from "./describe";
 export { interleaveTimeline, groupRevisionRuns } from "./timeline";
 export type { TimelineItem, GroupedTimelineItem } from "./timeline";
-export { imageReleases, imageRef, shortDigest } from "./imageReleases";
+export { collapseFlipFlops, imageReleases, imageRef, shortDigest } from "./imageReleases";
 export type { ImageRelease } from "./imageReleases";
+export { previousConfig } from "./previous";
+export type { RevertPlan } from "./previous";
+export { configRolloutOutcome } from "./outcome";
+export type { RolloutOutcome } from "./outcome";

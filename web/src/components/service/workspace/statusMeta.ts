@@ -27,6 +27,7 @@ const KIND_TO_STATUS: Partial<Record<NodeStatusKind, ServiceStatus>> = {
   build_failed: "failing",
   crashing: "failing",
   stuck: "stuck",
+  rollout_failing: "rollout_failing",
   sleeping: "sleeping",
   stopped: "stopped",
   not_deployed: "not_deployed",

@@ -1,13 +1,13 @@
 "use client";
 
 import { smoothScroll } from "@/lib/reduced-motion";
-import { lastDeployedAt } from "@/features/projects/facts";
+import { lastDeployedAt, promotedIfLive } from "@/features/projects/facts";
 import { useEffect, useMemo, useState } from "react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useBuilds, useService } from "@/features/services";
+import { deriveServiceStatus, useBuilds, useService } from "@/features/services";
 import { useProject } from "@/features/projects";
 import { useSetupStatus } from "@/features/github";
 import { isCurrentPod, listServicePods, useServicePods } from "@/features/pods";
@@ -30,21 +30,27 @@ import {
   type DeployBuild,
 } from "@/features/builds";
 import {
+  configRolloutOutcome,
+  describeRevision,
   envRevisionName,
   groupRevisionRuns,
   imageRef,
+  collapseFlipFlops,
   imageReleases,
   interleaveTimeline,
+  previousConfig,
   shortDigest,
   useRevertRevision,
   useRevisions,
   type ImageRelease,
+  type Revision,
 } from "@/features/revisions";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { KusoEnvironment } from "@/types/projects";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
-import { Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
+import { rolloutFacts } from "@/lib/status";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
 import { buildDurationLabel } from "./deployParts";
@@ -112,8 +118,13 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   const repoUrl = svc.data?.spec.repo?.url || proj.data?.project.spec.defaultRepo?.url;
 
   const uptime = useProjectUptime(project);
+  const derived = deriveServiceStatus({ stopped: !!svc.data?.spec?.stopped, env });
+  // An uptime "OK" next to a failing service reads as a contradiction (the
+  // ping can still reach a draining pod); the status card carries the truth.
   const uptimeStatus =
-    group === "production" ? (uptime.data?.services ?? []).find((s) => s.service === service) : undefined;
+    group === "production" && derived.tone !== "error"
+      ? (uptime.data?.services ?? []).find((s) => s.service === service)
+      : undefined;
 
   const setPaused = useSetAutoDeployPaused(project, service);
   const resumeAutoDeploy = () =>
@@ -157,6 +168,10 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         />
       )}
 
+      {env?.status?.state === "rollout_failing" && (
+        <RolloutFailingCard project={project} service={service} env={env} canDeploy={canDeploy} onNavigate={onNavigate} />
+      )}
+
       {isImage ? (
         <ImageDeploymentCard
           project={project}
@@ -183,6 +198,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
           url={url}
           repoUrl={repoUrl}
           canDeploy={canDeploy}
+          failing={derived.tone === "error" ? { label: derived.label, detail: derived.detail } : undefined}
           uptimeDown={uptimeStatus?.state === "down"}
           onDeploy={canDeploy ? redeploy.request : undefined}
           deploying={redeploy.pending}
@@ -203,11 +219,120 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   );
 }
 
+// RolloutFailingCard: the newest change rolled out pods that fail while
+// the previous version keeps serving. The server names the cause; the
+// fix offered is replaying the config the previous version ran with.
+function RolloutFailingCard({
+  project,
+  service,
+  env,
+  canDeploy,
+  onNavigate,
+}: {
+  project: string;
+  service: string;
+  env: KusoEnvironment;
+  canDeploy: boolean;
+  onNavigate?: (tab: string, anchor?: string) => void;
+}) {
+  const facts = rolloutFacts(env.status);
+  const serviceRevs = useRevisions(project, "service", service);
+  const revert = useRevertRevision(project);
+  const [confirm, setConfirm] = useState(false);
+  const plan = previousConfig(serviceRevs.data ?? []);
+  const cause = facts?.cause ?? env.status?.stateDetail ?? "the new version isn't becoming ready";
+  const sentence = cause.charAt(0).toUpperCase() + cause.slice(1);
+  const group = envGroupName(env);
+  const onConfirm = () => {
+    if (!plan) return;
+    revert.mutate(plan.target.id, {
+      onSuccess: () => toast.success("Reverting to the previous config"),
+      onError: (e) => toastError(e, "Revert failed"),
+      onSettled: () => setConfirm(false),
+    });
+  };
+  const changeLabel = plan ? describeChange(plan.change) : "";
+  return (
+    <section
+      role="status"
+      aria-label="Rollout failing"
+      className="rounded-lg border border-[var(--warning)]/45 bg-[var(--warning-subtle)] p-4"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">Rollout failing in {group}</p>
+          <p className="break-words text-sm text-[var(--text-primary)]">{sentence.endsWith(".") ? sentence : `${sentence}.`}</p>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {facts?.previousServing === false
+              ? "Nothing else is serving."
+              : "The previous version is still serving traffic; kuso keeps retrying the new one until you fix or revert the change."}
+            {plan && (
+              <>
+                {" "}
+                Started by <span className="text-[var(--text-primary)]">{changeLabel}</span>
+                {plan.change.actor ? ` by ${plan.change.actor}` : ""} {relativeTime(plan.change.createdAt)}.
+              </>
+            )}
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-2">
+            {plan && canDeploy && (
+              <Button size="sm" onClick={() => setConfirm(true)} disabled={revert.isPending}>
+                <Undo2 className="h-3.5 w-3.5" />
+                Revert to previous
+              </Button>
+            )}
+            {facts?.kind === "healthcheck" && onNavigate && (
+              <Button size="sm" variant="secondary" onClick={() => onNavigate("settings", "healthcheck")}>
+                Health check settings
+              </Button>
+            )}
+            {onNavigate && (
+              <Button size="sm" variant="ghost" onClick={() => onNavigate("logs")}>
+                Logs
+              </Button>
+            )}
+          </div>
+          {!plan && serviceRevs.isSuccess && (
+            <p className="pt-1 text-xs text-[var(--text-tertiary)]">
+              No earlier version of this change is recorded, so there&apos;s nothing to revert to automatically. Fix it in Settings, or roll back a build below.
+            </p>
+          )}
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirm}
+        title="Revert to the previous config?"
+        destructive={false}
+        confirmLabel="Revert"
+        body={
+          <span>
+            Undoes <strong>{changeLabel}</strong> by re-applying the config from{" "}
+            {plan ? relativeTime(plan.target.createdAt) : ""}. Every environment of {service} rolls again.
+          </span>
+        }
+        pending={revert.isPending}
+        onConfirm={onConfirm}
+        onCancel={() => setConfirm(false)}
+      />
+    </section>
+  );
+}
+
+function describeChange(rev: Revision): string {
+  const v = describeRevision(rev);
+  const s = rev.snapshot as { patch?: Record<string, unknown> } | null;
+  if (s?.patch && "healthcheck" in s.patch) return "the health check change";
+  if (s?.patch && "image" in s.patch) return "the image change";
+  return v.label.toLowerCase();
+}
+
 function useLiveHealth(project: string, service: string, env?: KusoEnvironment, uptimeDown?: boolean): LiveHealth | undefined {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const state = env?.status?.state;
   if (state === "crashlooping") return { label: "Crashlooping", tone: "bad" };
   if (state === "stuck") return { label: "Stuck", tone: "bad" };
+  if (state === "rollout_failing") return { label: "New version failing · previous version serving", tone: "warn" };
   if (state === "sleeping") return { label: "Sleeping", tone: "idle" };
   if (state === "stopped") return { label: "Stopped", tone: "idle" };
   if (uptimeDown) return { label: "Not responding", tone: "bad" };
@@ -230,6 +355,7 @@ function DeployList({
   url,
   repoUrl,
   canDeploy,
+  failing,
   uptimeDown,
   onDeploy,
   deploying,
@@ -244,6 +370,7 @@ function DeployList({
   url?: string;
   repoUrl?: string;
   canDeploy: boolean;
+  failing?: { label: string; detail?: string };
   uptimeDown?: boolean;
   // Starts a build; shown as the empty state's action when nothing was ever built.
   onDeploy?: () => void;
@@ -307,6 +434,7 @@ function DeployList({
 
   const history = visible.filter((b) => b.id !== liveId && !(firstDeploy && b.id === newest?.id));
   const revisions = [...(serviceRevs.data ?? []), ...(envRevs.data ?? [])];
+  const outcome = configRolloutOutcome(revisions, env);
   const timeline = groupRevisionRuns(interleaveTimeline(history, filter === "builds" ? [] : revisions));
   const liveIdx = live ? builds.indexOf(live) : -1;
   const shownTimeline = timeline.slice(0, limit);
@@ -358,6 +486,7 @@ function DeployList({
       deployedAt={lastDeployedAt(env)}
       health={health}
       serving={!["stopped", "sleeping"].includes(env?.status?.state ?? "")}
+      failing={failing}
       canDeploy={canDeploy}
       releaseFailed={releaseFailed}
       onShowBuild={showBuild}
@@ -430,7 +559,7 @@ function DeployList({
           {/* overflow-hidden trims the config-change rail where the list ends */}
           <ul className="space-y-2 overflow-hidden">
             {live && rolledBackFrom && (
-              <RollbackMarker live={live} from={rolledBackFrom} at={lastDeployedAt(env)} onShowBuild={showBuild} />
+              <RollbackMarker live={live} from={rolledBackFrom} at={env ? promotedIfLive(env) : undefined} onShowBuild={showBuild} />
             )}
             {shownTimeline.map((item) => {
               if (item.type === "revisions") {
@@ -440,6 +569,7 @@ function DeployList({
                     project={project}
                     revisions={item.revisions}
                     canRevert={canDeploy}
+                    outcome={outcome}
                   />
                 );
               }
@@ -451,6 +581,7 @@ function DeployList({
                     revision={item.revision}
                     canRevert={canDeploy}
                     history={revisions}
+                    outcome={outcome?.id === item.revision.id ? outcome.outcome : undefined}
                   />
                 );
               }
@@ -606,9 +737,11 @@ function ImageDeploymentCard({
       : live
         ? "border-[var(--success)]/35"
         : "border-[var(--border-default)]";
-  // The digest the ready pods actually run, as the kubelet resolved it.
+  // The digest ready pods of the spec image resolved to. Pods of another
+  // release (mid-rollout, or an old server that doesn't send image) give
+  // none, so a digest is never pinned on a release it didn't come from.
   const runningImageID = (podList ?? [])
-    .filter((p) => isCurrentPod(p) && p.ready)
+    .filter((p) => isCurrentPod(p) && p.ready && !!ref && (p as { image?: string }).image === ref)
     .map((p) => (p as { imageID?: string }).imageID ?? "")
     .find(Boolean);
 
@@ -714,8 +847,10 @@ function ImageReleaseHistory({
   if (serviceRevs.isError) {
     return <QueryErrorState what="release history" error={serviceRevs.error} onRetry={() => void serviceRevs.refetch()} />;
   }
-  const { releases, other } = imageReleases(serviceRevs.data ?? [], image);
+  const { releases: all, other } = imageReleases(serviceRevs.data ?? [], image);
+  const releases = collapseFlipFlops(all);
   const config = [...other, ...(envRevs.data ?? [])];
+  const outcome = configRolloutOutcome([...(serviceRevs.data ?? []), ...(envRevs.data ?? [])], env);
   // interleaveTimeline orders "builds" by startedAt; a release is placed by
   // the time its tag was saved.
   const items = releases.map((r) => ({ ...r, startedAt: r.revision.createdAt }));
@@ -737,7 +872,7 @@ function ImageReleaseHistory({
         <h4 id="image-history-h" className="text-xs font-medium text-[var(--text-secondary)]">
           Releases
           <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
-            {releases.length} image{releases.length === 1 ? "" : "s"}
+            {all.length} image change{all.length === 1 ? "" : "s"}
             {filter === "all" && config.length > 0
               ? ` · ${config.length} config change${config.length === 1 ? "" : "s"}`
               : ""}
@@ -760,11 +895,25 @@ function ImageReleaseHistory({
         {shown.map((item) => {
           if (item.type === "revisions") {
             return (
-              <RevisionGroup key={`revs-${item.revisions[0].id}`} project={project} revisions={item.revisions} canRevert={canDeploy} />
+              <RevisionGroup
+                key={`revs-${item.revisions[0].id}`}
+                project={project}
+                revisions={item.revisions}
+                canRevert={canDeploy}
+                outcome={outcome}
+              />
             );
           }
           if (item.type === "revision") {
-            return <RevisionRow key={`rev-${item.revision.id}`} project={project} revision={item.revision} canRevert={canDeploy} />;
+            return (
+              <RevisionRow
+                key={`rev-${item.revision.id}`}
+                project={project}
+                revision={item.revision}
+                canRevert={canDeploy}
+                outcome={outcome?.id === item.revision.id ? outcome.outcome : undefined}
+              />
+            );
           }
           const r = item.build;
           return (
@@ -837,8 +986,7 @@ function ImageReleaseRow({
           ) : (
             <span>Replaced</span>
           )}
-          {revision.summary === "create" && <span>· first image</span>}
-          {revision.actor && <span>· by {revision.actor}</span>}
+          <span>· {releaseWhy(release)}</span>
           <span>
             ·{" "}
             <time dateTime={revision.createdAt} title={new Date(revision.createdAt).toLocaleString()}>
@@ -858,6 +1006,25 @@ function ImageReleaseRow({
           Roll back to this image
         </Button>
       )}
+      {release.folded && release.folded.length > 0 && (
+        <details className="w-full text-xs text-[var(--text-tertiary)]">
+          <summary className="cursor-pointer select-none text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+            {release.folded.length} earlier switch{release.folded.length === 1 ? "" : "es"} between{" "}
+            <span className="font-mono">{release.tag}</span> and{" "}
+            <span className="font-mono">{release.folded[0].tag}</span>
+          </summary>
+          <ul className="mt-1.5 space-y-1 pl-3">
+            {release.folded.map((f) => (
+              <li key={f.revision.id}>
+                <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span> · {releaseWhy(f)} ·{" "}
+                <time dateTime={f.revision.createdAt} title={new Date(f.revision.createdAt).toLocaleString()}>
+                  {relativeTime(f.revision.createdAt)}
+                </time>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <ConfirmDialog
         open={confirm}
         title={`Roll back to ${release.tag}?`}
@@ -875,6 +1042,19 @@ function ImageReleaseRow({
       />
     </li>
   );
+}
+
+// releaseWhy: who changed the image and how ("rolled back by admin").
+function releaseWhy(r: ImageRelease): string {
+  const by = r.revision.actor ? ` by ${r.revision.actor}` : "";
+  switch (r.source) {
+    case "rollback":
+      return `rolled back${by}`;
+    case "create":
+      return `first image${by}`;
+    default:
+      return `tag set${by}`;
+  }
 }
 
 function RolloutBadge({ state }: { state: RolloutState }) {

@@ -11,7 +11,8 @@ export type AlertKind =
   | "dns_mismatch"
   | "crashloop"
   | "deploy_failed"
-  | "healthcheck_failing";
+  | "healthcheck_failing"
+  | "rollout_failing";
 
 export interface AlertRule {
   id: string;

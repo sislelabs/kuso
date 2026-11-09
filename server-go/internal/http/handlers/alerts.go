@@ -203,14 +203,14 @@ func normalizeAlertBody(b *createAlertBody) error {
 		if *b.ThresholdInt < 1 {
 			return errors.New("crashloop threshold is a restart count and must be >= 1")
 		}
-	case db.AlertKindDeployFailed:
+	case db.AlertKindDeployFailed, db.AlertKindRolloutFailing:
 	case db.AlertKindHealthcheckFailing:
 		b.ThresholdInt = defaultInt(b.ThresholdInt, 5)
 		if *b.ThresholdInt < 1 || *b.ThresholdInt > 1440 {
 			return errors.New("healthcheck_failing threshold is minutes failing, 1-1440")
 		}
 	default:
-		return errors.New("kind must be one of log_match|node_cpu|node_mem|node_disk|http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing")
+		return errors.New("kind must be one of log_match|node_cpu|node_mem|node_disk|http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing|rollout_failing")
 	}
 	if b.ThresholdInt != nil && *b.ThresholdInt < 0 {
 		return errors.New("thresholdInt must be >= 0")
@@ -218,7 +218,7 @@ func normalizeAlertBody(b *createAlertBody) error {
 	// Env scoping only exists for the env-aware kinds; accepting it on
 	// a log/node rule would silently widen the rule's scope.
 	if b.Env != "" && !episodic {
-		return errors.New("env scoping is only supported for http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing")
+		return errors.New("env scoping is only supported for http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing|rollout_failing")
 	}
 	if episodic && (b.Service != "" || b.Env != "") && b.Project == "" {
 		return errors.New("service/env scoping needs a project")

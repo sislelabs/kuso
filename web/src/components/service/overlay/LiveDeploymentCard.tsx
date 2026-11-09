@@ -37,6 +37,7 @@ export function LiveDeploymentCard({
   deployedAt,
   health,
   serving = true,
+  failing,
   canDeploy,
   extra,
   releaseFailed,
@@ -58,6 +59,10 @@ export function LiveDeploymentCard({
   // False while the env is stopped or asleep: this is still the current
   // deployment, but nothing is serving it.
   serving?: boolean;
+  // The derived service status when it's an error (crashloop, stuck,
+  // failed): the badge says that instead of "Live", so this card can't
+  // contradict the header pill.
+  failing?: { label: string; detail?: string };
   canDeploy: boolean;
   extra?: React.ReactNode;
   // A newer build whose release hook (migration) failed, so this one is
@@ -81,15 +86,20 @@ export function LiveDeploymentCard({
 
   return (
     <section
-      aria-label={`${serving ? "Live" : "Current deployment"} in ${envGroup}`}
+      aria-label={`${failing ? failing.label : serving ? "Live" : "Current deployment"} in ${envGroup}`}
       className={cn(
         "overflow-hidden rounded-lg border bg-[var(--bg-secondary)]",
-        rolledBack ? "border-[var(--border-strong)]" : serving ? "border-[var(--success)]/35" : "border-[var(--border-default)]",
+        failing ? "border-[var(--error)]/45" : rolledBack ? "border-[var(--border-strong)]" : serving ? "border-[var(--success)]/35" : "border-[var(--border-default)]",
       )}
     >
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {serving ? (
+          {failing ? (
+            <span className="inline-flex items-center gap-1.5 font-medium text-[var(--error)]" title={failing.detail}>
+              <span className="h-2 w-2 rounded-full bg-[var(--error)]" />
+              {failing.label}
+            </span>
+          ) : serving ? (
             <span className="inline-flex items-center gap-1.5 font-medium text-[var(--success)]">
               <span className="relative flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full rounded-full bg-[var(--success)] opacity-60 motion-safe:animate-ping" />

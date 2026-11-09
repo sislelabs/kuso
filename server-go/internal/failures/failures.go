@@ -20,6 +20,7 @@
 package failures
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -409,13 +410,17 @@ var logDetectors = []logDetector{
 		tab:       TabLogs,
 		buildTime: true,
 		re:        regexp.MustCompile(`(?i)couldn't find remote ref|remote branch \S+ not found|fatal: reference is not a tree:|unadvertised object|wanted ref \S+ not found|fatal: couldn't find remote ref`),
+		// The default copy is for a build that FAILED on it: it never says
+		// "nothing to fix", because only the poller knows whether the ref
+		// was a throwaway branch (it then cancels and applies
+		// RefDeletedWhileQueued) or the service's own branch (BranchMissing).
 		summarize: func(line string) string {
-			return "The branch or commit this build targeted no longer exists — it was deleted or force-pushed while the build was queued. No action needed."
+			return "The branch or commit this build targeted no longer exists in the repository."
 		},
 		remediate: func(line string, tail []string) *Remediation {
 			return &Remediation{
-				Title:  "Nothing to fix — the ref was deleted",
-				Detail: "The branch was deleted or force-pushed (e.g. a squash-merge that removed the PR branch) while this build sat in the queue, so the clone step couldn't find the commit. This is expected and safe to ignore; the build is marked cancelled, not failed.",
+				Title:  "Point the service at a branch that exists",
+				Detail: "The clone couldn't find the commit: the branch was deleted or force-pushed. If it's the branch this service deploys, pick an existing one in Settings → Source and redeploy.",
 			}
 		},
 	},
@@ -781,4 +786,32 @@ func briefLine(s string) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:maxBriefLine], "") + "…"
+}
+
+// BranchMissing rewrites a clone_ref_missing classification for the case
+// where the missing ref is the branch the service deploys: every build
+// will fail the same way until the branch is changed, so it's a failure
+// with a fix, not a cancelled non-event.
+func BranchMissing(c *Classification, branch string) {
+	if c == nil || c.Kind != KindCloneRefMissing || branch == "" {
+		return
+	}
+	c.Summary = fmt.Sprintf("Branch %q no longer exists in the repository.", branch)
+	c.Remediation = &Remediation{
+		Title:  "Point the service at a branch that exists",
+		Detail: fmt.Sprintf("This service deploys branch %q, but the clone could not find it. Pick an existing branch (for example the repository's default, often main or master) and redeploy.", branch),
+	}
+}
+
+// RefDeletedWhileQueued is the copy for a clone_ref_missing build the
+// poller cancelled: a throwaway branch vanished while the build waited.
+func RefDeletedWhileQueued(c *Classification) {
+	if c == nil || c.Kind != KindCloneRefMissing {
+		return
+	}
+	c.Summary = "The branch or commit this build targeted was deleted or force-pushed while the build was queued."
+	c.Remediation = &Remediation{
+		Title:  "Nothing to fix — the ref was deleted",
+		Detail: "The branch was deleted or force-pushed (e.g. a squash-merge that removed the PR branch) while this build sat in the queue. The build is marked cancelled, not failed.",
+	}
 }

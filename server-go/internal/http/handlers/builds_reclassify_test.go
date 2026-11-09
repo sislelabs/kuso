@@ -37,3 +37,19 @@ func TestReclassifyGenericFailures_UsesArchivedLogTail(t *testing.T) {
 		t.Errorf("archive reads = %v, want only b1", asked)
 	}
 }
+
+func TestExplainMissingBranch(t *testing.T) {
+	t.Parallel()
+	stale := &failures.Classification{Kind: failures.KindCloneRefMissing, Summary: "No action needed.", Remediation: &failures.Remediation{Title: "Nothing to fix — the ref was deleted"}}
+	out := []buildSummary{
+		{ID: "failed", Status: "failed", Branch: "main", FailureClass: stale},
+		{ID: "cancelled", Status: "cancelled", Branch: "feat", FailureClass: stale},
+	}
+	explainMissingBranch(out)
+	if got := out[0].FailureClass; got.Remediation == nil || got.Remediation.Title == stale.Remediation.Title || got.Summary != `Branch "main" no longer exists in the repository.` {
+		t.Errorf("failed build kept the cancelled copy: %+v", got)
+	}
+	if out[1].FailureClass != stale {
+		t.Errorf("a cancelled build must keep its copy")
+	}
+}

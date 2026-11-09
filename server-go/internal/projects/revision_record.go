@@ -51,6 +51,22 @@ type revisionSnapshot struct {
 	WildcardDomains  *[]kube.KusoWildcardDomain `json:"wildcardDomains,omitempty"`
 	Branch           string                     `json:"branch,omitempty"`
 	From             string                     `json:"from,omitempty"`
+	// RevertOf names the revision this one replayed (a rollback / revert
+	// from History); empty for a direct edit.
+	RevertOf string `json:"revertOf,omitempty"`
+}
+
+type revertOfKey struct{}
+
+// WithRevertOf marks ctx as replaying revision id, so the revision the
+// replay records says it was a rollback and of what.
+func WithRevertOf(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, revertOfKey{}, id)
+}
+
+func revertOf(ctx context.Context) string {
+	id, _ := ctx.Value(revertOfKey{}).(string)
+	return id
 }
 
 type revisionScopeKey struct{}
@@ -71,6 +87,7 @@ func (r *revisionScope) record(ctx context.Context, project, kind, name, summary
 	if r == nil || r.s.RecordRevision == nil || summary == "" {
 		return
 	}
+	snap.RevertOf = revertOf(ctx)
 	b, err := json.Marshal(snap)
 	if err != nil {
 		slog.WarnContext(ctx, "revision: marshal snapshot", "project", project, "kind", kind, "name", name, "err", err)

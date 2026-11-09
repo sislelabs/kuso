@@ -118,6 +118,8 @@ func alertDetail(r map[string]any) string {
 		return fmt.Sprintf("≥ %v restarts in %s or backing off", ti(3), alertWindow(r))
 	case "deploy_failed":
 		return "build or release failed"
+	case "rollout_failing":
+		return "new version failing, previous serving"
 	case "healthcheck_failing":
 		return fmt.Sprintf("uptime failing ≥ %vm", ti(5))
 	}
@@ -171,7 +173,7 @@ func buildAlertCreateRequest(o alertCreateOpts) (kusoApi.CreateAlertRequest, err
 	}
 	httpKind := o.kind == "http_5xx_rate" || o.kind == "http_p95_latency"
 	envKind := httpKind || o.kind == "cert_expiry" || o.kind == "dns_mismatch" ||
-		o.kind == "crashloop" || o.kind == "deploy_failed" || o.kind == "healthcheck_failing"
+		o.kind == "crashloop" || o.kind == "deploy_failed" || o.kind == "healthcheck_failing" || o.kind == "rollout_failing"
 	switch o.kind {
 	case "log_match":
 		if o.query == "" {
@@ -194,7 +196,7 @@ func buildAlertCreateRequest(o alertCreateOpts) (kusoApi.CreateAlertRequest, err
 			n := int64(o.threshold)
 			req.ThresholdInt = &n
 		}
-	case "dns_mismatch", "deploy_failed":
+	case "dns_mismatch", "deploy_failed", "rollout_failing":
 		if o.thresholdSet {
 			return req, fmt.Errorf("%s takes no --threshold", o.kind)
 		}
@@ -207,7 +209,7 @@ func buildAlertCreateRequest(o alertCreateOpts) (kusoApi.CreateAlertRequest, err
 			req.ThresholdInt = &n
 		}
 	default:
-		return req, fmt.Errorf("--kind must be one of http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing|log_match|node_cpu|node_mem|node_disk")
+		return req, fmt.Errorf("--kind must be one of http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing|rollout_failing|log_match|node_cpu|node_mem|node_disk")
 	}
 	if o.minRequestsSet {
 		if !httpKind {
@@ -217,7 +219,7 @@ func buildAlertCreateRequest(o alertCreateOpts) (kusoApi.CreateAlertRequest, err
 		req.ThresholdInt = &n
 	}
 	if o.env != "" && !envKind {
-		return req, fmt.Errorf("--env only applies to http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing")
+		return req, fmt.Errorf("--env only applies to http_5xx_rate|http_p95_latency|cert_expiry|dns_mismatch|crashloop|deploy_failed|healthcheck_failing|rollout_failing")
 	}
 	var err error
 	if req.WindowSeconds, err = parseAlertDuration(o.window); err != nil {
@@ -250,6 +252,7 @@ var alertCreateCmd = &cobra.Command{
 		"  crashloop         restart count (default 3) with the last restart inside --window; also fires on CrashLoopBackOff\n" +
 		"  deploy_failed     none — fires when a service's newest build or release hook fails\n" +
 		"  healthcheck_failing  minutes the uptime check has been failing (default 5)\n" +
+		"  rollout_failing   none — fires while a rollout's new version fails and the previous one still serves\n" +
 		"  log_match         match count; node_cpu|node_mem|node_disk  percent\n\n" +
 		"http_*, cert_expiry, dns_mismatch, crashloop, deploy_failed and\n" +
 		"healthcheck_failing fire once per episode and send a\n" +
@@ -504,7 +507,7 @@ func init() {
 	// Node-pressure-only.
 	alertAddNodePressureCmd.Flags().Float64Var(&alertAddPct, "threshold-pct", 80, "percentage threshold")
 	cf := alertCreateCmd.Flags()
-	cf.StringVar(&alertCreate.kind, "kind", "", "http_5xx_rate | http_p95_latency | cert_expiry | dns_mismatch | crashloop | deploy_failed | healthcheck_failing | log_match | node_cpu | node_mem | node_disk")
+	cf.StringVar(&alertCreate.kind, "kind", "", "http_5xx_rate | http_p95_latency | cert_expiry | dns_mismatch | crashloop | deploy_failed | healthcheck_failing | rollout_failing | log_match | node_cpu | node_mem | node_disk")
 	cf.StringVar(&alertCreate.name, "name", "", "human-readable name (default: kind + scope)")
 	cf.StringVar(&alertCreate.project, "project", "", "scope to one project")
 	cf.StringVar(&alertCreate.service, "service", "", "scope to one service (needs --project)")

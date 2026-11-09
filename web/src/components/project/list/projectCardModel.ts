@@ -75,6 +75,7 @@ const STATUS_HEALTH: Record<ServiceStatus, ServiceHealth> = {
   degraded: "failing",
   failing: "failing",
   stuck: "failing",
+  rollout_failing: "failing",
   sleeping: "sleeping",
   stopped: "stopped",
   not_deployed: "pending",

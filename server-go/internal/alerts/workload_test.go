@@ -107,7 +107,7 @@ func TestHealthcheckFinding(t *testing.T) {
 	rows := []db.UptimeState{
 		row("web", "shop-web-production", 10*time.Minute, "", 30*time.Second), // fires
 		row("api", "shop-api-production", 2*time.Minute, "", 30*time.Second),  // not long enough
-		row("app", "shop-app-production", 0, "", 30*time.Second),               // up
+		row("app", "shop-app-production", 0, "", 30*time.Second),              // up
 		row("zzz", "shop-zzz-production", time.Hour, "sleeping", 30*time.Second),
 		row("old", "shop-old-production", time.Hour, "", time.Hour), // stale row: the loop is down, not the app
 	}
@@ -122,5 +122,44 @@ func TestHealthcheckFinding(t *testing.T) {
 	r.Env = "staging"
 	if f := healthcheckFinding(r, rows, wlNow); len(f.targets) != 0 {
 		t.Errorf("env scope ignored: %v", f.targets)
+	}
+}
+
+func TestRolloutFailingFinding(t *testing.T) {
+	t.Parallel()
+	pod := func(name, hash string, age time.Duration, ready bool, restarts int32) *corev1.Pod {
+		st := corev1.ConditionFalse
+		if ready {
+			st = corev1.ConditionTrue
+		}
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"pod-template-hash": hash}, CreationTimestamp: metav1.NewTime(wlNow.Add(-age))},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodRunning,
+				Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: st}},
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: ready, RestartCount: restarts}},
+			},
+		}
+	}
+	hc := &kube.KusoHealthcheck{Path: "/health"}
+	envs := []envTarget{
+		{name: "shop-api-production", project: "shop", service: "api", env: "production", healthcheck: hc},
+		{name: "shop-web-production", project: "shop", service: "web", env: "production", healthcheck: hc},
+		{name: "shop-job-production", project: "shop", service: "job", env: "production", healthcheck: hc},
+	}
+	pods := map[string][]*corev1.Pod{
+		// new pod restarted by its liveness probe, old one serving: fires
+		"shop-api-production": {pod("old", "a", time.Hour, true, 0), pod("new", "b", time.Minute, false, 2)},
+		// healthy rollout still starting: quiet
+		"shop-web-production": {pod("old", "a", time.Hour, true, 0), pod("new", "b", 5*time.Second, false, 0)},
+		// nothing old serving: that's a crashloop alert, not this one
+		"shop-job-production": {pod("new", "b", time.Minute, false, 2)},
+	}
+	f := rolloutFailingFinding(envs, pods, nil, wlNow)
+	if len(f.targets) != 1 || f.targets[0] != "shop-api-production" {
+		t.Fatalf("targets = %v, want [shop-api-production]", f.targets)
+	}
+	if d := f.details["shop-api-production"]; !strings.Contains(d, "GET /health") || !strings.Contains(d, "previous version") {
+		t.Fatalf("detail = %q", d)
 	}
 }

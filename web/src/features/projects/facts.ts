@@ -7,6 +7,7 @@ import { formatBytes } from "@/features/project-overview/api";
 import { formatCpu } from "@/lib/format";
 import { serviceUrl } from "@/features/services/serviceUrl";
 import { hostScheme } from "@/lib/host-scheme";
+import { rolloutFacts } from "@/lib/status";
 import { serviceShortName } from "@/lib/utils";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 
@@ -26,13 +27,41 @@ function newest(values: ReadonlyArray<string | undefined>): string | undefined {
   return best;
 }
 
-// When the env's current release went live: the newest of the promotion
-// stamp (written on every image promotion, survives build-CR retention)
-// and the operator's lastDeployedAt. Build finish times are deliberately
-// ignored — a succeeded build isn't live until it's promoted.
+// When the env's last rollout went live: the newest of the promotion
+// stamp (written on every image promotion, survives build-CR retention),
+// the operator's lastDeployedAt, and rolloutCompletedAt — when the pods'
+// current ReplicaSet finished rolling out, so config changes, image
+// changes and rollbacks count as deploys too. Build finish times are
+// deliberately ignored: a succeeded build isn't live until it's promoted.
 export function lastDeployedAt(env: KusoEnvironment | undefined): string | undefined {
   if (!env) return undefined;
-  return newest([env.metadata?.annotations?.[PROMOTED_AT_ANNOTATION], env.status?.lastDeployedAt]);
+  const best = newest([promotedIfLive(env), env.status?.lastDeployedAt, env.status?.rolloutCompletedAt]);
+  // Mid failing rollout the completion stamp is gone; the serving
+  // version's pod start is the closest record of when it went out.
+  return best ?? (env.status?.state === "rollout_failing" ? rolloutFacts(env.status)?.previousSince : undefined);
+}
+
+// promotedIfLive drops a promotion stamp whose rollout never finished: an
+// image that can't be pulled or a version failing its health check was
+// promoted, but it isn't what's serving, so it isn't "deployed".
+export function promotedIfLive(env: KusoEnvironment): string | undefined {
+  const promoted = env.metadata?.annotations?.[PROMOTED_AT_ANNOTATION];
+  const at = Date.parse(promoted ?? "");
+  if (!promoted || !Number.isFinite(at)) return promoted;
+  const done = Date.parse(env.status?.rolloutCompletedAt ?? "");
+  if (Number.isFinite(done) && done >= at) return promoted;
+  const state = env.status?.state;
+  if (state === "rollout_failing") {
+    // Only the promotion that started the failing rollout is unfinished;
+    // an older one is what's still serving.
+    const since = Date.parse(rolloutFacts(env.status)?.since ?? "");
+    return Number.isFinite(since) && at >= since - 60_000 ? undefined : promoted;
+  }
+  if (state === "stuck") {
+    const ready = (env.status?.replicas as { ready?: number } | undefined)?.ready ?? 0;
+    return ready > 0 ? promoted : undefined;
+  }
+  return promoted;
 }
 
 // Newest lastDeployedAt across the production env-group.

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
-import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
+import { ERRORS_UNAVAILABLE, errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { useLiveProjectDomain } from "@/features/projects/liveDomain";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCpu, relativeTime } from "@/lib/format";
@@ -58,7 +58,17 @@ const NO_SERVICES: readonly string[] = [];
 // is rollout health: a live service can still log errors. Servers without
 // the summary endpoint 404 once and the chip stays hidden.
 function ErrorsChip({ project }: { project: string }) {
-  const { total } = useProjectErrorCounts(project, NO_SERVICES);
+  const { total, unavailable } = useProjectErrorCounts(project, NO_SERVICES);
+  if (unavailable) {
+    return (
+      <span
+        title="This kuso server doesn't report error counts yet, so a clean card doesn't mean no errors."
+        className="inline-flex h-5 shrink-0 items-center rounded-md border border-[var(--border-subtle)] px-1.5 text-2xs text-[var(--text-tertiary)]"
+      >
+        {ERRORS_UNAVAILABLE}
+      </span>
+    );
+  }
   if (!total) return null;
   const label = errorCountLabel(total);
   return (

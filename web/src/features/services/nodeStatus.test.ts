@@ -153,6 +153,27 @@ describe("deriveServiceStatus stuck", () => {
   });
 });
 
+describe("deriveServiceStatus rollout", () => {
+  it("reads a failing rollout with the previous version serving as degraded, not down", () => {
+    const s = deriveServiceStatus({
+      env: env({ state: "rollout_failing", stateDetail: "the new version fails its health check (GET /health → 404); the previous version is still serving" }),
+    });
+    expect([s.kind, s.label, s.tone]).toEqual(["rollout_failing", "Rollout failing", "warning"]);
+    expect(s.detail).toContain("→ 404");
+  });
+
+  it("names an image pull failure instead of a bare Stuck", () => {
+    const s = deriveServiceStatus({
+      env: env({ state: "stuck", stateDetail: "The image can't be pulled", stuck: { reason: "image_pull", summary: "The image can't be pulled" } }),
+    });
+    expect([s.kind, s.label, s.tone]).toEqual(["stuck", "Image pull failed", "error"]);
+  });
+
+  it("doesn't call a never-served promotion a deploy", () => {
+    expect(lastDeployAt(env({ state: "stuck" }, { "kuso.sislelabs.com/promoted-at": "2026-11-09T10:00:00Z" }))).toBeUndefined();
+  });
+});
+
 describe("deriveCronStatus", () => {
   it("suspended crons are paused", () => {
     expect(deriveCronStatus({ suspend: true }).kind).toBe("paused");

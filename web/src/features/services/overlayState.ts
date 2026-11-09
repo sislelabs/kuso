@@ -53,7 +53,9 @@ export type HealthProblem = "runtime" | "deploy" | "stuck" | null;
 
 export function healthProblem(serverState: string | undefined, uiStatus: string): HealthProblem {
   if (serverState === "stuck") return "stuck";
-  if (serverState === "build_failed" || serverState === "release_failed") return "deploy";
+  // rollout_failing: the previous version keeps serving; the fix is the
+  // change that started the rollout (Deployments has Revert).
+  if (serverState === "build_failed" || serverState === "release_failed" || serverState === "rollout_failing") return "deploy";
   if (serverState === "crashlooping" || serverState === "degraded") return "runtime";
   if (!serverState && uiStatus === "failed") return "runtime";
   return null;

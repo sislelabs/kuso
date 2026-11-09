@@ -103,8 +103,9 @@ const COPY: Record<FailureKind, CopyPair> = {
     body: "Check the registry credentials in Settings → Build. A private base image needs auth too.",
   },
   clone_ref_missing: {
-    headline: "The git ref no longer exists.",
-    body: "The branch or commit was deleted or force-pushed away. Pick an existing branch and redeploy.",
+    headline: "Build failed: the branch no longer exists.",
+    body: "The branch or commit was deleted or force-pushed away, so every retry fails the same way. Pick an existing branch and redeploy.",
+    action: { label: "Open Settings → Source", tab: "settings", anchor: "source" },
   },
   clone_unreachable: {
     headline: "kuso couldn't reach the git host.",

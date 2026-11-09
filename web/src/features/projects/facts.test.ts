@@ -64,6 +64,27 @@ describe("lastDeployedAt", () => {
     );
   });
 
+  it("counts a config-only rollout's completion as the last deploy", () => {
+    const e = env("web", { promoted: "2026-11-01T10:00:00Z" });
+    e.status = { ...e.status, rolloutCompletedAt: "2026-11-05T09:30:00Z" };
+    expect(lastDeployedAt(e)).toBe("2026-11-05T09:30:00Z");
+  });
+
+  it("doesn't call a promotion that never rolled out a deploy", () => {
+    const e = env("web", { promoted: "2026-11-05T10:00:00Z", state: "stuck" });
+    expect(lastDeployedAt(e)).toBeUndefined();
+    e.status = { ...e.status, state: "rollout_failing", rollout: { since: "2026-11-05T10:00:05Z" } };
+    expect(lastDeployedAt(e)).toBeUndefined();
+    e.status = { ...e.status, rollout: { since: "2026-11-05T10:00:05Z", previousSince: "2026-11-02T08:00:00Z" } };
+    expect(lastDeployedAt(e)).toBe("2026-11-02T08:00:00Z");
+  });
+
+  it("keeps the promotion that's still serving under a failing config rollout", () => {
+    const e = env("web", { promoted: "2026-11-01T10:00:00Z", state: "rollout_failing" });
+    e.status = { ...e.status, rollout: { since: "2026-11-09T09:03:24Z" } };
+    expect(lastDeployedAt(e)).toBe("2026-11-01T10:00:00Z");
+  });
+
   it("ignores unparseable stamps", () => {
     expect(lastDeployedAt(env("web", { promoted: "garbage", deployed: "2026-11-01T10:00:00Z" }))).toBe(
       "2026-11-01T10:00:00Z",

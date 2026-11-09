@@ -58,6 +58,14 @@ export const ALERT_KINDS: Record<AlertKind, KindMeta> = {
     scope: "env",
     help: "Fires when a service's newest build fails or its release hook (migrations) fails. Only failures inside the window open an alert; it resolves when a later build succeeds.",
   },
+  rollout_failing: {
+    label: "Rollout failing",
+    group: "Service",
+    minRequests: false,
+    window: false,
+    scope: "env",
+    help: "Fires when a new version can't become ready (failing health check, crash, image pull) while the previous version keeps serving. Resolves when the rollout completes or is reverted.",
+  },
   healthcheck_failing: {
     label: "Uptime check failing",
     group: "Service",
@@ -235,6 +243,8 @@ export function describeRule(rule: AlertRule): string {
       return `build or release fails (new failures within ${win})`;
     case "healthcheck_failing":
       return `uptime check failing for ≥ ${rule.thresholdInt ?? 5} min`;
+    case "rollout_failing":
+      return "a new version can't become ready while the old one serves";
     default:
       return `≥ ${rule.thresholdFloat ?? 80}% (window ${win})`;
   }

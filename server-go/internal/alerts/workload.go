@@ -13,6 +13,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/rollout"
 	"kuso/server/internal/uptime"
 )
 
@@ -229,6 +230,47 @@ func healthcheckFinding(r *db.AlertRule, rows []db.UptimeState, now time.Time) f
 			detail += fmt.Sprintf(" — HTTP %d", row.LastStatusCode)
 		}
 		f.add(row.Namespace+"/"+row.Env, detail)
+	}
+	sort.Strings(f.targets)
+	return f
+}
+
+// ---- rollout_failing ---------------------------------------------------
+
+func (e *Engine) evalRolloutFailing(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error) {
+	envs, err := e.scopedEnvs(ctx, r)
+	if err != nil || len(envs) == 0 {
+		return finding{}, err
+	}
+	pods := map[string][]*corev1.Pod{}
+	deadline := map[string]bool{}
+	for _, t := range envs {
+		ps, err := e.envPods(ctx, t)
+		if err != nil {
+			return finding{}, err
+		}
+		pods[t.name] = ps
+		if e.Kube.Cache != nil {
+			if dep, ok := e.Kube.Cache.GetDeployment(t.namespace, t.name); ok {
+				deadline[t.name] = rollout.DeadlineExceeded(dep)
+			}
+		}
+	}
+	return rolloutFailingFinding(envs, pods, deadline, now), nil
+}
+
+// rolloutFailingFinding flags an env whose new ReplicaSet's pods fail while
+// an older one keeps serving: the same verdict as the service state
+// "rollout_failing", so the alert and the dashboard agree. The episode
+// resolves when the rollout completes or the change is reverted.
+func rolloutFailingFinding(envs []envTarget, pods map[string][]*corev1.Pod, deadline map[string]bool, now time.Time) finding {
+	var f finding
+	for _, t := range envs {
+		r := rollout.Analyze(pods[t.name], t.healthcheck, deadline[t.name], now)
+		if !r.Failing || !r.PreviousServing {
+			continue
+		}
+		f.add(t.name, fmt.Sprintf("%s: %s; the previous version is still serving", t.scope(), r.Cause))
 	}
 	sort.Strings(f.targets)
 	return f
