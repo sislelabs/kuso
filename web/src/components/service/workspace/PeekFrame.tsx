@@ -34,6 +34,12 @@ function loadWidth(): number {
   }
 }
 
+// peekWidthNow is the width the side panel opens at, so the canvas can
+// keep the selected node clear of it before the slide-in finishes.
+export function peekWidthNow(): number {
+  return clampPeekWidth(loadWidth(), maxWidth());
+}
+
 function saveWidth(w: number) {
   try {
     window.localStorage.setItem(WIDTH_KEY, String(w));

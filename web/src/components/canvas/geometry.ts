@@ -68,6 +68,86 @@ export function facingSides(source: Box, target: Box): { source: Side; target: S
   return dx >= 0 ? { source: "right", target: "left" } : { source: "left", target: "right" };
 }
 
+// Each side of a node carries PORT_SLOTS anchor points, evenly spaced, so
+// edges meeting one side spread out instead of stacking on its midpoint.
+export const PORT_SLOTS = 7;
+
+// slotFraction is where slot i sits along its side (0 = top/left end).
+export function slotFraction(i: number): number {
+  return (i + 1) / (PORT_SLOTS + 1);
+}
+
+// slotsFor spreads n edges over the side's slots, centred: one edge takes
+// the middle slot, two sit either side of it, and so on. Past
+// PORT_SLOTS edges the slots are shared.
+export function slotsFor(n: number): number[] {
+  return Array.from({ length: n }, (_, i) =>
+    Math.min(PORT_SLOTS - 1, Math.max(0, Math.round(((i + 1) * (PORT_SLOTS + 1)) / (n + 1)) - 1)),
+  );
+}
+
+export interface EdgePorts {
+  sourceHandle: string;
+  targetHandle: string;
+  // Where the bend sits between the two ends (smoothstep stepPosition):
+  // edges into different ports bend at different points, so parallel
+  // edges between two columns don't share one vertical lane.
+  stepPosition: number;
+}
+
+// assignPorts picks, for every edge, the facing sides of its two nodes
+// and a distinct slot on each. Edges sharing a node side are ordered by
+// where their other end sits along that side, so they fan out without
+// crossing each other at the node.
+export function assignPorts(
+  edges: readonly { id: string; source: string; target: string }[],
+  boxById: ReadonlyMap<string, Box>,
+): Map<string, EdgePorts> {
+  type End = { edge: string; end: "source" | "target"; key: string; side: Side; other: number };
+  const ends: End[] = [];
+  for (const e of edges) {
+    const s = boxById.get(e.source);
+    const t = boxById.get(e.target);
+    if (!s || !t) continue;
+    const sides = facingSides(s, t);
+    const along = (b: Box, side: Side) => {
+      const c = center(b);
+      return side === "left" || side === "right" ? c.cy : c.cx;
+    };
+    ends.push({ edge: e.id, end: "source", key: `${e.source}|${sides.source}`, side: sides.source, other: along(t, sides.source) });
+    ends.push({ edge: e.id, end: "target", key: `${e.target}|${sides.target}`, side: sides.target, other: along(s, sides.target) });
+  }
+  const groups = new Map<string, End[]>();
+  for (const end of ends) {
+    const g = groups.get(end.key);
+    if (g) g.push(end);
+    else groups.set(end.key, [end]);
+  }
+  const slot = new Map<string, { side: Side; slot: number }>();
+  for (const g of groups.values()) {
+    g.sort((a, b) => a.other - b.other || (a.edge < b.edge ? -1 : 1));
+    const slots = slotsFor(g.length);
+    g.forEach((end, i) => slot.set(`${end.edge}|${end.end}`, { side: end.side, slot: slots[i] }));
+  }
+  const out = new Map<string, EdgePorts>();
+  const mid = (PORT_SLOTS - 1) / 2;
+  for (const e of edges) {
+    const s = slot.get(`${e.id}|source`);
+    const t = slot.get(`${e.id}|target`);
+    if (!s || !t) continue;
+    out.set(e.id, {
+      sourceHandle: portId(s.side, s.slot),
+      targetHandle: portId(t.side, t.slot),
+      stepPosition: 0.5 + ((t.slot - mid) / mid) * 0.25,
+    });
+  }
+  return out;
+}
+
+export function portId(side: Side, slot: number): string {
+  return `${side}-${slot}`;
+}
+
 // serviceNodeWidth sizes a service card to its name: 280px base, growing
 // for longer names up to 380px, past which the name truncates (with a
 // tooltip). The estimate is ~7.6px per character of 14px medium text

@@ -42,7 +42,7 @@ import {
   type ContextMenuEntry,
 } from "./CanvasContextMenu";
 import { planConnection } from "./connect";
-import { facingSides, nextInDirection, readingOrder, type Box, type Direction } from "./geometry";
+import { assignPorts, nextInDirection, readingOrder, type Box, type Direction, type EdgePorts } from "./geometry";
 import { useLatestBuilds, useProjectCrons } from "@/features/services";
 import { useServiceBadges } from "./useServiceBadges";
 import { useCanvasDensity } from "./density";
@@ -81,6 +81,7 @@ import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { peekWidthNow } from "@/components/service/workspace/PeekFrame";
 
 const nodeTypes = {
   service: ServiceNode,
@@ -105,6 +106,9 @@ interface Props {
   // means "use the overlay's own default."
   onSelectService?: (svcName: string, tab?: string) => void;
   onSelectAddon?: (addonName: string, tab?: string) => void;
+  // Node id ("svc:<cr>" / "addon:<cr>") whose side panel is open. The
+  // canvas pans it out from under the panel.
+  selectedNodeId?: string | null;
 }
 
 interface ContextState {
@@ -122,6 +126,7 @@ export function ProjectCanvas({
   envs,
   onSelectService,
   onSelectAddon,
+  selectedNodeId,
 }: Props) {
   // Latest build per service in this project, filtered to the
   // selected env-group's branch. The server (v0.17.1+) groups builds
@@ -615,6 +620,20 @@ export function ProjectCanvas({
   const boxes = useMemo(() => nodes.map(nodeBox), [nodes]);
   const boxById = useMemo(() => new Map(boxes.map((b) => [b.id, b])), [boxes]);
   const order = useMemo(() => readingOrder(boxes).map((b) => b.id), [boxes]);
+  // Hide categories the user toggled off. Edges without a kind tag
+  // (legacy or future categories) are always shown so an upgrade can't
+  // accidentally swallow them.
+  const visibleEdges = useMemo(
+    () =>
+      edges.filter((e) => {
+        const kind = (e.data as { kind?: string } | undefined)?.kind;
+        if (kind === "addon" && !edgeFilters.addon) return false;
+        if (kind === "ref" && !edgeFilters.ref) return false;
+        return true;
+      }),
+    [edges, edgeFilters],
+  );
+  const ports = useMemo(() => assignPorts(visibleEdges, boxById), [visibleEdges, boxById]);
   const tabStopId = activeId && nodes.some((n) => n.id === activeId) ? activeId : (order[0] ?? null);
   const openNodeRef = useRef<(id: string) => void>(() => {});
 
@@ -641,6 +660,43 @@ export function ProjectCanvas({
       void inst.setCenter(box.x + box.w / 2, box.y + box.h / 2, { zoom, duration: reducedMotion() ? 0 : 200 });
     }
   };
+
+  // When a node's side panel opens, keep that node in the strip of canvas
+  // left of the panel (Railway does the same); otherwise the user stares
+  // at the grid while the card they clicked hides under the panel. Zoom
+  // is kept; only an off-screen node moves, and only once per opening.
+  const pannedFor = useRef<string | null>(null);
+  const [rfReady, setRfReady] = useState(false);
+  useEffect(() => {
+    if (!selectedNodeId) {
+      pannedFor.current = null;
+      return;
+    }
+    if (pannedFor.current === selectedNodeId) return;
+    const box = boxById.get(selectedNodeId);
+    const inst = rf.current;
+    const wrap = wrapperRef.current;
+    if (!box || !inst || !wrap) return;
+    pannedFor.current = selectedNodeId;
+    // Below sm the panel covers everything; there's no strip to use.
+    if (window.innerWidth < 640) return;
+    const rect = wrap.getBoundingClientRect();
+    const visibleW = Math.min(rect.width, window.innerWidth - peekWidthNow() - rect.left);
+    if (visibleW < 120) return;
+    const { x, y, zoom } = inst.getViewport();
+    const left = box.x * zoom + x;
+    const right = left + box.w * zoom;
+    const top = box.y * zoom + y;
+    const bottom = top + box.h * zoom;
+    const margin = 24;
+    const fitsX = left >= margin && right <= visibleW - margin;
+    const fitsY = top >= margin && bottom <= rect.height - margin;
+    if (fitsX && fitsY) return;
+    const nx = fitsX ? x : visibleW / 2 - (box.x + box.w / 2) * zoom;
+    const ny = fitsY ? y : rect.height / 2 - (box.y + box.h / 2) * zoom;
+    userMovedRef.current = true;
+    void inst.setViewport({ x: nx, y: ny, zoom }, { duration: reducedMotion() ? 0 : 250 });
+  }, [selectedNodeId, boxById, rfReady]);
 
   // Keys pressed while a node (or something inside one) has focus.
   const onCanvasKeyDown = (e: React.KeyboardEvent) => {
@@ -780,7 +836,9 @@ export function ProjectCanvas({
   const nodeCount = initialNodes.length;
   useEffect(() => {
     if (nodeCount === 0 || userMovedRef.current) return;
-    const id = requestAnimationFrame(() => void rf.current?.fitView(FIT_VIEW_OPTIONS));
+    const id = requestAnimationFrame(() => {
+      if (!userMovedRef.current) void rf.current?.fitView(FIT_VIEW_OPTIONS);
+    });
     return () => cancelAnimationFrame(id);
   }, [project, nodeCount]);
 
@@ -1200,6 +1258,40 @@ export function ProjectCanvas({
         onPaneContext(e);
       }}
     >
+      {/* The toolbars come before the graph in the DOM, so Tab reaches
+          Add, Reset layout and Compact before it walks into the nodes. */}
+        <AddMenuPanel
+          project={project}
+          canServicesWrite={canServicesWrite}
+          canAddonsWrite={canAddonsWrite}
+          onAddAddon={() => setShowAddAddon(true)}
+          onAddCron={() => setShowAddCron(true)}
+        />
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetLayout}
+            title="Forget dragged positions and re-run the automatic layout"
+            className="canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+            Reset layout
+          </button>
+          <button
+            type="button"
+            aria-pressed={density === "compact"}
+            onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
+            title={density === "compact" ? "Show full cards (URL row)" : "Smaller cards, so more of the project fits"}
+            className={cn(
+              "canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
+              density === "compact" ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]",
+            )}
+          >
+            <Rows3 className="h-3.5 w-3.5" aria-hidden />
+            Compact
+          </button>
+          <CanvasShortcutsButton />
+        </div>
       <ReactFlow
         nodes={nodes.map((n): Node => ({
           ...n,
@@ -1224,17 +1316,7 @@ export function ProjectCanvas({
                   : undefined,
           },
         }))}
-        edges={edges
-          .filter((e) => {
-            // Hide categories the user toggled off. Edges without a
-            // kind tag (legacy or future categories) are always shown
-            // so an upgrade can't accidentally swallow them.
-            const kind = (e.data as { kind?: string } | undefined)?.kind;
-            if (kind === "addon" && !edgeFilters.addon) return false;
-            if (kind === "ref" && !edgeFilters.ref) return false;
-            return true;
-          })
-          .map((e) => styleEdge(e, hotNodes, boxById))}
+        edges={visibleEdges.map((e) => styleEdge(e, hotNodes, ports))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
@@ -1244,6 +1326,7 @@ export function ProjectCanvas({
         connectionMode={ConnectionMode.Loose}
         onInit={(inst) => {
           rf.current = inst;
+          setRfReady(true);
         }}
         // A non-null event means the user dragged or scrolled the
         // viewport (programmatic fits pass null).
@@ -1274,38 +1357,6 @@ export function ProjectCanvas({
         <Background id="major" variant={BackgroundVariant.Cross} gap={120} size={9} lineWidth={1} color="var(--grid-major)" />
         <Controls />
         <EdgeLegend filters={edgeFilters} setFilters={setEdgeFilters} />
-        <Panel position="top-right" className="!m-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={resetLayout}
-            title="Forget dragged positions and re-run the automatic layout"
-            className="canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-          >
-            <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
-            Reset layout
-          </button>
-          <button
-            type="button"
-            aria-pressed={density === "compact"}
-            onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
-            title={density === "compact" ? "Show full cards (URL row)" : "Smaller cards, so more of the project fits"}
-            className={cn(
-              "canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
-              density === "compact" ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]",
-            )}
-          >
-            <Rows3 className="h-3.5 w-3.5" aria-hidden />
-            Compact
-          </button>
-          <CanvasShortcutsButton />
-        </Panel>
-        <AddMenuPanel
-          project={project}
-          canServicesWrite={canServicesWrite}
-          canAddonsWrite={canAddonsWrite}
-          onAddAddon={() => setShowAddAddon(true)}
-          onAddCron={() => setShowAddCron(true)}
-        />
       </ReactFlow>
 
       <CanvasContextMenu
@@ -1522,7 +1573,7 @@ function AddMenuPanel({
     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
   const needsEditor = "You need editor access on this project";
   return (
-    <Panel position="top-left" className="!m-3">
+    <div className="absolute left-3 top-3 z-10">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger className="canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)] data-[popup-open]:bg-[var(--bg-tertiary)]">
           <Plus className="h-3.5 w-3.5" />
@@ -1573,7 +1624,7 @@ function AddMenuPanel({
           </button>
         </PopoverContent>
       </Popover>
-    </Panel>
+    </div>
   );
 }
 
@@ -1665,30 +1716,29 @@ const EDGE_COLOR: Record<EdgeData["kind"], string> = {
 // styleEdge: solid and low-contrast by default, accent + thicker when
 // either end is hovered, focused or selected, and nearly gone when
 // another node is. Edges are rounded orthogonal paths that leave and
-// enter on the sides of the two nodes facing each other, so a busy graph
-// reads as tidy lanes instead of crossing curves; several addon edges
-// into one service share its facing side and bundle on the way in.
+// enter on the sides of the two nodes facing each other, each on its own
+// port (assignPorts), and bend at a point picked by the target port, so a
+// busy graph reads as separate lanes instead of one overlapping bundle.
+// Mounted-but-unreferenced addon edges stay faint at rest.
 // Never animated — a moving dash read as "in progress" on every edge.
-function styleEdge(e: Edge, hot: Set<string>, boxById: Map<string, Box>): BuiltInEdge {
+function styleEdge(e: Edge, hot: Set<string>, ports: Map<string, EdgePorts>): BuiltInEdge {
   const d = (e.data ?? { kind: "ref" }) as EdgeData;
   const lit = hot.has(e.source) || hot.has(e.target);
   const dimmed = hot.size > 0 && !lit;
-  const src = boxById.get(e.source);
-  const dst = boxById.get(e.target);
-  const sides = src && dst ? facingSides(src, dst) : { source: "right" as const, target: "left" as const };
+  const p = ports.get(e.id);
   return {
     ...e,
     type: "smoothstep",
-    pathOptions: { borderRadius: 18, offset: 24 },
-    sourceHandle: sides.source,
-    targetHandle: sides.target,
+    pathOptions: { borderRadius: 18, offset: 24, stepPosition: p?.stepPosition ?? 0.5 },
+    sourceHandle: p?.sourceHandle,
+    targetHandle: p?.targetHandle,
     animated: false,
     zIndex: lit ? 1 : 0,
     style: {
       stroke: lit ? "var(--edge-lit)" : EDGE_COLOR[d.kind],
       strokeWidth: lit ? 2.25 : 1.5,
       strokeLinecap: "round",
-      opacity: lit ? 1 : dimmed ? 0.08 : d.implicit ? 0.45 : 0.85,
+      opacity: lit ? 1 : dimmed ? 0.05 : d.implicit ? 0.3 : 0.85,
       strokeDasharray: d.pending ? "5 5" : undefined,
     },
   };

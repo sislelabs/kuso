@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ADDON_NODE_CHROME, addonNodeWidth, facingSides, nextInDirection, readingOrder, serviceNodeWidth, smallNodeWidth, type Box } from "./geometry";
+import { ADDON_NODE_CHROME, addonNodeWidth, assignPorts, facingSides, slotsFor, nextInDirection, readingOrder, serviceNodeWidth, smallNodeWidth, type Box } from "./geometry";
 
 const box = (id: string, x: number, y: number, w = 200, h = 100): Box => ({ id, x, y, w, h });
 
@@ -74,5 +74,47 @@ describe("addonNodeWidth", () => {
   it("widens for the CVE chip on the status row", () => {
     const row = "Live · ClickHouse";
     expect(addonNodeWidth("clickhouse", row, true)).toBeGreaterThan(addonNodeWidth("clickhouse", row, false));
+  });
+});
+
+describe("assignPorts", () => {
+  it("spreads several edges into one side over distinct slots, ordered by the other end", () => {
+    // Three addons stacked on the left, one service to their right.
+    const boxes = new Map(
+      [box("a1", 0, 0), box("a2", 0, 200), box("a3", 0, 400), box("svc", 500, 200)].map((b) => [b.id, b]),
+    );
+    const ports = assignPorts(
+      [
+        { id: "e3", source: "a3", target: "svc" },
+        { id: "e1", source: "a1", target: "svc" },
+        { id: "e2", source: "a2", target: "svc" },
+      ],
+      boxes,
+    );
+    // Top addon lands highest on the service's left side; none share a slot.
+    expect(ports.get("e1")?.targetHandle).toBe("left-1");
+    expect(ports.get("e2")?.targetHandle).toBe("left-3");
+    expect(ports.get("e3")?.targetHandle).toBe("left-5");
+    // Each addon has one edge, so it leaves from its side's middle.
+    expect(ports.get("e1")?.sourceHandle).toBe("right-3");
+    // Different target slots bend at different points.
+    const steps = new Set(["e1", "e2", "e3"].map((id) => ports.get(id)?.stepPosition));
+    expect(steps.size).toBe(3);
+  });
+
+  it("keeps a lone edge on the middle slots with a centred bend", () => {
+    const boxes = new Map([box("a", 0, 0), box("b", 500, 0)].map((b) => [b.id, b]));
+    expect(assignPorts([{ id: "e", source: "a", target: "b" }], boxes).get("e")).toEqual({
+      sourceHandle: "right-3",
+      targetHandle: "left-3",
+      stepPosition: 0.5,
+    });
+  });
+
+  it("spreads n edges symmetrically", () => {
+    expect(slotsFor(1)).toEqual([3]);
+    expect(slotsFor(2)).toEqual([2, 4]);
+    expect(slotsFor(3)).toEqual([1, 3, 5]);
+    expect(new Set(slotsFor(7)).size).toBe(7);
   });
 });
