@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
 )
@@ -92,5 +94,35 @@ func TestGetDrift_PortlessWorkerIsNotPending(t *testing.T) {
 		if f == "port" {
 			t.Fatalf("SpecPending = %v, port must not drift for a portless worker", d.SpecPending)
 		}
+	}
+}
+
+// An old ReplicaSet's pod that exited 0 on SIGTERM lingers as Succeeded
+// with the previous image; it must not read as image drift (the sticky
+// "Restart to apply" after a rollback).
+func TestCompareDeploymentToEnv_IgnoresFinishedPods(t *testing.T) {
+	t.Parallel()
+	pod := func(name, image string, phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso", Labels: map[string]string{"app.kubernetes.io/instance": "shop-web-production"}},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: image}}},
+			Status:     corev1.PodStatus{Phase: phase},
+		}
+	}
+	cs := kubefake.NewSimpleClientset(
+		pod("new", "nginx:1.28", corev1.PodRunning),
+		pod("old", "nginx:1.27", corev1.PodSucceeded),
+	)
+	s := New(&kube.Client{Clientset: cs}, "kuso")
+	env := kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop-web-production"},
+		Spec:       kube.KusoEnvironmentSpec{Image: &kube.KusoImage{Repository: "nginx", Tag: "1.28"}},
+	}
+	if got := compareDeploymentToEnv(context.Background(), s, "kuso", env); len(got) != 0 {
+		t.Fatalf("podsStale = %v, want none", got)
+	}
+	env.Spec.Image.Tag = "1.29"
+	if got := compareDeploymentToEnv(context.Background(), s, "kuso", env); len(got) != 1 || got[0] != "image" {
+		t.Fatalf("podsStale = %v, want [image] when the running pod lags the spec", got)
 	}
 }

@@ -452,7 +452,10 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 		// Skip pods that are terminating — they're the OLD generation
 		// being killed, including them would make drift flap during
 		// rollouts. Phase==Running + DeletionTimestamp==nil = current.
-		if p.DeletionTimestamp != nil {
+		// Finished pods too: an old ReplicaSet's pod whose app exited 0 on
+		// SIGTERM lingers as Succeeded with the previous image, and read
+		// as "image drift → Restart to apply" after every rollback.
+		if p.DeletionTimestamp != nil || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}
 		if len(p.Spec.Containers) == 0 {

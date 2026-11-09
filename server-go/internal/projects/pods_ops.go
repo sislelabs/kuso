@@ -41,6 +41,9 @@ type PodSummary struct {
 	// ImageID is the first container's resolved image (registry@sha256:…)
 	// as the kubelet reports it; empty until the image is pulled.
 	ImageID string `json:"imageID,omitempty"`
+	// Image is the first container's spec image reference (repo:tag), so
+	// a client can tell which release a pod runs before trusting ImageID.
+	Image string `json:"image,omitempty"`
 }
 
 // PodList is what the handler returns. Namespace is included so callers
@@ -151,6 +154,9 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 			Current:    podIsCurrent(p, currentRS),
 			CreatedAt:  p.CreationTimestamp.UTC().Format(time.RFC3339),
 			ImageID:    imageID,
+		}
+		if len(p.Spec.Containers) > 0 {
+			sum.Image = p.Spec.Containers[0].Image
 		}
 		if reason != "" {
 			sum.Summary = podreason.Summarize(reason, message)
