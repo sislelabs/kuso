@@ -110,6 +110,8 @@ interface Props {
   // Node id ("svc:<cr>" / "addon:<cr>") whose side panel is open. The
   // canvas pans it out from under the panel.
   selectedNodeId?: string | null;
+  // A click on empty canvas: close whatever panel is open.
+  onClearSelection?: () => void;
 }
 
 interface ContextState {
@@ -128,6 +130,7 @@ export function ProjectCanvas({
   onSelectService,
   onSelectAddon,
   selectedNodeId,
+  onClearSelection,
 }: Props) {
   // Latest build per service in this project, filtered to the
   // selected env-group's branch. The server (v0.17.1+) groups builds
@@ -963,6 +966,14 @@ export function ProjectCanvas({
     }
   };
   const onNodeClick: NodeMouseHandler = (_e, node) => openNode(node);
+  // React Flow's pane eats the mousedown, so a focused node (e.g. the one
+  // focus returned to when its panel closed) kept its ring and lit edges.
+  const onPaneClick = () => {
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && el.dataset.canvasNode) el.blur();
+    setFocusedId(null);
+    onClearSelection?.();
+  };
   openNodeRef.current = (id: string) => {
     const node = nodes.find((n) => n.id === id);
     if (node) openNode(node);
@@ -1336,6 +1347,7 @@ export function ProjectCanvas({
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
         onNodeMouseEnter={(_e, n) => setHoveredNode(n.id)}
         onNodeMouseLeave={() => setHoveredNode(null)}
         onConnect={onConnect}

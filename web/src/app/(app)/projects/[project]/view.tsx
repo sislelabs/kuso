@@ -523,6 +523,7 @@ export function ProjectDetailView() {
                   ? `addon:${selectedAddon}`
                   : null
             }
+            onClearSelection={closeOverlay}
           />
         )}
       </div>
