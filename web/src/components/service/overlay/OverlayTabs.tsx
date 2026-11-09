@@ -180,20 +180,30 @@ export function OverlayTabs<T extends string>({
       onKeyDown={onKeyDown}
       className={cn("relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3", phone && "py-2")}
     >
-      <div className="relative flex min-w-0 flex-1">
-        <div
-          ref={stripRef}
-          onScroll={updateFade}
-          className={cn(
-            "relative flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-            phone && "gap-1.5 px-1",
-          )}
-        >
-          {visible.map((t) => tabButton(t))}
-        </div>
-        {/* Clipped tabs get a fade plus a chevron, so the strip reads as
-            scrollable; the chevron pages it (keyboard users have arrows). */}
+      {/* Clipped tabs get a fade plus a chevron, so the strip reads as
+          scrollable; the chevron pages it (keyboard users have arrows). The
+          chevrons sit beside the strip, not over it, so they never cover a
+          tab label or its count. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1">
         {fade.left && <ScrollEdge side="left" errors={hiddenErrors.left} onPage={() => pageStrip(-1)} />}
+        <div className="relative flex min-w-0 flex-1">
+          <div
+            ref={stripRef}
+            onScroll={updateFade}
+            className={cn(
+              "relative flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              phone && "gap-1.5 px-1",
+            )}
+          >
+            {visible.map((t) => tabButton(t))}
+          </div>
+          {fade.left && (
+            <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-[var(--bg-primary)] to-transparent" />
+          )}
+          {fade.right && (
+            <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[var(--bg-primary)] to-transparent" />
+          )}
+        </div>
         {fade.right && <ScrollEdge side="right" errors={hiddenErrors.right} onPage={() => pageStrip(1)} />}
       </div>
       {overflow.length > 0 && (
@@ -260,34 +270,27 @@ export function OverlayTabs<T extends string>({
 
 function ScrollEdge({ side, errors, onPage }: { side: "left" | "right"; errors: number; onPage: () => void }) {
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
-  return (
-    <span
-      className={cn(
-        "pointer-events-none absolute inset-y-0 flex w-12 items-center from-[var(--bg-primary)] from-45% to-transparent",
-        side === "left" ? "left-0 justify-start bg-gradient-to-r" : "right-0 justify-end bg-gradient-to-l",
-      )}
-    >
-      <button
-        type="button"
-        tabIndex={-1}
+  // Visible hint only; the tab itself carries the count for screen readers.
+  const count =
+    errors > 0 ? (
+      <span
         aria-hidden
-        onClick={onPage}
-        className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm hover:text-[var(--text-primary)]"
+        className="rounded-full bg-[var(--error-subtle)] px-1.5 text-xs font-semibold leading-[18px] tabular-nums text-[var(--error)]"
       >
-        <Icon className="h-4 w-4" />
-      </button>
-      {errors > 0 && (
-        // Visible hint only; the tab itself carries the count for screen readers.
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute top-1 rounded-full bg-[var(--error)] px-1 text-2xs font-semibold leading-4 tabular-nums text-[var(--bg-primary)]",
-            side === "left" ? "left-5" : "right-0",
-          )}
-        >
-          {badgeText(errors)}
-        </span>
-      )}
-    </span>
+        {badgeText(errors)}
+      </span>
+    ) : null;
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-hidden
+      onClick={onPage}
+      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--bg-elevated)] px-1 text-[var(--text-secondary)] shadow-sm hover:text-[var(--text-primary)]"
+    >
+      {side === "right" && count}
+      <Icon className="h-4 w-4" />
+      {side === "left" && count}
+    </button>
   );
 }
