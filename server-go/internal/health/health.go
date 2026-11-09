@@ -28,10 +28,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/rollout"
 	"kuso/server/internal/serverstate"
 )
 
@@ -336,7 +338,7 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		if open {
 			continue
 		}
-		ep = w.alertCrash(ctx, o.badPod, o.reason, now)
+		ep = w.alertCrash(ctx, o.badPod, o.reason, o.ready, now)
 		ep.lastBad = now
 		w.mu.Lock()
 		w.crashSeen[key] = ep
@@ -377,7 +379,8 @@ func (w *Watcher) checkPods(ctx context.Context) {
 
 // alertCrash emits the crash event for the first bad pod of a new
 // episode and returns the episode it opens.
-func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, now time.Time) *crashEpisode {
+// previousServing: another pod of the same env is Ready.
+func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, previousServing bool, now time.Time) *crashEpisode {
 	project := p.Labels[kube.LabelProject]
 	restarts := containerRestartTotal(p)
 	// Addon pods (postgres/redis/s3/...) carry kuso.sislelabs.com/addon
@@ -420,7 +423,10 @@ func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, 
 	// as a crashloop. Prefer the terminated signal so Classify
 	// reaches KindOOM (and the exit-137 fallback).
 	termReason, exitCode := podTerminatedSignal(p)
-	sig := failures.Signal{Reason: sigReason, ExitCode: exitCode, Runtime: true}
+	sig := failures.Signal{Reason: sigReason, ExitCode: exitCode, Runtime: true, PreviousServing: previousServing}
+	if sigReason == "ErrImagePull" || sigReason == "ImagePullBackOff" {
+		sig.Image, sig.PullCause = w.pullFailure(ctx, p)
+	}
 	if termReason != "" {
 		sig.Reason = termReason
 	}
@@ -428,17 +434,70 @@ func (w *Watcher) alertCrash(ctx context.Context, p *corev1.Pod, reason string, 
 	service := podServiceShort(p)
 	envName := w.podEnvName(ctx, p, service)
 	w.send(notify.PodCrashed(notify.PodCrash{
-		Project:        project,
-		Service:        service,
-		Env:            envName,
-		Pod:            p.Name,
-		Reason:         reason,
-		LogTail:        logTail,
-		Restarts:       restarts,
-		Since:          now,
-		Classification: &classification,
+		Project:         project,
+		Service:         service,
+		Env:             envName,
+		Pod:             p.Name,
+		Reason:          reason,
+		LogTail:         logTail,
+		Restarts:        restarts,
+		Since:           now,
+		Classification:  &classification,
+		PreviousServing: previousServing,
 	}))
 	return &crashEpisode{since: now, project: project, service: service, env: envName}
+}
+
+// pullFailure returns the image a pull-failing pod wants and the
+// registry's answer (rollout.Pull*). ImagePullBackOff's own message
+// carries no cause, so the pod's newest "Failed" event is read then.
+func (w *Watcher) pullFailure(ctx context.Context, p *corev1.Pod) (image, cause string) {
+	for _, all := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
+		for _, cs := range all {
+			if cs.State.Waiting == nil || (cs.State.Waiting.Reason != "ErrImagePull" && cs.State.Waiting.Reason != "ImagePullBackOff") {
+				continue
+			}
+			image, cause = cs.Image, rollout.PullCause(cs.State.Waiting.Message)
+			if image == "" {
+				image = containerImage(p, cs.Name)
+			}
+			break
+		}
+		if image != "" {
+			break
+		}
+	}
+	if cause != "" || w.Kube == nil || w.Kube.Clientset == nil {
+		return image, cause
+	}
+	ectx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	sel := fields.Set{"involvedObject.kind": "Pod", "involvedObject.name": p.Name, "reason": "Failed"}.AsSelector().String()
+	list, err := w.Kube.Clientset.CoreV1().Events(p.Namespace).List(ectx, metav1.ListOptions{FieldSelector: sel})
+	if err != nil {
+		return image, ""
+	}
+	var newest time.Time
+	for i := range list.Items {
+		ev := &list.Items[i]
+		t := ev.LastTimestamp.Time
+		if t.IsZero() {
+			t = ev.EventTime.Time
+		}
+		if c := rollout.PullCause(ev.Message); c != "" && !t.Before(newest) {
+			newest, cause = t, c
+		}
+	}
+	return image, cause
+}
+
+func containerImage(p *corev1.Pod, name string) string {
+	for _, c := range append(append([]corev1.Container{}, p.Spec.InitContainers...), p.Spec.Containers...) {
+		if c.Name == name {
+			return c.Image
+		}
+	}
+	return ""
 }
 
 func lastLines(lines []string, n int) string {

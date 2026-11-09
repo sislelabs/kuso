@@ -73,6 +73,26 @@ type PodCrash struct {
 	// Since is when the episode started (first observed); zero = unknown.
 	Since          time.Time
 	Classification *failures.Classification
+	// PreviousServing: an older pod of the env is still Ready, so a pod
+	// that can't pull or start is a stuck rollout, not an outage.
+	PreviousServing bool
+}
+
+// crashHeadline names what the pods are doing. Only a container that
+// starts and dies is "Crashing"; one that never started can't have.
+func crashHeadline(reason string, previousServing bool) string {
+	r := strings.TrimPrefix(reason, "init:")
+	switch {
+	case r == "ErrImagePull" || r == "ImagePullBackOff" || r == "CreateContainerConfigError":
+		if previousServing {
+			return "Rollout stuck"
+		}
+		if r == "CreateContainerConfigError" {
+			return "Can't start"
+		}
+		return "Image pull failed"
+	}
+	return "Crashing"
 }
 
 // PodCrashed: a service's pods are crashlooping / can't pull / can't
@@ -112,7 +132,7 @@ func PodCrashed(c PodCrash) Event {
 	}
 	return Event{
 		Type:           EventPodCrashed,
-		Title:          "✗ Crashing · " + Scope(c.Project, c.Service, c.Env),
+		Title:          "✗ " + crashHeadline(c.Reason, c.PreviousServing) + " · " + Scope(c.Project, c.Service, c.Env),
 		LogTail:        c.LogTail,
 		Body:           c.Reason, // raw-webhook consumers
 		Project:        c.Project,

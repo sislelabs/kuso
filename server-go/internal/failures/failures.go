@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"kuso/server/internal/rollout"
 )
 
 // Kind enumerates the failure classes the UI knows how to route. The
@@ -162,6 +164,14 @@ type Signal struct {
 	// exit code 1" for any failing script, and a crashing app was being
 	// reported as a failed build.
 	Runtime bool
+	// PullCause is the registry's answer for a failed image pull
+	// (rollout.Pull*), "" when unknown. Image is the reference the pod
+	// tried to pull, and PreviousServing says an older pod of the same
+	// env is still Ready, i.e. a rollout is stuck rather than the
+	// service down.
+	PullCause       string
+	Image           string
+	PreviousServing bool
 }
 
 // Classify inspects pod-status signal + the last N log lines and
@@ -324,11 +334,7 @@ func classifyFromSignal(sig Signal) (Classification, bool) {
 			Summary: "Pod keeps crashing. See logs for the failing stack.",
 		}, true
 	case "ErrImagePull", "ImagePullBackOff":
-		return Classification{
-			Kind:    KindImagePullFailed,
-			Tab:     TabSettings,
-			Summary: "Couldn't pull the image. Check the registry credentials in Settings → Source.",
-		}, true
+		return Classification{Kind: KindImagePullFailed, Tab: TabSettings, Summary: imagePullSummary(sig)}, true
 	case "CreateContainerConfigError":
 		// CreateContainerConfigError on a kuso pod almost always means
 		// a referenced Secret/ConfigMap key is missing — i.e. an env
@@ -350,6 +356,35 @@ func classifyFromSignal(sig Signal) (Classification, bool) {
 		}, true
 	}
 	return Classification{}, false
+}
+
+// imagePullSummary names a failed pull by the registry's answer: a
+// missing tag is a typo or an unpushed image, a 401/403 is credentials.
+// With the previous version still serving it's a stuck rollout, not an
+// outage.
+func imagePullSummary(sig Signal) string {
+	var what, hint string
+	switch sig.PullCause {
+	case rollout.PullNotFound:
+		what = "image not found in the registry"
+		if tag := rollout.ImageTag(sig.Image); tag != "" {
+			what = "tag " + tag + " not found"
+		}
+		hint = "Check the tag for a typo, or push the image, then redeploy."
+	case rollout.PullUnauthorized:
+		what = "the registry refused the image (401/403)"
+		hint = "Check the registry credentials in Settings → Source."
+	case rollout.PullUnreachable:
+		what = "the image registry can't be reached"
+		hint = "Check the registry host in the image reference."
+	default:
+		what = "the image can't be pulled"
+		hint = "Check the image tag and the registry credentials in Settings → Source."
+	}
+	if sig.PreviousServing {
+		return "Rollout stuck: " + what + " (old version still serving). " + hint
+	}
+	return "Can't start: " + what + ". " + hint
 }
 
 // logDetector pairs a regex with the Kind it implies plus a short
