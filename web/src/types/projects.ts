@@ -267,6 +267,9 @@ export interface KusoEnvironment {
       | "unknown"
       | (string & {});
     stateDetail?: string;
+    // When the Deployment's current ReplicaSet finished rolling out
+    // (any rollout: build, config, image, rollback). Absent mid-rollout.
+    rolloutCompletedAt?: string;
     [k: string]: unknown;
   };
 }

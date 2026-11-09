@@ -5,6 +5,7 @@
 
 import { isProductionGroup, isProductionResource } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
+import { deriveServiceStatus, serviceBucketOf } from "@/features/services/nodeStatus";
 
 export type StatusTone = "success" | "progress" | "warning" | "danger" | "info" | "neutral";
 
@@ -22,6 +23,7 @@ export type ServiceStatus =
   | "degraded"
   | "failing"
   | "stuck"
+  | "rollout_failing"
   | "sleeping"
   | "stopped"
   | "not_deployed"
@@ -37,6 +39,9 @@ export const SERVICE_STATUS: Record<ServiceStatus, StatusMeta> = {
   // has been pending > 10 min. Needs attention like failing; the reason
   // is in stateDetail.
   stuck: { label: "Stuck", tone: "danger" },
+  // The new version fails (health check, crash, image pull) while the
+  // previous one keeps serving: needs attention, but the app is up.
+  rollout_failing: { label: "Rollout failing", tone: "warning" },
   sleeping: { label: "Sleeping", tone: "neutral" },
   stopped: { label: "Stopped", tone: "neutral" },
   not_deployed: { label: "Not deployed", tone: "info" },
@@ -65,6 +70,8 @@ export function serviceStatusFromServerState(state: string | undefined): Service
       return "failing";
     case "stuck":
       return "stuck";
+    case "rollout_failing":
+      return "rollout_failing";
     case "sleeping":
       return "sleeping";
     case "stopped":
@@ -90,6 +97,8 @@ export function serverStateCause(state: string | undefined): string | undefined 
       return "Release hook failed; previous build still serving";
     case "stuck":
       return "Can't start";
+    case "rollout_failing":
+      return "New version failing; previous version still serving";
     default:
       return undefined;
   }
@@ -150,6 +159,35 @@ export function stuckFacts(status: Record<string, unknown> | undefined): StuckFa
   };
 }
 
+// The server's failing-rollout facts (env.status.rollout, sent with
+// state "rollout_failing").
+export interface RolloutFacts {
+  // healthcheck | crash | image_pull | config_error | stalled
+  kind?: string;
+  // "the new version fails its health check (GET /health → 404)"
+  cause?: string;
+  previousServing: boolean;
+  healthcheckPath?: string;
+  // HTTP status code, "connection refused" or "timed out".
+  probeResult?: string;
+  since?: string;
+  // When the version still serving started (its newest ready pod).
+  previousSince?: string;
+}
+
+export function rolloutFacts(status: Record<string, unknown> | undefined): RolloutFacts | undefined {
+  const r = status?.rollout;
+  if (!r || typeof r !== "object") return undefined;
+  const o = r as Record<string, unknown>;
+  const str = (k: string) => (typeof o[k] === "string" && o[k] ? (o[k] as string) : undefined);
+  const out: RolloutFacts = { previousServing: o.previousServing === true };
+  for (const k of ["kind", "cause", "healthcheckPath", "probeResult", "since", "previousSince"] as const) {
+    const v = str(k);
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 type HelmCondition = { type?: string; status?: string; message?: string };
 
 export interface AddonHealthFacts {
@@ -192,32 +230,9 @@ export function addonStatusFromServer(addon: {
 export type ServiceBucket = "running" | "in_flight" | "attention" | "sleeping" | "stopped" | "not_deployed" | "unknown";
 
 export function serviceBucket(stopped: boolean | undefined, env: KusoEnvironment | undefined): ServiceBucket {
-  if (stopped) return "stopped";
-  if (!env) return "not_deployed";
-  const state = env.status?.state;
-  const kind = serviceStatusFromServerState(typeof state === "string" ? state : undefined);
-  switch (kind) {
-    case "live":
-      return "running";
-    case "deploying":
-    case "building":
-      return "in_flight";
-    case "failing":
-    case "stuck":
-    case "degraded":
-      return "attention";
-    case "sleeping":
-      return "sleeping";
-    case "stopped":
-      return "stopped";
-    case "not_deployed":
-      return "not_deployed";
-    case "unknown":
-      return "unknown";
-  }
-  // Older server without a rollup state.
-  const replicas = env.status?.replicas as { ready?: number } | undefined;
-  return (replicas?.ready ?? 0) > 0 || env.status?.ready === true ? "running" : "unknown";
+  // The same derivation as every dot and pill (deriveServiceStatus), so
+  // counts can't disagree with what the cards show.
+  return serviceBucketOf(deriveServiceStatus({ stopped, env }));
 }
 
 export type ServiceTally = Record<ServiceBucket, number> & { total: number };

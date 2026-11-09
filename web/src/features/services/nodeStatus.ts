@@ -5,7 +5,8 @@
 
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
 import type { BuildSummary } from "./api";
-import { addonStatusFromServer } from "@/lib/status";
+import { addonStatusFromServer, stuckFacts, type ServiceBucket, type StatusTone } from "@/lib/status";
+import { promotedIfLive } from "@/features/projects/facts";
 
 export type NodeStatusKind =
   | "live"
@@ -15,6 +16,7 @@ export type NodeStatusKind =
   | "build_failed"
   | "crashing"
   | "stuck"
+  | "rollout_failing"
   | "sleeping"
   | "stopped"
   | "not_deployed"
@@ -54,6 +56,10 @@ function serverState(state: string | undefined, detail?: string): NodeStatus | n
     // Pods can't start or the rollout stalled; detail is the plain reason.
     case "stuck":
       return S("stuck", "Stuck", "error", detail);
+    // The new version's pods fail while the previous version keeps
+    // serving: degraded, not down. The detail names the cause.
+    case "rollout_failing":
+      return S("rollout_failing", "Rollout failing", "warning", detail);
     case "deploying":
       return S("deploying", "Deploying", "progress", detail);
     case "building":
@@ -96,6 +102,10 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
 
   const detail = env?.status?.stateDetail || undefined;
   const fromServer = serverState(env?.status?.state, detail);
+  // Name the commonest stuck cause outright rather than "Stuck".
+  if (fromServer?.kind === "stuck" && stuckFacts(env?.status)?.reason === "image_pull") {
+    return { ...fromServer, label: "Image pull failed" };
+  }
   if (fromServer) return fromServer;
 
   if (!env) return S("not_deployed", "Not deployed", "info");
@@ -155,9 +165,10 @@ export function deriveCronStatus(spec: { suspend?: boolean }): NodeStatus {
 // lastDeployedAt, and the latest build if it succeeded.
 export function lastDeployAt(env: KusoEnvironment | undefined, latestBuild?: BuildSummary): string | undefined {
   const candidates: string[] = [];
-  const promoted = env?.metadata?.annotations?.["kuso.sislelabs.com/promoted-at"];
+  const promoted = env ? promotedIfLive(env) : undefined;
   if (promoted) candidates.push(promoted);
   if (env?.status?.lastDeployedAt) candidates.push(env.status.lastDeployedAt);
+  if (env?.status?.rolloutCompletedAt) candidates.push(env.status.rolloutCompletedAt);
   if ((latestBuild?.status ?? "").toLowerCase() === "succeeded") {
     const t = latestBuild?.finishedAt ?? latestBuild?.startedAt;
     if (t) candidates.push(t);
@@ -212,4 +223,39 @@ export const STATUS_TONE: Record<NodeStatusTone, { dot: string; text: string; bo
     border: "border-[var(--border-default)]",
     chip: "border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
   },
+};
+
+// serviceBucketOf files a derived status into the count buckets the
+// Health page and project cards sum, so a count never disagrees with the
+// dot it counts. "attention" = anything with a warning or error tone.
+export function serviceBucketOf(status: NodeStatus): ServiceBucket {
+  switch (status.kind) {
+    case "live":
+      return "running";
+    case "building":
+    case "deploying":
+    case "provisioning":
+      return "in_flight";
+    case "sleeping":
+      return "sleeping";
+    case "stopped":
+    case "paused":
+      return "stopped";
+    case "not_deployed":
+      return "not_deployed";
+    case "unknown":
+      return "unknown";
+    default:
+      return "attention";
+  }
+}
+
+// NODE_TONE_TO_STATUS maps the node tones onto the lib/status tones.
+export const NODE_TONE_TO_STATUS: Record<NodeStatusTone, StatusTone> = {
+  success: "success",
+  warning: "warning",
+  error: "danger",
+  progress: "progress",
+  info: "info",
+  muted: "neutral",
 };

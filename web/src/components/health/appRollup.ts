@@ -9,14 +9,13 @@ import { serviceShortName } from "@/components/project/list/projectCardModel";
 import { envGroupName } from "@/lib/env-group";
 import {
   ADDON_STATUS,
-  SERVICE_STATUS,
   addonStatusFromServer,
   serverStateCause,
-  serviceStatusFromServerState,
   tallyServices,
   type StatusMeta,
 } from "@/lib/status";
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
+import { deriveServiceStatus, NODE_TONE_TO_STATUS, serviceBucketOf } from "@/features/services/nodeStatus";
 
 // One project's probe results. null = that probe failed; "unsupported" =
 // the server predates the endpoint (404).
@@ -125,7 +124,7 @@ export function projectHref(
 // Failed or broken deploys are fixed from the deployment history; a
 // crashloop or degraded runtime is read in the logs.
 function tabForState(state: string | undefined): OverlayTab {
-  return state === "build_failed" || state === "release_failed" ? "deployments" : "logs";
+  return state === "build_failed" || state === "release_failed" || state === "rollout_failing" ? "deployments" : "logs";
 }
 
 function stripPrefix(name: string, project: string): string {
@@ -166,15 +165,16 @@ function rollupServices(items: ProjectSummaryItem[]): AppRollup["services"] {
       if (svc?.spec.stopped === true) continue;
       const service = svc ? serviceShortName(svc) : stripPrefix(env.spec.service, project);
       const state = stateOf(env);
-      const kind = serviceStatusFromServerState(state);
-      if (kind !== "failing" && kind !== "stuck" && kind !== "degraded") continue;
+      // Same derivation as the canvas card, header pill and project cards.
+      const derived = deriveServiceStatus({ stopped: svc?.spec.stopped, env });
+      if (serviceBucketOf(derived) !== "attention") continue;
       const detail = env.status?.stateDetail;
       out.problems.push({
         project,
         service,
         group,
-        status: SERVICE_STATUS[kind],
-        cause: serverStateCause(state) ?? (kind === "degraded" ? "Not all replicas ready" : undefined),
+        status: { label: derived.label, tone: NODE_TONE_TO_STATUS[derived.tone] },
+        cause: serverStateCause(state) ?? (derived.kind === "degraded" ? "Not all replicas ready" : undefined),
         detail: typeof detail === "string" && detail ? detail : undefined,
         href: projectHref(project, {
           env: group === "production" ? undefined : group,

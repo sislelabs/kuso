@@ -42,7 +42,7 @@ export function imageRolloutState(envState: string | undefined, allPods: readonl
   const notReady = pods.filter((p) => !p.ready);
   const pullFail = notReady.find((p) => p.reason && PULL_FAILED.has(p.reason));
   if (pullFail) {
-    return { step: "pulling", status: "failed", title: "Can't pull the image", detail: pullFail.summary || pullFail.message || pullFail.reason, ready, total };
+    return { step: "pulling", status: "failed", title: "Image pull failed", detail: pullFail.summary || pullFail.message || pullFail.reason, ready, total };
   }
   const startFail = notReady.find((p) => p.reason && START_FAILED.has(p.reason));
   if (startFail || envState === "crashlooping") {
