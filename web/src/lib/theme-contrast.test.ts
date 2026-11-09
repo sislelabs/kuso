@@ -43,6 +43,32 @@ const WIRES = ["edge-addon", "edge-ref", "edge-lit"];
 // it gets headroom on every surface, popovers and hovered rows included.
 const META = ["text-tertiary", "muted-foreground"];
 const META_SURFACES = [...SURFACES, "popover", "card"];
+// Status chips (error counts, CVEs, Rolled back) set 11px text in the tone
+// colour on its translucent tint, laid over a card or the canvas. Small
+// text, so the full 4.5:1 applies to the composited fill.
+const CHIPS: [string, string][] = [
+  ["error", "error-subtle"],
+  ["warning", "warning-subtle"],
+  ["success", "success-subtle"],
+  ["accent", "accent-subtle"],
+  ["building", "building-subtle"],
+];
+const CHIP_SURFACES = ["bg-elevated", "bg-primary", "bg-secondary", "canvas-bg"];
+
+// over composites an rgba() tint onto an opaque hex surface.
+function over(tint: string, base: string): string {
+  const m = /^rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\s*\)$/.exec(tint);
+  if (!m) throw new Error(`not an rgba() tint: ${tint}`);
+  const a = Number(m[4]);
+  const b = [1, 3, 5].map((i) => parseInt(base.slice(i, i + 2), 16));
+  return (
+    "#" +
+    [1, 2, 3]
+      .map((i, k) => Math.round(Number(m[i]) * a + b[k] * (1 - a)))
+      .map((c) => c.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
 const FILLS: [string, string][] = [
   ["btn-primary-fg", "btn-primary-bg"],
   ["btn-primary-fg", "btn-primary-bg-hover"],
@@ -66,6 +92,16 @@ for (const [theme, vars] of [["light", root], ["dark", { ...root, ...tokens(".da
     });
     it.each(WIRES)("--%s reaches 3:1 on the canvas", (tok) => {
       expect(contrastRatio(get(tok), get("canvas-bg"))).toBeGreaterThanOrEqual(3);
+    });
+    it.each(CHIPS)("--%s chip text on --%s reaches 4.5:1 over every card surface", (fg, tint) => {
+      const raw = (name: string): string => {
+        const v = vars[name];
+        const ref = /^var\(--([a-z0-9-]+)\)$/.exec(v ?? "");
+        return ref ? raw(ref[1]) : v;
+      };
+      for (const s of CHIP_SURFACES) {
+        expect(contrastRatio(get(fg), over(raw(tint), get(s))), `${fg} on ${tint} over ${s}`).toBeGreaterThanOrEqual(4.5);
+      }
     });
     it.each(FILLS)("--%s on --%s reaches 4.5:1", (fg, bg) => {
       expect(contrastRatio(get(fg), get(bg))).toBeGreaterThanOrEqual(4.5);
