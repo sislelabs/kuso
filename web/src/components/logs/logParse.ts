@@ -49,6 +49,9 @@ export function stripAnsi(s: string): string {
 
 const KV_LEVEL = /(?:^|[\s{,])"?(?:level|lvl|severity|loglevel)"?\s*[:=]\s*"?([A-Za-z]+|\d{2})"?/i;
 const BRACKET_LEVEL = /^\W{0,3}(?:\S+\s+){0,3}?[[(<]?(FATAL|PANIC|CRIT(?:ICAL)?|ERRO?R?|WARN(?:ING)?|WRN|INFO|INF|NOTICE|DEBUG|DBG|TRACE)\b[\])>:]?/;
+// nginx-style bracketed level after a timestamp: "2026/11/09 12:00:00
+// [emerg] 1#1: …". Lower-case, so the leading-token match misses it.
+const BRACKETED_LEVEL = /\[(emerg|alert|crit|critical|error|err|warn|warning|notice|info|debug)\]/i;
 const ERROR_SHAPES = /(^panic:|^Traceback \(most recent call last\)|\bUncaught\b|\bunhandled(?: promise)? rejection\b|^\s*at .+\(.+:\d+:\d+\)$|^\w*(?:Error|Exception)(?::|\s*$)|^\[?Error[:\]])/i;
 
 // An upper-case ERROR / FATAL / PANIC word anywhere near the start
@@ -71,6 +74,11 @@ export function detectLevel(raw: string): LogLevel {
   if (head) {
     const tok = head[1].toLowerCase();
     const hit = LEVEL_ALIASES[tok] ?? (tok.startsWith("err") ? "error" : undefined);
+    if (hit) return hit;
+  }
+  const bracketed = BRACKETED_LEVEL.exec(line.slice(0, 80));
+  if (bracketed) {
+    const hit = LEVEL_ALIASES[bracketed[1].toLowerCase()];
     if (hit) return hit;
   }
   if (ERROR_SHAPES.test(line) || SHOUTED_ERROR.test(line.slice(0, 200))) return "error";

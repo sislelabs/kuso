@@ -18,6 +18,11 @@ describe("detectLevel", () => {
     ["\x1b[31mERROR\x1b[0m something", "error"],
     ["GET /healthz 200 1ms", "none"],
     ["user errored out of the wizard", "none"],
+    ["2026/11/09 12:00:00 [emerg] 1#1: bind() to 0.0.0.0:80 failed", "error"],
+    ["2026/11/09 12:00:00 [alert] 1#1: worker process 29 exited on signal 9", "error"],
+    ["2026/11/09 12:00:00 [crit] 1#1: *3 SSL_do_handshake() failed", "error"],
+    ["2026/11/09 12:00:00 [warn] 1#1: conflicting server name", "warn"],
+    ["2026/11/09 12:00:00 [notice] 1#1: start worker processes", "info"],
   ])("%s → %s", (line, want) => {
     expect(detectLevel(line)).toBe(want);
   });
