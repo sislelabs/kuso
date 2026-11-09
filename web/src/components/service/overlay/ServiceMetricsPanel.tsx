@@ -23,7 +23,7 @@ import {
   useEnvTimeseries,
   useServiceUsageHistory,
 } from "@/features/service-metrics";
-import type { ResourceSample } from "@/features/service-metrics";
+import type { ResourceSample, TimeseriesResponse } from "@/features/service-metrics";
 import { formatCpu, shortSha } from "@/lib/format";
 import { envGroupName } from "@/lib/env-group";
 import { unavailableNotice } from "@/features/system-version";
@@ -123,6 +123,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
   const errShape = seriesShape(err, trafficGapMs, domain);
   const p95Shape = seriesShape(p95, trafficGapMs, domain);
   const hasTraffic = reqStats.max !== null && reqStats.max > 0;
+  const trafficState = traffic.data?.traffic;
 
   const limits = svc.data?.spec.resources;
   const memLimit = parseMemoryQuantity(limits?.limits?.memory ?? memoryLimit);
@@ -211,6 +212,16 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
         />
         {traffic.isError ? (
           <QueryErrorState what="traffic metrics" error={traffic.error} onRetry={() => void traffic.refetch()} />
+        ) : trafficState === "unscraped" || trafficState === "unavailable" ? (
+          <p role="status" className="rounded-md border border-[var(--warning)]/40 bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+            <span className="font-medium text-[var(--text-primary)]">
+              {trafficState === "unavailable" ? "Traffic metrics unavailable" : "Ingress isn't measured"}
+            </span>{" "}
+            ·{" "}
+            {trafficState === "unavailable"
+              ? "kuso couldn't reach its Prometheus, so requests, 5xx responses and response times can't be shown. CPU and memory below come from the cluster and still work."
+              : "Prometheus is running but holds no request metrics from the ingress (Traefik), so there's nothing to chart. This is a monitoring gap, not a sign the service gets no traffic."}
+          </p>
         ) : (
           <div className="grid gap-3 @2xl:grid-cols-3">
             <ChartCard
@@ -219,7 +230,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
               valueNote="avg / s"
               foot={reqStats.max !== null ? `peak ${fmtRate(reqStats.max)}/s · ≈${fmtCount((reqStats.avg ?? 0) * (rangeMs / 1000))} requests` : undefined}
               loading={traffic.isPending}
-              empty={!traffic.isPending && req.length === 0 ? <NoTraffic /> : undefined}
+              empty={!traffic.isPending && req.length === 0 ? <NoTraffic state={trafficState} /> : undefined}
             >
               <TimeSeriesChart
                 points={req}
@@ -251,7 +262,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                 ) : undefined
               }
               loading={traffic.isPending}
-              empty={!traffic.isPending && !hasTraffic ? <NoTraffic /> : undefined}
+              empty={!traffic.isPending && !hasTraffic ? <NoTraffic state={trafficState} /> : undefined}
             >
               <TimeSeriesChart
                 points={err}
@@ -282,7 +293,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
                   : undefined
               }
               loading={traffic.isPending}
-              empty={!traffic.isPending && p95.length === 0 ? <NoTraffic /> : undefined}
+              empty={!traffic.isPending && p95.length === 0 ? <NoTraffic state={trafficState} /> : undefined}
             >
               <TimeSeriesChart
                 points={p95}
@@ -569,14 +580,22 @@ function ChartCard({
   );
 }
 
-const NO_TRAFFIC_HINT =
-  "Request metrics come from the ingress through Prometheus. They stay empty until traffic reaches the service's domain, or if no Prometheus scrapes the ingress.";
+// Older servers don't say why requests are empty, so their hint keeps
+// both explanations.
+const NO_TRAFFIC_HINT = {
+  idle: "The ingress is measured and this service has had requests before, just none in this range.",
+  never: "The ingress is measured, but no request has reached this service's domain since the ingress started counting.",
+  unknown:
+    "Request metrics come from the ingress through Prometheus. They stay empty until traffic reaches the service's domain, or if no Prometheus scrapes the ingress.",
+} as const;
 
-function NoTraffic() {
+function NoTraffic({ state }: { state: TimeseriesResponse["traffic"] }) {
+  const kind = state === "idle" || state === "never" ? state : "unknown";
+  const hint = NO_TRAFFIC_HINT[kind];
   return (
-    <p className="flex items-center gap-1.5 whitespace-nowrap text-xs text-[var(--text-secondary)]" title={NO_TRAFFIC_HINT}>
-      No traffic in this range
-      <Info aria-label={NO_TRAFFIC_HINT} className="h-3.5 w-3.5 shrink-0 cursor-help text-[var(--text-tertiary)]" />
+    <p className="flex items-center gap-1.5 whitespace-nowrap text-xs text-[var(--text-secondary)]" title={hint}>
+      {kind === "never" ? "No requests yet" : "No traffic in this range"}
+      <Info aria-label={hint} className="h-3.5 w-3.5 shrink-0 cursor-help text-[var(--text-tertiary)]" />
     </p>
   );
 }

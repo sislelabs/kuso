@@ -24,6 +24,11 @@ export interface TimeseriesResponse {
     errors?: [number, number][];
     p95ms?: [number, number][];
   };
+  // Why requests are empty (servers before this field omit it): "idle" =
+  // none in this range, "never" = none since the ingress started counting,
+  // "unscraped" = Prometheus has no ingress metrics, "unavailable" =
+  // Prometheus didn't answer.
+  traffic?: "ok" | "idle" | "never" | "unscraped" | "unavailable";
 }
 
 export function getEnvPodMetrics(env: string): Promise<EnvMetricsResponse> {
