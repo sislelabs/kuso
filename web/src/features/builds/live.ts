@@ -30,6 +30,21 @@ export function liveBuildId(
   return succeeded[0]?.id;
 }
 
+// servingBuildId: a promoted build isn't serving until its pods are
+// ready. While a rollout is in flight the build whose image the previous
+// pods still run (previousImageTag, from env.status.rollout) is the live
+// one; the promoted build is still on its way in.
+export function servingBuildId(
+  builds: DeployBuild[],
+  promotedId: string | undefined,
+  previousImageTag: string | undefined,
+): string | undefined {
+  if (!previousImageTag) return promotedId;
+  const promoted = builds.find((b) => b.id === promotedId);
+  if (promoted?.imageTag === previousImageTag) return promotedId;
+  return builds.find((b) => b.imageTag === previousImageTag && lower(b.status) === "succeeded")?.id ?? promotedId;
+}
+
 export function classifyBuild(b: DeployBuild, liveId: string | undefined): BuildRowStatus {
   const s = lower(b.status);
   if (s === "succeeded") return b.id === liveId ? "active" : "superseded";

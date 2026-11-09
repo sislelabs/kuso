@@ -11,29 +11,32 @@ import (
 	"kuso/server/internal/rollout"
 )
 
-// probeCache bounds the event lookups a failing rollout costs: one
-// field-selected LIST per failing pod per probeCacheTTL, and only while
-// the rollup has already decided the rollout fails its health check.
-type probeCacheEntry struct {
+// eventCache bounds the event lookups a failing rollout costs: one
+// field-selected LIST per failing pod and reason per eventCacheTTL, and
+// only while the rollup has already decided the rollout fails its health
+// check or can't pull its image.
+type eventCacheEntry struct {
 	outcome string
 	at      time.Time
 }
 
-const probeCacheTTL = 20 * time.Second
+const eventCacheTTL = 20 * time.Second
 
-var probeCache sync.Map // ns/pod -> probeCacheEntry
+var eventCache sync.Map // reason/ns/pod -> eventCacheEntry
 
-func (s *Service) probeFailure(ctx context.Context, ns, pod string) string {
+// podEventOutcome is the newest non-empty read of the pod's events with
+// the given reason.
+func (s *Service) podEventOutcome(ctx context.Context, ns, pod, reason string, read func(string) string) string {
 	if s.Kube == nil || s.Kube.Clientset == nil || pod == "" {
 		return ""
 	}
-	key := ns + "/" + pod
-	if v, ok := probeCache.Load(key); ok {
-		if e := v.(probeCacheEntry); time.Since(e.at) < probeCacheTTL {
+	key := reason + "/" + ns + "/" + pod
+	if v, ok := eventCache.Load(key); ok {
+		if e := v.(eventCacheEntry); time.Since(e.at) < eventCacheTTL {
 			return e.outcome
 		}
 	}
-	sel := fields.Set{"involvedObject.kind": "Pod", "involvedObject.name": pod, "reason": "Unhealthy"}.AsSelector().String()
+	sel := fields.Set{"involvedObject.kind": "Pod", "involvedObject.name": pod, "reason": reason}.AsSelector().String()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	outcome := ""
@@ -45,16 +48,29 @@ func (s *Service) probeFailure(ctx context.Context, ns, pod string) string {
 			if t.IsZero() {
 				t = ev.EventTime.Time
 			}
-			if o := rollout.ProbeOutcome(ev.Message); o != "" && !t.Before(newest) {
+			if o := read(ev.Message); o != "" && !t.Before(newest) {
 				newest, outcome = t, o
 			}
 		}
 	}
-	probeCache.Store(key, probeCacheEntry{outcome: outcome, at: time.Now()})
+	eventCache.Store(key, eventCacheEntry{outcome: outcome, at: time.Now()})
 	return outcome
 }
 
-// rolloutStatus is the wire shape of status.rollout (additive).
+func (s *Service) probeFailure(ctx context.Context, ns, pod string) string {
+	return s.podEventOutcome(ctx, ns, pod, "Unhealthy", rollout.ProbeOutcome)
+}
+
+// pullFailure reads the registry's answer from the kubelet's "Failed to
+// pull image" events: during ImagePullBackOff the pod status itself only
+// says "Back-off pulling image".
+func (s *Service) pullFailure(ctx context.Context, ns, pod string) string {
+	return s.podEventOutcome(ctx, ns, pod, "Failed", rollout.PullCause)
+}
+
+// rolloutStatus is the wire shape of status.rollout (additive). Sent with
+// state rollout_failing, and with deploying while a rollout is in flight
+// (failing=false) so clients can name what is rolling out over what.
 func rolloutStatus(f rollout.Facts, hcPath, probe string) map[string]any {
 	out := map[string]any{
 		"failing":         f.Failing,
@@ -71,6 +87,15 @@ func rolloutStatus(f rollout.Facts, hcPath, probe string) map[string]any {
 		if probe != "" {
 			out["probeResult"] = probe
 		}
+	}
+	if f.PullCause != "" {
+		out["pullCause"] = f.PullCause
+	}
+	if f.NewImage != "" {
+		out["newImage"] = f.NewImage
+	}
+	if f.PreviousImage != "" {
+		out["previousImage"] = f.PreviousImage
 	}
 	if !f.Since.IsZero() {
 		out["since"] = f.Since.UTC().Format(time.RFC3339)

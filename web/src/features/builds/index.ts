@@ -16,6 +16,7 @@ export {
   newerReleaseFailure,
   previousDeployTarget,
   buildNeverReady,
+  servingBuildId,
 } from "./live";
 export type { LiveImages } from "./live";
 export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog, hintLineNumber } from "./logs";

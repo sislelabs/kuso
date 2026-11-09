@@ -13,6 +13,7 @@ import {
   previousSucceeded,
   rollForwardTarget,
   newerReleaseFailure,
+  servingBuildId,
 } from "./live";
 import type { DeployBuild } from "./types";
 
@@ -22,6 +23,18 @@ const b = (id: string, over: Partial<DeployBuild> = {}): DeployBuild => ({
   status: "succeeded",
   branch: "main",
   ...over,
+});
+
+describe("servingBuildId", () => {
+  const builds = [b("new", { imageTag: "t-new", liveEnvs: ["production"] }), b("old", { imageTag: "t-old" })];
+  it("keeps the previous build live until the promoted one's pods are ready", () => {
+    expect(servingBuildId(builds, "new", "t-old")).toBe("old");
+  });
+  it("is the promoted build once nothing older serves", () => {
+    expect(servingBuildId(builds, "new", undefined)).toBe("new");
+    expect(servingBuildId(builds, "new", "t-new")).toBe("new");
+    expect(servingBuildId(builds, "new", "t-unknown")).toBe("new");
+  });
 });
 
 describe("liveBuildId", () => {

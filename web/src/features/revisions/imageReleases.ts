@@ -101,16 +101,18 @@ export function imageReleases(
 // alternate between two refs (1.28 → 1.27 → 1.28 → …) into its newest
 // row, so a few quick rollbacks don't bury the history. Input and output
 // are newest first; a folded run keeps the current release on top.
-export function collapseFlipFlops(releases: ImageRelease[]): ImageRelease[] {
+// `keep` marks releases that must stay their own row (a failed release);
+// a run never reaches across one.
+export function collapseFlipFlops(releases: ImageRelease[], keep: (r: ImageRelease) => boolean = () => false): ImageRelease[] {
   const out: ImageRelease[] = [];
   let i = 0;
   while (i < releases.length) {
     const head = releases[i];
     let j = i + 1;
-    if (j < releases.length && releases[j].ref !== head.ref) {
+    if (!keep(head) && j < releases.length && releases[j].ref !== head.ref && !keep(releases[j])) {
       const other = releases[j].ref;
       j++;
-      while (j < releases.length && releases[j].ref === (((j - i) % 2 === 0) ? head.ref : other)) j++;
+      while (j < releases.length && !keep(releases[j]) && releases[j].ref === (((j - i) % 2 === 0) ? head.ref : other)) j++;
     }
     const run = releases.slice(i, j);
     if (run.length >= 3) {

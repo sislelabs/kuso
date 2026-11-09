@@ -36,3 +36,19 @@ func TestDeriveEnvStateRollout(t *testing.T) {
 		t.Fatalf("stopped: got %s", st)
 	}
 }
+
+func TestDeriveEnvStateRollingOutNamesVersions(t *testing.T) {
+	t.Parallel()
+	// The operator hasn't applied the new image yet: the only pods are the
+	// old version, ready, and the Deployment arithmetic says done.
+	in := envStateInput{HasImage: true, HasReplicaInfo: true, Desired: 1, Ready: 1, Updated: 1,
+		Rollout: rollout.Facts{InFlight: true, PreviousServing: true, NewImage: "traefik/whoami:v9.9.9-nope", PreviousImage: "traefik/whoami:v1.11.0"}}
+	st, d := deriveEnvState(in)
+	if st != stateDeploying || !strings.Contains(d, "rolling out v9.9.9-nope") || !strings.Contains(d, "(v1.11.0) is serving") {
+		t.Fatalf("got %s %q", st, d)
+	}
+	in.Rollout = rollout.Facts{}
+	if st, _ := deriveEnvState(in); st != stateRunning {
+		t.Fatalf("settled: got %s", st)
+	}
+}
