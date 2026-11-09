@@ -125,7 +125,7 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         </div>
       </div>
 
-      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} />}
+      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} onNavigate={onNavigate} />}
 
       {isImage ? (
         <ImageDeploymentCard

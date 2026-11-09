@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Github, ExternalLink, Eye, EyeOff } from "lucide-react";
+import { Github, ExternalLink, Eye, EyeOff, Package } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -114,6 +114,44 @@ export function SourceSection({
       ? <>GitHub, cloned through the <span className="text-[var(--text-primary)]">{autoResolved.accountLogin}</span> GitHub App installation</>
       : "GitHub";
 
+  const displayNameField = (
+    <Field label="Display name" hint="Shown on the canvas and in the header. Doesn't change URLs or DNS." htmlFor="svc-display-name">
+      <Input
+        id="svc-display-name"
+        value={state.displayName}
+        onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
+        placeholder={service}
+        className={inputClass}
+        maxLength={60}
+        spellCheck={false}
+      />
+    </Field>
+  );
+
+  // An image service has no repo, branch or watch paths: its source is
+  // the registry image, which is edited in the Image section (#build).
+  if (state.runtime === "image") {
+    return (
+      <Section id="source" title="Source" icon={Package} description="A pre-built image pulled from a registry. Pushes don't deploy it.">
+        {displayNameField}
+        <FieldGrid>
+          <Field label="Image">
+            <Code>{state.imageRepository || "—"}</Code>
+          </Field>
+          <Field label="Tag">
+            <Code>{state.imageTag || "latest"}</Code>
+          </Field>
+        </FieldGrid>
+        <p className="text-xs text-[var(--text-secondary)]">
+          <a href="#build" onClick={jumpToImage} className="font-medium text-[var(--link)] underline underline-offset-2">
+            Change the image or tag
+          </a>{" "}
+          in the Image section. Saving a new tag deploys it.
+        </p>
+      </Section>
+    );
+  }
+
   return (
     <Section
       id="source"
@@ -122,17 +160,7 @@ export function SourceSection({
       description="Where kuso pulls code from and which pushes trigger a build."
       footerNote="Saving doesn't rebuild. The next push or manual deploy uses the new source."
     >
-      <Field label="Display name" hint="Shown on the canvas and in the header. Doesn't change URLs or DNS." htmlFor="svc-display-name">
-        <Input
-          id="svc-display-name"
-          value={state.displayName}
-          onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
-          placeholder={service}
-          className={inputClass}
-          maxLength={60}
-          spellCheck={false}
-        />
-      </Field>
+      {displayNameField}
       <Field label="Repository" hint={<>Full https URL. {providerNote}.</>} htmlFor="svc-repo-url">
         <div className="flex items-center gap-1.5">
           <Input
@@ -384,4 +412,13 @@ function RenameRow({ project, service }: { project: string; service: string }) {
       />
     </Field>
   );
+}
+
+// jumpToImage scrolls the settings pane to the Image section and focuses
+// its tag field, without touching the overlay's route.
+export function jumpToImage(e?: { preventDefault: () => void }) {
+  e?.preventDefault();
+  const el = document.getElementById("build");
+  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  (document.getElementById("build-image-tag") as HTMLInputElement | null)?.focus({ preventScroll: true });
 }
