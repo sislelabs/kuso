@@ -608,6 +608,7 @@ function EnvBranchSection({
   return (
     <Section
       id="env-branch"
+      scope={{ env }}
       title={`Branch in ${env}`}
       icon={GitBranch}
       description={

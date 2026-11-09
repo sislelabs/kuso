@@ -29,6 +29,7 @@ export function AlertsSection({ project, service, env }: { project: string; serv
   return (
     <Section
       id="alerts"
+      scope="none"
       title="Alerts"
       icon={BellRing}
       status={q.data ? (firing > 0 ? `${firing} firing` : `${rules.length} ${rules.length === 1 ? "rule" : "rules"}`) : undefined}
