@@ -26,7 +26,7 @@ import { buildServicePatch } from "@/components/service/overlay/settings/buildSe
 import type { KusoService } from "@/types/projects";
 import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
 import { applyStagedService, refreshServiceQueries } from "./applyStaged";
-import { healthcheckCheck, overlaySettings, patchFieldDiff, planService, type HealthcheckCheck, type ServicePlan } from "./plan";
+import { healthcheckCheck, isSourcePatchField, overlaySettings, patchFieldDiff, planService, type HealthcheckCheck, type ServicePlan } from "./plan";
 
 type Phase = "idle" | "applying" | "done" | "failed";
 
@@ -330,7 +330,11 @@ export function StagedReviewDialog({
                           kind="Setting"
                           before={before}
                           after={after}
-                          note={serviceBlast(f)?.message}
+                          note={
+                            plan.builds && isSourcePatchField(f)
+                              ? "Applying starts a build from it; the running pods change when that build deploys."
+                              : serviceBlast(f)?.message
+                          }
                           check={check && <HealthcheckCheckLine check={check} />}
                           error={errors.settings}
                           onDiscard={busy ? undefined : () => discardFields(service, fieldsBehind(plan, st, f))}

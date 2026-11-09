@@ -27,6 +27,10 @@ const ROLLING_PATCH_FIELDS = new Set([
 // staged.
 const SOURCE_PATCH_FIELDS = new Set(["repo", "dockerfile", "runtime", "buildArgs", "static", "buildpacks"]);
 
+export function isSourcePatchField(field: string): boolean {
+  return SOURCE_PATCH_FIELDS.has(field);
+}
+
 export interface ServicePlan {
   envSet: { name: string; value: string }[];
   envUnset: string[];
