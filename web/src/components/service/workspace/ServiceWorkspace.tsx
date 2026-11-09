@@ -78,6 +78,11 @@ import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { hostScheme } from "@/lib/host-scheme";
 import { OverlayDirtyContext, type OverlayDirtyAPI } from "./dirtyContext";
 import { SaveBar } from "./SaveBar";
+import { classifyError } from "@/lib/error-kind";
+import { EmptyState } from "@/components/shared/EmptyState";
+import Link from "next/link";
+import { projectCanvasHref } from "./hrefs";
+import { PackageX } from "lucide-react";
 
 type Tab =
   | "deployments"
@@ -781,7 +786,39 @@ export function ServiceWorkspace({
     <div className={cn(pad, width, fill && "h-full")}>{children}</div>
   );
 
-  const content = open ? (
+  // A link to a deleted or mistyped service: say so instead of drawing a
+  // workspace full of actions for something that isn't there.
+  const missing = svc.isError && classifyError(svc.error) === "not-found";
+
+  const content = !open ? null : missing ? (
+    <div ref={rootRef} tabIndex={-1} className="relative flex h-full min-h-0 flex-col outline-none">
+      {onClose ? (
+        <button
+          type="button"
+          onClick={guardedClose}
+          aria-label="Close"
+          className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      ) : null}
+      <div className="p-6 lg:p-10">
+        <EmptyState
+          icon={<PackageX className="h-5 w-5" />}
+          title={`No service called “${service}”`}
+          description={`${project} has no service by that name in ${envParam}. It may have been deleted or renamed.`}
+          action={
+            <Link
+              href={projectCanvasHref(project, envParam)}
+              className="inline-flex h-8 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)]"
+            >
+              Back to {project}
+            </Link>
+          }
+        />
+      </div>
+    </div>
+  ) : (
     <div ref={rootRef} tabIndex={-1} className="flex h-full min-h-0 flex-col outline-none">
       <FirstRunProvider value={firstRunCtx}>
         {header}
@@ -948,7 +985,7 @@ export function ServiceWorkspace({
         ) : null}
       </FirstRunProvider>
     </div>
-  ) : null;
+  );
 
   return (
     <>
