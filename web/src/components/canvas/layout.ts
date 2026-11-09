@@ -5,9 +5,20 @@
 
 import dagre from "dagre";
 import type { Node, Edge } from "@xyflow/react";
+import { serviceShortName } from "@/lib/utils";
+import { serviceNodeWidth } from "./geometry";
 
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 140;
+
+// Service cards widen for long names; lay them out at the width they render.
+function widthOf(n: Node): number {
+  if (n.type !== "service") return NODE_WIDTH;
+  const d = n.data as { project?: unknown; service?: { metadata?: { name?: unknown }; spec?: { displayName?: unknown } } };
+  const display = typeof d.service?.spec?.displayName === "string" ? d.service.spec.displayName.trim() : "";
+  const full = typeof d.service?.metadata?.name === "string" ? d.service.metadata.name : "";
+  return serviceNodeWidth(display || serviceShortName(typeof d.project === "string" ? d.project : "", full));
+}
 
 export function autoLayout(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph();
@@ -19,7 +30,7 @@ export function autoLayout(nodes: Node[], edges: Edge[]): Node[] {
   // without a stored layout lands the same way every time.
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   [...nodes].sort(byId).forEach((n) => {
-    g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    g.setNode(n.id, { width: widthOf(n), height: NODE_HEIGHT });
   });
   [...edges].sort(byId).forEach((e) => {
     g.setEdge(e.source, e.target);
@@ -32,7 +43,7 @@ export function autoLayout(nodes: Node[], edges: Edge[]): Node[] {
     return {
       ...n,
       position: {
-        x: pos.x - NODE_WIDTH / 2,
+        x: pos.x - widthOf(n) / 2,
         y: pos.y - NODE_HEIGHT / 2,
       },
     };

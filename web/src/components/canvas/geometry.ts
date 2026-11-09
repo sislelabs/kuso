@@ -67,3 +67,14 @@ export function facingSides(source: Box, target: Box): { source: Side; target: S
   }
   return dx >= 0 ? { source: "right", target: "left" } : { source: "left", target: "right" };
 }
+
+// serviceNodeWidth sizes a service card to its name: 280px base, growing
+// for longer names up to 380px, past which the name truncates (with a
+// tooltip). The estimate is ~7.6px per character of 14px medium text
+// plus the icon, padding and the actions button.
+export const SERVICE_NODE_MIN_WIDTH = 280;
+export const SERVICE_NODE_MAX_WIDTH = 380;
+export function serviceNodeWidth(name: string): number {
+  const est = Math.round(76 + name.length * 7.6);
+  return Math.min(SERVICE_NODE_MAX_WIDTH, Math.max(SERVICE_NODE_MIN_WIDTH, est));
+}

@@ -22,6 +22,7 @@ import { ErrorBadge, VulnBadge } from "./NodeBadges";
 import type { ErrorSummary, VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
+import { serviceNodeWidth } from "./geometry";
 
 export interface ServiceNodeData extends CanvasNodeA11y {
   project: string;
@@ -66,6 +67,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const deployedAt = lastDeployedAt(data.env);
   const dimmed = status.kind === "sleeping" || status.kind === "stopped";
   const live = liveBuildOf(data.latestBuild);
+  const hasBadges = (data.errors?.occurrences ?? 0) > 0 || (data.vulns?.fixableCritical ?? 0) > 0;
 
   return (
     <div
@@ -79,9 +81,10 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         .filter(Boolean)
         .join(", ")}
       onContextMenu={data.__onContext}
+      style={{ width: serviceNodeWidth(displayName) }}
       title={[status.detail, url ? buildRefText(data.latestBuild)?.title : ""].filter(Boolean).join("\n") || undefined}
       className={cn(
-        "group relative flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        "group relative flex min-h-[120px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         tone.border,
         "hover:border-[var(--border-strong)]",
         dimmed && "opacity-70",
@@ -104,17 +107,20 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      {/* One row: the badges keep their size and the name truncates. */}
-      <div className="flex min-w-0 items-center gap-1.5 pr-6">
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          <RuntimeIcon runtime={data.service.spec.runtime} />
-          <span className="truncate text-sm font-medium text-[var(--text-primary)]" title={displayName}>
-            {displayName}
-          </span>
+      {/* The name owns its row (the card widens for it); badges sit on
+          their own row so they never squeeze it. */}
+      <div className="flex min-w-0 items-center gap-2 pr-6">
+        <RuntimeIcon runtime={data.service.spec.runtime} />
+        <span className="truncate text-sm font-medium text-[var(--text-primary)]" title={displayName}>
+          {displayName}
         </span>
-        <ErrorBadge compact tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
-        <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
       </div>
+      {hasBadges && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <ErrorBadge compact tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
+          <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+        </div>
+      )}
 
       {/* The URL gets the whole row; the commit moves to the tooltip
           then, and only takes this row when there's no URL to show. */}

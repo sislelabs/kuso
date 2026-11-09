@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { facingSides, nextInDirection, readingOrder, type Box } from "./geometry";
+import { facingSides, nextInDirection, readingOrder, serviceNodeWidth, type Box } from "./geometry";
 
 const box = (id: string, x: number, y: number, w = 200, h = 100): Box => ({ id, x, y, w, h });
 
@@ -47,5 +47,15 @@ describe("facingSides", () => {
 
   it("keeps a diagonal neighbour on horizontal sides", () => {
     expect(facingSides(box("a", 0, 0), box("b", 400, 300))).toEqual({ source: "right", target: "left" });
+  });
+});
+
+describe("serviceNodeWidth", () => {
+  it("keeps short names at the base width and widens for longer ones up to a cap", () => {
+    expect(serviceNodeWidth("web")).toBe(280);
+    const mid = serviceNodeWidth("notification-dispatcher-worker");
+    expect(mid).toBeGreaterThan(280);
+    expect(mid).toBeLessThan(380);
+    expect(serviceNodeWidth("x".repeat(80))).toBe(380);
   });
 });
