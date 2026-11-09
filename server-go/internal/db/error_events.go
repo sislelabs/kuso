@@ -61,8 +61,9 @@ const (
 // hideSplitContinuation drops rows the error scanner wrote before it
 // grouped multi-line errors: a continuation line (indented frame, "at …")
 // or a sibling line from the same write ("… line one" / "… line two")
-// that became its own group, or a bare "Traceback (most recent call
-// last):" header whose exception line went into another row. A row is
+// that became its own group, or a "Traceback (most recent call last):"
+// cut off from the ERROR line before it and titled "Python traceback
+// (exception line not captured)" (errorscan's fallback title). A row is
 // such a split when an earlier row from the same pod, with another fingerprint, sits just before it. The
 // sibling test mirrors errorscan's rule (same millisecond, a shared
 // prefix of at least 16 bytes and half the shorter first line). Every
@@ -73,6 +74,7 @@ const hideSplitContinuation = `NOT EXISTS (
 		   AND sib.ts < e.ts AND sib.ts >= e.ts - interval '100 milliseconds'
 		   AND sib.fingerprint <> e.fingerprint
 		   AND (e."rawLine" ~ '^(\s|at\s|Traceback \(most recent call last\):?\s*$)'
+		        OR (e."rawLine" ~ '^Traceback \(most recent call last\)' AND e.message = 'Python traceback (exception line not captured)')
 		        OR (sib.ts >= e.ts - interval '1 millisecond'
 		            AND length(split_part(e."rawLine", E'\n', 1)) >= 16
 		            AND left(sib."rawLine", greatest(16, least(length(split_part(sib."rawLine", E'\n', 1)), length(split_part(e."rawLine", E'\n', 1))) / 2))

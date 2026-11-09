@@ -26,6 +26,18 @@ func TestErrorReadersHideSplitContinuations(t *testing.T) {
 		ev("frame", "    at Object.<anonymous> (TypeError thrown here)", t0.Add(time.Minute+40*us)),
 		ev("receipt", "ERROR failed to send order receipt order_id=1012", t0.Add(2*time.Minute)),
 		ev("tb", "Traceback (most recent call last):", t0.Add(2*time.Minute+30*us)),
+		// Same split, but the traceback row kept its frames and lost the
+		// exception line: the sandbox's "exception line not captured".
+		ev("receipt", "ERROR failed to send order receipt order_id=1024", t0.Add(3*time.Minute)),
+		{Project: "p", Service: "p-api", Env: "production", Pod: "pod-1", Fingerprint: "tbcut",
+			Message: "Python traceback (exception line not captured)",
+			RawLine: "Traceback (most recent call last):\n  File \"/app/jobs/emails.py\", line 42, in send_receipt\n    smtp.send(msg)",
+			Ts:      t0.Add(3*time.Minute + time.Millisecond)},
+		// A complete traceback that follows another error keeps its row.
+		ev("deadline", "ERROR deadline exceeded calling billing", t0.Add(4*time.Minute)),
+		{Project: "p", Service: "p-api", Env: "production", Pod: "pod-1", Fingerprint: "keyerr",
+			Message: "KeyError: 'cart'", RawLine: "Traceback (most recent call last):\n  File \"w.py\", line 9, in run\nKeyError: 'cart'",
+			Ts: t0.Add(4*time.Minute + time.Millisecond)},
 	} {
 		if err := d.InsertErrorEvent(ctx, e); err != nil {
 			t.Fatal(err)
@@ -41,7 +53,7 @@ func TestErrorReadersHideSplitContinuations(t *testing.T) {
 	for _, g := range groups {
 		got[g.Fingerprint] = g.Count
 	}
-	want := map[string]int64{"one": 1, "hook": 2, "type": 1, "receipt": 1}
+	want := map[string]int64{"one": 1, "hook": 2, "type": 1, "receipt": 2, "deadline": 1, "keyerr": 1}
 	if len(got) != len(want) {
 		t.Fatalf("groups = %v; want %v", got, want)
 	}
@@ -55,8 +67,8 @@ func TestErrorReadersHideSplitContinuations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sum) != 1 || sum[0].Occurrences != 5 || sum[0].Groups != 4 {
-		t.Errorf("summary = %+v; want 5 occurrences in 4 groups", sum)
+	if len(sum) != 1 || sum[0].Occurrences != 8 || sum[0].Groups != 6 {
+		t.Errorf("summary = %+v; want 8 occurrences in 6 groups", sum)
 	}
 
 	detail, err := d.GetErrorGroupDetail(ctx, "p", "p-api", "", "two", since, time.Hour, 20)
