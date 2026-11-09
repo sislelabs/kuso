@@ -555,7 +555,7 @@ func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container
 		// Tag init-container lines with the container name so the UI
 		// can render a subtle prefix ("clone | ..."). Main container
 		// logs stay un-prefixed.
-		line := text
+		line := linescan.KubeletNotice(text)
 		if isInit {
 			line = container + " | " + text
 		}

@@ -7,6 +7,7 @@ package linescan
 import (
 	"bufio"
 	"bytes"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -44,4 +45,15 @@ func Lines(max int) bufio.SplitFunc {
 		discarding = true
 		return len(data), tok, nil
 	}
+}
+
+// KubeletNotice marks the kubelet's own "unable to retrieve container
+// logs for …" (written into the log stream when a container's log file is
+// gone) as a warning, so log viewers don't file it as app output or as an
+// error. Every other line is returned unchanged.
+func KubeletNotice(line string) string {
+	if strings.HasPrefix(line, "unable to retrieve container logs") {
+		return "WARN kubelet: " + line
+	}
+	return line
 }

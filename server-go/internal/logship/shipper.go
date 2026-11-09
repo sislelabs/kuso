@@ -555,7 +555,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 		if line == "" {
 			continue
 		}
-		line = db.SanitizeLogLine(line)
+		line = linescan.KubeletNotice(db.SanitizeLogLine(line))
 		// Emitted no later than the newest stored ingest time and stored
 		// already: a replay of the overlap, not a new line.
 		if ok && replayed[line] > 0 && !ts.After(storedAt) {

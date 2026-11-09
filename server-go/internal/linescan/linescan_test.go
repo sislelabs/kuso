@@ -29,3 +29,12 @@ func TestLinesSurvivesOverlongLine(t *testing.T) {
 		t.Errorf("truncated line = %q (len %d)", got[1], len(got[1]))
 	}
 }
+
+func TestKubeletNotice(t *testing.T) {
+	if got := KubeletNotice("unable to retrieve container logs for containerd://abc"); got != "WARN kubelet: unable to retrieve container logs for containerd://abc" {
+		t.Errorf("got %q", got)
+	}
+	if got := KubeletNotice("GET / 200"); got != "GET / 200" {
+		t.Errorf("app line changed: %q", got)
+	}
+}

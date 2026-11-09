@@ -303,7 +303,7 @@ func (s *Service) tailPodStream(ctx context.Context, ns string, pod *corev1.Pod,
 		if line == "" {
 			continue
 		}
-		out = append(out, Line{Pod: pod.Name, Line: line, ts: ts})
+		out = append(out, Line{Pod: pod.Name, Line: linescan.KubeletNotice(line), ts: ts})
 	}
 	return out
 }
