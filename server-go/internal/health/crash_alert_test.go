@@ -105,8 +105,8 @@ func TestPodCrashed_ServiceIsShortSlugFromServiceLabel(t *testing.T) {
 	if e.Service != "api" {
 		t.Errorf("Service = %q, want short slug %q", e.Service, "api")
 	}
-	if e.URL == "" || !strings.Contains(e.URL, "?service=api") || strings.Contains(e.URL, "service=shop-api") {
-		t.Errorf("URL = %q, want ?service=api", e.URL)
+	if e.URL == "" || !strings.Contains(e.URL, "/services/api?") || strings.Contains(e.URL, "shop-api") {
+		t.Errorf("URL = %q, want /services/api", e.URL)
 	}
 	if !strings.Contains(e.Title, "production") {
 		t.Errorf("Title = %q, want env name", e.Title)

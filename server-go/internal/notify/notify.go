@@ -29,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -739,6 +740,11 @@ func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event, menti
 // @here so an outage isn't silent. Set "*": "none" (or any non-
 // mention string) to opt out of the default.
 func mentionFor(e Event, config map[string]any) string {
+	// Tests and an alert's all-clear never ping, whatever the rules say:
+	// nobody has to act on them.
+	if quietEvent(e) {
+		return ""
+	}
 	mentions, _ := config["mentions"].(map[string]any)
 	if v, ok := mentions[string(e.Type)].(string); ok {
 		return normalizeMention(v)
@@ -751,6 +757,15 @@ func mentionFor(e Event, config map[string]any) string {
 		return "@here"
 	}
 	return ""
+}
+
+// quietEvent: a test send or an alert's resolved notice.
+func quietEvent(e Event) bool {
+	return e.Type == EventTestPing || e.Extra["test"] == "true" || isResolvedAlert(e)
+}
+
+func isResolvedAlert(e Event) bool {
+	return e.Type == EventAlertFired && e.Extra["state"] == "resolved"
 }
 
 // normalizeMention coerces UI-friendly strings to Discord wire form.
@@ -809,6 +824,9 @@ const (
 // every failure type arrives as error); info events are then split by
 // type into success / neutral / plain info.
 func eventTone(e Event) tone {
+	if isResolvedAlert(e) {
+		return toneSuccess
+	}
 	switch e.Severity {
 	case "error":
 		return toneError
@@ -888,6 +906,9 @@ func discordPayload(e Event, mention string) map[string]any {
 	}
 	parts := make([]string, 0, 4)
 	desc := cardDescription(e)
+	if isKubeJobMessage(desc) {
+		desc = kubeJobSentence(e, desc)
+	}
 	if pingSrc == whyDescription {
 		desc = dropFirstLine(desc)
 	}
@@ -925,6 +946,11 @@ func discordPayload(e Event, mention string) map[string]any {
 	} else {
 		for _, f := range e.Fields {
 			if f.Name == "" || f.Value == "" || (pingSrc == whyReason && f.Name == "Reason") {
+				continue
+			}
+			// "Job has reached the specified backoff limit" says only that
+			// the Job failed, which the title already does.
+			if f.Name == "Reason" && isKubeJobMessage(f.Value) {
 				continue
 			}
 			fields = append(fields, map[string]any{
@@ -982,6 +1008,25 @@ func discordPayload(e Event, mention string) map[string]any {
 	// title or reason containing "@everyone" can never ping.
 	payload["allowed_mentions"] = allowedMentionsFor(mention)
 	return payload
+}
+
+// kubeJobMessageRe matches the Job controller's own failure messages.
+var kubeJobMessageRe = regexp.MustCompile(`(?i)^(?:Job has reached the specified backoff limit\.?|BackoffLimitExceeded|Job was active longer than specified deadline\.?|DeadlineExceeded)$`)
+
+func isKubeJobMessage(s string) bool { return kubeJobMessageRe.MatchString(strings.TrimSpace(s)) }
+
+// kubeJobSentence says what a Job controller message means, the way the
+// dashboard's bell does (web lib/format-notification.ts).
+func kubeJobSentence(e Event, msg string) string {
+	subject := "The job"
+	if strings.HasPrefix(string(e.Type), "build.") {
+		subject = "The build"
+	}
+	what := "failed"
+	if m := strings.ToLower(msg); strings.Contains(m, "deadline") {
+		what = "timed out"
+	}
+	return subject + " " + what + ". Open its log to see why."
 }
 
 // fitDiscordEmbed trims an assembled embed until it's within
@@ -1251,7 +1296,7 @@ func serviceURL(project, service string) string {
 	if project == "" || service == "" {
 		return ""
 	}
-	return fmt.Sprintf("/projects/%s?service=%s", project, service)
+	return "/projects/" + url.PathEscape(project) + "/services/" + url.PathEscape(service)
 }
 
 // absoluteURL upgrades an in-app path like "/projects/foo?service=bar"
@@ -1328,7 +1373,7 @@ func runEventURL(project, service string) string {
 	if project == "" || service == "" {
 		return ""
 	}
-	return fmt.Sprintf("/projects/%s?service=%s&tab=runs", project, service)
+	return serviceURL(project, service) + "?tab=runs"
 }
 
 // formatShortDuration renders a duration compactly: "5m", "1h 24m",

@@ -126,7 +126,7 @@ func TestSlackPayload_FooterOverride(t *testing.T) {
 
 func TestPodCrashed_EnvInURL(t *testing.T) {
 	e := PodCrashed(PodCrash{Project: "shop", Service: "web", Env: "preview-pr-7", Pod: "web-abc", Reason: "CrashLoopBackOff", Restarts: 1})
-	if e.URL != "/projects/shop?service=web&env=preview-pr-7" {
+	if e.URL != "/projects/shop/services/web?env=preview-pr-7" {
 		t.Errorf("url %q", e.URL)
 	}
 	if e.Title != "✗ Crashing · shop / web → preview-pr-7" {
@@ -146,7 +146,7 @@ func TestPodCrashed_SeverityByEnv(t *testing.T) {
 }
 
 func TestAlertURL(t *testing.T) {
-	if got := AlertURL("shop", "web"); got != "/projects/shop?service=web" {
+	if got := AlertURL("shop", "web"); got != "/projects/shop/services/web" {
 		t.Errorf("service alert url %q", got)
 	}
 	if got := AlertURL("shop", ""); got != "/projects/shop" {

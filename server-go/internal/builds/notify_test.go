@@ -240,7 +240,7 @@ func TestBuildRichCard_TargetsInTitle(t *testing.T) {
 }
 
 func TestBuildCardLinks(t *testing.T) {
-	base := "/projects/p?service=s"
+	base := "/projects/p/services/s"
 	one := []buildTarget{{Env: "staging", URL: "https://s-staging.example.com"}}
 	two := []buildTarget{{Env: "production", URL: "https://s.example.com"}, {Env: "internal"}}
 	cls := &failures.Classification{Kind: "build_oom", Tab: failures.TabBuild}
@@ -252,23 +252,23 @@ func TestBuildCardLinks(t *testing.T) {
 		want    []EnvelopeLink
 	}{
 		{"failed, one env", "failed", one, cls, []EnvelopeLink{
-			{"View failure", base + "&tab=deployments&kind=build_oom&env=staging"},
+			{"View failure", base + "?tab=deployments&kind=build_oom&env=staging"},
 		}},
 		{"failed, no classification", "failed", nil, nil, []EnvelopeLink{
-			{"View failure", base + "&tab=deployments"},
+			{"View failure", base + "?tab=deployments"},
 		}},
 		{"succeeded opens every env with a URL", "succeeded", two, nil, []EnvelopeLink{
-			{"Deployments", base + "&tab=deployments"},
+			{"Deployments", base + "?tab=deployments"},
 			{"Open production", "https://s.example.com"},
 		}},
 		{"succeeded, one env", "succeeded", one, nil, []EnvelopeLink{
-			{"Deployments", base + "&tab=deployments&env=staging"},
+			{"Deployments", base + "?tab=deployments&env=staging"},
 			{"Open staging", "https://s-staging.example.com"},
 		}},
-		{"cancelled", "cancelled", two, nil, []EnvelopeLink{{"Deployments", base + "&tab=deployments"}}},
-		{"superseded", "superseded", one, nil, []EnvelopeLink{{"Deployments", base + "&tab=deployments&env=staging"}}},
+		{"cancelled", "cancelled", two, nil, []EnvelopeLink{{"Deployments", base + "?tab=deployments"}}},
+		{"superseded", "superseded", one, nil, []EnvelopeLink{{"Deployments", base + "?tab=deployments&env=staging"}}},
 		{"release failed", "release-failed", []buildTarget{{Env: "production"}}, nil, []EnvelopeLink{
-			{"Deployments", base + "&tab=deployments&env=production"},
+			{"Deployments", base + "?tab=deployments&env=production"},
 		}},
 	}
 	for _, tc := range cases {
@@ -531,8 +531,8 @@ func TestBuildRichCard_ReasonAlongsideCommitMessage(t *testing.T) {
 }
 
 func TestWithEnvParam(t *testing.T) {
-	base := "/projects/p?service=s"
-	if got := withEnvParam(base, []buildTarget{{Env: "preview-pr-7"}}); got != base+"&env=preview-pr-7" {
+	base := "/projects/p/services/s"
+	if got := withEnvParam(base, []buildTarget{{Env: "preview-pr-7"}}); got != base+"?env=preview-pr-7" {
 		t.Errorf("single target: %q", got)
 	}
 	if got := withEnvParam(base, []buildTarget{{Env: "production"}, {Env: "staging"}}); got != base {

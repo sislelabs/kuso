@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -100,7 +101,7 @@ func buildEventURL(project, service string) string {
 	if project == "" || service == "" {
 		return ""
 	}
-	return fmt.Sprintf("/projects/%s?service=%s", project, service)
+	return "/projects/" + url.PathEscape(project) + "/services/" + url.PathEscape(service)
 }
 
 // withEnvParam pins the project page's env selector (?env=<group>) when
@@ -110,7 +111,11 @@ func withEnvParam(u string, targets []buildTarget) string {
 	if u == "" || len(targets) != 1 || targets[0].Env == "" {
 		return u
 	}
-	return u + "&env=" + url.QueryEscape(targets[0].Env)
+	sep := "?"
+	if strings.Contains(u, "?") {
+		sep = "&"
+	}
+	return u + sep + "env=" + url.QueryEscape(targets[0].Env)
 }
 
 // buildRichCard assembles the title, description, and inline field
@@ -375,11 +380,11 @@ func buildCardLinks(project, short, phase string, targets []buildTarget, c *fail
 	if base == "" {
 		return nil
 	}
-	deployments := withEnvParam(base+"&tab=deployments", targets)
+	deployments := withEnvParam(base+"?tab=deployments", targets)
 	var links []EnvelopeLink
 	switch phase {
 	case "failed":
-		logs := base + "&tab=deployments"
+		logs := base + "?tab=deployments"
 		if c != nil && c.Kind != "" {
 			logs += "&kind=" + url.QueryEscape(string(c.Kind))
 		}
@@ -612,4 +617,17 @@ func formatBuildDuration(ms int64) string {
 		return fmt.Sprintf("%dh", h)
 	}
 	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+// buildCRNameRe: "<service>-<sha12+>-<base36>" build CR names and the
+// "<sha12+>-<base36>" image tags made from them.
+var buildCRNameRe = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]*-)?([0-9a-f]{12,40})-[a-z0-9]{6,10}$`)
+
+// buildLabel is the short commit a person recognises ("c850e9b") for a
+// build CR name; any other name is returned as is.
+func buildLabel(name string) string {
+	if m := buildCRNameRe.FindStringSubmatch(name); m != nil {
+		return m[1][:7]
+	}
+	return name
 }

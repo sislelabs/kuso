@@ -161,7 +161,7 @@ func TestCommitStatus_PostedOnEachTransition(t *testing.T) {
 		if got.Owner != "acme" || got.Repo != "shop" || got.SHA != testSHA || got.InstallationID != 42 {
 			t.Errorf("post %d: target %s/%s@%s inst=%d", i, got.Owner, got.Repo, got.SHA, got.InstallationID)
 		}
-		if got.TargetPath != "/projects/shop?service=web&tab=deployments" {
+		if got.TargetPath != "/projects/shop/services/web?tab=deployments" {
 			t.Errorf("post %d: target path %q", i, got.TargetPath)
 		}
 	}
@@ -194,7 +194,7 @@ func TestCommitStatus_NonProductionContextCarriesEnv(t *testing.T) {
 		if s.Context != "kuso/web (staging)" {
 			t.Errorf("context %q, want kuso/web (staging)", s.Context)
 		}
-		if s.TargetPath != "/projects/shop?service=web&tab=deployments&env=staging" {
+		if s.TargetPath != "/projects/shop/services/web?tab=deployments&env=staging" {
 			t.Errorf("target path %q", s.TargetPath)
 		}
 	}

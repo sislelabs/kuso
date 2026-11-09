@@ -1596,7 +1596,7 @@ func buildFailureURL(project, service string, c failures.Classification) string 
 	if c.Tab == "" {
 		return base
 	}
-	url := base + "&tab=" + string(c.Tab) + "&kind=" + string(c.Kind)
+	url := base + "?tab=" + string(c.Tab) + "&kind=" + string(c.Kind)
 	if c.LineNum > 0 {
 		url += "&highlight=" + strconv.Itoa(c.LineNum)
 	}

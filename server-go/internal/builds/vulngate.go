@@ -281,7 +281,7 @@ func (p *Poller) emitVulnScanFailed(b *kube.KusoBuild, short, reason string) {
 
 func vulnTabURL(project, service string) string {
 	if u := buildEventURL(project, service); u != "" {
-		return u + "&tab=vulnerabilities"
+		return u + "?tab=vulnerabilities"
 	}
 	return ""
 }
