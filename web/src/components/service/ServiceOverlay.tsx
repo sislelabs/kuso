@@ -836,7 +836,7 @@ export function ServiceOverlay({
                   })()}
                 </div>
                 {/* Actions keep one row; what doesn't fit lives in ⋯. */}
-                <div className="mt-2 flex flex-nowrap items-center gap-1.5 empty:hidden">
+                <div className="mt-2 hidden flex-nowrap items-center gap-1.5 sm:flex">
                   {service && status === "sleeping" && !stopped ? (
                     <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
                   ) : null}
@@ -1133,6 +1133,21 @@ export function ServiceOverlay({
                 </OverlayDirtyContext.Provider>
               )}
             </div>
+            {/* Phones: the actions live in a bar pinned to the bottom. */}
+            {service ? (
+              <div className="flex shrink-0 items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] empty:hidden sm:hidden">
+                {status === "sleeping" && !stopped ? (
+                  <WakeControl project={project} service={service} env={wakeEnvParam(env, envGroup)} />
+                ) : null}
+                <ServiceHeaderActions
+                  project={project}
+                  service={service}
+                  env={env}
+                  stopped={stopped}
+                  showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                />
+              </div>
+            ) : null}
           </motion.div>
           <ConfirmDialog
             open={confirmDiscard}

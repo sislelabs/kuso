@@ -104,10 +104,40 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
     },
   ];
 
+  const errorsN = errors.data?.occurrences;
+  const deploy = cells.find((c) => c.id === "deploy");
   return (
+    <>
+    {/* Phones: one status line instead of the five-cell grid. */}
+    <button
+      type="button"
+      onClick={() => onNavigate("deployments")}
+      className="mt-2 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-[var(--text-secondary)] sm:hidden"
+    >
+      <StatusDot status={status} />
+      <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
+      {total > 0 && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="whitespace-nowrap">{ready}/{total} ready</span>
+        </>
+      )}
+      {errorsN !== undefined && errorsN > 0 && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="whitespace-nowrap text-[var(--danger)]">{errorsN.toLocaleString()} errors</span>
+        </>
+      )}
+      {deploy && deploy.value !== "Never" && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="min-w-0 truncate">deployed {deploy.value}</span>
+        </>
+      )}
+    </button>
     <ul
       aria-label="Service health"
-      className="mt-3 grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
+      className="mt-3 hidden grid-cols-6 gap-px sm:grid overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
     >
       {cells.map((c, i) => (
         <li key={c.id} className={cn("flex min-w-0 bg-[var(--bg-primary)] lg:col-span-1", i < 3 ? "col-span-2" : "col-span-3")}>
@@ -145,6 +175,7 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
         </li>
       ))}
     </ul>
+    </>
   );
 }
 

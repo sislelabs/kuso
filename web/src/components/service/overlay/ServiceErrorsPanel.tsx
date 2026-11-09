@@ -259,6 +259,10 @@ function ErrorRow({
           <div className="line-clamp-2 break-words font-mono text-[13px] text-[var(--text-primary)]" title={group.message}>
             {group.message ? errorTitle(group.message) : "(empty error)"}
           </div>
+          <div className="mt-0.5 text-xs text-[var(--text-secondary)] sm:hidden">
+            <span className="font-semibold tabular-nums text-[var(--text-primary)]">{group.count.toLocaleString()}</span>{" "}
+            {group.count === 1 ? "occurrence" : "occurrences"}
+          </div>
           {frames.length > 0 && !isOpen && (
             <div className="mt-1 space-y-px border-l-2 border-[var(--border-default)] pl-2 font-mono text-xs text-[var(--text-tertiary)]">
               {frames.map((f, i) => (
@@ -287,7 +291,7 @@ function ErrorRow({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="text-right">
+          <span className="hidden text-right sm:block">
             <span className="block text-sm font-semibold tabular-nums text-[var(--text-primary)]">{group.count.toLocaleString()}</span>
             <span className="block text-xs text-[var(--text-tertiary)]">{group.count === 1 ? "occurrence" : "occurrences"}</span>
           </span>

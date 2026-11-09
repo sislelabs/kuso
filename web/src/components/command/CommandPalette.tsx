@@ -60,6 +60,7 @@ import { buildTriggerMessage, buildsQueryKey, restartService, triggerBuild, useB
 import { buildRefLabel, buildTitle, previousDeployTarget, rollbackToBuild } from "@/features/builds";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
+import { TONE_CLASSES } from "@/lib/status";
 import {
   buildPaletteIndex,
   canRedeploy,
@@ -114,9 +115,9 @@ function currentProjectFromPath(pathname: string | null): string {
 }
 
 const STATUS_STYLE: Record<PaletteStatus, { dot: string; label: string }> = {
-  live: { dot: "bg-[var(--success)]", label: "Live" },
-  deploying: { dot: "bg-[var(--warning)] motion-safe:animate-pulse", label: "Deploying" },
-  failing: { dot: "bg-[var(--error)]", label: "Failing" },
+  live: { dot: TONE_CLASSES.success.dot, label: "Live" },
+  deploying: { dot: `${TONE_CLASSES.progress.dot} motion-safe:animate-pulse`, label: "Deploying" },
+  failing: { dot: TONE_CLASSES.danger.dot, label: "Failing" },
   sleeping: { dot: "bg-[var(--text-tertiary)]", label: "Sleeping" },
   stopped: { dot: "border border-[var(--text-tertiary)]", label: "Stopped" },
   idle: { dot: "border border-[var(--text-tertiary)]", label: "Not deployed" },
