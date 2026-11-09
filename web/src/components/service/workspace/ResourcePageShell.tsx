@@ -165,7 +165,7 @@ function ResourceRail({
               ))}
             </RailGroup>
             {addons.length > 0 ? (
-              <RailGroup title="Databases & addons" count={addons.length}>
+              <RailGroup title="Addons" count={addons.length}>
                 {addons.map((a) => (
                   <RailRow
                     key={`a:${a.name}`}
@@ -304,7 +304,7 @@ function ResourceSwitcher({
               </CommandGroup>
             ) : null}
             {resources && resources.addons.length > 0 ? (
-              <CommandGroup heading="Databases & addons" className={groupHeading}>
+              <CommandGroup heading="Addons" className={groupHeading}>
                 {resources.addons.map((a) => (
                   <CommandItem key={a.name} value={`addon ${a.name} ${a.kind}`} onSelect={() => go("addon", a.name)} className="px-2 py-1.5">
                     <StatusDot tone={a.status.tone} label={a.status.label} />

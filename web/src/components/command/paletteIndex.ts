@@ -317,6 +317,19 @@ export function serviceActions(services: PaletteService[]): ServiceAction[] {
   return out;
 }
 
+// soleActionTarget is the one service every query-matching action targets,
+// or null when they span several. The palette then names that service in
+// the group heading instead of repeating it on every row.
+export function soleActionTarget(actions: readonly ServiceAction[], query: string): PaletteService | null {
+  let target: PaletteService | null = null;
+  for (const a of actions) {
+    if (matchScore(query, a.label, a.keywords) <= 0) continue;
+    if (!target) target = a.svc;
+    else if (target.project !== a.svc.project || target.name !== a.svc.name || target.group !== a.svc.group) return null;
+  }
+  return target;
+}
+
 // The one way the palette names something inside a project.
 export function pathLabel(project: string, name: string): string {
   return `${project} / ${name}`;

@@ -12,6 +12,7 @@ import {
   RECENTS_MAX,
   serviceActions,
   shouldGroupByProject,
+  soleActionTarget,
   tierBoost,
   type PaletteService,
   type RankContext,
@@ -158,6 +159,14 @@ describe("serviceActions", () => {
     expect(hits).toEqual(["Logs: shop / web", "Logs: shop / web (staging)", "Logs: shop / worker"]);
     const scoped = actions.filter((a) => matchScore("logs worker", a.label, a.keywords) > 0);
     expect(scoped.map((a) => a.label)).toEqual(["Logs: shop / worker"]);
+  });
+
+  it("names the target once when every matching action is for one service", () => {
+    expect(soleActionTarget(actions, "worker")?.name).toBe("worker");
+    // web runs in production and staging: two targets, so rows keep their path.
+    expect(soleActionTarget(actions, "web")).toBeNull();
+    expect(soleActionTarget(actions, "logs")).toBeNull();
+    expect(soleActionTarget(actions, "zzz")).toBeNull();
   });
 });
 

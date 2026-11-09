@@ -79,6 +79,7 @@ import {
   saveIndexSnapshot,
   saveRecents,
   serviceActions,
+  soleActionTarget,
   serviceHref,
   shouldGroupByProject,
   tierBoost,
@@ -591,6 +592,7 @@ export function CommandPalette() {
     const otherServices = index.services.filter((s) => s.project !== currentProject);
     const hits = query ? index.services.filter((s) => matchScore(query, pathLabel(s.project, s.display), [s.name, s.runtime ?? "", s.repo ?? ""]) > 0) : [];
     const groupServices = shouldGroupByProject(hits);
+    const actionTarget = query ? soleActionTarget(actions, query) : null;
     const servicesByOtherProject = [...servicesByProject.entries()].filter(([proj]) => proj !== currentProject);
     body = (
       <>
@@ -636,7 +638,7 @@ export function CommandPalette() {
               onSelect={() => go(`/projects/${encodeURIComponent(currentProject)}?add=addon`)}
               icon={<Database />}
             >
-              Add database or addon
+              Add addon
             </Row>
             <Row
               id="ctx" value="add cron"
@@ -654,7 +656,7 @@ export function CommandPalette() {
         )}
 
         {query && actions.length > 0 && (
-          <Group heading="Service actions" limit={30}>
+          <Group heading={actionTarget ? `Actions · ${pathLabel(actionTarget.project, actionTarget.display)}` : "Service actions"} limit={30}>
             {actions.map((a) => {
               const recent: RecentItem = { kind: "service", project: a.svc.project, name: a.svc.name, group: a.svc.group };
               const confirmKind = a.kind === "redeploy" || a.kind === "restart" || a.kind === "rollback" ? a.kind : null;
@@ -678,11 +680,19 @@ export function CommandPalette() {
                   right={<StatusBadge status={a.svc.status} />}
                 >
                   {a.verb}
-                  <span className="text-[var(--text-tertiary)]">: </span>
-                  <PathLabel project={a.svc.project} name={a.svc.display} />
+                  {!actionTarget && (
+                    <>
+                      <span className="text-[var(--text-tertiary)]">: </span>
+                      <PathLabel project={a.svc.project} name={a.svc.display} />
+                    </>
+                  )}
                 </Row>
               );
             })}
+          </Group>
+        )}
+        {query && (
+          <Group heading="Project settings">
             {index.projects.map((p) => (
               <Row
                 key={`act-psettings-${p.name}`}
@@ -716,7 +726,7 @@ export function CommandPalette() {
                 <Group heading="Services" limit={25}>{otherServices.map((s) => serviceRow(s, "all"))}</Group>
               ))}
             {addons.length > 0 && (
-              <Group heading="Databases & addons">{addons.map(({ project, addon }) => addonRow(project, addon, "all"))}</Group>
+              <Group heading="Addons">{addons.map(({ project, addon }) => addonRow(project, addon, "all"))}</Group>
             )}
             {index.envs.length > 0 && (
               <Group heading="Environments">
@@ -854,7 +864,7 @@ export function CommandPalette() {
         </Group>
         {svcs.length > 0 && <Group heading="Services">{svcs.map((s) => serviceRow(s, "proj", false))}</Group>}
         {projAddons.length > 0 && (
-          <Group heading="Databases & addons">{projAddons.map(({ addon }) => addonRow(p, addon, "proj", false))}</Group>
+          <Group heading="Addons">{projAddons.map(({ addon }) => addonRow(p, addon, "proj", false))}</Group>
         )}
         <Group heading="Environments">
           <Row value="env production" keywords={["switch", "environment"]} onSelect={() => go(`/projects/${enc}`, { kind: "project", project: p })} icon={<GitBranch />}>
@@ -878,7 +888,7 @@ export function CommandPalette() {
             Add service
           </Row>
           <Row value="add addon" keywords={["new", "database", "postgres", "redis"]} onSelect={() => go(`/projects/${enc}?add=addon`)} icon={<Database />}>
-            Add database or addon
+            Add addon
           </Row>
           <Row value="add cron" keywords={["new", "schedule", "job"]} onSelect={() => go(`/projects/${enc}?add=cron`)} icon={<Clock />}>
             Add cron job
