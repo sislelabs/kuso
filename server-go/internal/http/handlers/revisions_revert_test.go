@@ -12,6 +12,12 @@ import (
 type revertRecorder struct {
 	ProjectsAPI
 	service, environment int
+	envImage             []string
+}
+
+func (r *revertRecorder) SetEnvironmentImage(_ context.Context, project, service, env, repo, tag string) error {
+	r.envImage = append(r.envImage, project+"/"+service+"@"+env+"="+repo+":"+tag)
+	return nil
 }
 
 func (r *revertRecorder) RevertServiceSnapshot(context.Context, string, string, []byte) error {
@@ -60,5 +66,30 @@ func TestReplayRevisionDispatchesByKind(t *testing.T) {
 	// server, but must still not be silently accepted.
 	if _, err := h.replayRevision(ctx, &db.Revision{Kind: "cron", Snapshot: []byte(`{}`)}); !errors.Is(err, errRevertUnsupported) {
 		t.Fatalf("cron err = %v, want errRevertUnsupported", err)
+	}
+}
+
+func TestRevertImageToEnvScopesToOneEnv(t *testing.T) {
+	t.Parallel()
+	rec := &revertRecorder{}
+	h := &ProjectsHandler{Svc: rec}
+	ctx := context.Background()
+	err := h.revertImageToEnv(ctx, &db.Revision{Project: "shop", Kind: "service", Name: "web",
+		Snapshot: []byte(`{"patch":{"image":{"repository":"nginx","tag":"1.27"}}}`)}, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.envImage) != 1 || rec.envImage[0] != "shop/web@staging=nginx:1.27" {
+		t.Fatalf("envImage = %v", rec.envImage)
+	}
+	if rec.service != 0 {
+		t.Fatal("env-scoped rollback replayed the service-wide change")
+	}
+	// A revision that changed more than the image can't be scoped to one env.
+	for _, snap := range []string{`{"patch":{"image":{"repository":"nginx"},"port":80}}`, `{"patch":{"port":80}}`, `{"op":"service.envVars"}`} {
+		err := h.revertImageToEnv(ctx, &db.Revision{Project: "shop", Kind: "service", Name: "web", Snapshot: []byte(snap)}, "staging")
+		if !errors.Is(err, projects.ErrNotRevertable) {
+			t.Errorf("%s: err = %v, want ErrNotRevertable", snap, err)
+		}
 	}
 }

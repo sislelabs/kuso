@@ -123,6 +123,7 @@ func (w *Watcher) reconcileOnce(ctx context.Context) error {
 		}
 		for i := range envs {
 			e := &envs[i]
+			w.recordLiveImage(ctx, ns, e)
 			if e.Spec.PendingImage == nil {
 				continue
 			}

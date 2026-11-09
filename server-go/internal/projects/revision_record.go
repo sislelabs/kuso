@@ -50,6 +50,7 @@ type revisionSnapshot struct {
 	AdditionalHosts  *[]string                  `json:"additionalHosts,omitempty"`
 	WildcardDomains  *[]kube.KusoWildcardDomain `json:"wildcardDomains,omitempty"`
 	Branch           string                     `json:"branch,omitempty"`
+	Image            *kube.KusoImage            `json:"image,omitempty"`
 	From             string                     `json:"from,omitempty"`
 	// RevertOf names the revision this one replayed (a rollback / revert
 	// from History); empty for a direct edit.
@@ -423,6 +424,11 @@ func (s *Service) RevertEnvironmentSnapshot(ctx context.Context, project, name s
 		return s.replayEnvDomains(ctx, project, snap)
 	case revOpEnvOverrides:
 		return s.replayEnvOverrides(ctx, project, snap)
+	case revOpEnvImage:
+		if snap.Image == nil || snap.Image.Repository == "" {
+			return fmt.Errorf("%w: snapshot has no image", ErrInvalid)
+		}
+		return s.SetEnvironmentImage(ctx, project, snap.Service, snap.Env, snap.Image.Repository, snap.Image.Tag)
 	case revOpEnvBranch:
 		if snap.Branch == "" {
 			return fmt.Errorf("%w: snapshot has no branch", ErrInvalid)
