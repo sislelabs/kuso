@@ -30,11 +30,14 @@ function resolver(vars: Record<string, string>) {
   return get;
 }
 
-const SURFACES = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-elevated"];
+const SURFACES = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-elevated", "canvas-bg"];
 const TEXT = ["text-primary", "text-secondary", "text-tertiary", "muted-foreground", "accent", "link", "success", "warning", "error", "building", "info", "destructive"];
 // Placeholder is intentionally fainter than any real value but still legible.
 // btn-primary-bg: the primary button must stand out from the page as a shape, not only by its label.
 const NON_TEXT = ["text-placeholder", "border-strong", "focus", "selected-border", "btn-primary-bg"];
+// Canvas wires carry meaning (which service reads which addon), so they
+// need 3:1 against the canvas ground they're drawn on.
+const WIRES = ["edge-addon", "edge-ref", "edge-lit"];
 const FILLS: [string, string][] = [
   ["btn-primary-fg", "btn-primary-bg"],
   ["btn-primary-fg", "btn-primary-bg-hover"],
@@ -51,6 +54,9 @@ for (const [theme, vars] of [["light", root], ["dark", { ...root, ...tokens(".da
     });
     it.each(NON_TEXT)("--%s reaches 3:1 on every surface", (tok) => {
       for (const s of SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(3);
+    });
+    it.each(WIRES)("--%s reaches 3:1 on the canvas", (tok) => {
+      expect(contrastRatio(get(tok), get("canvas-bg"))).toBeGreaterThanOrEqual(3);
     });
     it.each(FILLS)("--%s on --%s reaches 4.5:1", (fg, bg) => {
       expect(contrastRatio(get(fg), get(bg))).toBeGreaterThanOrEqual(4.5);

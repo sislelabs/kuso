@@ -8,7 +8,8 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-ui);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-ui);
+  --font-heading: var(--font-archivo);
+  --font-display: var(--font-archivo);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -76,15 +77,23 @@
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 2);
+
+  --shadow-node: var(--node-shadow);
+  --shadow-node-hover: var(--node-shadow-hover);
+  --color-surface-float: var(--surface-float);
+  --color-canvas: var(--canvas-bg);
 }
 
 /*
- * Palette derived from the kuso logo:
- *   #40476D slate-blue / #AFBBF2 periwinkle — the brand accent. One hue
- *            (~230°) in both themes: links, focus rings, selection.
- *   #ACBEA3 sage   — the one primary action colour (Deploy/Save/Create).
- *   #EB6534 orange — attention only: warnings, "needs you" states.
- *   red            — errors and destructive actions.
+ * Palette derived from the kuso logo, pushed to one confident signal:
+ *   indigo  #3A42A6 light / #A9B4FF dark — the brand accent. Links, focus
+ *           rings, selection, the canvas's lit wires and grid crosses.
+ *   sage    — the one primary action colour (Deploy/Save/Create).
+ *   orange  — attention only: warnings, "needs you" states.
+ *   red     — errors and destructive actions.
+ * Light keeps the warm paper ground; dark is one cool ink hue stepped by
+ * lightness, with a top-edge highlight so raised surfaces read as lit.
  *
  * Every text token clears WCAG AA (4.5:1) on every surface it sits on
  * (bg-primary/secondary/tertiary/elevated); placeholder is deliberately
@@ -99,75 +108,90 @@
   --console-bg-hover: #1a1a20;
   --console-fg: #c9d1d9;
 
-  --bg-primary: #FBFBF7;
-  --bg-secondary: #F4F3EC;
-  --bg-tertiary: #ECEAE0;
+  --bg-primary: #FAF9F4;
+  --bg-secondary: #F3F1EA;
+  --bg-tertiary: #EAE7DD;
   --bg-elevated: #FFFFFF;
   --bg-inverse: #271F30;
-  --text-primary: #1A1D2E;
-  --text-secondary: #4A4F66;
-  --text-tertiary: #5F6377;
+  --text-primary: #191C2B;
+  --text-secondary: #474C63;
+  --text-tertiary: #5C6075;
   --text-placeholder: #85827A;
-  --text-inverse: #FBFBF7;
+  --text-inverse: #FAF9F4;
 
-  --accent: #40476D;
-  --accent-hover: #2F3556;
-  --accent-subtle: rgba(64, 71, 109, 0.10);
-  --accent-fg: #FBFBF7;           /* text on a solid --accent fill */
+  --accent: #3A42A6;
+  --accent-hover: #2E3588;
+  --accent-subtle: rgba(58, 66, 166, 0.09);
+  --accent-fg: #FAF9F4;           /* text on a solid --accent fill */
   --link: var(--accent);
-  --focus: #4F5A92;               /* focus ring — brand hue, ≥3:1 on every surface */
-  --selected: rgba(64, 71, 109, 0.10);
-  --selected-border: #6B73A0;
+  --focus: #4A53C0;               /* focus ring — brand hue, ≥3:1 on every surface */
+  --selected: rgba(58, 66, 166, 0.08);
+  --selected-border: #6C74C4;
 
   /* The one primary button. Same green family as dark mode, deepened so
      cream text clears AA and saturated enough that it reads as the
      action, not as another muted surface. */
   --btn-primary-bg: #2E7340;
   --btn-primary-bg-hover: #245E34;
-  --btn-primary-fg: #FBFBF7;
+  --btn-primary-fg: #FAF9F4;
   --btn-primary-border: #245E34;
   --btn-secondary-bg: #FFFFFF;
-  --btn-secondary-bg-hover: #F4F3EC;
-  --btn-secondary-fg: #1A1D2E;
+  --btn-secondary-bg-hover: #F3F1EA;
+  --btn-secondary-fg: #191C2B;
   --btn-secondary-border: #D3D0C1;
 
   --border-default: #DCD9CB;
   --border-subtle: #E8E5D8;
   --border-strong: #7A7F9E;       /* hover/active outlines */
-  --shadow-sm: 0 1px 2px rgba(26, 29, 46, 0.06);
-  --shadow-md: 0 4px 12px rgba(26, 29, 46, 0.08);
-  --shadow-lg: 0 12px 40px rgba(26, 29, 46, 0.14);
+  --shadow-sm: 0 1px 2px rgba(25, 28, 43, 0.05), 0 1px 1px rgba(25, 28, 43, 0.03);
+  --shadow-md: 0 1px 2px rgba(25, 28, 43, 0.05), 0 6px 16px -4px rgba(25, 28, 43, 0.10);
+  --shadow-lg: 0 2px 4px rgba(25, 28, 43, 0.05), 0 18px 48px -12px rgba(25, 28, 43, 0.22);
   /* Slide-over backdrops. Wide screens keep the canvas readable behind
      the panel; narrow ones dim harder since the panel covers most of it. */
   --scrim: rgba(8, 8, 11, 0.45);
   --scrim-wide: rgba(8, 8, 11, 0.18);
+  /* Raised-surface recipe: a hairline top highlight over a soft drop. */
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --btn-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  --surface-float: rgba(255, 255, 255, 0.88);
 
-  --background: #FBFBF7;
-  --foreground: #1A1D2E;
+  /* Canvas: drafting-paper ground. Fine dots on the 24px snap grid, a
+     cross every fifth unit, wires in two hues, cards with real depth. */
+  --canvas-bg: #F6F4EE;
+  --grid-minor: rgba(25, 28, 43, 0.22);
+  --grid-major: rgba(58, 66, 166, 0.34);
+  --edge-addon: #8A7A4E;
+  --edge-ref: #5A62B8;
+  --edge-lit: var(--accent);
+  --node-shadow: 0 1px 0 rgba(25, 28, 43, 0.04), 0 4px 12px -6px rgba(25, 28, 43, 0.14);
+  --node-shadow-hover: 0 1px 0 rgba(25, 28, 43, 0.04), 0 12px 28px -10px rgba(25, 28, 43, 0.24);
+
+  --background: #FAF9F4;
+  --foreground: #191C2B;
   --card: #FFFFFF;
-  --card-foreground: #1A1D2E;
+  --card-foreground: #191C2B;
   --popover: #FFFFFF;
-  --popover-foreground: #1A1D2E;
+  --popover-foreground: #191C2B;
   --primary: #4D6847;
-  --primary-foreground: #FBFBF7;
-  --secondary: #F4F3EC;
-  --secondary-foreground: #1A1D2E;
-  --muted: #ECEAE0;
-  --muted-foreground: #4A4F66;
-  --accent-ui: #ECEAE0;
-  --accent-foreground: #1A1D2E;
+  --primary-foreground: #FAF9F4;
+  --secondary: #F3F1EA;
+  --secondary-foreground: #191C2B;
+  --muted: #EAE7DD;
+  --muted-foreground: #474C63;
+  --accent-ui: #EAE7DD;
+  --accent-foreground: #191C2B;
   --destructive: #A3200F;
   --border: #DCD9CB;
   --input: #FFFFFF;
   --ring: var(--focus);
   --radius: 0.375rem;
 
-  --sidebar: #F4F3EC;
-  --sidebar-foreground: #1A1D2E;
-  --sidebar-primary: #40476D;
-  --sidebar-primary-foreground: #FBFBF7;
-  --sidebar-accent: #ECEAE0;
-  --sidebar-accent-foreground: #1A1D2E;
+  --sidebar: #F3F1EA;
+  --sidebar-foreground: #191C2B;
+  --sidebar-primary: #3A42A6;
+  --sidebar-primary-foreground: #FAF9F4;
+  --sidebar-accent: #EAE7DD;
+  --sidebar-accent-foreground: #191C2B;
   --sidebar-border: #DCD9CB;
   --sidebar-ring: var(--focus);
 
@@ -183,14 +207,14 @@
   --error-subtle: rgba(163, 32, 15, 0.09);
   --danger: var(--error);
   --danger-subtle: var(--error-subtle);
-  --info: #40476D;
-  --info-subtle: rgba(64, 71, 109, 0.10);
+  --info: #3A42A6;
+  --info-subtle: rgba(58, 66, 166, 0.09);
 
-  --chart-1: #40476D;
+  --chart-1: #3A42A6;
   --chart-2: #EB6534;
   --chart-3: #6F8B69;
   --chart-4: #8C7F4A;
-  --chart-5: #7C89D6;
+  --chart-5: #7C84D6;
 
   /* CVE severity scale (vulnerability scanning). Aliases of the status
      hues, so both themes follow automatically. */
@@ -210,28 +234,28 @@
   color-scheme: dark;
   /* Surface ladder: one cool near-black hue, ~5% lightness per step so
      page < sidebar < hover < card read as elevations of one material. */
-  --bg-primary: #0A0C15;
-  --bg-secondary: #11141F;
-  --bg-tertiary: #181C29;
-  --bg-elevated: #1F2333;
-  --bg-inverse: #FBFBF7;
+  --bg-primary: #090B12;
+  --bg-secondary: #10131D;
+  --bg-tertiary: #171B28;
+  --bg-elevated: #1D2131;
+  --bg-inverse: #FAF9F4;
 
   --text-primary: #ECEAE0;
   --text-secondary: #B4B8C6;
   --text-tertiary: #8C91A3;
   --text-placeholder: #6B7082;
-  --text-inverse: #0A0C15;
+  --text-inverse: #090B12;
 
   /* Accent = periwinkle, the same brand hue as light mode's slate.
      Orange no longer doubles as focus/selection colour. */
-  --accent: #AFBBF2;
-  --accent-hover: #C4CDF6;
-  --accent-subtle: rgba(175, 187, 242, 0.12);
-  --accent-fg: #0A0C15;
+  --accent: #A9B4FF;
+  --accent-hover: #C2C9FF;
+  --accent-subtle: rgba(169, 180, 255, 0.12);
+  --accent-fg: #090B12;
   --link: var(--accent);
-  --focus: #8E9BE0;
-  --selected: rgba(175, 187, 242, 0.12);
-  --selected-border: #7680B8;
+  --focus: #8C97F2;
+  --selected: rgba(169, 180, 255, 0.10);
+  --selected-border: #7781C9;
   --accent-2: #40476D;
   --accent-2-subtle: rgba(64, 71, 109, 0.14);
   --accent-3: #ACBEA3;
@@ -239,10 +263,10 @@
 
   --btn-primary-bg: #A6CB8E;
   --btn-primary-bg-hover: #B8D8A3;
-  --btn-primary-fg: #0A0C15;
+  --btn-primary-fg: #090B12;
   --btn-primary-border: #A6CB8E;
-  --btn-secondary-bg: #181C29;
-  --btn-secondary-bg-hover: #1F2333;
+  --btn-secondary-bg: #171B28;
+  --btn-secondary-bg-hover: #1D2131;
   --btn-secondary-fg: #ECEAE0;
   --btn-secondary-border: #3A3F55;
 
@@ -250,36 +274,48 @@
   --border-default: #3A3F55;
   --border-strong: #6C7396;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.4), 0 24px 64px -16px rgba(0, 0, 0, 0.75);
   --scrim: rgba(4, 5, 10, 0.55);
   --scrim-wide: rgba(4, 5, 10, 0.32);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --btn-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  --surface-float: rgba(29, 33, 49, 0.86);
 
-  --background: #0A0C15;
+  --canvas-bg: #0B0D15;
+  --grid-minor: rgba(180, 184, 198, 0.2);
+  --grid-major: rgba(169, 180, 255, 0.26);
+  --edge-addon: #A89A6E;
+  --edge-ref: #8E99EE;
+  --edge-lit: var(--accent);
+  --node-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 0 rgba(0, 0, 0, 0.5), 0 10px 24px -14px rgba(0, 0, 0, 0.9);
+  --node-shadow-hover: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 0 rgba(0, 0, 0, 0.5), 0 18px 40px -14px rgba(0, 0, 0, 0.95);
+
+  --background: #090B12;
   --foreground: #ECEAE0;
-  --card: #1F2333;
+  --card: #1D2131;
   --card-foreground: #ECEAE0;
-  --popover: #171A27;
+  --popover: #161A26;
   --popover-foreground: #ECEAE0;
   --primary: #ACBEA3;
-  --primary-foreground: #0A0C15;
-  --secondary: #11141F;
+  --primary-foreground: #090B12;
+  --secondary: #10131D;
   --secondary-foreground: #ECEAE0;
-  --muted: #181C29;
+  --muted: #171B28;
   --muted-foreground: #B4B8C6;
-  --accent-ui: #181C29;
+  --accent-ui: #171B28;
   --accent-foreground: #ECEAE0;
   --destructive: #F47A6E;
   --border: #3A3F55;
-  --input: #11141F;
+  --input: #10131D;
   --ring: var(--focus);
 
-  --sidebar: #11141F;
+  --sidebar: #10131D;
   --sidebar-foreground: #ECEAE0;
   --sidebar-primary: #ACBEA3;
-  --sidebar-primary-foreground: #0A0C15;
-  --sidebar-accent: #181C29;
+  --sidebar-primary-foreground: #090B12;
+  --sidebar-accent: #171B28;
   --sidebar-accent-foreground: #ECEAE0;
   --sidebar-border: #3A3F55;
   --sidebar-ring: var(--focus);
@@ -297,10 +333,10 @@
   --error-subtle: rgba(244, 122, 110, 0.13);
   --danger: var(--error);
   --danger-subtle: var(--error-subtle);
-  --info: #AFBBF2;
-  --info-subtle: rgba(175, 187, 242, 0.13);
+  --info: #A9B4FF;
+  --info-subtle: rgba(169, 180, 255, 0.12);
 
-  --chart-1: #AFBBF2;
+  --chart-1: #A9B4FF;
   --chart-2: #EB6534;
   --chart-3: #ACBEA3;
   --chart-4: #B5B19A;
@@ -318,6 +354,16 @@
      inset its ring with outline-offset-[-2px]. */
   :focus-visible { outline-offset: 2px; }
   ::selection { background: var(--accent-subtle); }
+  /* Page titles are set in the display face wherever they come from. */
+  h1 { font-family: var(--font-archivo), var(--font-ui), sans-serif; font-stretch: 112%; letter-spacing: -0.012em; }
+  /* The display face runs semi-expanded: wide, engineered letterforms
+     that read like equipment labelling, against the narrower UI sans.
+     In the base layer so a font-stretch utility can still override it. */
+  .font-heading,
+  .font-display {
+    font-stretch: 112%;
+    letter-spacing: -0.01em;
+  }
 }
 
 /* One focus ring for every focusable: 2px solid --focus. Unlayered on
@@ -372,11 +418,12 @@ textarea::placeholder {
   color: var(--text-tertiary);
 }
 @utility text-title {
-  font-family: var(--font-ui);
-  font-size: 1.375rem;
-  line-height: 1.75rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-family: var(--font-archivo), var(--font-ui), sans-serif;
+  font-stretch: 112%;
+  font-size: 1.5rem;
+  line-height: 1.875rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
   color: var(--text-primary);
 }
 @utility tabular {
@@ -386,17 +433,19 @@ textarea::placeholder {
 .text-hero {
   font-size: clamp(3rem, 6vw, 5.5rem);
   line-height: 1.02;
-  letter-spacing: -0.035em;
-  font-family: var(--font-ui);
-  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-family: var(--font-archivo), var(--font-ui), sans-serif;
+  font-stretch: 118%;
+  font-weight: 750;
 }
 
 .text-section-heading {
   font-size: clamp(1.75rem, 3vw, 2.5rem);
   line-height: 1.15;
-  letter-spacing: -0.025em;
-  font-family: var(--font-ui);
-  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-family: var(--font-archivo), var(--font-ui), sans-serif;
+  font-stretch: 112%;
+  font-weight: 650;
 }
 
 /* Respect the OS "reduce motion" setting everywhere: CSS animations,
@@ -420,21 +469,25 @@ textarea::placeholder {
   }
 }
 
-/* React Flow Controls — the library ships white-button CSS that
-   overrides inline classes on the buttons themselves. Re-skinned here
-   instead of per-button className props. */
+/* React Flow chrome. The library ships white-button CSS that overrides
+   inline classes on the buttons themselves, so it's re-skinned here: the
+   controls are a floating instrument strip on the same frosted surface
+   as the other canvas panels. */
 .react-flow__controls {
-  box-shadow: none !important;
+  box-shadow: var(--shadow-md), var(--highlight) !important;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
+  background: var(--surface-float);
+  backdrop-filter: blur(8px);
 }
 .react-flow__controls-button {
-  background: var(--bg-elevated) !important;
+  background: transparent !important;
   border-bottom: 1px solid var(--border-subtle) !important;
   color: var(--text-secondary) !important;
-  width: 28px !important;
-  height: 28px !important;
+  width: 30px !important;
+  height: 30px !important;
+  transition: background-color 120ms, color 120ms;
 }
 .react-flow__controls-button:last-child {
   border-bottom: none !important;
@@ -445,6 +498,19 @@ textarea::placeholder {
 }
 .react-flow__controls-button svg {
   fill: currentColor !important;
+  max-width: 11px !important;
+  max-height: 11px !important;
+}
+/* Edges ease between rest, lit and dimmed instead of snapping. */
+.react-flow__edge-path {
+  transition: stroke 160ms ease-out, stroke-width 160ms ease-out, opacity 160ms ease-out;
+}
+/* The canvas floats panels over the grid; they share one frosted card. */
+.canvas-float {
+  background: var(--surface-float);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm), var(--highlight);
+  backdrop-filter: blur(8px);
 }
 
 /* Hide scrollbars on horizontal strips (tabs, chips) that show a fade

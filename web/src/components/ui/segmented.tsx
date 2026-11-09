@@ -78,7 +78,7 @@ function Segmented<T extends string>({
               "rounded-[calc(var(--radius-md)-2px)] font-medium whitespace-nowrap text-[var(--text-secondary)] transition-colors outline-none hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
               size === "sm" ? "h-6 px-2 text-xs" : "h-7 px-2.5 text-xs",
               mono && "font-mono",
-              checked && "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]"
+              checked && "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm),var(--highlight)]"
             )}
           >
             {o.label}

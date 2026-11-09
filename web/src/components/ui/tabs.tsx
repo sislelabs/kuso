@@ -59,7 +59,7 @@ function tabClass(size: "sm" | "default") {
     "text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]",
     "focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-inset",
     "aria-selected:text-[var(--text-primary)] aria-selected:hover:bg-transparent",
-    "after:pointer-events-none after:absolute after:inset-x-2 after:-bottom-[5px] after:h-0.5 after:rounded-full after:bg-transparent aria-selected:after:bg-[var(--text-primary)]",
+    "after:pointer-events-none after:absolute after:inset-x-2 after:-bottom-[5px] after:h-0.5 after:rounded-full after:bg-transparent aria-selected:after:bg-[var(--accent)]",
     "disabled:pointer-events-none disabled:opacity-50",
     "[&_svg]:size-3.5 [&_svg]:shrink-0",
     size === "sm" ? "h-7 px-2 text-[13px]" : "h-8 px-2.5 text-sm"
