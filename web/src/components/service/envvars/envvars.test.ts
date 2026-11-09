@@ -252,7 +252,7 @@ describe("restart impact", () => {
     const impact = restartImpactFromEnvs(envs, "p", "web", (e) => e.name);
     expect(impact).toEqual({ pods: 3, envs: ["preview-pr-3", "production"] });
     expect(restartNote(impact)).toBe(
-      "Saving restarts 3 running pods (preview-pr-3, production). Env vars can't be applied without a restart.",
+      "Deploying restarts 3 running pods (preview-pr-3, production) once. Variables can't be applied without a restart.",
     );
   });
   it("says so when nothing runs", () => {

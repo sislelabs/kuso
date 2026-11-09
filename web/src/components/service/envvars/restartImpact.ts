@@ -40,9 +40,9 @@ export function restartImpactFromEnvs<E extends EnvLike>(
 }
 
 export function restartNote(impact: RestartImpact | undefined): string {
-  if (!impact) return "Saving restarts this service's pods so they pick up the new values.";
+  if (!impact) return "Deploying restarts this service's pods once so they pick up the new values.";
   if (impact.pods === 0) return "No pods are running right now. The new values apply on the next start.";
   const pods = impact.pods === 1 ? "1 running pod" : `${impact.pods} running pods`;
   const where = impact.envs.length ? ` (${impact.envs.join(", ")})` : "";
-  return `Saving restarts ${pods}${where}. Env vars can't be applied without a restart.`;
+  return `Deploying restarts ${pods}${where} once. Variables can't be applied without a restart.`;
 }

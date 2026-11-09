@@ -27,12 +27,14 @@ export function toStagedEnv(plan: Plan, baseline: readonly Row[], rows: readonly
       name: w.name,
       value: w.value,
       before: b ? knownValue(b) : null,
-      sensitive: isSensitiveVar(w.name, w.value) || !!b?.secretBacked || !!r?.secretBacked,
+      // Same rule the editor uses to mask a value; secret-backed storage
+      // alone isn't it, since every plain value is stored that way.
+      sensitive: isSensitiveVar(w.name, w.value) || (!!b && isSensitiveVar(b.name, b.value)) || !!r?.fromSecret,
     };
   });
   const unset = plan.deletes.map((name) => {
     const b = byName.get(name);
-    return { name, before: knownValue(b), sensitive: !!b && (b.secretBacked || isSensitiveVar(name, b.value)) };
+    return { name, before: knownValue(b), sensitive: !!b && (b.fromSecret || isSensitiveVar(name, b.value)) };
   });
   if (set.length === 0 && unset.length === 0) return undefined;
   return { set, unset };

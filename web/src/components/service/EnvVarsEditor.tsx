@@ -396,9 +396,12 @@ export function EnvVarsEditor({
   };
   discardRef.current = discard;
 
+  const stagedForData = useRef<unknown>(undefined);
   // Stage every valid edit as it's made. Raw mode stages the parsed text
   // without rewriting the rows under the cursor.
   useEffect(() => {
+    const baselineMoved = stagedForData.current !== env.data;
+    stagedForData.current = env.data;
     if (!dirty || !canWrite || !env.data) return;
     let current = rows;
     if (view === "raw") {
@@ -416,6 +419,16 @@ export function EnvVarsEditor({
     }
     setStageError(null);
     const next = toStagedEnv(plan, baselineFromRows.current, current);
+    // The deployed values caught up with every edit (our deploy landed):
+    // settle back to a clean editor instead of holding stale edit rows.
+    if (!next && baselineMoved) {
+      lastStagedRef.current = undefined;
+      stageEnv(project, service, undefined);
+      setRows(baselineFromRows.current);
+      setEditing(new Set());
+      setDirty(false);
+      return;
+    }
     if (sameStagedEnv(next, lastStagedRef.current)) return;
     lastStagedRef.current = next;
     stageEnv(project, service, next);
