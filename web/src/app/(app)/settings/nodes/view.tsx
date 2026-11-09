@@ -11,13 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
-import { ChevronRight, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
+import { AlertTriangle, ChevronRight, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatCpu, relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
+import { nodePressures, roleLabels } from "@/components/layout/nodeHealth";
 import { DbHealthTile } from "@/components/shared/DbHealthTile";
 
 interface Label {
@@ -288,6 +289,7 @@ export function NodesView() {
               onChange={(next) => setLabels(n, next)}
               isDirty={n.name in edits}
               advisory={advisoryByNode.get(n.name)}
+              advisoryFailed={updates.isError}
             />
           ))}
         </ul>
@@ -359,12 +361,14 @@ function NodeCard({
   onChange,
   isDirty,
   advisory,
+  advisoryFailed,
 }: {
   node: NodeSummary;
   labels: Label[];
   onChange: (next: Label[]) => void;
   isDirty: boolean;
   advisory?: NodeUpdateAdvisory;
+  advisoryFailed?: boolean;
 }) {
   const status = node.unreachable
     ? { text: "Unreachable", tone: "danger" as const, title: "kuso cordoned this node because it has been NotReady past the threshold. It is uncordoned automatically when the node recovers." }
@@ -388,11 +392,17 @@ function NodeCard({
               <span aria-hidden className="size-1.5 rounded-full bg-current" />
               {status.text}
             </Badge>
+            {nodePressures(node).map((p) => (
+              <Badge key={p.type} variant="warning" title={p.message ? `${p.detail}\n\n${p.message}` : p.detail}>
+                <AlertTriangle aria-hidden />
+                {p.label}
+              </Badge>
+            ))}
             {isDirty && <Badge variant="warning">Unsaved</Badge>}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-tertiary)]">
-            {node.roles.map((r) => (
-              <span key={r}>{roleLabel(r)}</span>
+            {roleLabels(node.roles).map((r) => (
+              <span key={r}>{r}</span>
             ))}
             {node.zone && <span>Zone <span className="font-mono">{node.zone}</span></span>}
             {!node.schedulable && !node.unreachable && <UncordonButton node={node.name} />}
@@ -405,7 +415,7 @@ function NodeCard({
 
       <div className="space-y-3 px-4 pt-4 pb-4 sm:px-5">
         <NodeStats node={node} />
-        <PackageUpdates advisory={advisory} />
+        <PackageUpdates advisory={advisory} failed={advisoryFailed} />
       </div>
 
       {/* The chip strip is the entire label UI: the chips ARE the
@@ -418,18 +428,22 @@ function NodeCard({
   );
 }
 
-function roleLabel(role: string): string {
-  if (role === "control-plane" || role === "master") return "Control plane";
-  if (role === "worker") return "Worker";
-  return role.charAt(0).toUpperCase() + role.slice(1).replace(/-/g, " ");
-}
-
 // PackageUpdates renders the per-node host package-update advisory plus
 // the apply action. States: not-yet-probed, unsupported OS, up-to-date,
 // updates-available (with Apply), and an in-flight apply banner
 // (running/rebooting/failed) that polls until terminal.
-function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
+// How long "Checking host packages…" may show before it admits defeat.
+const PACKAGE_CHECK_TIMEOUT_MS = 20_000;
+
+function PackageUpdates({ advisory, failed }: { advisory?: NodeUpdateAdvisory; failed?: boolean }) {
   const qc = useQueryClient();
+  const [checkTimedOut, setCheckTimedOut] = useState(false);
+  const reported = !!advisory?.present;
+  useEffect(() => {
+    if (reported) return;
+    const t = setTimeout(() => setCheckTimedOut(true), PACKAGE_CHECK_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [reported]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const phase = advisory?.apply?.phase ?? "";
   // "settling" is the post-reboot sweep; the server 409s a new apply until it ends.
@@ -462,6 +476,20 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   }, [inFlight, qc]);
 
   if (!advisory || !advisory.present) {
+    if (failed || checkTimedOut) {
+      return (
+        <div
+          className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]"
+          title={
+            failed
+              ? "The package-update check request failed."
+              : "The host package probe hasn't reported for this node. It runs as a DaemonSet; check that its pod is running here."
+          }
+        >
+          <Package className="h-3.5 w-3.5" /> Couldn&apos;t check host packages
+        </div>
+      );
+    }
     return (
       <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
         <Package className="h-3.5 w-3.5" /> Checking host packages…

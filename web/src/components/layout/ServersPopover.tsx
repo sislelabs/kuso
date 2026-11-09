@@ -8,6 +8,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { api } from "@/lib/api-client";
 import { useCan, Perms } from "@/features/auth";
 import { cn } from "@/lib/utils";
+import { nodePressures, roleLabels, type NodeCondition } from "./nodeHealth";
 
 export interface NodeSummary {
   name: string;
@@ -33,6 +34,8 @@ export interface NodeSummary {
   diskAvailableBytes?: number;
   pods?: number;
   podsCapacity?: number;
+  // Kubelet conditions (Memory/Disk/PID pressure). Absent on older servers.
+  conditions?: NodeCondition[];
 }
 
 // ServersPopover renders a compact "<n> nodes" pill in the top nav.
@@ -57,6 +60,7 @@ export function ServersPopover() {
   const list = nodes.data ?? [];
   const ready = list.filter((n) => n.ready).length;
   const total = list.length;
+  const pressured = list.filter((n) => nodePressures(n).length > 0).length;
 
   // Group by region (or "default" when unset). Region comes from the
   // upstream topology label OR our kuso/region label, whichever is
@@ -76,7 +80,7 @@ export function ServersPopover() {
   return (
     <Popover>
       <PopoverTrigger
-        aria-label={`Cluster nodes: ${ready} of ${total} ready`}
+        aria-label={`Cluster nodes: ${ready} of ${total} ready${pressured ? `, ${pressured} under resource pressure` : ""}`}
         title="Cluster nodes"
         className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
       >
@@ -87,7 +91,7 @@ export function ServersPopover() {
               aria-hidden
               className={cn(
                 "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-[var(--bg-primary)]",
-                ready === total ? "bg-[var(--success)]" : "bg-[var(--error)]"
+                ready !== total ? "bg-[var(--error)]" : pressured > 0 ? "bg-[var(--warning)]" : "bg-[var(--success)]"
               )}
             />
           )}
@@ -126,7 +130,9 @@ export function ServersPopover() {
                     {region}
                   </div>
                   <ul>
-                    {ns.map((n) => (
+                    {ns.map((n) => {
+                      const pressure = nodePressures(n);
+                      return (
                       <li
                         key={n.name}
                         className="flex items-center gap-2 px-3 py-1.5 text-[13px]"
@@ -134,12 +140,20 @@ export function ServersPopover() {
                         <span
                           className={cn(
                             "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                            n.ready ? "bg-[var(--success)]" : "bg-[var(--error)]"
+                            !n.ready ? "bg-[var(--error)]" : pressure.length > 0 ? "bg-[var(--warning)]" : "bg-[var(--success)]"
                           )}
                         />
                         <span className="truncate font-mono">{n.name}</span>
+                        {pressure.length > 0 && (
+                          <span
+                            className="shrink-0 text-xs text-[var(--warning)]"
+                            title={pressure.map((p) => p.detail).join("\n")}
+                          >
+                            {pressure.map((p) => p.label).join(", ")}
+                          </span>
+                        )}
                         <span className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-[var(--text-tertiary)]">
-                          {n.roles.map((r) => (
+                          {roleLabels(n.roles).map((r) => (
                             <span
                               key={r}
                               className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5"
@@ -160,7 +174,8 @@ export function ServersPopover() {
                           )}
                         </span>
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 </li>
               ))}
