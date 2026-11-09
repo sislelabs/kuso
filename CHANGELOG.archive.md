@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.30] — 2026-09-03
+
+### 🐛 Bug Fixes
+- Fix(envs): refuse an env GROUP name in DeleteEnvironment instead of reporting success ([1bb70a6](https://github.com/sislelabs/kuso/commit/1bb70a6976a639bc4a71e62e890fb17edc76af49))
+
 ## [0.25.29] — 2026-09-03
 
 ### 🐛 Bug Fixes

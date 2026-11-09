@@ -19,6 +19,37 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.40.0] — 2026-11-09
+
+### Other
+- Name a failed image pull by its cause instead of "Crashing" ([e82ab54](https://github.com/sislelabs/kuso/commit/e82ab54e011d2c7280c379e817ec5bbce5c846c4))
+- Tell one rollout story on every surface during and after a bad deploy ([bb9a28f](https://github.com/sislelabs/kuso/commit/bb9a28f1e021518f308676acee995bf44a8fab88))
+- Report a rollout as in flight until new pods are ready, and name pull causes ([7a6c995](https://github.com/sislelabs/kuso/commit/7a6c9959c48a23994d1b77d5eedfcce6c614ebad))
+- Show platform build failures as kuso's, with Cancel and the right step ([c8a9d75](https://github.com/sislelabs/kuso/commit/c8a9d75238421824fb9b674014a888c4d5bcb683))
+- Fail builds whose pod can't start after a timeout ([52329e9](https://github.com/sislelabs/kuso/commit/52329e959570172116441b3f075a124489d69b26))
+- Create a service with its variables and addon subscription in one call ([f351fec](https://github.com/sislelabs/kuso/commit/f351fecb337e67bb100f6bb08e7c85d94d111368))
+- Replace the branch datalist with a searchable branch combobox ([c16bdf0](https://github.com/sislelabs/kuso/commit/c16bdf04b8111ab118ac142b30b2fa0090a33587))
+- Make staged variable rows and the review's rollout copy truthful ([161dadd](https://github.com/sislelabs/kuso/commit/161dadd6ef6c4f2fb098face1e36c29ba81e2a8c))
+- List built-in alerts beside alert rules, with routing, tests and last delivery ([7e2a902](https://github.com/sislelabs/kuso/commit/7e2a902918429e1b18db28d4f87af9120f207a42))
+- Cap the bell badge at 9+ and match the panel count to it ([0e72df2](https://github.com/sislelabs/kuso/commit/0e72df2b7b2db7374dbfe6a4a39f462437e67d86))
+- Fit the logs toolbar into two rows on phones ([0c40fd0](https://github.com/sislelabs/kuso/commit/0c40fd03a0827a6bbc519ca9649155149402bae8))
+- Mark every rollout on the metrics charts and draw levels as lines ([08c099c](https://github.com/sislelabs/kuso/commit/08c099c64580f06a332507f1b235f151e693c49c))
+- Read log levels the way the Errors tab does and land error links on the line ([5a04690](https://github.com/sislelabs/kuso/commit/5a04690c7428086d4f982a59ac9d361326f4c483))
+- Show the detected framework before import and a Connect GitHub fix ([55f965c](https://github.com/sislelabs/kuso/commit/55f965c2393aba39f981922903d55b5c295440c3))
+- Let ? open the shortcuts sheet while the palette is still closing ([037bd39](https://github.com/sislelabs/kuso/commit/037bd392ddc912b0b30fbbfb1234daa0face4878))
+- Raise status chips to 12px and pin secondary text contrast ([e391a9c](https://github.com/sislelabs/kuso/commit/e391a9cf9a6bb9cdc50d8a181382380f00965853))
+- Keep tab scroll chevrons and their error count off the tab labels ([8f608b5](https://github.com/sislelabs/kuso/commit/8f608b500ab1aca1b7a14b054dc7a8567b4dd220))
+- Render one service header in the peek and on the full page ([03ccea6](https://github.com/sislelabs/kuso/commit/03ccea6979153ee1ba9b50c1bb64655b5398258d))
+- Call addons Addons everywhere and stop repeating names in palette rows ([41d9d46](https://github.com/sislelabs/kuso/commit/41d9d46ab03634940e7869a1ea5af177180cc7fb))
+- Hide cut-off traceback rows left over from the old error grouping ([3763b9b](https://github.com/sislelabs/kuso/commit/3763b9bc5e59fd01e7edc8bd58f881548e05a039))
+- Name a failed build in the project health line instead of "failing" ([86a6621](https://github.com/sislelabs/kuso/commit/86a66212efc3fcda053d54fb783c92597cc812a3))
+- Keep a re-created service from inheriting its namesake's feed and env history ([7712f57](https://github.com/sislelabs/kuso/commit/7712f5734db67c00082a83ea4eb4d255eb6777d4))
+- Clear an alert's attention row when its own target recovers ([fab5f49](https://github.com/sislelabs/kuso/commit/fab5f497b662dfdae77749b4317b06c7f38bb521))
+- Redesign the projects home and declutter project, drawer and addon chrome ([a77a57d](https://github.com/sislelabs/kuso/commit/a77a57d9857083579e93660a1dea6584812a5bf8))
+
+### ✨ Features
+- Add test sends and last-delivery reads for built-in alerts ([536bb0d](https://github.com/sislelabs/kuso/commit/536bb0d4d70ca19f2e5a2c8ced9efbe3d284f8a5))
+
 ## [0.39.0] — 2026-11-09
 
 ### Other
@@ -1073,11 +1104,6 @@ messages on every release. The format is loosely based on
 - Fix(backups): match the pg client major to the server so dumps restore ([375efc6](https://github.com/sislelabs/kuso/commit/375efc686dd4f3f8aca42913e5811b0f15e1596a))
 - Fix(backups): back up every logical DB, propagate the S3 secret, stop false failures ([f9f5229](https://github.com/sislelabs/kuso/commit/f9f52297a859c3a2661de9fc301f7020030b52b0))
 - Fix(builds): stop builds starving the control plane ([fa79bf7](https://github.com/sislelabs/kuso/commit/fa79bf76d2b6283e006faa2b82d369f3a9026917))
-
-## [0.25.30] — 2026-09-03
-
-### 🐛 Bug Fixes
-- Fix(envs): refuse an env GROUP name in DeleteEnvironment instead of reporting success ([1bb70a6](https://github.com/sislelabs/kuso/commit/1bb70a6976a639bc4a71e62e890fb17edc76af49))
 
 
 ---
