@@ -66,3 +66,19 @@ export function compactCount(n: number): string {
   if (n < 10_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
   return `${Math.round(n / 1000)}k`;
 }
+
+// Without a last-hour count (older server), a day's total at or past this
+// still reads as worth a look.
+export const ERROR_CHIP_LOUD_DAY = 50;
+
+// errorChipHot grades the canvas error chip: red only when errors are new
+// (everything today landed in the last hour) or spiking (the last hour ran
+// at 3x the day's hourly rate); a steady trickle stays neutral so a card
+// isn't red for background noise.
+export function errorChipHot(day: number, lastHour: number | undefined): boolean {
+  if (day <= 0) return false;
+  if (lastHour === undefined) return day >= ERROR_CHIP_LOUD_DAY;
+  if (lastHour <= 0) return false;
+  if (lastHour >= day && day >= 3) return true;
+  return lastHour >= 5 && lastHour * 24 >= 3 * day;
+}

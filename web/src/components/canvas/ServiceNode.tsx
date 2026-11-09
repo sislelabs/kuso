@@ -22,7 +22,7 @@ import { ErrorBadge, VulnBadge } from "./NodeBadges";
 import type { ErrorSummary, VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
-import { serviceNodeWidth } from "./geometry";
+import { COMPACT_SERVICE_NODE_HEIGHT, COMPACT_SERVICE_NODE_WIDTH, serviceNodeWidth } from "./geometry";
 import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
 import { StagedDot } from "@/components/staged";
 
@@ -35,6 +35,10 @@ export interface ServiceNodeData extends CanvasNodeA11y {
   latestBuild?: BuildSummary;
   vulns?: VulnSummary;
   errors?: ErrorSummary;
+  // New or spiking errors (errorChipHot): the chip goes red.
+  errorsHot?: boolean;
+  // Compact density: a one-size card without the URL row.
+  compact?: boolean;
   // Injected by ProjectCanvas — fires the right-click context menu with
   // the URL this card shows, so "Open URL" goes to the same place.
   __onContext?: (e: React.MouseEvent, liveUrl?: string) => void;
@@ -71,6 +75,10 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
   const dimmed = status.kind === "sleeping" || status.kind === "stopped";
   const live = liveBuildOf(data.latestBuild);
   const hasBadges = (data.errors?.occurrences ?? 0) > 0 || (data.vulns?.fixableCritical ?? 0) > 0;
+  const compact = !!data.compact;
+  const errorBadge = (
+    <ErrorBadge compact tabIndex={-1} summary={data.errors} hot={data.errorsHot} onOpen={() => data.__onOpenTab?.("errors")} />
+  );
 
   return (
     <div
@@ -84,11 +92,15 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         .filter(Boolean)
         .join(", ")}
       onContextMenu={(e) => data.__onContext?.(e, url)}
-      style={{ width: serviceNodeWidth(displayName) }}
+      style={
+        compact
+          ? { width: COMPACT_SERVICE_NODE_WIDTH, height: COMPACT_SERVICE_NODE_HEIGHT }
+          : { width: serviceNodeWidth(displayName) }
+      }
       title={[status.detail, url ? buildRefText(data.latestBuild)?.title : ""].filter(Boolean).join("\n") || undefined}
       className={cn(
         nodeCardClass,
-        "flex min-h-[120px] flex-col p-3 pt-3.5",
+        compact ? "flex flex-col justify-center px-3 py-2" : "flex min-h-[120px] flex-col p-3 pt-3.5",
         nodeBorderClass(status.tone, tone.border),
         dimmed && "opacity-70",
         nodeFocusClass,
@@ -120,12 +132,29 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         </span>
         <StagedDot project={data.project} service={shortName} className="shrink-0" />
       </div>
-      {hasBadges && (
+      {compact ? (
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs">
+          <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
+          <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
+          {replicas && !dimmed && (
+            <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]" title={`${replicas.ready} of ${replicas.desired} replicas ready`}>
+              · {replicas.ready}/{replicas.desired}
+            </span>
+          )}
+          <span className="ml-auto flex min-w-0 shrink items-center gap-1">
+            {errorBadge}
+            <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
+          </span>
+        </div>
+      ) : null}
+      {!compact && hasBadges && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          <ErrorBadge compact tabIndex={-1} summary={data.errors} onOpen={() => data.__onOpenTab?.("errors")} />
+          {errorBadge}
           <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
         </div>
       )}
+      {!compact && (
+        <>
 
       {/* The URL gets the whole row; the commit moves to the tooltip
           then, and only takes this row when there's no URL to show. */}
@@ -176,6 +205,8 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           </span>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

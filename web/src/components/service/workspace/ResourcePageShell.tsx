@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, ChevronDown, LayoutGrid, Search } from "lucide-react";
 import { useAddons, useProject } from "@/features/projects";
-import { STATUS_TONE } from "@/features/services";
+import { STATUS_TONE, useLatestBuilds } from "@/features/services";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { AddonIcon } from "@/components/addon/AddonIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -38,12 +38,13 @@ export function ResourcePageShell({
 }) {
   const proj = useProject(project);
   const addons = useAddons(project);
+  const latestBuilds = useLatestBuilds(project, env);
   const resources = useMemo(
     () =>
       proj.data
-        ? railResources(project, env, proj.data.services, proj.data.environments, addons.data ?? [])
+        ? railResources(project, env, proj.data.services, proj.data.environments, addons.data ?? [], latestBuilds.data)
         : null,
-    [proj.data, addons.data, project, env],
+    [proj.data, addons.data, project, env, latestBuilds.data],
   );
   const hrefFor = (kind: ActiveResource["kind"], name: string) =>
     kind === "service" ? servicePageHref(project, name, { env }) : addonPageHref(project, name, { env });

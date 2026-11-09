@@ -2,9 +2,9 @@
 
 import { hasPublicIngress, stopConsequence } from "./stopCopy";
 import { firstRunState } from "./firstRun";
-import { cloneElement, useState } from "react";
+import { cloneElement, useId, useState } from "react";
 import Link from "next/link";
-import { BellPlus, MoreHorizontal, Play, Rocket, RotateCw, Square } from "lucide-react";
+import { BellPlus, MoreHorizontal, Package, Play, Rocket, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -18,9 +18,12 @@ import {
   useService,
   useStartService,
   useStopService,
+  usePatchService,
   useTriggerBuild,
 } from "@/features/services";
-import { useProject } from "@/features/projects";
+import { parseImageRef } from "@/features/services/imageRef";
+import { Input } from "@/components/ui/input";
+import { useEnvironments, useProject } from "@/features/projects";
 import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
@@ -196,6 +199,7 @@ export function ServiceHeaderActions({
 
   return (
     <>
+      {redeploy.isImage && !hideDeploy && <DeployImageControl project={project} service={service} canWrite={canWrite} />}
       {!redeploy.isImage && !hideDeploy && (
         <Explained label={redeploy.verb} explain={canWrite ? redeploy.explain : NO_ACCESS}>
           <Button size="sm" onClick={redeploy.request} disabled={!canWrite || redeploy.pending} className="h-7 px-2.5 text-xs">
@@ -351,6 +355,123 @@ export function ServiceHeaderActions({
       />
     </>
   );
+}
+
+// DeployImageControl is the image service's deploy: it has no build, so
+// shipping means pointing the service at another tag. Accepts a bare tag
+// or a pasted full reference (repo:tag); digests aren't supported because
+// the chart renders "<repository>:<tag>".
+function DeployImageControl({ project, service, canWrite }: { project: string; service: string; canWrite: boolean }) {
+  const svc = useService(project, service).data;
+  const envs = useEnvironments(project).data;
+  const patch = usePatchService(project, service);
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [touched, setTouched] = useState(false);
+  const inputId = useId();
+  const repository = svc?.spec.image?.repository ?? "";
+  const currentTag = svc?.spec.image?.tag || "latest";
+  const fqn = `${project}-${service}`;
+  const groups = [...new Set((envs ?? []).filter((e) => e.spec.service === fqn).map((e) => envGroupName(e)))];
+
+  const parsed = parseTarget(value, repository);
+  const error = touched || value ? parsed.error : undefined;
+  const unchanged = !parsed.error && parsed.repository === repository && parsed.tag === currentTag;
+
+  const submit = async () => {
+    setTouched(true);
+    if (parsed.error || !parsed.tag) return;
+    try {
+      await patch.mutateAsync({ image: { repository: parsed.repository, tag: parsed.tag } });
+      toast.success(`Deploying ${parsed.repository}:${parsed.tag}`);
+      setOpen(false);
+    } catch (e) {
+      toastError(e, "Couldn't deploy the image");
+    }
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) {
+          setValue(currentTag);
+          setTouched(false);
+        }
+      }}
+    >
+      <Explained label="Deploy image" explain={canWrite ? "Roll out another tag of this image. No build runs." : NO_ACCESS}>
+        <PopoverTrigger
+          render={
+            <Button size="sm" disabled={!canWrite || patch.isPending} className="h-7 px-2.5 text-xs">
+              <Package className="h-3 w-3" />
+              {patch.isPending ? "Deploying…" : "Deploy image…"}
+            </Button>
+          }
+        />
+      </Explained>
+      <PopoverContent align="end" className="w-80 gap-0 rounded-lg p-3">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+          className="space-y-2.5"
+        >
+          <div className="space-y-1">
+            <label htmlFor={inputId} className="block text-xs font-medium text-[var(--text-primary)]">
+              Tag to deploy
+            </label>
+            <p className="text-xs text-[var(--text-tertiary)]">
+              Running{" "}
+              <span className="break-all font-mono">
+                {repository || "—"}:<span className="text-[var(--text-secondary)]">{currentTag}</span>
+              </span>
+            </p>
+          </div>
+          <Input
+            id={inputId}
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={() => setTouched(true)}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="e.g. 1.4.2 or ghcr.io/acme/web:1.4.2"
+            aria-invalid={!!error || undefined}
+            aria-describedby={`${inputId}-hint`}
+            className="h-8 font-mono text-[13px]"
+          />
+          <p id={`${inputId}-hint`} className={cn("text-xs", error ? "text-[var(--danger)]" : "text-[var(--text-secondary)]")}>
+            {error ??
+              `Rolls out to ${groups.length > 1 ? `all ${groups.length} environments (${groups.join(", ")})` : (groups[0] ?? "production")}. The current version serves until the new pods are ready.`}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" className="h-7 px-2.5 text-xs" disabled={!!parsed.error || unchanged || patch.isPending}>
+              {patch.isPending ? "Deploying…" : "Deploy"}
+            </Button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// parseTarget reads the deploy field: a bare tag keeps the repository, a
+// full reference may switch it.
+export function parseTarget(raw: string, repository: string): { repository: string; tag: string; error?: string } {
+  const v = raw.trim();
+  if (!v) return { repository, tag: "", error: "Enter a tag" };
+  if (v.includes("@")) return { repository, tag: "", error: "Digests aren't supported here; deploy a tag" };
+  if (/^[\w][\w.-]{0,127}$/.test(v)) return { repository, tag: v };
+  const ref = parseImageRef(v);
+  if (!ref) return { repository, tag: "", error: "Not a valid tag or image reference" };
+  if (!ref.tag) return { repository: ref.repository, tag: "", error: "Add a tag (e.g. :1.4.2)" };
+  return { repository: ref.repository, tag: ref.tag };
 }
 
 function Explained({

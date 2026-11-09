@@ -18,10 +18,10 @@ import {
   healthProblem,
   needsRestart,
   deriveServiceStatus,
+  useLatestBuilds,
   type HealthProblem,
-  type NodeStatusKind,
 } from "@/features/services";
-import { useServiceErrorCount } from "@/features/errors";
+import { errorsEnvScope, useServiceErrorCount } from "@/features/errors";
 import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { useEnvironments } from "@/features/projects";
 import { buildRefLabel } from "@/features/builds";
@@ -65,7 +65,8 @@ import { trimRepeatedCause } from "../overlay/statusCopy";
 import { ExternalLink, X, Pencil, Maximize2 } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import { StatusPill as SharedStatusPill } from "@/components/ui/status-pill";
-import { SERVICE_STATUS, serverStateCause, stuckFacts, type ServiceStatus } from "@/lib/status";
+import { stuckFacts } from "@/lib/status";
+import { isProblemStatus, nodeServiceStatus, nodeStatusMeta } from "./statusMeta";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
@@ -478,8 +479,10 @@ export function ServiceWorkspace({
     [showCrons, showRuns, tab, canShell],
   );
 
-  // Same count the canvas badge, project card and Errors tab headline show.
-  const errorCount = useServiceErrorCount(project, service ?? "").data?.occurrences ?? 0;
+  // Same count (and env scope) as the health strip's Errors cell and the
+  // Errors tab headline.
+  const errorCount =
+    useServiceErrorCount(project, service ?? "", undefined, errorsEnvScope(envParam)).data?.occurrences ?? 0;
   const tabItems = useMemo<OverlayTabItem<Tab>[]>(
     () =>
       MAIN_TABS.map((t) =>
@@ -550,26 +553,26 @@ export function ServiceWorkspace({
   const liveUrl = useLiveServiceUrl(project, service ?? "", env, url) ?? url;
   const rollingNow = !!drift.data?.rolloutPending;
   const rolloutSlow = useRolloutSlow(rollingNow, drift.data?.lastSpecMutation);
-  // The same reading as the canvas node: the server rollup when present,
-  // client heuristics on older servers.
-  const derived = deriveServiceStatus({ stopped: !!svc.data?.spec?.stopped, env });
-  const stateDetail = env?.status?.stateDetail || undefined;
-  const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;
-  const shortOfReplicas =
-    replicas?.desired !== undefined && replicas.desired > 0 && (replicas.ready ?? 0) < replicas.desired;
-  const rollingLegacy = !env?.status?.state && derived.kind === "live" && rollingNow;
-  const status: ServiceStatus =
-    derived.kind === "live" && shortOfReplicas ? "degraded" : rollingLegacy ? "deploying" : NODE_TO_STATUS[derived.kind];
-  const statusDetail =
-    status === "stuck"
-      ? stateDetail || stuckFacts(env?.status)?.summary || serverStateCause("stuck")
-      : rollingLegacy
-        ? "Rolling out a new spec"
-        : stateDetail || serverStateCause(env?.status?.state);
-
   const envGroup = env ? envGroupName(env) : envParam;
+  // The one selector every surface (canvas card, rail dot, project card)
+  // reads, fed the same latest-build query the canvas polls.
+  const latestBuilds = useLatestBuilds(project, envGroup);
+  const derived = deriveServiceStatus({
+    stopped: !!svc.data?.spec?.stopped,
+    env,
+    latestBuild: service ? latestBuilds.data?.[service] : undefined,
+  });
+  const stateDetail = env?.status?.stateDetail || undefined;
+  const status = nodeServiceStatus(derived);
+  const statusMeta = nodeStatusMeta(derived);
+  const statusDetail = derived.detail || (derived.kind === "stuck" ? stuckFacts(env?.status)?.summary : undefined);
+
   const stopped = !!svc.data?.spec?.stopped;
-  const problem = healthProblem(env?.status?.state, status === "failing" ? "failed" : status);
+  // A state the problem table doesn't name yet (a newer server rollup)
+  // still gets the banner when the selector calls it unhealthy.
+  const problem =
+    healthProblem(env?.status?.state, status === "failing" ? "failed" : status) ??
+    (isProblemStatus(derived) ? "runtime" : null);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
   const failureBannerVisible = !!failureKind && tab === failureTab;
   const firstRun = useMemo(() => firstRunState(env, builds.data), [env, builds.data]);
@@ -695,9 +698,49 @@ export function ServiceWorkspace({
     />
   ) : null;
 
+  // Every env group this service runs in, so a rollback can say which
+  // it touches and which it leaves alone.
+  const serviceEnvGroups = useMemo(
+    () => [...new Set((envs.data ?? []).filter((e) => e.spec.service === fqn).map((e) => envGroupName(e)))],
+    [envs.data, fqn],
+  );
+
+  const alert =
+    service && problem && !failureBannerVisible && !neverRan ? (
+      <HealthBanner
+        project={project}
+        service={service}
+        problem={problem}
+        serverState={env?.status?.state}
+        label={statusMeta.label}
+        detail={stateDetail ?? statusDetail}
+        env={env}
+        envGroup={envGroup}
+        otherEnvGroups={serviceEnvGroups.filter((g) => g !== envGroup)}
+        onDeployments={tab === "deployments"}
+        onNavigate={navigateTo}
+      />
+    ) : null;
+
+  const strip = service ? (
+    <ServiceHealthStrip
+      project={project}
+      service={service}
+      env={env}
+      envGroup={envGroup}
+      status={statusMeta}
+      statusDetail={statusDetail}
+      alert={alert}
+      firstRun={firstRun}
+      onNavigate={navigateTo}
+    />
+  ) : null;
+
+  const envChip = <EnvChip env={envGroup} />;
+
   const header = page ? (
     <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40">
-      <div className="flex flex-col gap-3 px-4 pt-4 pb-3 sm:px-6 lg:flex-row lg:items-start lg:gap-6 lg:px-8 lg:pt-5">
+      <div className="flex flex-col gap-3 px-4 pt-4 pb-2 sm:px-6 lg:flex-row lg:items-start lg:gap-6 lg:px-8">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <span className="mt-0.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-sm)]">
             <RuntimeIcon runtime={svc.data?.spec.runtime} />
@@ -705,14 +748,12 @@ export function ServiceWorkspace({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
               {titleRow}
-              <SharedStatusPill status={SERVICE_STATUS[status]} detail={statusDetail} />
+              <SharedStatusPill status={statusMeta} detail={statusDetail} />
             </div>
-            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+              {envChip}
               {svc.data?.spec.displayName?.trim() && svc.data.spec.displayName.trim() !== service ? (
                 <span className="font-mono text-[var(--text-tertiary)]">{service}</span>
-              ) : null}
-              {envParam !== "production" ? (
-                <span className="rounded border border-[var(--border-subtle)] px-1.5 py-px">{envParam}</span>
               ) : null}
               {urlLine}
             </div>
@@ -722,61 +763,62 @@ export function ServiceWorkspace({
       </div>
       {service ? (
         <div className="px-4 pb-3 sm:px-6 lg:px-8">
-          <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} firstRun={firstRun} onNavigate={navigateTo} />
+          {strip}
           {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
         </div>
       ) : null}
     </header>
   ) : (
-    <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
-      <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
-        <RuntimeIcon runtime={svc.data?.spec.runtime} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          {titleRow}
-          <SharedStatusPill status={SERVICE_STATUS[status]} detail={statusDetail} />
+    <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:px-5">
+      <div className="flex items-start gap-2 sm:gap-3">
+        <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
+          <RuntimeIcon runtime={svc.data?.spec.runtime} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              {titleRow}
+              <SharedStatusPill status={statusMeta} detail={statusDetail} />
+            </div>
+            {/* Actions share the title row; what doesn't fit lives in ⋯. */}
+            <div className="ml-auto hidden flex-nowrap items-center gap-1.5 sm:flex">{actions}</div>
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
+            <span className="min-w-0 truncate">
+              {project}
+              <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
+              <span className="font-mono">{service}</span>
+            </span>
+            {envChip}
+            {urlLine}
+          </div>
         </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
-          <span className="min-w-0 truncate">
-            {project}
-            <span aria-hidden className="px-1 text-[var(--text-tertiary)]">/</span>
-            <span className="font-mono">{service}</span>
-            {envParam !== "production" && (
-              <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-xs">{envParam}</span>
-            )}
-          </span>
-          {urlLine}
-        </div>
-        {service ? (
-          <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} firstRun={firstRun} onNavigate={navigateTo} />
+        {onOpenPage ? (
+          <button
+            type="button"
+            onClick={openPage}
+            title="Open the full page (O)"
+            aria-label="Open full page"
+            className="hidden h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-2 pr-1.5 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] sm:inline-flex"
+          >
+            <Maximize2 aria-hidden className="h-3.5 w-3.5" />
+            <span className="hidden xl:inline">Open full page</span>
+            <Kbd className="ml-0.5">O</Kbd>
+          </button>
         ) : null}
-        {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
-        {/* Actions keep one row; what doesn't fit lives in ⋯. */}
-        <div className="mt-2 hidden flex-nowrap items-center gap-1.5 sm:flex">{actions}</div>
+        {onClose ? (
+          <button
+            type="button"
+            onClick={guardedClose}
+            aria-label="Close"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
-      {onOpenPage ? (
-        <button
-          type="button"
-          onClick={openPage}
-          title="Open the full page (O)"
-          className="hidden h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] pl-2 pr-1.5 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] sm:inline-flex"
-        >
-          <Maximize2 aria-hidden className="h-3.5 w-3.5" />
-          Open full page
-          <Kbd className="ml-0.5">O</Kbd>
-        </button>
-      ) : null}
-      {onClose ? (
-        <button
-          type="button"
-          onClick={guardedClose}
-          aria-label="Close"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      ) : null}
+      {strip}
+      {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
     </header>
   );
 
@@ -823,21 +865,6 @@ export function ServiceWorkspace({
       <FirstRunProvider value={firstRunCtx}>
         {header}
 
-        {service && problem && !failureBannerVisible && !neverRan ? (
-          <HealthBanner
-            project={project}
-            service={service}
-            problem={problem}
-            serverState={env?.status?.state}
-            detail={stateDetail}
-            env={env}
-            envGroup={envGroup}
-            onDeployments={tab === "deployments"}
-            onNavigate={navigateTo}
-            wide={page}
-          />
-        ) : null}
-
         <OverlayTabs
           tabs={tabItems}
           pinned={{ ...PINNED_TAB }}
@@ -870,7 +897,8 @@ export function ServiceWorkspace({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.12 }}
-                  className="h-full overflow-y-auto"
+                  // Room for the staged-changes bar so it never covers the end of a tab.
+                  className="h-full overflow-y-auto pb-[var(--staged-bar-space,0px)]"
                 >
                   {failureBannerVisible && (
                     <div className={cn(page ? "px-4 pt-5 sm:px-6 lg:px-8" : "px-5 pt-5", width)}>
@@ -995,8 +1023,8 @@ export function ServiceWorkspace({
   );
 }
 
-// HealthBanner is the always-visible strip under the header while the
-// selected env is unhealthy. Runtime problems (crashloop / degraded)
+// HealthBanner is the first row of the health strip while the selected
+// env is unhealthy (one block with the cells, not a second banner). Runtime problems (crashloop / degraded)
 // get Logs + Roll back + Restart. Deploy problems (build or release
 // hook failed) keep the last green version serving, so the only useful
 // jump is to the failed build on Deployments.
@@ -1013,14 +1041,14 @@ function HealthBanner({
   service,
   problem,
   serverState,
+  label: fallbackLabel,
   detail,
   env,
   envGroup,
+  otherEnvGroups,
   onDeployments,
   onNavigate,
-  wide = false,
 }: {
-  wide?: boolean;
   project: string;
   service: string;
   problem: Exclude<HealthProblem, null>;
@@ -1028,12 +1056,15 @@ function HealthBanner({
   // jump button would go nowhere.
   onDeployments: boolean;
   serverState?: string;
+  // The selector's label, for states the table above doesn't name.
+  label: string;
   detail?: string;
   env?: KusoEnvironment;
   envGroup: string;
+  otherEnvGroups: string[];
   onNavigate: (tab: string) => void;
 }) {
-  const label = (serverState && PROBLEM_LABEL[serverState]) || "Failed";
+  const label = (serverState && PROBLEM_LABEL[serverState]) || fallbackLabel;
   const runtime = problem === "runtime";
   const danger = runtime || problem === "stuck";
   const shown = trimRepeatedCause(label, detail);
@@ -1041,11 +1072,8 @@ function HealthBanner({
     <div
       role="alert"
       className={cn(
-        "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2",
-        wide ? "sm:px-6 lg:px-8" : "sm:px-5",
-        danger
-          ? "border-[var(--error)]/30 bg-[var(--error)]/5"
-          : "border-[var(--warning)]/30 bg-[var(--warning)]/5",
+        "flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2",
+        danger ? "bg-[var(--error)]/5" : "bg-[var(--warning)]/5",
       )}
     >
       <AlertTriangle
@@ -1053,7 +1081,7 @@ function HealthBanner({
       />
       <span className="text-xs font-medium text-[var(--text-primary)]">{label}</span>
       {shown ? (
-        <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={shown}>
+        <span className="line-clamp-2 min-w-0 flex-1 text-xs text-[var(--text-secondary)] sm:line-clamp-1" title={shown}>
           {shown}
         </span>
       ) : (
@@ -1065,7 +1093,7 @@ function HealthBanner({
             <BannerButton onClick={() => onNavigate("logs")} icon={ScrollText}>
               Logs
             </BannerButton>
-            <RollbackControl project={project} service={service} env={env} envGroup={envGroup} />
+            <RollbackControl project={project} service={service} env={env} envGroup={envGroup} otherEnvGroups={otherEnvGroups} />
             <RestartControl project={project} service={service} envGroup={envGroup} variant="button" />
           </>
         ) : onDeployments ? null : (
@@ -1202,11 +1230,13 @@ function RollbackControl({
   service,
   env,
   envGroup,
+  otherEnvGroups,
 }: {
   project: string;
   service: string;
   env?: KusoEnvironment;
   envGroup: string;
+  otherEnvGroups: string[];
 }) {
   const builds = useBuilds(project, service);
   const [confirming, setConfirming] = useState(false);
@@ -1257,7 +1287,17 @@ function RollbackControl({
       <ConfirmDialog
         open={confirming}
         title={`Roll ${envGroup} back to ${sha}`}
-        body={`${envGroup} will run build ${sha}${ageStamp ? ` (${ageStamp})` : ""}. Redeploy to roll forward again.`}
+        body={
+          <span>
+            Rolls back <strong className="text-[var(--text-primary)]">{envGroup}</strong> only: it will run build{" "}
+            <span className="font-mono text-[var(--text-primary)]">{sha}</span>
+            {ageStamp ? ` (${ageStamp})` : ""}.{" "}
+            {otherEnvGroups.length > 0
+              ? `${otherEnvGroups.join(", ")} ${otherEnvGroups.length === 1 ? "keeps" : "keep"} running what ${otherEnvGroups.length === 1 ? "it runs" : "they run"} now. `
+              : ""}
+            Redeploy to roll forward again.
+          </span>
+        }
         confirmLabel="Roll back"
         destructive={false}
         pending={m.isPending}
@@ -1285,23 +1325,18 @@ function relativeAge(iso: string): string {
   return `${days}d ago`;
 }
 
-// The canvas node's kinds on the shared vocabulary; the specific cause
-// (crashloop, failed build) is the detail, not the label.
-const NODE_TO_STATUS: Record<NodeStatusKind, ServiceStatus> = {
-  live: "live",
-  degraded: "degraded",
-  building: "building",
-  deploying: "deploying",
-  build_failed: "failing",
-  crashing: "failing",
-  stuck: "stuck",
-  sleeping: "sleeping",
-  stopped: "stopped",
-  not_deployed: "not_deployed",
-  provisioning: "deploying",
-  paused: "stopped",
-  unknown: "unknown",
-};
+// EnvChip names the environment the header's actions and edits apply to.
+function EnvChip({ env }: { env: string }) {
+  return (
+    <span
+      title={`You're viewing and editing the ${env} environment`}
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1.5 py-px text-xs text-[var(--text-secondary)]"
+    >
+      <span className="text-[var(--text-tertiary)]">env</span>
+      <span className="font-medium text-[var(--text-primary)]">{env}</span>
+    </span>
+  );
+}
 
 function UrlPill({ url }: { url: string }) {
   const display = url.replace(/^https?:\/\//, "");

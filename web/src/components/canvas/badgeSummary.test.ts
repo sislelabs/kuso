@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VulnImageReport } from "@/features/vulns/types";
-import { canvasVulnSummaries, compactCount } from "./badgeSummary";
+import { canvasVulnSummaries, compactCount, errorChipHot } from "./badgeSummary";
 
 const img = (extra: Partial<VulnImageReport>, counts: { fc: number; c: number; h: number }, status = "succeeded"): VulnImageReport => ({
   ownerKind: "service",
@@ -40,5 +40,17 @@ describe("canvasVulnSummaries", () => {
 describe("compactCount", () => {
   it("abbreviates thousands", () => {
     expect([compactCount(999), compactCount(1000), compactCount(1250), compactCount(12_400)]).toEqual(["999", "1k", "1.3k", "12k"]);
+  });
+});
+
+describe("errorChipHot", () => {
+  it("keeps a steady trickle neutral and flags new or spiking errors", () => {
+    expect(errorChipHot(205, 8)).toBe(false); // 8/h against ~8.5/h average
+    expect(errorChipHot(205, 40)).toBe(true); // spike
+    expect(errorChipHot(4, 4)).toBe(true); // all new this hour
+    expect(errorChipHot(1, 1)).toBe(false); // a single new line is noise
+    expect(errorChipHot(30, 0)).toBe(false);
+    expect(errorChipHot(60, undefined)).toBe(true); // no last-hour data: day threshold
+    expect(errorChipHot(12, undefined)).toBe(false);
   });
 });

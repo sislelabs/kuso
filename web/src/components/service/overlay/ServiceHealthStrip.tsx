@@ -2,7 +2,7 @@
 
 import { ApiError } from "@/lib/api-client";
 import { relativeTime } from "@/lib/format";
-import { SERVICE_STATUS, TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
+import { TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "@/components/ui/status-pill";
 import { ERRORS_WINDOW, errorCountLabel, errorsEnvScope, useServiceErrorCount } from "@/features/errors";
@@ -26,6 +26,11 @@ export interface ServiceHealthStripProps {
   envGroup: string;
   // The same status the header pill shows, so the two never disagree.
   status: StatusMeta;
+  // The cause behind a failing / degraded status (the selector's detail).
+  statusDetail?: string;
+  // The problem banner (cause + fixes), folded in as the strip's first
+  // row so a failing service shows one block instead of two.
+  alert?: React.ReactNode;
   // Never-run services collapse the strip into one banner.
   firstRun?: FirstRun;
   onNavigate: (tab: string, anchor?: string) => void;
@@ -113,7 +118,7 @@ function NeverRanBanner({
   );
 }
 
-function HealthCells({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
+function HealthCells({ project, service, env, envGroup, status, statusDetail, alert, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
   const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
@@ -127,8 +132,9 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
   const hasRollup = typeof replicas?.desired === "number";
   const ready = hasRollup ? (replicas?.ready ?? 0) : (podList?.filter((p) => p.ready).length ?? 0);
   const total = hasRollup ? (replicas?.desired ?? 0) : (podList?.length ?? 0);
-  // Serving, but not on every replica: Degraded, never Live.
-  const status = headerStatus.tone === "success" && total > 0 && ready < total ? SERVICE_STATUS.degraded : headerStatus;
+  // While the status is a problem, "1/1 ready" or "Uptime: Up" next to it
+  // reads as a contradiction; the cause takes their place.
+  const problem = status.tone === "danger" || status.tone === "warning";
   const httpService = !env || !!env.spec.host || (env.spec.additionalHosts?.length ?? 0) > 0;
   const restarts = podList?.reduce((n, p) => n + (p.restarts ?? 0), 0) ?? 0;
   const crashing = podList?.some((p) => /crashloop/i.test(p.reason ?? "")) ?? false;
@@ -140,19 +146,34 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
       label: "Status",
       value: status.label,
       secondary:
-        total > 0
+        total > 0 && !problem
           ? { text: `${ready}/${total} ready`, tone: ready === total ? "plain" : ready === 0 ? "danger" : "warning" }
           : undefined,
       tone: status.tone,
       title: total > 0 ? `${ready} of ${total} instances ready` : status.label,
       tab: "deployments",
     },
-    uptimeCell(
-      uptime.data?.enabled,
-      pickUptime(uptime.data?.services ?? null, service, env, envGroup),
-      uptime.error,
-      httpService,
-    ),
+    ...(problem
+      ? alert
+        ? []
+        : [
+            {
+              id: "reason",
+              label: "Reason",
+              value: statusDetail || status.label,
+              tone: status.tone,
+              title: statusDetail || status.label,
+              tab: "deployments",
+            } satisfies Cell,
+          ]
+      : [
+          uptimeCell(
+            uptime.data?.enabled,
+            pickUptime(uptime.data?.services ?? null, service, env, envGroup),
+            uptime.error,
+            httpService,
+          ),
+        ]),
     {
       id: "restarts",
       label: "Restarts",
@@ -183,16 +204,67 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
 
   const errorsN = errors.data?.occurrences;
   const deploy = cells.find((c) => c.id === "deploy");
-  return (
-    <>
-    {/* Phones: one compact row, each fact its own tap target that opens
-        the tab it came from. */}
-    <ul aria-label="Service health" className="mt-2 flex flex-wrap items-center gap-1.5 sm:hidden">
+  // 4 or 5 cells: fill the row at lg; two rows of 2 + 3 (or 2 + 2) below.
+  const lgCols = cells.length === 5 ? "lg:grid-cols-5" : "lg:grid-cols-4";
+  const span = (i: number) => (cells.length === 5 && i < 3 ? "col-span-2" : "col-span-3");
+  const grid = (
+    <ul
+      aria-label="Service health"
+      className={cn(
+        "hidden grid-cols-6 gap-px bg-[var(--border-subtle)] sm:grid",
+        lgCols,
+        alert ? "border-t border-[var(--border-subtle)]" : "mt-3 overflow-hidden rounded-lg border border-[var(--border-subtle)]",
+      )}
+    >
+      {cells.map((c, i) => (
+        <li key={c.id} className={cn("flex min-w-0 bg-[var(--bg-primary)] lg:col-span-1", span(i))}>
+          <button
+            type="button"
+            title={c.title}
+            aria-label={`${c.label}: ${c.value}${c.secondary ? `, ${c.secondary.text}` : ""}. ${c.title}`}
+            onClick={() => onNavigate(c.tab, c.anchor)}
+            className={cn(
+              "flex min-w-0 flex-1 text-left transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-offset-[-2px]",
+              // Folded under a problem banner the cells go single-line, so
+              // the block costs one row of height instead of two.
+              alert ? "items-baseline gap-2 px-3 py-1.5" : "flex-col items-start gap-0.5 px-3 py-2",
+            )}
+          >
+            <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+              {c.id === "status" && <StatusDot status={status} />}
+              {c.label}
+            </span>
+            {/* The value never wraps mid-word; qualifiers go on the muted line below. */}
+            <span
+              className={cn(
+                "max-w-full truncate whitespace-nowrap text-sm font-medium",
+                c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
+              )}
+            >
+              {c.value}
+            </span>
+            {c.secondary && (
+              <span
+                className={cn(
+                  "truncate text-xs font-normal",
+                  c.secondary.tone === "plain" ? "text-[var(--text-secondary)]" : TONE_CLASSES[c.secondary.tone].text,
+                )}
+              >
+                {c.secondary.text}
+              </span>
+            )}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+  const phone = (
+    <ul aria-label="Service health" className={cn("flex flex-wrap items-center gap-1.5 sm:hidden", alert ? "border-t border-[var(--border-subtle)] p-2" : "mt-2")}>
       <li>
         <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
           <StatusDot status={status} />
           <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
-          {total > 0 && <span className="whitespace-nowrap">· {ready}/{total} ready</span>}
+          {total > 0 && !problem && <span className="whitespace-nowrap">· {ready}/{total} ready</span>}
         </button>
       </li>
       {errorsN !== undefined && errorsN > 0 && (
@@ -217,47 +289,28 @@ function HealthCells({ project, service, env, envGroup, status: headerStatus, on
         </li>
       )}
     </ul>
-    <ul
-      aria-label="Service health"
-      className="mt-3 hidden grid-cols-6 gap-px sm:grid overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
+  );
+  if (!alert) {
+    return (
+      <>
+        {/* Phones: one compact row, each fact its own tap target that opens
+            the tab it came from. */}
+        {phone}
+        {grid}
+      </>
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "mt-3 overflow-hidden rounded-lg border",
+        status.tone === "danger" ? "border-[var(--danger)]/35" : "border-[var(--warning)]/35",
+      )}
     >
-      {cells.map((c, i) => (
-        <li key={c.id} className={cn("flex min-w-0 bg-[var(--bg-primary)] lg:col-span-1", i < 3 ? "col-span-2" : "col-span-3")}>
-          <button
-            type="button"
-            title={c.title}
-            aria-label={`${c.label}: ${c.value}${c.secondary ? `, ${c.secondary.text}` : ""}. ${c.title}`}
-            onClick={() => onNavigate(c.tab, c.anchor)}
-            className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2 text-left transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)]"
-          >
-            <span className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
-              {c.id === "status" && <StatusDot status={status} />}
-              {c.label}
-            </span>
-            {/* The value never wraps mid-word; qualifiers go on the muted line below. */}
-            <span
-              className={cn(
-                "max-w-full whitespace-nowrap text-sm font-medium",
-                c.tone === "plain" ? "text-[var(--text-primary)]" : TONE_CLASSES[c.tone].text,
-              )}
-            >
-              {c.value}
-            </span>
-            {c.secondary && (
-              <span
-                className={cn(
-                  "text-xs font-normal",
-                  c.secondary.tone === "plain" ? "text-[var(--text-secondary)]" : TONE_CLASSES[c.secondary.tone].text,
-                )}
-              >
-                {c.secondary.text}
-              </span>
-            )}
-          </button>
-        </li>
-      ))}
-    </ul>
-    </>
+      {alert}
+      {phone}
+      {grid}
+    </div>
   );
 }
 

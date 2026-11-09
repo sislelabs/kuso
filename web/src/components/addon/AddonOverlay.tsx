@@ -26,8 +26,8 @@ export function AddonOverlay({ addon, onOpenPage, ...props }: Props) {
       variant="peek"
       addon={addon}
       onOpenPage={onOpenPage && addon ? (tab) => onOpenPage(addon, tab) : undefined}
-      frame={({ open, label, content, requestClose, tab }) => (
-        <PeekFrame open={open} label={label} requestClose={requestClose} wide={tab === "sql"}>
+      frame={({ open, label, content, requestClose }) => (
+        <PeekFrame open={open} label={label} requestClose={requestClose}>
           {content}
         </PeekFrame>
       )}

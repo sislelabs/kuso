@@ -137,6 +137,7 @@ export function ConfirmDialog({
   }, [open, onCancel]);
 
   const allow = () => !pending && (typeToConfirm ? text === typeToConfirm : true);
+  const gated = !!typeToConfirm && text !== typeToConfirm;
 
   return (
     <AnimatePresence>
@@ -223,15 +224,25 @@ export function ConfirmDialog({
             </div>
 
             <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-3">
+              {/* Until the name matches, the button is plainly locked (neutral,
+                  dashed, with the reason) rather than a faded red that reads
+                  as broken. */}
+              {gated && (
+                <span aria-hidden className="mr-auto text-xs text-[var(--text-tertiary)]">
+                  Type the name to enable
+                </span>
+              )}
               <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={pending}>
                 Cancel
               </Button>
               <Button
                 type="submit"
-                variant={destructive ? "destructive" : "primary"}
+                variant={gated ? "secondary" : destructive ? "destructive" : "primary"}
                 size="sm"
                 disabled={!allow()}
+                disabledReason={gated ? `Type ${typeToConfirm} above to enable` : undefined}
                 loading={pending}
+                className={cn(gated && "border-dashed bg-transparent text-[var(--text-tertiary)] shadow-none disabled:opacity-100 aria-disabled:opacity-100")}
               >
                 {confirmLabel}
               </Button>

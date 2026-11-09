@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ChevronDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/components/project/useMediaQuery";
 
 export interface OverlayTabItem<T extends string> {
   id: T;
@@ -17,6 +18,12 @@ export interface OverlayTabItem<T extends string> {
   // Always listed under "More" (unless active), whatever the width, so
   // the strip reads the same for every service.
   secondary?: boolean;
+}
+
+// The exact count, same number the health strip and the tab's headline
+// show; a cap like "99+" next to "205" reads as two different counts.
+export function badgeText(n: number): string {
+  return n.toLocaleString();
 }
 
 const BADGE_TONE = {
@@ -49,8 +56,14 @@ export function OverlayTabs<T extends string>({
   const stripRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [fade, setFade] = useState({ left: false, right: false });
-  const visible = useMemo(() => tabs.filter((t) => !t.secondary), [tabs]);
-  const overflow = useMemo(() => tabs.filter((t) => t.secondary), [tabs]);
+  // Phones: every section is a chip in one sideways-scrolling row (no
+  // "More" popover, no select), pinned tab last.
+  const phone = useMediaQuery("(max-width: 639px)");
+  const visible = useMemo(
+    () => (phone ? [...tabs, ...(pinned ? [pinned] : [])] : tabs.filter((t) => !t.secondary)),
+    [tabs, pinned, phone],
+  );
+  const overflow = useMemo(() => (phone ? [] : tabs.filter((t) => t.secondary)), [tabs, phone]);
   const activeInMore = overflow.find((t) => t.id === active);
 
   const updateFade = useCallback(() => {
@@ -110,67 +123,52 @@ export function OverlayTabs<T extends string>({
         title={t.chord ? `${t.label} (G then ${t.chord.toUpperCase()})` : t.label}
         onClick={() => onChange(t.id)}
         className={cn(
-          "relative inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 text-sm font-medium outline-none transition-colors",
-          "focus-visible:after:absolute focus-visible:after:inset-x-1 focus-visible:after:inset-y-1.5 focus-visible:after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-[var(--ring)]",
-          selected ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-          isPinned && "border-l border-[var(--border-subtle)] pl-3.5",
+          "relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-sm font-medium transition-colors focus-visible:outline-offset-[-2px]",
+          phone
+            ? cn(
+                "h-9 rounded-full border px-3.5",
+                selected
+                  ? "border-[var(--border-strong)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "border-[var(--border-subtle)] text-[var(--text-secondary)]",
+              )
+            : cn(
+                "h-10 px-3",
+                selected ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                isPinned && "border-l border-[var(--border-subtle)] pl-3.5",
+              ),
         )}
       >
         {Icon && <Icon aria-hidden className="h-3.5 w-3.5" />}
         {t.label}
         {!!t.badge && (
           <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums leading-[18px]", BADGE_TONE[t.badgeTone ?? "neutral"])}>
-            {t.badge > 99 ? "99+" : t.badge}
+            {badgeText(t.badge)}
             <span className="sr-only"> {t.badgeTone === "error" ? "errors" : "items"}</span>
           </span>
         )}
-        {selected && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--accent)]" />}
+        {selected && !phone && <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--accent)]" />}
       </button>
     );
   };
 
   const overflowBadge = overflow.some((t) => !!t.badge && t.badgeTone === "error");
 
-  const all = [...visible, ...overflow, ...(pinned ? [pinned] : [])];
   return (
     <>
-    {/* Phones: every section in one labelled picker instead of a strip
-        that clips. */}
-    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 sm:hidden">
-      <label htmlFor={`${idPrefix}-section`} className="text-xs font-medium text-[var(--text-secondary)]">
-        Section
-      </label>
-      <div className="relative min-w-0 flex-1">
-        <select
-          id={`${idPrefix}-section`}
-          value={active}
-          onChange={(e) => {
-            const next = all.find((t) => t.id === e.target.value);
-            if (next) onChange(next.id);
-          }}
-          className="h-11 w-full appearance-none rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] pr-8 pl-3 text-sm font-medium text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-        >
-          {all.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-              {t.badge ? ` (${t.badge > 99 ? "99+" : t.badge})` : ""}
-            </option>
-          ))}
-        </select>
-        <ChevronDown aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
-      </div>
-    </div>
     <div
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className="relative hidden shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:flex sm:px-3"
+      className={cn("relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3", phone && "py-2")}
     >
       <div className="relative flex min-w-0 flex-1">
         <div
           ref={stripRef}
           onScroll={updateFade}
-          className="relative flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className={cn(
+            "relative flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            phone && "gap-1.5 px-1",
+          )}
         >
           {visible.map((t) => tabButton(t))}
         </div>
@@ -225,7 +223,7 @@ export function OverlayTabs<T extends string>({
                       <span className="flex-1">{t.label}</span>
                       {!!t.badge && (
                         <span className={cn("rounded-full px-1.5 text-xs font-semibold tabular-nums", BADGE_TONE[t.badgeTone ?? "neutral"])}>
-                          {t.badge}
+                          {badgeText(t.badge)}
                         </span>
                       )}
                       {t.chord && (
@@ -237,7 +235,7 @@ export function OverlayTabs<T extends string>({
               </PopoverContent>
             </Popover>
       )}
-      {pinned && tabButton(pinned, true)}
+      {pinned && !phone && tabButton(pinned, true)}
     </div>
     </>
   );

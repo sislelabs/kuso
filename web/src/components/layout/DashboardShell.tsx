@@ -11,7 +11,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   // The top nav (h-12) is the desktop chrome; phones add a bottom tab
-  // bar, so <main> reserves its height below sm.
+  // bar, so <main> reserves its height below sm. The staged-changes bar
+  // sets --staged-bar-space (on phones it already includes the nav), so
+  // the larger of the two wins rather than both adding up.
   //
   // Suspense boundaries: TopNav and many pages call useSearchParams,
   // which static export requires to sit under a Suspense ancestor. One
@@ -26,7 +28,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         <main
           id="main"
           tabIndex={-1}
-          className="flex-1 overflow-y-auto bg-[var(--bg-primary)] pb-[calc(3.5rem+env(safe-area-inset-bottom))] outline-none sm:pb-0"
+          className="flex-1 overflow-y-auto bg-[var(--bg-primary)] pb-[max(var(--staged-bar-space,0px),calc(3.5rem+env(safe-area-inset-bottom)))] outline-none sm:pb-[var(--staged-bar-space,0px)]"
         >
           <Suspense fallback={null}>{children}</Suspense>
         </main>

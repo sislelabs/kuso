@@ -30,8 +30,8 @@ export function ServiceOverlay({ onOpenPage, service, ...props }: Props) {
       variant="peek"
       service={service}
       onOpenPage={onOpenPage && service ? (tab) => onOpenPage(service, tab) : undefined}
-      frame={({ open, label, content, requestClose, tab }) => (
-        <PeekFrame open={open} label={label} requestClose={requestClose} wide={tab === "logs" || tab === "settings"}>
+      frame={({ open, label, content, requestClose }) => (
+        <PeekFrame open={open} label={label} requestClose={requestClose}>
           {content}
         </PeekFrame>
       )}

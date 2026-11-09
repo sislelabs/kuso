@@ -45,6 +45,7 @@ import { planConnection } from "./connect";
 import { facingSides, nextInDirection, readingOrder, type Box, type Direction } from "./geometry";
 import { useLatestBuilds, useProjectCrons } from "@/features/services";
 import { useServiceBadges } from "./useServiceBadges";
+import { useCanvasDensity } from "./density";
 import { CanvasShortcutsButton, useCanvasShortcuts } from "./CanvasShortcuts";
 import { isTypingTarget } from "@/lib/shortcuts";
 import { servicesQueryKey } from "@/features/projects";
@@ -54,7 +55,7 @@ import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { AddCronDialog } from "@/components/cron/AddCronDialog";
 import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { serviceShortName } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 import { isProductionGroup } from "@/lib/env-group";
 import { cronsForEnv } from "@/features/projects/facts";
 import { buildTriggerMessage } from "@/features/services";
@@ -67,6 +68,7 @@ import {
   Eye,
   Plus,
   LayoutGrid,
+  Rows3,
   Database,
   HardDrive,
   Settings as SettingsIcon,
@@ -142,7 +144,8 @@ export function ProjectCanvas({
 
   // Error + vuln badge counts: one project-wide request each, shared
   // with the mobile cards so both surfaces show the same numbers.
-  const { vulnSummaries, errorSummaries } = useServiceBadges(project, selectedEnv, services);
+  const { vulnSummaries, errorSummaries, errorHot } = useServiceBadges(project, selectedEnv, services);
+  const [density, setDensity] = useCanvasDensity(project);
   useSkipTarget("canvas-root", "Skip to canvas");
 
   const initialNodes: Node[] = useMemo(() => {
@@ -183,6 +186,8 @@ export function ProjectCanvas({
           latestBuild,
           vulns: vulnSummaries.services[shortName],
           errors: errorSummaries[shortName],
+          errorsHot: errorHot[shortName],
+          compact: density === "compact",
         } satisfies ServiceNodeData,
       });
     });
@@ -207,7 +212,7 @@ export function ProjectCanvas({
       });
     });
     return out;
-  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnSummaries, errorSummaries, selectedEnv]);
+  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data, vulnSummaries, errorSummaries, errorHot, selectedEnv, density]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -1278,6 +1283,19 @@ export function ProjectCanvas({
           >
             <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
             Reset layout
+          </button>
+          <button
+            type="button"
+            aria-pressed={density === "compact"}
+            onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
+            title={density === "compact" ? "Show full cards (URL row)" : "Smaller cards, so more of the project fits"}
+            className={cn(
+              "canvas-float inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
+              density === "compact" ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]",
+            )}
+          >
+            <Rows3 className="h-3.5 w-3.5" aria-hidden />
+            Compact
           </button>
           <CanvasShortcutsButton />
         </Panel>

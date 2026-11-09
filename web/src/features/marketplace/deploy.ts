@@ -1,3 +1,4 @@
+import { addonPageHref, projectCanvasHref, servicePageHref } from "@/components/service/workspace/hrefs";
 import type { MarketplaceApp, MarketplacePrompt } from "./api";
 
 const HOST_RE = /^(?=.{1,253}$)([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
@@ -41,18 +42,18 @@ export function answersPayload(
   return out;
 }
 
-// landingPath opens the first created service on its Deployments tab so
+// landingPath opens the first created service (its canonical full page)
+// on the Deployments tab so
 // the first rollout is visible; addon-only apps open the addon instead.
 export function landingPath(
   project: string,
   plan: { servicesToCreate: string[]; servicesToUpdate: string[]; addonsToCreate: string[]; addonsToUpdate: string[] },
 ): string {
-  const base = `/projects/${encodeURIComponent(project)}`;
   const svc = plan.servicesToCreate[0] ?? plan.servicesToUpdate[0];
-  if (svc) return `${base}?service=${encodeURIComponent(svc)}&tab=deployments`;
+  if (svc) return servicePageHref(project, svc, { tab: "deployments" });
   const addon = plan.addonsToCreate[0] ?? plan.addonsToUpdate[0];
-  if (addon) return `${base}?addon=${encodeURIComponent(addon)}`;
-  return base;
+  if (addon) return addonPageHref(project, addon);
+  return projectCanvasHref(project);
 }
 
 // uniqueProjectName picks `base`, or base-2, base-3… when taken.

@@ -3,15 +3,9 @@ import { isProductionGroup, isProductionResource } from "@/lib/env-group";
 import { projectLastDeployedAt, projectPrimaryDomain, type ProjectDomain } from "@/features/projects/facts";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
-import {
-  SERVICE_STATUS,
-  serviceBucket,
-  serviceStatusFromServerState,
-  tallyServices,
-  type ServiceBucket,
-  type ServiceStatus,
-  type StatusTone,
-} from "@/lib/status";
+import { SERVICE_STATUS, type ServiceStatus, type StatusTone } from "@/lib/status";
+import { deriveServiceStatus } from "@/features/services/nodeStatus";
+import { nodeServiceStatus } from "@/components/service/workspace/statusMeta";
 
 // One health answer per project card. "pending" = services exist but none
 // has ever produced a running image; "empty" = no services yet.
@@ -67,27 +61,20 @@ export interface ProjectCardModel {
   hasSummary: boolean;
 }
 
-// envServiceStatus is the shared per-service status (the canvas node's).
-// A missing state (older servers) falls back to the replica count /
-// ready flag the cards used before state existed.
+// envServiceStatus is the canvas node's status (deriveServiceStatus, the
+// one selector), bucketed into the shared vocabulary for counting.
 export function envServiceStatus(svc: KusoService, env: KusoEnvironment | undefined): ServiceStatus {
-  if (svc.spec.stopped === true) return "stopped";
-  if (!env) return "not_deployed";
-  const st = env.status;
-  const fromServer = serviceStatusFromServerState(st?.state);
-  if (fromServer) return fromServer;
-  const replicas = st?.replicas as { ready?: number } | undefined;
-  if ((replicas?.ready ?? 0) > 0 || st?.ready === true) return "live";
-  return "not_deployed";
+  return nodeServiceStatus(deriveServiceStatus({ stopped: svc.spec.stopped === true, env }));
 }
 
-// The card's health per service is the shared bucket (lib/status
-// serviceBucket), the same one the Health page counts with. Failing,
-// stuck and degraded all need attention, so they land in "failing".
-const BUCKET_HEALTH: Record<ServiceBucket, ServiceHealth> = {
-  running: "live",
-  in_flight: "building",
-  attention: "failing",
+// Failing, stuck and degraded all need attention, so they land in "failing".
+const STATUS_HEALTH: Record<ServiceStatus, ServiceHealth> = {
+  live: "live",
+  deploying: "building",
+  building: "building",
+  degraded: "failing",
+  failing: "failing",
+  stuck: "failing",
   sleeping: "sleeping",
   stopped: "stopped",
   not_deployed: "pending",
@@ -95,7 +82,7 @@ const BUCKET_HEALTH: Record<ServiceBucket, ServiceHealth> = {
 };
 
 export function serviceHealth(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
-  return BUCKET_HEALTH[serviceBucket(svc.spec.stopped, env)];
+  return STATUS_HEALTH[envServiceStatus(svc, env)] ?? "pending";
 }
 
 const TONE_RANK: Record<StatusTone, number> = { danger: 5, warning: 4, progress: 3, success: 2, info: 1, neutral: 0 };
@@ -223,9 +210,8 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
   const counts: Partial<Record<ServiceStatus, number>> = {};
   for (const p of perService) counts[p.st] = (counts[p.st] ?? 0) + 1;
   const status = summary ? rollupStatus(health) : "pending";
-  // The Health page's tally, so the two pages never disagree.
-  const tally = tallyServices(services, envs);
-  const stoppedCount = tally.stopped;
+  const countOf = (h: ServiceHealth) => health.filter((x) => x === h).length;
+  const stoppedCount = countOf("stopped");
   const attention = perService.find((p) => p.health === "failing") ?? perService.find((p) => p.health === "building");
   const detailText = attention?.env?.status?.stateDetail;
 
@@ -248,10 +234,10 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     createdAt: project.metadata.creationTimestamp,
     status,
     serviceCount: services.length,
-    liveCount: tally.running,
+    liveCount: countOf("live"),
     stoppedCount,
     readyOf: services.length - stoppedCount,
-    failingCount: tally.attention,
+    failingCount: countOf("failing"),
     counts,
     tone: summary ? worstTone(perService.map((p) => p.st)) : "neutral",
     detail: typeof detailText === "string" && detailText ? detailText : undefined,

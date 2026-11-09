@@ -37,11 +37,11 @@ describe("landingPath", () => {
   const empty = { servicesToCreate: [], servicesToUpdate: [], addonsToCreate: [], addonsToUpdate: [] };
   it("opens the created service on deployments", () => {
     expect(landingPath("p", { ...empty, servicesToCreate: ["web"], addonsToCreate: ["db"] })).toBe(
-      "/projects/p?service=web&tab=deployments",
+      "/projects/p/services/web?tab=deployments",
     );
   });
   it("falls back to the addon for addon-only apps", () => {
-    expect(landingPath("p", { ...empty, addonsToCreate: ["db"] })).toBe("/projects/p?addon=db");
+    expect(landingPath("p", { ...empty, addonsToCreate: ["db"] })).toBe("/projects/p/addons/db");
   });
 });
 
