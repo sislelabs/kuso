@@ -1,14 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, Plus } from "lucide-react";
 import { ApiError } from "@/lib/api-client";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { alertKindLabel, describeRule, listAlerts, type AlertRule } from "@/features/alerts";
-import { alertRuleHref } from "../ServiceHeaderActions";
+import { Button } from "@/components/ui/button";
+import {
+  alertKindLabel,
+  canEditAlertProject,
+  defaultAlertKindFor,
+  describeRule,
+  listAlerts,
+  serviceRuleForm,
+  type AlertAccessSession,
+  type AlertRule,
+  type RuleFormState,
+} from "@/features/alerts";
+import { useSession } from "@/features/auth";
+import type { KusoService } from "@/types/projects";
+import { AlertRuleDialog } from "@/app/(app)/settings/alerts/AlertRuleDialog";
 import { Section } from "./_primitives";
 
 // rulesForService: rules that watch this service, either by name or by
@@ -18,8 +32,29 @@ export function rulesForService(rules: AlertRule[], project: string, service: st
 }
 
 // AlertsSection lists the alert rules that cover this service, with a
-// "New alert" link that opens the create form scoped to it.
-export function AlertsSection({ project, service, env }: { project: string; service: string; env: string }) {
+// "New alert" button that opens the create form in place, scoped to it.
+export function AlertsSection({
+  project,
+  service,
+  env,
+  svc,
+}: {
+  project: string;
+  service: string;
+  env: string;
+  svc: KusoService | undefined;
+}) {
+  const qc = useQueryClient();
+  const session = useSession();
+  const access: AlertAccessSession = useMemo(
+    () => ({
+      adminAll: session.data?.session.adminAll ?? false,
+      projectRoles: session.data?.session.projectRoles ?? {},
+    }),
+    [session.data],
+  );
+  const canAdd = canEditAlertProject(access, project);
+  const [adding, setAdding] = useState<RuleFormState | null>(null);
   // Same cache entry as Settings → Alert rules.
   const q = useQuery({ queryKey: ["alerts"], queryFn: listAlerts, retry: false });
   const forbidden = q.error instanceof ApiError && (q.error.status === 403 || q.error.status === 404);
@@ -82,17 +117,35 @@ export function AlertsSection({ project, service, env }: { project: string; serv
       )}
       {!forbidden && (
         <div className="flex flex-wrap items-center gap-3">
-          <Link
-            href={alertRuleHref(project, service, env, "http_5xx_rate")}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-default)] bg-[var(--bg-primary)] px-3 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!canAdd || session.isPending}
+            disabledReason={canAdd || session.isPending ? undefined : `You need editor access on ${project} to add its alert rules`}
+            onClick={() => setAdding(serviceRuleForm(defaultAlertKindFor(svc?.spec), project, service, env))}
           >
             <Plus aria-hidden className="h-3.5 w-3.5" />
             New alert
-          </Link>
+          </Button>
           <Link href="/settings/alerts" className="text-xs text-[var(--text-secondary)] underline-offset-2 hover:underline">
             All alert rules
           </Link>
         </div>
+      )}
+      {adding && (
+        <AlertRuleDialog
+          initial={adding}
+          access={access}
+          projects={canAdd ? [project] : []}
+          projectsLoading={false}
+          serviceScope
+          onClose={() => setAdding(null)}
+          onCreated={() => {
+            setAdding(null);
+            void qc.invalidateQueries({ queryKey: ["alerts"] });
+          }}
+        />
       )}
     </Section>
   );

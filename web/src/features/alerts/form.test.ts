@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   autoRuleName,
+  defaultAlertKindFor,
+  serviceRuleForm,
   buildCreateBody,
   describeRule,
   emptyRuleForm,
@@ -164,5 +166,17 @@ describe("new kinds and form helpers", () => {
     expect(ruleStatus(rule({ lastFiredAt: "2026-11-09T11:59:00Z" }), now)).toBe("ok");
     expect(ruleStatus(rule({ kind: "log_match", lastFiredAt: "2026-11-09T11:59:00Z" }), now)).toBe("firing");
     expect(ruleStatus(rule({ kind: "log_match", lastFiredAt: "2026-11-08T11:59:00Z" }), now)).toBe("ok");
+  });
+});
+
+describe("service-scoped alert defaults", () => {
+  it("starts web services on 5xx and services without ingress on crash loop", () => {
+    expect(defaultAlertKindFor({ runtime: "dockerfile" })).toBe("http_5xx_rate");
+    expect(defaultAlertKindFor({ runtime: "worker" })).toBe("crashloop");
+    expect(defaultAlertKindFor({ runtime: "image", internal: true })).toBe("crashloop");
+  });
+  it("prefills project, service and env", () => {
+    const f = serviceRuleForm("crashloop", "shop", "worker", "production");
+    expect([f.project, f.service, f.env, f.name]).toEqual(["shop", "worker", "production", "worker Crash loop"]);
   });
 });

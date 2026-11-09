@@ -12,6 +12,7 @@ export {
   alertKindLabel,
   autoRuleName,
   buildCreateBody,
+  defaultAlertKindFor,
   describeRule,
   emptyRuleForm,
   formatSec,
@@ -20,6 +21,7 @@ export {
   parseDur,
   prefillRuleForm,
   ruleStatus,
+  serviceRuleForm,
   splitDur,
 } from "./form";
 export type { DurUnit, RuleFormState, RuleStatus } from "./form";

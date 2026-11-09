@@ -340,3 +340,22 @@ export function prefillRuleForm(params: URLSearchParams): RuleFormState | null {
   f.name = autoRuleName(f);
   return f;
 }
+
+// defaultAlertKindFor picks the kind a service's "New alert" starts on:
+// a service with public HTTP traffic watches its 5xx rate; one without
+// (worker, internal-only) has no traffic to measure, so it watches for a
+// crash loop.
+export function defaultAlertKindFor(svc: { runtime?: string; internal?: boolean } | undefined): AlertKind {
+  if (!svc || svc.runtime === "worker" || svc.internal) return "crashloop";
+  return "http_5xx_rate";
+}
+
+// serviceRuleForm is the starting form for a rule scoped to one service.
+export function serviceRuleForm(kind: AlertKind, project: string, service: string, env: string): RuleFormState {
+  const f = emptyRuleForm(kind);
+  f.project = project;
+  f.service = service;
+  if (ALERT_KINDS[kind].scope === "env") f.env = env;
+  f.name = autoRuleName(f);
+  return f;
+}

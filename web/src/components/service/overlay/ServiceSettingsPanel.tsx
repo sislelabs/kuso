@@ -377,7 +377,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
               <HealthcheckSection state={state} setState={setState} project={project} service={service} env={envName} />
             )}
             {uptimeApplies && <UptimeSection project={project} state={state} setState={setState} />}
-            <AlertsSection project={project} service={service} env={envName} />
+            <AlertsSection project={project} service={service} env={envName} svc={svc} />
             <SecuritySection state={state} setState={setState} />
             <DangerSection
               project={project}
