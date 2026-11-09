@@ -6,6 +6,10 @@ export type LogLevel = "error" | "warn" | "info" | "debug" | "none";
 
 export const LOG_LEVELS: Exclude<LogLevel, "none">[] = ["error", "warn", "info", "debug"];
 
+// The level filter's chips: the four levels plus "other" for lines with no
+// detectable level, so the chip counts add up to the lines in view.
+export const LOG_FILTER_LEVELS: LogLevel[] = [...LOG_LEVELS, "none"];
+
 const LEVEL_ALIASES: Record<string, LogLevel> = {
   fatal: "error",
   panic: "error",
@@ -270,13 +274,15 @@ export function fmtClock(iso: string, withDate: boolean): string {
 // levelCountText labels a level chip as lines loaded in this view
 // ("5 error lines in view") so "0" can't be read as the Errors tab's
 // error total, which spans 24h.
-export function levelCountText(level: Exclude<LogLevel, "none">, n: number): { count: string; noun: string } {
+export function levelCountText(level: LogLevel, n: number): { count: string; noun: string } {
   const count = n.toLocaleString();
   switch (level) {
     case "error":
       return { count, noun: n === 1 ? "error line in view" : "error lines in view" };
     case "warn":
       return { count, noun: n === 1 ? "warning in view" : "warnings in view" };
+    case "none":
+      return { count, noun: n === 1 ? "other line in view" : "other lines in view" };
     default:
       return { count, noun: `${level} in view` };
   }

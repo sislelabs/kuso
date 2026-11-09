@@ -37,7 +37,7 @@ import { JsonSummary } from "./LogLineText";
 import { LogDetailPanel } from "./LogDetailPanel";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
-import { buildMatcher, dayChange, detectLevel, fmtClock, isCollectorNote, levelCountText, linesToText, LOG_LEVELS, parseJsonLine, shortPod, sortByTime, splitLeadingTimestamp, stripAnsi } from "./logParse";
+import { buildMatcher, dayChange, detectLevel, fmtClock, isCollectorNote, levelCountText, linesToText, LOG_FILTER_LEVELS, parseJsonLine, shortPod, sortByTime, splitLeadingTimestamp, stripAnsi } from "./logParse";
 import type { LogLevel } from "./logParse";
 import {
   getLogView,
@@ -238,22 +238,30 @@ export function LogViewer({
       // Replayed lines carry no time, so only the trace shape can tie
       // them to their head.
       const bothBacklog = prev !== null && !!prev.backlog && !!l.backlog;
+      const traceShape = CONT_SHAPE.test(stripAnsi(l.line));
+      const gap = prev !== null ? Math.abs(Date.parse(prev.ts) - Date.parse(l.ts)) : NaN;
+      // A long trace is flushed over several writes, so a trace-shaped line
+      // still belongs to its head a moment later; anything else must share
+      // the head's instant.
       const sameInstant =
-        prev !== null && prev.pod === l.pod && (bothBacklog || Math.abs(Date.parse(prev.ts) - Date.parse(l.ts)) <= 2);
+        prev !== null && prev.pod === l.pod && (bothBacklog || gap <= 2 || (traceShape && gap <= 1000));
       const cont =
         sameInstant &&
         p.level === "none" &&
         !p.json &&
-        (CONT_SHAPE.test(stripAnsi(l.line)) || (!bothBacklog && (prev?.level === "error" || prev?.level === "warn")));
+        (traceShape || (!bothBacklog && (prev?.level === "error" || prev?.level === "warn")));
       // The app's own time beats an arrival time; a precise collector
       // time is kept and the app's duplicate stamp just hidden.
       const ownTs = p.appTs ?? (l.approx || l.backlog ? p.lead?.ts : undefined);
+      // A continuation takes its head's time (detail panel, copy, export
+      // and sorting all read the head's instant, not a write a moment later).
+      const head = cont && prev ? prev : null;
       const row: Row = {
         ...l,
         line: p.lead?.rest ?? l.line,
-        ts: ownTs ?? l.ts,
-        approx: ownTs ? false : l.approx,
-        backlog: ownTs ? false : l.backlog,
+        ts: head ? head.ts : (ownTs ?? l.ts),
+        approx: head ? head.approx : ownTs ? false : l.approx,
+        backlog: head ? head.backlog : ownTs ? false : l.backlog,
         level: cont && prev ? prev.level : p.level,
         cont,
         json: p.json,
@@ -603,7 +611,7 @@ export function LogViewer({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <div role="group" aria-label="Filter by level" className="hidden items-center gap-0.5 sm:inline-flex">
-            {LOG_LEVELS.map((l) => (
+            {LOG_FILTER_LEVELS.filter((l) => l !== "none" || levelCounts.none > 0 || view.levels.includes(l)).map((l) => (
               <LevelChip key={l} level={l} count={levelCounts[l]} on={view.levels.includes(l)} onClick={() => toggleLevel(l)} errorGroups={errorGroups} />
             ))}
           </div>
@@ -650,6 +658,8 @@ export function LogViewer({
               )}
             </Select>
           )}
+          {/* The view actions wrap as one group, never one icon alone. */}
+          <div className="flex shrink-0 items-center gap-1.5">
           <span aria-hidden className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
           <IconToggle label={view.wrap ? "Don't wrap lines" : "Wrap lines"} pressed={view.wrap} onClick={() => setView({ wrap: !view.wrap })}>
             <WrapText className="h-3.5 w-3.5" />
@@ -660,6 +670,7 @@ export function LogViewer({
           <IconToggle label="Download as .log" onClick={download} disabled={visible.length === 0}>
             <Download className="h-3.5 w-3.5" />
           </IconToggle>
+          </div>
         </div>
       </div>
 
@@ -834,7 +845,7 @@ function LevelPopover({
   onClear: () => void;
   errorGroups?: ServiceErrorCount;
 }) {
-  const label = levels.length === 0 ? "All levels" : levels.map((l) => l[0].toUpperCase() + l.slice(1)).join(", ");
+  const label = levels.length === 0 ? "All levels" : levels.map((l) => (l === "none" ? "Other" : l[0].toUpperCase() + l.slice(1))).join(", ");
   return (
     <Popover>
       <PopoverTrigger
@@ -857,7 +868,7 @@ function LevelPopover({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-56 gap-0.5 p-1">
         <div role="group" aria-label="Filter by level" className="flex flex-col">
-          {LOG_LEVELS.map((l) => (
+          {LOG_FILTER_LEVELS.filter((l) => l !== "none" || counts.none > 0 || levels.includes(l)).map((l) => (
             <LevelChip key={l} level={l} count={counts[l]} on={levels.includes(l)} onClick={() => onToggle(l)} block errorGroups={errorGroups} />
           ))}
         </div>
@@ -1090,7 +1101,8 @@ function ClockCell({ ts }: { ts: string }) {
   );
 }
 
-function chipCountHint(level: Exclude<LogLevel, "none">, errors: ServiceErrorCount | undefined): string {
+function chipCountHint(level: LogLevel, errors: ServiceErrorCount | undefined): string {
+  if (level === "none") return "lines with no detectable level, loaded in this view";
   if (level !== "error") return "counts the lines loaded in this view";
   if (errors === undefined) return "error-level log lines loaded in this view, not the Errors tab's grouped errors";
   const n = errors.occurrences;
@@ -1105,7 +1117,7 @@ function LevelChip({
   block,
   errorGroups,
 }: {
-  level: Exclude<LogLevel, "none">;
+  level: LogLevel;
   count: number;
   on: boolean;
   onClick: () => void;
@@ -1113,9 +1125,15 @@ function LevelChip({
   // The Errors tab's count, to relate the two numbers.
   errorGroups?: ServiceErrorCount;
 }) {
-  const names = { error: "Error", warn: "Warn", info: "Info", debug: "Debug" } as const;
+  const names = { error: "Error", warn: "Warn", info: "Info", debug: "Debug", none: "Other" } as const;
   const text = levelCountText(level, count);
-  const dot = { error: "bg-[var(--error)]", warn: "bg-[var(--warning)]", info: "bg-[var(--info)]", debug: "bg-[var(--text-tertiary)]" }[level];
+  const dot = {
+    error: "bg-[var(--error)]",
+    warn: "bg-[var(--warning)]",
+    info: "bg-[var(--info)]",
+    debug: "bg-[var(--text-tertiary)]",
+    none: "border border-[var(--text-tertiary)]",
+  }[level];
   return (
     <button
       type="button"
