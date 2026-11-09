@@ -35,6 +35,7 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", v.state === "up" ? "bg-[var(--success)]" : v.state === "down" ? "bg-[var(--error)]" : v.state === "failing" ? "bg-[var(--warning)]" : "bg-[var(--text-tertiary)]")} />
       Health check {v.label}
+      {v.stale && <span className="font-normal text-[var(--text-tertiary)]">· last known</span>}
     </span>
   );
 }

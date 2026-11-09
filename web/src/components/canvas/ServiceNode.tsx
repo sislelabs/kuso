@@ -136,7 +136,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           <span className={cn("shrink-0 font-medium", tone.text)}>{status.label}</span>
           {live?.rolledBack && (
             <span
-              className="shrink-0 rounded-full border border-[var(--warning)]/45 bg-[var(--warning-subtle)] px-1.5 font-medium text-[var(--warning)]"
+              className="shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-1.5 font-medium text-[var(--text-secondary)]"
               title="Rolled back to an older build. The next deploy replaces it."
             >
               Rolled back

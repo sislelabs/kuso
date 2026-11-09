@@ -67,7 +67,7 @@ export interface UptimeView {
 export function uptimeView(s: UptimeServiceStatus | undefined): UptimeView {
   if (!s) return { state: "not_set_up", label: "Not set up", stale: false };
   const stale = !!s.stale;
-  const suffix = stale ? " (last known)" : "";
+  const suffix = "";
   switch (s.state) {
     case "up":
       return {

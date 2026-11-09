@@ -9,6 +9,7 @@ import { VulnBadge } from "./NodeBadges";
 import type { VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
+import { addonVersionLabel } from "@/features/addons/version";
 
 export interface AddonNodeData extends CanvasNodeA11y {
   project: string;
@@ -25,7 +26,7 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
     ? data.addon.metadata.name.slice(data.project.length + 1)
     : data.addon.metadata.name;
   const meta = [
-    addonLabel(data.addon.spec.kind) + (data.addon.spec.version ? ` ${data.addon.spec.version}` : ""),
+    addonVersionLabel(addonLabel(data.addon.spec.kind), data.addon.spec.version),
     data.addon.spec.storageSize,
     data.addon.spec.ha ? "HA" : undefined,
   ].filter(Boolean);

@@ -20,6 +20,7 @@ import {
   type HealthProblem,
 } from "@/features/services";
 import { useServiceErrorCount } from "@/features/errors";
+import { useLiveServiceUrl } from "@/features/projects/liveDomain";
 import { useEnvironments } from "@/features/projects";
 import { buildRefLabel } from "@/features/builds";
 import { envGroupName, wakeEnvParam } from "@/lib/env-group";
@@ -607,6 +608,8 @@ export function ServiceOverlay({
         : customDomain
           ? `${customTLS ? "https" : "http"}://${customDomain}`
           : (env?.status?.url as string | undefined);
+  // Same host the project card and canvas show while a custom domain is still pending.
+  const liveUrl = useLiveServiceUrl(project, service ?? "", env, url) ?? url;
   const ready = !!env?.status?.ready;
   const phase = (env?.status?.phase as string | undefined)?.toLowerCase();
   // "rolling" is a real running state, not a diagnostic — the
@@ -737,8 +740,8 @@ export function ServiceOverlay({
                       <span className="ml-1.5 rounded border border-[var(--border-subtle)] px-1.5 py-px text-xs">{envParam}</span>
                     )}
                   </span>
-                  {url ? (
-                    <UrlPill url={url} />
+                  {liveUrl ? (
+                    <UrlPill url={liveUrl} />
                   ) : (
                     <span className="text-[var(--text-tertiary)]">No public URL yet</span>
                   )}

@@ -21,6 +21,6 @@ describe("uptimeView", () => {
     expect(uptimeView({ ...s("up"), latencyMs: 1 })).toMatchObject({ state: "up", label: "OK · 1 ms" });
     expect(uptimeView(s("paused")).label).toBe("Paused");
     expect(uptimeView(s("pending")).state).toBe("unknown");
-    expect(uptimeView({ ...s("down"), stale: true }).label).toBe("Down (last known)");
+    expect(uptimeView({ ...s("down"), stale: true }).label).toBe("Down");
   });
 });
