@@ -57,6 +57,38 @@ type Summary struct {
 	DiskAvailableBytes int64 `json:"diskAvailableBytes"`
 	Pods               int   `json:"pods"`
 	PodsCapacity       int   `json:"podsCapacity"`
+	// Conditions carries the kubelet's pressure conditions
+	// (MemoryPressure, DiskPressure, PIDPressure) with status "True" or
+	// "False". A True one means the kubelet is evicting / refusing pods.
+	Conditions []Condition `json:"conditions"`
+}
+
+// Condition is one node pressure condition.
+type Condition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	Since   string `json:"since,omitempty"`
+}
+
+// pressureConditions picks the pressure conditions off a node, in a
+// fixed order.
+func pressureConditions(n *corev1.Node) []Condition {
+	out := []Condition{}
+	for _, t := range []corev1.NodeConditionType{corev1.NodeMemoryPressure, corev1.NodeDiskPressure, corev1.NodePIDPressure} {
+		for _, c := range n.Status.Conditions {
+			if c.Type != t {
+				continue
+			}
+			cond := Condition{Type: string(c.Type), Status: string(c.Status), Reason: c.Reason, Message: c.Message}
+			if !c.LastTransitionTime.IsZero() {
+				cond.Since = c.LastTransitionTime.UTC().Format(time.RFC3339)
+			}
+			out = append(out, cond)
+		}
+	}
+	return out
 }
 
 // Usage is the per-node live slice the caller passes in: CPU/memory
@@ -148,6 +180,7 @@ func buildSummary(n *corev1.Node, podCount int, u Usage) Summary {
 		DiskAvailableBytes: diskAvail,
 		Pods:               podCount,
 		PodsCapacity:       int(podsCap),
+		Conditions:         pressureConditions(n),
 	}
 }
 

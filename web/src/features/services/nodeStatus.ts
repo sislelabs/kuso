@@ -5,6 +5,7 @@
 
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
 import type { BuildSummary } from "./api";
+import { addonStatusFromServer } from "@/lib/status";
 
 export type NodeStatusKind =
   | "live"
@@ -13,6 +14,7 @@ export type NodeStatusKind =
   | "deploying"
   | "build_failed"
   | "crashing"
+  | "stuck"
   | "sleeping"
   | "stopped"
   | "not_deployed"
@@ -49,6 +51,9 @@ function serverState(state: string | undefined, detail?: string): NodeStatus | n
       return S("degraded", "Degraded", "warning", because("Release failed", detail));
     case "crashlooping":
       return S("crashing", "Failing", "error", because("Crashing", detail));
+    // Pods can't start or the rollout stalled; detail is the plain reason.
+    case "stuck":
+      return S("stuck", "Stuck", "error", detail);
     case "deploying":
       return S("deploying", "Deploying", "progress", detail);
     case "building":
@@ -115,17 +120,28 @@ export function deriveServiceStatus({ stopped, env, latestBuild }: ServiceStatus
   return S("unknown", "Unknown", "muted", detail);
 }
 
-// deriveAddonStatus reads helm-operator conditions: a wedged upgrade
-// (ReleaseFailed / Irreconcilable) has to win over a stale Deployed=True
-// from the last good release.
+// deriveAddonStatus reads the server's addon rollup (helm conditions +
+// pod readiness, status.state) via the shared addonStatusFromServer, so
+// the canvas, Health page and addon overview agree. Older servers fall
+// back to the helm conditions alone.
 export function deriveAddonStatus(addon: KusoAddon): NodeStatus {
-  const conditions = (addon.status?.conditions ?? []) as Array<{ type?: string; status?: string; message?: string }>;
-  const failure = conditions.find(
-    (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
-  );
-  if (failure) return S("build_failed", "Failing", "error", because("Release failed", failure.message || undefined));
-  if (conditions.some((c) => c.type === "Deployed" && c.status === "True")) return S("live", "Live", "success");
-  return S("provisioning", "Provisioning", "progress");
+  const { status, detail } = addonStatusFromServer(addon);
+  switch (status) {
+    case "live":
+      return S("live", "Live", "success", detail);
+    case "degraded":
+      return S("degraded", "Degraded", "warning", detail);
+    case "failing":
+      return S("crashing", "Failing", "error", detail);
+    case "stuck":
+      return S("stuck", "Stuck", "error", detail);
+    case "external":
+      return S("live", "External", "info", detail);
+    case "provisioning":
+      return S("provisioning", "Provisioning", "progress", detail);
+    default:
+      return S("unknown", "Unknown", "muted", detail);
+  }
 }
 
 export function deriveCronStatus(spec: { suspend?: boolean }): NodeStatus {

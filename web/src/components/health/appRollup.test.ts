@@ -38,12 +38,13 @@ function addon(project: string, name: string, conditions: Array<{ type: string; 
 const deployed = [{ type: "Deployed", status: "True" }];
 
 describe("buildAppRollup", () => {
-  it("counts states and links each problem to the tab that fixes it", () => {
+  it("counts production like the project cards and links each problem to the tab that fixes it", () => {
     const items = [
       item(
         "shop",
-        [svc("shop", "api"), svc("shop", "web"), svc("shop", "worker", { stopped: true }), svc("shop", "jobs")],
+        [svc("shop", "api"), svc("shop", "web"), svc("shop", "worker", { stopped: true }), svc("shop", "jobs"), svc("shop", "cart")],
         [
+          env("shop", "cart", "stuck", "production", "The node is low on disk, so the pod can't be scheduled"),
           env("shop", "api", "crashlooping", "production", "back-off restarting"),
           env("shop", "web", "build_failed"),
           env("shop", "worker", "running"),
@@ -55,9 +56,11 @@ describe("buildAppRollup", () => {
       ),
     ];
     const r = buildAppRollup(items, []);
-    expect(r.services).toMatchObject({ total: 6, running: 1, sleeping: 1, stopped: 1 });
+    // Staging and preview envs are not counted: cards sum production only.
+    expect(r.services).toMatchObject({ total: 5, running: 1, sleeping: 0, stopped: 1, attention: 3 });
     expect(r.services.problems.map((p) => [p.service, p.group, p.status.label, p.href])).toEqual([
       ["api", "production", "Failing", "/projects/shop?service=api&tab=logs"],
+      ["cart", "production", "Stuck", "/projects/shop?service=cart&tab=logs"],
       ["web", "production", "Failing", "/projects/shop?service=web&tab=deployments"],
       ["jobs", "staging", "Degraded", "/projects/shop?env=staging&service=jobs&tab=deployments"],
     ]);

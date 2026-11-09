@@ -81,3 +81,25 @@ func TestPodWaitReason(t *testing.T) {
 		}
 	}
 }
+
+func TestPodIsCurrent(t *testing.T) {
+	ctrl := true
+	mk := func(owner, kind string, phase corev1.PodPhase) *corev1.Pod {
+		p := &corev1.Pod{}
+		p.OwnerReferences = []metav1.OwnerReference{{Kind: kind, Name: owner, Controller: &ctrl}}
+		p.Status.Phase = phase
+		return p
+	}
+	if !podIsCurrent(mk("web-new", "ReplicaSet", corev1.PodPending), "web-new") {
+		t.Error("pod of the current ReplicaSet should be current")
+	}
+	if podIsCurrent(mk("web-old", "ReplicaSet", corev1.PodRunning), "web-new") {
+		t.Error("draining pod of an older ReplicaSet counted as current")
+	}
+	if podIsCurrent(mk("web-release-x", "Job", corev1.PodSucceeded), "web-new") {
+		t.Error("finished release-hook pod counted as current")
+	}
+	if !podIsCurrent(mk("web-any", "ReplicaSet", corev1.PodRunning), "") {
+		t.Error("unknown current ReplicaSet should count every live pod")
+	}
+}

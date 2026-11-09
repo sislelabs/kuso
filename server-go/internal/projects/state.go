@@ -38,6 +38,7 @@ import (
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/podreason"
 	"kuso/server/internal/scaledown"
 )
 
@@ -55,6 +56,7 @@ const (
 	stateSleeping      = "sleeping"       // scaled to zero by the sleep controller
 	stateStopped       = "stopped"        // deliberately down (kuso stop, or scaled to 0)
 	stateNoImage       = "no_image"       // never built / no image ever deployed
+	stateStuck         = "stuck"          // pods can't start: unschedulable, image pull, bad config, or rollout stalled >10m
 	stateUnknown       = "unknown"        // not enough data to say
 )
 
@@ -75,13 +77,17 @@ type envStateInput struct {
 	// CrashLooping + CrashDetail come from the pod informer scan.
 	CrashLooping bool
 	CrashDetail  string
+	// Stuck is the worst pod issue podreason found (nil = none).
+	Stuck *podreason.Issue
 	// BuildPhase is the latest branch-matching, non-dry-run build's
 	// phase ("" = no build known — includes builds older than the 24h
 	// CR retention window; see populateRollupState).
 	BuildPhase string
 }
 
-// deriveEnvState maps the input to (state, stateDetail).
+// deriveEnvState maps the input to (state, stateDetail). The detail never
+// restates the state ("build_failed" + "nothing is running"): clients
+// render it after the state's own label.
 //
 // Precedence, first match wins — pinned by TestDeriveEnvState:
 //
@@ -99,6 +105,10 @@ type envStateInput struct {
 //  5. crashlooping   — pod-level truth beats deployment arithmetic:
 //     a crashlooping pod often still counts toward
 //     "updated" and can flap ready.
+//     5b. stuck        — a pod can't start (unschedulable, image pull,
+//     bad config) or a rollout has been pending past
+//     podreason.StallAfter; stateDetail is the human
+//     reason, status.stuck carries the raw facts.
 //  6. release_failed — the release-hook gate held promotion; state
 //     is release_failed even while the last green
 //     image keeps serving (that serving is BY
@@ -129,9 +139,9 @@ func deriveEnvState(in envStateInput) (string, string) {
 	if !in.HasImage {
 		switch in.BuildPhase {
 		case "failed":
-			return stateBuildFailed, "latest build failed and no image has ever deployed"
+			return stateBuildFailed, "no image has ever deployed"
 		case "release-failed":
-			return stateReleaseFailed, "release hook failed and no image has ever deployed"
+			return stateReleaseFailed, "no image has ever deployed"
 		}
 		return stateNoImage, "no image built yet — waiting for the first build"
 	}
@@ -144,11 +154,17 @@ func deriveEnvState(in envStateInput) (string, string) {
 		}
 		return stateCrashLooping, "pod is crash-looping"
 	}
+	if in.Stuck != nil && in.Stuck.Kind != podreason.KindCrashLoop {
+		if in.Ready > 0 {
+			return stateStuck, in.Stuck.Summary + "; the previous version is still serving"
+		}
+		return stateStuck, in.Stuck.Summary
+	}
 	if in.BuildPhase == "release-failed" {
 		if in.Ready > 0 {
-			return stateReleaseFailed, "release hook failed; last green build still serving"
+			return stateReleaseFailed, "last green build still serving"
 		}
-		return stateReleaseFailed, "release hook failed and no replicas are ready"
+		return stateReleaseFailed, "no replicas are ready"
 	}
 	// lastBuildFailed note: when the latest build failed but last-green
 	// replicas are still serving, the state stays runtime-derived and
@@ -168,7 +184,7 @@ func deriveEnvState(in envStateInput) (string, string) {
 	}
 	if in.Ready == 0 {
 		if failedNote != "" {
-			return stateBuildFailed, "latest build failed and nothing is running"
+			return stateBuildFailed, "nothing is running"
 		}
 		return stateDeploying, fmt.Sprintf("0/%d replicas ready — rollout in progress", in.Desired)
 	}
@@ -308,12 +324,16 @@ func (s *Service) populateRollupState(e *kube.KusoEnvironment, buildsBySvc map[s
 		sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": e.Name})
 		if pods, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
 			in.CrashLooping, in.CrashDetail = crashLoopSignal(pods)
+			in.Stuck = podreason.Worst(pods, time.Now())
 		}
 	}
 	state, detail := deriveEnvState(in)
 	e.Status["state"] = state
 	if detail != "" {
 		e.Status["stateDetail"] = detail
+	}
+	if state == stateStuck && in.Stuck != nil {
+		e.Status["stuck"] = stuckStatus(in.Stuck)
 	}
 }
 
@@ -333,4 +353,18 @@ func statusInt32(m map[string]any, key string) (int32, bool) {
 		return int32(n), true
 	}
 	return 0, false
+}
+
+// stuckStatus is the wire shape of status.stuck (additive):
+// {reason: podreason kind, summary, message: raw scheduler/kubelet
+// text, since: RFC3339}.
+func stuckStatus(is *podreason.Issue) map[string]any {
+	out := map[string]any{"reason": is.Kind, "summary": is.Summary}
+	if is.Message != "" {
+		out["message"] = is.Message
+	}
+	if !is.Since.IsZero() {
+		out["since"] = is.Since.UTC().Format(time.RFC3339)
+	}
+	return out
 }

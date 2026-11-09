@@ -10,8 +10,10 @@ import { envGroupName } from "@/lib/env-group";
 import {
   ADDON_STATUS,
   SERVICE_STATUS,
+  addonStatusFromServer,
   serverStateCause,
   serviceStatusFromServerState,
+  tallyServices,
   type StatusMeta,
 } from "@/lib/status";
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
@@ -68,13 +70,18 @@ export interface AddonProblem {
 
 export interface AppRollup {
   services: {
-    // Non-preview deployments (production + env-group members).
+    // Counts: each production service's production env, the scope the
+    // project cards sum over (tallyServices), so the two always agree.
     total: number;
     running: number;
     sleeping: number;
     stopped: number;
     inFlight: number;
     notDeployed: number;
+    // Production services failing, stuck or degraded.
+    attention: number;
+    // Every non-preview env needing attention (production first); the
+    // non-production ones carry their group.
     problems: ServiceProblem[];
   };
   uptime: {
@@ -137,67 +144,51 @@ function rollupServices(items: ProjectSummaryItem[]): AppRollup["services"] {
     stopped: 0,
     inFlight: 0,
     notDeployed: 0,
+    attention: 0,
     problems: [],
   };
   for (const item of items) {
     const project = item.project.metadata.name;
+    const t = tallyServices(item.services, item.environments ?? []);
+    out.total += t.total;
+    out.running += t.running;
+    out.sleeping += t.sleeping;
+    out.stopped += t.stopped;
+    out.inFlight += t.in_flight;
+    out.notDeployed += t.not_deployed;
+    out.attention += t.attention;
+
     const byName = new Map(item.services.map((s) => [s.metadata.name, s]));
     for (const env of item.environments ?? []) {
       const group = envGroupName(env);
       if (isPreviewGroup(group)) continue;
       const svc = byName.get(env.spec.service);
+      if (svc?.spec.stopped === true) continue;
       const service = svc ? serviceShortName(svc) : stripPrefix(env.spec.service, project);
-      out.total++;
-      if (svc?.spec.stopped === true) {
-        out.stopped++;
-        continue;
-      }
       const state = stateOf(env);
       const kind = serviceStatusFromServerState(state);
-      switch (kind) {
-        case "live":
-          out.running++;
-          break;
-        case "sleeping":
-          out.sleeping++;
-          break;
-        case "stopped":
-          out.stopped++;
-          break;
-        case "deploying":
-        case "building":
-          out.inFlight++;
-          break;
-        case "not_deployed":
-          out.notDeployed++;
-          break;
-        case "failing":
-        case "degraded": {
-          const detail = env.status?.stateDetail;
-          out.problems.push({
-            project,
-            service,
-            group,
-            status: SERVICE_STATUS[kind],
-            cause: serverStateCause(state) ?? (kind === "degraded" ? "Not all replicas ready" : undefined),
-            detail: typeof detail === "string" && detail ? detail : undefined,
-            href: projectHref(project, {
-              env: group === "production" ? undefined : group,
-              service,
-              tab: tabForState(state),
-            }),
-          });
-          break;
-        }
-        // unknown / old server without a state: say nothing rather than guess.
-        default:
-          break;
-      }
+      if (kind !== "failing" && kind !== "stuck" && kind !== "degraded") continue;
+      const detail = env.status?.stateDetail;
+      out.problems.push({
+        project,
+        service,
+        group,
+        status: SERVICE_STATUS[kind],
+        cause: serverStateCause(state) ?? (kind === "degraded" ? "Not all replicas ready" : undefined),
+        detail: typeof detail === "string" && detail ? detail : undefined,
+        href: projectHref(project, {
+          env: group === "production" ? undefined : group,
+          service,
+          tab: tabForState(state),
+        }),
+      });
     }
   }
-  // Hard failures first, then by name so the list doesn't reshuffle on poll.
+  // Production first, hard failures next, then by name so the list
+  // doesn't reshuffle on poll.
   out.problems.sort(
     (a, b) =>
+      Number(a.group !== "production") - Number(b.group !== "production") ||
       rank(a.status) - rank(b.status) ||
       a.project.localeCompare(b.project) ||
       a.service.localeCompare(b.service) ||
@@ -292,11 +283,9 @@ function rollupErrors(probes: ProjectProbe[], items: ProjectSummaryItem[]): AppR
   return out;
 }
 
-type AddonCondition = { type?: string; status?: string; message?: string };
-
-// Same reading as the canvas addon node: a failed helm release is
-// failing, Deployed=True is live, anything else is still provisioning.
-// Pod readiness isn't fetched here (one request per addon).
+// Same reading as the canvas addon node (addonStatusFromServer): the
+// server's state with pod readiness folded in, helm conditions on older
+// servers.
 function rollupAddons(probes: ProjectProbe[]): AppRollup["addons"] {
   const out: AppRollup["addons"] = { total: 0, live: 0, external: 0, problems: [], unavailable: [] };
   for (const p of probes) {
@@ -306,24 +295,20 @@ function rollupAddons(probes: ProjectProbe[]): AppRollup["addons"] {
     }
     for (const a of p.addons) {
       out.total++;
-      if (a.spec.external && !a.spec.pooler?.enabled) {
+      const { status, detail } = addonStatusFromServer(a);
+      if (status === "external") {
         out.external++;
         continue;
       }
-      const conditions = (a.status?.conditions ?? []) as AddonCondition[];
-      const failure = conditions.find(
-        (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
-      );
-      const deployed = conditions.some((c) => c.type === "Deployed" && c.status === "True");
-      if (!failure && deployed) {
+      if (status === "live") {
         out.live++;
         continue;
       }
       out.problems.push({
         project: p.project,
         addon: stripPrefix(a.metadata.name, p.project),
-        status: failure ? ADDON_STATUS.failing : ADDON_STATUS.provisioning,
-        detail: failure?.message || undefined,
+        status: ADDON_STATUS[status],
+        detail,
         href: projectHref(p.project, { addon: a.metadata.name, tab: "overview" }),
       });
     }
@@ -360,8 +345,10 @@ export interface ReconcileCounts {
 export function verdict(r: AppRollup, reconcile: ReconcileCounts = { issues: 0, critical: 0 }): Verdict {
   const reconcileIssues = reconcile.issues;
   const parts: string[] = [];
-  const svc = r.services.problems.length;
+  const svc = r.services.attention;
   if (svc > 0) parts.push(`${plural(svc, "service")} ${svc === 1 ? "needs" : "need"} attention`);
+  const elsewhere = r.services.problems.filter((p) => p.group !== "production").length;
+  if (elsewhere > 0) parts.push(`${elsewhere} in other environments`);
   const up = r.uptime.problems.length;
   if (up > 0) parts.push(`${plural(up, "uptime check")} failing`);
   const addonsFailing = r.addons.problems.filter((a) => a.status.tone === "danger").length;

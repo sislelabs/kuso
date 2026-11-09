@@ -350,6 +350,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// a target pod for kubectl exec, and by future shell tab in the
 	// web UI. Slim summary — name, ready, container list.
 	r.Get("/api/projects/{project}/services/{service}/pods", h.ListPods)
+	// Recent kube events for the env's pods + Deployment (?env=, default
+	// production). Viewer-gated; explains a stuck rollout inline.
+	r.Get("/api/projects/{project}/services/{service}/events", h.ListPodEvents)
 	// Health-check "Test path": GET one path on one of the service's own
 	// ready pods, from the server. Editor-gated like the settings it tests.
 	r.Post("/api/projects/{project}/services/{service}/healthcheck/test", h.TestHealthcheck)
@@ -1640,6 +1643,24 @@ func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 			Resource: "kuspod",
 			Message:  fmt.Sprintf("shell session opened against env=%q pods=%v", env, podNames),
 		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListPodEvents returns recent events for a service env's pods.
+func (h *ProjectsHandler) ListPodEvents(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	podSvc, podEnv := envGroupTarget(ctx, h.Kube, h.Namespace, project, service, r.URL.Query().Get("env"))
+	out, err := h.Svc.ListPodEvents(ctx, project, podSvc, podEnv)
+	if err != nil {
+		h.fail(w, "list pod events", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -3,6 +3,9 @@
 // health) takes its label and tone from here, so the same thing is never
 // "Live" in one place and "Online" / "Healthy" / "ok" in another.
 
+import { isProductionGroup, isProductionResource } from "@/lib/env-group";
+import type { KusoEnvironment, KusoService } from "@/types/projects";
+
 export type StatusTone = "success" | "progress" | "warning" | "danger" | "info" | "neutral";
 
 export interface StatusMeta {
@@ -18,6 +21,7 @@ export type ServiceStatus =
   | "building"
   | "degraded"
   | "failing"
+  | "stuck"
   | "sleeping"
   | "stopped"
   | "not_deployed"
@@ -29,6 +33,10 @@ export const SERVICE_STATUS: Record<ServiceStatus, StatusMeta> = {
   building: { label: "Building", tone: "progress", pulse: true },
   degraded: { label: "Degraded", tone: "warning" },
   failing: { label: "Failing", tone: "danger" },
+  // Pods can't start (unschedulable, image pull, bad config) or a rollout
+  // has been pending > 10 min. Needs attention like failing; the reason
+  // is in stateDetail.
+  stuck: { label: "Stuck", tone: "danger" },
   sleeping: { label: "Sleeping", tone: "neutral" },
   stopped: { label: "Stopped", tone: "neutral" },
   not_deployed: { label: "Not deployed", tone: "info" },
@@ -55,6 +63,8 @@ export function serviceStatusFromServerState(state: string | undefined): Service
     case "crashlooping":
     case "build_failed":
       return "failing";
+    case "stuck":
+      return "stuck";
     case "sleeping":
       return "sleeping";
     case "stopped":
@@ -78,18 +88,21 @@ export function serverStateCause(state: string | undefined): string | undefined 
       return "Latest build failed";
     case "release_failed":
       return "Release hook failed; previous build still serving";
+    case "stuck":
+      return "Can't start";
     default:
       return undefined;
   }
 }
 
-export type AddonStatus = "live" | "provisioning" | "degraded" | "failing" | "external" | "unknown";
+export type AddonStatus = "live" | "provisioning" | "degraded" | "failing" | "stuck" | "external" | "unknown";
 
 export const ADDON_STATUS: Record<AddonStatus, StatusMeta> = {
   live: { label: "Live", tone: "success" },
   provisioning: { label: "Provisioning", tone: "progress", pulse: true },
   degraded: { label: "Degraded", tone: "warning" },
   failing: { label: "Failing", tone: "danger" },
+  stuck: { label: "Stuck", tone: "danger" },
   // Managed outside kuso: kuso can't see its pods, so it has no health.
   external: { label: "External", tone: "info" },
   unknown: { label: "Unknown", tone: "neutral" },
@@ -112,6 +125,126 @@ export function addonStatusFromPods(input: {
   if (input.ready === input.total) return "live";
   if (input.ready === 0) return "failing";
   return "degraded";
+}
+
+// The server's stuck facts (env.status.stuck / addon status.stuck).
+export interface StuckFacts {
+  // unschedulable | image_pull | config_error | crashloop | rollout_stalled
+  reason: string;
+  summary: string;
+  // Raw scheduler / kubelet text, for a details disclosure.
+  message?: string;
+  since?: string;
+}
+
+export function stuckFacts(status: Record<string, unknown> | undefined): StuckFacts | undefined {
+  const s = status?.stuck;
+  if (!s || typeof s !== "object") return undefined;
+  const o = s as Record<string, unknown>;
+  if (typeof o.reason !== "string" || typeof o.summary !== "string") return undefined;
+  return {
+    reason: o.reason,
+    summary: o.summary,
+    ...(typeof o.message === "string" && o.message ? { message: o.message } : {}),
+    ...(typeof o.since === "string" && o.since ? { since: o.since } : {}),
+  };
+}
+
+type HelmCondition = { type?: string; status?: string; message?: string };
+
+export interface AddonHealthFacts {
+  status: AddonStatus;
+  detail?: string;
+  // Live pod counts, when the server sent them.
+  pods?: { ready: number; total: number };
+}
+
+const ADDON_SERVER_STATES = new Set<AddonStatus>(["live", "provisioning", "degraded", "failing", "stuck", "external"]);
+
+// addonStatusFromServer is the one reading of an addon's health from the
+// addon list: the server's status.state (pod readiness folded in) when
+// present, else the helm conditions alone (older servers).
+export function addonStatusFromServer(addon: {
+  spec: { external?: unknown; pooler?: { enabled?: boolean } };
+  status?: Record<string, unknown>;
+}): AddonHealthFacts {
+  const st = addon.status;
+  const state = st?.state;
+  const detail = typeof st?.stateDetail === "string" && st.stateDetail ? st.stateDetail : undefined;
+  const p = st?.pods as { ready?: unknown; total?: unknown } | undefined;
+  const pods =
+    p && typeof p.ready === "number" && typeof p.total === "number" ? { ready: p.ready, total: p.total } : undefined;
+  if (typeof state === "string" && ADDON_SERVER_STATES.has(state as AddonStatus)) {
+    return { status: state as AddonStatus, ...(detail ? { detail } : {}), ...(pods ? { pods } : {}) };
+  }
+  if (addon.spec.external && !addon.spec.pooler?.enabled) return { status: "external", detail: "Managed outside kuso" };
+  const conditions = (st?.conditions ?? []) as HelmCondition[];
+  const failure = conditions.find(
+    (c) => (c.type === "ReleaseFailed" || c.type === "Irreconcilable") && c.status === "True",
+  );
+  if (failure) return { status: "failing", detail: failure.message || "Helm release failed" };
+  if (conditions.some((c) => c.type === "Deployed" && c.status === "True")) return { status: "live" };
+  return { status: "provisioning" };
+}
+
+// One answer per service env for every count (Health page, project cards,
+// project filters). "attention" = failing, stuck or degraded.
+export type ServiceBucket = "running" | "in_flight" | "attention" | "sleeping" | "stopped" | "not_deployed" | "unknown";
+
+export function serviceBucket(stopped: boolean | undefined, env: KusoEnvironment | undefined): ServiceBucket {
+  if (stopped) return "stopped";
+  if (!env) return "not_deployed";
+  const state = env.status?.state;
+  const kind = serviceStatusFromServerState(typeof state === "string" ? state : undefined);
+  switch (kind) {
+    case "live":
+      return "running";
+    case "deploying":
+    case "building":
+      return "in_flight";
+    case "failing":
+    case "stuck":
+    case "degraded":
+      return "attention";
+    case "sleeping":
+      return "sleeping";
+    case "stopped":
+      return "stopped";
+    case "not_deployed":
+      return "not_deployed";
+    case "unknown":
+      return "unknown";
+  }
+  // Older server without a rollup state.
+  const replicas = env.status?.replicas as { ready?: number } | undefined;
+  return (replicas?.ready ?? 0) > 0 || env.status?.ready === true ? "running" : "unknown";
+}
+
+export type ServiceTally = Record<ServiceBucket, number> & { total: number };
+
+// tallyServices counts the PRODUCTION env of each production service, the
+// scope project cards use, so the Health page and the cards sum the same.
+export function tallyServices(
+  services: ReadonlyArray<KusoService>,
+  envs: ReadonlyArray<KusoEnvironment>,
+): ServiceTally {
+  const out: ServiceTally = {
+    total: 0,
+    running: 0,
+    in_flight: 0,
+    attention: 0,
+    sleeping: 0,
+    stopped: 0,
+    not_deployed: 0,
+    unknown: 0,
+  };
+  for (const s of services) {
+    if (!isProductionResource(s.metadata.labels)) continue;
+    const env = envs.find((e) => e.spec.service === s.metadata.name && isProductionGroup(e));
+    out.total++;
+    out[serviceBucket(s.spec.stopped, env)]++;
+  }
+  return out;
 }
 
 // Job-shaped things (backups, crons, runs, restores).
