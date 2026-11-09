@@ -33,11 +33,14 @@ import { detectionCopy, type DetectionCopy, type Provenance } from "./detectionC
 import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "./RepoInsights";
 import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
 import { reportCreateOutcome } from "./reportCreateOutcome";
+import { ConnectAddons, connectedByDefault, existingAddons, subscriptionFor, type ExistingAddon } from "./ConnectAddons";
+import { setSubscribedAddons } from "@/features/addons";
 import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 // Addon kinds a scan suggestion can turn into with one click — the
 // scanner also reports kinds kuso has no chart for (kafka, memcached…).
 const SUGGESTABLE_ADDON_KINDS = new Set(["postgres", "mysql", "mongodb", "redis", "rabbitmq", "clickhouse"]);
+const IMAGE_ADDON_KINDS = ["postgres", "redis", "mysql", "mongodb"];
 
 const RUNTIMES = [
   { value: "dockerfile", label: "Dockerfile", hint: "build the repo's Dockerfile" },
@@ -204,8 +207,22 @@ export function AddServiceView() {
 
   const addonSuggestions = useMemo((): AddonSuggestion[] => {
     const have = new Set((projectAddons.data ?? []).map((a) => a.spec.kind));
+    // An image has no repo to scan: offer the common datastores the
+    // project doesn't have yet, all off.
+    if (source === "image") {
+      return IMAGE_ADDON_KINDS.filter((k) => !have.has(k)).map((kind) => ({
+        kind,
+        reason: `Create a ${addonLabel(kind)} addon with the service`,
+      }));
+    }
     return detection.suggestions.filter((s) => SUGGESTABLE_ADDON_KINDS.has(s.kind) && !have.has(s.kind));
-  }, [detection.suggestions, projectAddons.data]);
+  }, [detection.suggestions, projectAddons.data, source]);
+
+  const existing = useMemo(() => existingAddons(projectAddons.data, project), [projectAddons.data, project]);
+  const [connectOverride, setConnectOverride] = useState<Record<string, boolean>>({});
+  const isConnected = (a: ExistingAddon) => connectOverride[a.short] ?? connectedByDefault(a.kind);
+  const toggleConnect = (short: string, on: boolean) => setConnectOverride((prev) => ({ ...prev, [short]: on }));
+  const connectField = <ConnectAddons addons={existing} isConnected={isConnected} onToggle={toggleConnect} />;
 
   const toggleAddonPick = (k: string) =>
     setAddonPicks((prev) => {
@@ -308,12 +325,27 @@ export function AddServiceView() {
         // list mounts every project addon, so it still gets DATABASE_URL.
         beforeBuild: async () => {
           const failed: string[] = [];
-          for (const addonKind of source === "repo" ? addonPicks : []) {
+          const created: string[] = [];
+          for (const addonKind of addonPicks) {
             if (!addonSuggestions.some((s) => s.kind === addonKind)) continue;
             try {
               await addAddon(project, { name: addonKind, kind: addonKind });
+              created.push(addonKind);
             } catch (ae) {
               if (!(ae instanceof ApiError && ae.status === 409)) failed.push(`${addonKind} (${friendlyApiError(ae, "failed")})`);
+            }
+          }
+          // Unchecked addons aren't mounted: the service gets an explicit
+          // list (plus the addons it was just created with).
+          const subscription = subscriptionFor(existing, isConnected, created);
+          if (subscription) {
+            try {
+              await setSubscribedAddons(project, body.name, subscription);
+            } catch (se) {
+              toast.warning(`Service created, but its addon connections weren't saved (${friendlyApiError(se, "failed")}). It's connected to every addon; change that in Variables.`, {
+                duration: Infinity,
+                closeButton: true,
+              });
             }
           }
           if (failed.length > 0) {
@@ -337,7 +369,7 @@ export function AddServiceView() {
     }
   };
 
-  const submitLabel = submitting ? "Creating…" : kind === "worker" && source === "repo" ? "Create worker" : "Create & deploy";
+  const submitLabel = submitting ? "Creating…" : "Create & deploy";
   const submitDisabled =
     submitting ||
     (willBuild && detection.state === "detecting") ||
@@ -547,6 +579,7 @@ export function AddServiceView() {
               addonPicks={addonPicks}
               onToggleAddon={toggleAddonPick}
             />
+            {existing.length > 0 && <div className="mt-4">{connectField}</div>}
             <div className="mt-4 flex flex-col-reverse gap-3 border-t border-[var(--border-subtle)] pt-4 sm:flex-row sm:items-center sm:justify-between">
               <Button type="button" variant="ghost" size="sm" onClick={() => setAdvanced(true)} className="self-start sm:self-auto">
                 <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -569,7 +602,7 @@ export function AddServiceView() {
                   ) : (
                     <Rocket className="h-4 w-4" />
                   )}
-                  {submitting ? "Creating…" : detection.state === "detecting" ? "Detecting…" : "Deploy now"}
+                  {submitting ? "Creating…" : detection.state === "detecting" ? "Detecting…" : "Create & deploy"}
                 </Button>
               </div>
             </div>
@@ -756,10 +789,16 @@ export function AddServiceView() {
   
                 <SizingFields value={sizing} onChange={setSizing} presets={podSizes.data ?? []} error={fieldErrors.sizing} />
   
-                {source === "repo" && addonSuggestions.length > 0 && (
+                {connectField}
+
+                {addonSuggestions.length > 0 && (
                   <FormField
-                    label="Suggested addons"
-                    hint="Found in the repo's .env.example or docker-compose. Selected ones are created with the service."
+                    label={source === "image" ? "Add addons" : "Suggested addons"}
+                    hint={
+                      source === "image"
+                        ? "Selected ones are created with the service and connected to it."
+                        : "Found in the repo's .env.example or docker-compose. Selected ones are created with the service."
+                    }
                   >
                     <div className="flex flex-wrap gap-1.5">
                       {addonSuggestions.map((sug) => {
@@ -826,7 +865,7 @@ export function AddServiceView() {
                   branch={source === "repo" && kind === "web" ? picked?.repo.defaultBranch : undefined}
                   image={source === "image" ? imageRefString(imageRepo.trim() || "…", imageTag.trim() || "…") : undefined}
                   envCount={env.vars.length}
-                  addons={source === "repo" ? [...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k)) : []}
+                  addons={[...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k))}
                   worker={source === "repo" && kind === "worker" ? fromService : undefined}
                 />
                 <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -951,7 +990,7 @@ function SourceCard({
 }
 
 // DetectedSettings is the quick path's summary: each detected value with
-// where it came from, so "Deploy now" is an informed click.
+// where it came from, so "Create & deploy" is an informed click.
 function DetectedSettings({
   project,
   name,

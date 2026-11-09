@@ -74,7 +74,12 @@ import {
 import { applyStagedEnv, sameStagedEnv, toStagedEnv } from "@/components/service/envvars/staging";
 import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envvars/RawEnvEditor";
 import { EnvExampleDialog } from "@/components/service/envvars/EnvExampleDialog";
-import { AddReferenceDialog, RefValueInput, type RefValueInputHandle } from "@/components/service/envvars/refCatalog";
+import {
+  AddReferenceDialog,
+  RefValueInput,
+  unavailableKeyReason,
+  type RefValueInputHandle,
+} from "@/components/service/envvars/refCatalog";
 import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
 import { addonPageHref } from "@/components/service/workspace/hrefs";
 
@@ -495,9 +500,38 @@ export function EnvVarsEditor({
     | { kind: "shared"; name: string; source: "project" | "instance" }
     | { kind: "override"; name: string; value: string; ref: boolean };
 
+  // Keys the addon's conn Secret carries but leaves empty because the
+  // addon doesn't provide them now (POOLER_* with the pooler off). They're
+  // mounted with every addon, not chosen, so they get one quiet note
+  // instead of a warning row each.
+  const poolerOffAddons = useMemo(
+    () =>
+      new Set(
+        (addons.data ?? [])
+          .filter((a) => !a.spec.pooler?.enabled)
+          .map((a) => (a.metadata.name.startsWith(`${project}-`) ? a.metadata.name.slice(project.length + 1) : a.metadata.name)),
+      ),
+    [addons.data, project],
+  );
+  const unprovided = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          !!r.addon &&
+          !r.value.startsWith("${{") &&
+          !!unavailableKeyReason(r.addon, r.name, !poolerOffAddons.has(r.addon)) &&
+          (r.value === "" || masked) &&
+          !isChanged(r),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isChanged reads the baseline, which moves with rows
+    [rows, poolerOffAddons, masked],
+  );
+  const unprovidedIds = useMemo(() => new Set(unprovided.map((r) => r.id)), [unprovided]);
+
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     rows.forEach((row, index) => {
+      if (unprovidedIds.has(row.id)) return;
       if (row.name.trim() && !(editing.has(row.id) && !row.origName))
         out.push({ kind: "var", name: row.name, row, index });
     });
@@ -508,7 +542,7 @@ export function EnvVarsEditor({
       out.push({ kind: "override", name: v.name, value: v.value ?? "", ref: !!v.valueFrom });
     }
     return out.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-  }, [rows, subscribed, rowNames, sharedSourceOf, overrideVars, editing]);
+  }, [rows, subscribed, rowNames, sharedSourceOf, overrideVars, editing, unprovidedIds]);
 
   // Rows added this session that are still open render on top, so typing
   // a name doesn't make the row jump into its sorted slot mid-edit.
@@ -1350,6 +1384,10 @@ export function EnvVarsEditor({
         </div>
       )}
 
+      {view === "table" && unprovided.length > 0 && !q && (
+        <UnprovidedNote project={project} rows={unprovided} />
+      )}
+
       {view === "table" && missing.length > 0 && !q && (
         <div className="rounded-md border border-dashed border-[var(--border-subtle)]">
           <p className="border-b border-dashed border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)]">
@@ -1502,5 +1540,31 @@ function RefChip({ text, title }: { text: string; title: string }) {
       <Link2 aria-hidden className="h-3 w-3 shrink-0" />
       <span className="truncate">{text}</span>
     </span>
+  );
+}
+
+// UnprovidedNote lists the keys an addon mounts empty because it doesn't
+// provide them right now, grouped per addon.
+function UnprovidedNote({ project, rows }: { project: string; rows: { addon?: string; name: string }[] }) {
+  const byAddon = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!r.addon) continue;
+    byAddon.set(r.addon, [...(byAddon.get(r.addon) ?? []), r.name]);
+  }
+  return (
+    <div className="space-y-1">
+      {Array.from(byAddon, ([addon, keys]) => (
+        <p key={addon} className="text-xs text-[var(--text-secondary)]">
+          <span className="font-mono">{keys.sort().join(", ")}</span> {keys.length === 1 ? "isn't" : "aren't"} set:{" "}
+          {addon}&apos;s pooler is off, so it doesn&apos;t provide {keys.length === 1 ? "it" : "them"}.{" "}
+          <Link
+            href={addonPageHref(project, addon, { tab: "settings" })}
+            className="font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
+          >
+            Enable pooler
+          </Link>
+        </p>
+      ))}
+    </div>
   );
 }
