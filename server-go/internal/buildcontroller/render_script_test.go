@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -162,5 +163,35 @@ func TestStaticPlanExportsBuildEnv(t *testing.T) {
 	}
 	if want := tricky + "|1.2.3|unset"; string(got) != want {
 		t.Errorf("build saw %q, want %q", got, want)
+	}
+}
+
+func TestNixpacksOSPatchScriptRunsBeforeInjectedEnv(t *testing.T) {
+	requireTools(t, "bash", "awk", "date")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".nixpacks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := filepath.Join(dir, ".nixpacks", "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("FROM base\nRUN echo hi\nFROM base AS second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", "set -e\n"+nixpacksEnvInjectScript+nixpacksOSPatchScript)
+	cmd.Dir = dir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "KUSO_BUILDENV_KEYS=APP", "KUSO_BE_APP=x"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(dockerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 5 || lines[0] != "FROM base" || lines[2] != `ENV APP="x"` || lines[3] != "RUN echo hi" || lines[4] != "FROM base AS second" {
+		t.Fatalf("unexpected Dockerfile:\n%s", raw)
+	}
+	if !strings.HasPrefix(lines[1], "RUN ") || !strings.Contains(lines[1], "apt-get upgrade") ||
+		!regexp.MustCompile(`\(\d{4}-W\d{2}\)`).MatchString(lines[1]) {
+		t.Fatalf("OS patch line = %q", lines[1])
 	}
 }
