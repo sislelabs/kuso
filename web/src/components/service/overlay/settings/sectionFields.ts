@@ -5,7 +5,6 @@ import type { FormState } from "./_primitives";
 // sectionFields.test.ts fails when a new FormState field isn't mapped.
 export const SECTION_FIELDS = {
   source: [
-    "displayName",
     "repoURL",
     "repoBranch",
     "repoPath",

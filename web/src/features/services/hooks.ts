@@ -17,6 +17,7 @@ import {
   listBuilds,
   listErrors,
   listRuns,
+  listServiceBranches,
   listServiceCrons,
   listStorageClasses,
   patchService,
@@ -240,6 +241,20 @@ export function useStartService(project: string, service: string) {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       qc.invalidateQueries({ queryKey: ["projects", project] });
     },
+  });
+}
+
+// useServiceBranches lists the repo's branches for the Branch picker. Off
+// until `enabled` (the field is focused) so opening settings doesn't mint
+// a GitHub token; an older server's 404 just leaves the field free text.
+export function useServiceBranches(project: string, service: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["projects", project, "services", service, "branches"] as const,
+    queryFn: () => listServiceBranches(project, service),
+    enabled: enabled && !!project && !!service,
+    staleTime: 5 * 60_000,
+    retry: false,
+    meta: { skipGlobalErrorToast: true },
   });
 }
 

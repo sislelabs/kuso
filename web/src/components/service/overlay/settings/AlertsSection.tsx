@@ -64,6 +64,7 @@ export function AlertsSection({
   return (
     <Section
       id="alerts"
+      applies="now"
       scope="none"
       title="Alerts"
       icon={BellRing}

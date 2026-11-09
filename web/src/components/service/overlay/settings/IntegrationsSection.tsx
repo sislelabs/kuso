@@ -25,6 +25,7 @@ export function IntegrationsSection({
   return (
     <Section
       id="integrations"
+      applies="now"
       title="Integrations"
       icon={Puzzle}
       scope="none"

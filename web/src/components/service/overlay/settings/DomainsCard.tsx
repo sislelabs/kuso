@@ -1,14 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, CheckCircle2, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { HostClashHint } from "@/components/shared/HostClashHint";
 import { useIngressTargets } from "@/features/cluster";
@@ -59,6 +58,7 @@ export function DomainsCard({
   canWrite: boolean;
 }) {
   const status = useDomainStatus(project, service, envName, !!env);
+  const certIssuer = useCertIssuer(project, service, envName, !!env);
   const qc = useQueryClient();
   const { add, remove } = useEnvDomainMutations(project, service, envName);
   const [adding, setAdding] = useState(false);
@@ -122,27 +122,12 @@ export function DomainsCard({
     <Section
       id="domains"
       scope={{ env: envName }}
+      applies="now"
       title="Domains"
       icon={Globe}
       status={customCount > 0 ? `${customCount} custom` : undefined}
       description={
         <>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  tabIndex={0}
-                  className="mr-1.5 inline-flex items-center gap-1 rounded-full border border-[var(--info)]/30 bg-[var(--info-subtle)] px-2 py-px align-[1px] text-xs font-medium text-[var(--info)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                />
-              }
-            >
-              <Zap className="h-3 w-3" aria-hidden />
-              Changes apply immediately
-            </TooltipTrigger>
-            <TooltipContent className="max-w-64">
-              Adding or removing a domain takes effect right away. Unlike most cards, domain edits aren&apos;t staged for the next deploy.
-            </TooltipContent>
-          </Tooltip>
           Where this service answers in the <Code>{envName}</Code> environment.
         </>
       }
@@ -187,6 +172,7 @@ export function DomainsCard({
             (adding ? (
               <AddDomainForm
                 envName={envName}
+                certs={env.spec.tlsEnabled === false ? "tls-off" : certIssuer === false ? "no-issuer" : "auto"}
                 existing={rows.map((r) => r.host.toLowerCase())}
                 pending={add.isPending}
                 onCancel={() => setAdding(false)}
@@ -633,7 +619,7 @@ function DnsRecordLine({ host }: { host: string }) {
 }
 
 // DnsInstructions shows the exact record(s) to create, with copy buttons.
-function DnsInstructions({ host }: { host: string }) {
+function DnsInstructions({ host, certificate = true }: { host: string; certificate?: boolean }) {
   const targets = useIngressTargets();
   const t = targets.data;
   if (targets.isLoading) return <p className="text-xs text-[var(--text-tertiary)]">Looking up the cluster address…</p>;
@@ -686,9 +672,11 @@ function DnsInstructions({ host }: { host: string }) {
           These are node addresses (no load balancer found). Use one that is reachable from the internet.
         </p>
       )}
-      <p className="text-xs text-[var(--text-secondary)]">
-        Using Cloudflare? Either keep the record DNS-only until the certificate is issued, or set SSL to Full.
-      </p>
+      {certificate && (
+        <p className="text-xs text-[var(--text-secondary)]">
+          Using Cloudflare? Either keep the record DNS-only until the certificate is issued, or set SSL to Full.
+        </p>
+      )}
     </div>
   );
 }
@@ -697,12 +685,17 @@ function DnsInstructions({ host }: { host: string }) {
 
 function AddDomainForm({
   envName,
+  certs,
   existing,
   pending,
   onCancel,
   onAdd,
 }: {
   envName: string;
+  // What happens to TLS once the domain is added: a certificate is
+  // requested ("auto"), or the domain stays on HTTP because the env has
+  // TLS off or the cluster has no certificate issuer.
+  certs: "auto" | "tls-off" | "no-issuer";
   existing: string[];
   pending: boolean;
   onCancel: () => void;
@@ -712,6 +705,8 @@ function AddDomainForm({
   const [raw, setRaw] = useState("");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const hostRef = useRef<HTMLInputElement>(null);
+  const inlineErrorId = "add-domain-host-error";
   const host = normalizeHostInput(raw);
   const wildcard = host.startsWith("*.");
   const validationError = raw.trim() ? hostError(host) : null;
@@ -725,15 +720,15 @@ function AddDomainForm({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const err =
-      hostError(host) ??
-      (duplicate
-        ? `${host} is already on this environment`
-        : clash
-          ? `${host} is already served by another ingress in this cluster`
-          : null);
-    if (err) {
-      setError(err);
+    // Problems already shown under the field aren't repeated below the
+    // buttons; focus the field instead so the inline message is read.
+    if (!host || validationError || duplicate) {
+      if (!host) setError("Enter a hostname first");
+      hostRef.current?.focus();
+      return;
+    }
+    if (clash) {
+      setError(`${host} is already served by another ingress in this cluster`);
       return;
     }
     if (wildcard && !secret.trim()) {
@@ -753,11 +748,16 @@ function AddDomainForm({
           Domain
         </label>
         <p className="text-xs text-[var(--text-secondary)]">
-          Applies to the <Code>{envName}</Code> environment only. A certificate is issued automatically once DNS points
-          here.
+          Applies to the <Code>{envName}</Code> environment only.{" "}
+          {certs === "auto"
+            ? "A certificate is requested automatically once DNS points here."
+            : certs === "tls-off"
+              ? "TLS is off for this environment, so the domain is served over plain HTTP."
+              : "This cluster has no certificate issuer (cert-manager isn't installed), so the domain is served over plain HTTP until one is set up."}
         </p>
         <Input
           id="add-domain-host"
+          ref={hostRef}
           value={raw}
           onChange={(e) => {
             setRaw(e.target.value);
@@ -768,10 +768,12 @@ function AddDomainForm({
           spellCheck={false}
           autoComplete="off"
           aria-invalid={!!(validationError || duplicate)}
+          aria-describedby={validationError || duplicate ? inlineErrorId : undefined}
+          aria-errormessage={validationError || duplicate ? inlineErrorId : undefined}
           className={monoInputClass}
         />
         {(validationError || duplicate) && (
-          <p className="text-xs text-[var(--error)]">
+          <p id={inlineErrorId} className="text-xs text-[var(--error)]">
             {validationError ?? `${host} is already on this environment`}
           </p>
         )}
@@ -797,11 +799,11 @@ function AddDomainForm({
       )}
       {host && !validationError && !wildcard && (
         <>
-          <DnsInstructions host={host} />
+          <DnsInstructions host={host} certificate={certs === "auto"} />
           <HostClashHint hosts={[host]} />
         </>
       )}
-      {!wildcard && (
+      {!wildcard && certs === "auto" && (
         <Callout tone={recent >= BUDGET_WARN_AT ? "warning" : "info"}>
           {recent >= BUDGET_WARN_AT ? (
             <>

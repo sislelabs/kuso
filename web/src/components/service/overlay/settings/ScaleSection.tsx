@@ -8,10 +8,11 @@ import { Input } from "@/components/ui/input";
 import { listPodSizes } from "@/features/cluster-config/api";
 import { matchPodSize, podSizeFields } from "@/features/services";
 import { Section, Field, FieldGrid, WithSuffix, monoInputClass, type SectionProps } from "./_primitives";
+import { formatCPU, formatMemory, scaleImpact, type ScaleImpact } from "./scaleImpact";
 
 const CUSTOM = "__custom";
 
-export function ScaleSection({ state, setState }: SectionProps) {
+export function ScaleSection({ state, setState, environments }: SectionProps & { environments: number }) {
   const min = Number(state.scaleMin);
   const max = Number(state.scaleMax);
   const sleeps = min === 0;
@@ -148,6 +149,17 @@ export function ScaleSection({ state, setState }: SectionProps) {
           <option value={CUSTOM}>Custom…</option>
         </Select>
       </Field>
+      <ScaleImpactSummary
+        impact={scaleImpact({
+          min: state.scaleMin,
+          max: state.scaleMax,
+          cpuRequest: state.cpuRequest,
+          memRequest: state.memRequest,
+          cpuLimit: state.cpuLimit,
+          memLimit: state.memLimit,
+          environments,
+        })}
+      />
       {showCustom && (
         // k8s quantity syntax: request = guaranteed floor (scheduling +
         // HPA %), limit = hard ceiling (OOM-kill / throttle past it).
@@ -169,5 +181,47 @@ export function ScaleSection({ state, setState }: SectionProps) {
         </FieldGrid>
       )}
     </Section>
+  );
+}
+
+function range([lo, hi]: [number, number], fmt: (n: number) => string): string {
+  return lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`;
+}
+
+// ScaleImpactSummary turns per-pod sizes into what the service as a whole
+// reserves: per environment across the replica range, and the worst case
+// across every environment it runs in.
+function ScaleImpactSummary({ impact }: { impact: ScaleImpact | null }) {
+  if (!impact) return null;
+  const { cpuRequest, memRequest, cpuLimit, memLimit, minPods, maxPods, environments } = impact;
+  const pods = minPods === maxPods ? `${minPods} pod${minPods === 1 ? "" : "s"}` : `${minPods}–${maxPods} pods`;
+  const reserved = [cpuRequest && `${range(cpuRequest, formatCPU)} CPU`, memRequest && `${range(memRequest, formatMemory)} memory`]
+    .filter(Boolean)
+    .join(" and ");
+  const ceiling = [cpuLimit && `${range(cpuLimit, formatCPU)} CPU`, memLimit && `${range(memLimit, formatMemory)} memory`]
+    .filter(Boolean)
+    .join(" and ");
+  const worst = [cpuRequest && `${formatCPU(cpuRequest[1] * environments)} CPU`, memRequest && `${formatMemory(memRequest[1] * environments)} memory`]
+    .filter(Boolean)
+    .join(" and ");
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)]/50 px-3 py-2.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+      <p className="font-medium text-[var(--text-primary)]">Total for this service</p>
+      <p className="mt-0.5">
+        {reserved ? (
+          <>
+            Each environment reserves {reserved} ({pods}).
+          </>
+        ) : (
+          <>No requests set, so nothing is reserved on the nodes ({pods} per environment).</>
+        )}
+        {ceiling && <> Capped at {ceiling}.</>}
+      </p>
+      {environments > 1 && worst && (
+        <p className="mt-0.5">
+          Across its {environments} environments: up to {worst} at max replicas.
+        </p>
+      )}
+    </div>
   );
 }

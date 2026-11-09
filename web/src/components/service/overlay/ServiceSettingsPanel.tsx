@@ -74,6 +74,7 @@ import { UptimeSection } from "./settings/UptimeSection";
 import { HealthcheckSection } from "./settings/HealthcheckSection";
 import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
+import { findSettingsFields, revealSettingsTarget, type SettingsFieldHit } from "./settings/reveal";
 
 interface Props {
   project: string;
@@ -108,7 +109,7 @@ const SECTIONS = [
 
 // Words people search for that aren't a section's name.
 const SECTION_KEYWORDS: Record<string, string> = {
-  source: "repo repository branch git github root directory monorepo deploy hook",
+  source: "repo repository branch git github gitlab token root directory monorepo watch paths deploy hook slug rename display name",
   domains: "domain hostname dns tls https certificate url",
   networking: "port internal public expose protocol",
   scale: "replicas autoscale cpu memory size resources instances",
@@ -116,7 +117,7 @@ const SECTION_KEYWORDS: Record<string, string> = {
   placement: "node region label pin",
   volumes: "disk storage persistent mount pvc",
   build: "dockerfile nixpacks buildpacks runtime build args command static",
-  deploy: "auto-deploy push branch watch paths previews pull request",
+  deploy: "auto-deploy push start command cmd ci checks previews pull request",
   release: "migration release hook pre-deploy command",
   healthcheck: "readiness liveness probe path",
   uptime: "monitor ping check",
@@ -170,6 +171,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     );
   }, [envs.data, project, service, envName]);
 
+  const serviceEnvCount = useMemo(
+    () =>
+      (envs.data ?? []).filter((e) => e.spec.service === service || e.spec.service === `${project}-${service}`).length,
+    [envs.data, project, service],
+  );
   const baseline = useMemo(() => fromSvc(svc), [svc]);
   const staged = useStagedService(project, service);
   // Immediate-card edits (volumes) stay local: they're unsaved, not staged.
@@ -348,11 +354,38 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const certIssuer = useCertIssuer(project, service, envName, domainsApply && !!activeEnv);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = useScrollSpy(rootRef, sections.map((s) => s.id).join(","));
+  // Section jumps move focus to the section heading (not just the
+  // viewport), so the next Tab enters that card.
   const jump = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: smoothScroll(), block: "start" });
+    revealSettingsTarget(id);
   };
   const [find, setFind] = useState("");
-  const railSections = sections.filter((s) => sectionMatches(s.id, s.label, find));
+  // Field matches come from the rendered labels, so a search lands on
+  // the field where it actually is.
+  const [fieldHits, setFieldHits] = useState<SettingsFieldHit[]>([]);
+  useEffect(() => {
+    const root = rootRef.current;
+    setFieldHits(root ? findSettingsFields(root, find).slice(0, 8) : []);
+  }, [find]);
+  const hitSections = new Set(fieldHits.map((h) => h.section));
+  const railSections = sections.filter((s) => sectionMatches(s.id, s.label, find) || hitSections.has(s.id));
+  const findFirst = () => {
+    if (fieldHits[0]) revealSettingsTarget(fieldHits[0].target);
+    else if (railSections[0]) jump(railSections[0].id);
+  };
+
+  // A #hash on load (a deep link like #branch) reveals that target once
+  // the cards have rendered.
+  useEffect(() => {
+    const reveal = () => {
+      const id = decodeURIComponent(window.location.hash.slice(1));
+      if (!id || !rootRef.current?.querySelector(`[id="${CSS.escape(id)}"]`)) return;
+      window.setTimeout(() => revealSettingsTarget(id), 150);
+    };
+    reveal();
+    window.addEventListener("hashchange", reveal);
+    return () => window.removeEventListener("hashchange", reveal);
+  }, []);
 
   return (
     <SettingsSaveProvider value={saveApi}>
@@ -361,7 +394,13 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         <div className="grid grid-cols-1 gap-0 pb-28 md:grid-cols-[minmax(0,1fr)_168px]">
           <div className="min-w-0 space-y-6 px-3 py-4 sm:px-4 md:px-6 md:py-6">
             {!onProduction && env && <EnvBranchSection project={project} env={env} service={service} svc={svc} />}
-            <SourceSection state={state} setState={setState} project={project} service={service} />
+            <SourceSection
+              state={state}
+              setState={setState}
+              project={project}
+              service={service}
+              deployedRepoURL={baseline.repoURL}
+            />
             {domainsApply && (
               <DomainsCard
                 project={project}
@@ -373,7 +412,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
               />
             )}
             <NetworkingSection state={state} setState={setState} certIssuer={certIssuer} />
-            <ScaleSection state={state} setState={setState} />
+            <ScaleSection state={state} setState={setState} environments={serviceEnvCount} />
             <SleepSection state={state} setState={setState} />
             <PlacementSection state={state} setState={setState} />
             <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
@@ -410,9 +449,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
               value={find}
               onChange={(e) => setFind(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && railSections[0]) {
+                if (e.key === "Enter") {
                   e.preventDefault();
-                  jump(railSections[0].id);
+                  findFirst();
                 }
               }}
               placeholder="Find a setting"
@@ -420,7 +459,23 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
               className="mb-2 h-7 text-xs"
             />
             {railSections.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">No section matches.</p>
+              <p className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">No setting matches.</p>
+            )}
+            {fieldHits.length > 0 && (
+              <ul aria-label="Matching fields" className="mb-2 space-y-0.5 border-b border-[var(--border-subtle)] pb-2 text-[13px]">
+                {fieldHits.map((h) => (
+                  <li key={h.target}>
+                    <button
+                      type="button"
+                      onClick={() => revealSettingsTarget(h.target)}
+                      className="flex w-full flex-col rounded-md px-2 py-1 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60"
+                    >
+                      <span className="truncate">{h.label}</span>
+                      <span className="text-xs text-[var(--text-tertiary)]">in {SECTION_LABEL[h.section] ?? h.section}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
             <ul className="space-y-0.5 text-[13px]">
               {railSections.map((s) => {
@@ -646,12 +701,13 @@ function EnvBranchSection({
     <Section
       id="env-branch"
       scope={{ env }}
+      applies="now"
       title={`Branch in ${env}`}
       icon={GitBranch}
       description={
         <>
           The branch {repoLabel ? <Code>{repoLabel}</Code> : "this service"} deploys in <Code>{env}</Code>. Production
-          keeps its own branch from the Source card. Applies immediately; not staged.
+          keeps its own branch from the Source card.
         </>
       }
     >

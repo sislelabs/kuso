@@ -14,15 +14,18 @@ import { useCanOnProject, Perms } from "@/features/auth";
 import { useProject } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { Section, Field, FieldGrid, Code, inputClass, monoInputClass, textareaClass, type SectionProps } from "./_primitives";
+import { Section, Field, FieldGrid, Code, monoInputClass, textareaClass, type SectionProps } from "./_primitives";
 import { DeployHookRow } from "./DeployHookRow";
+import { BranchInput } from "./BranchInput";
+import { DisplayNameField } from "./DisplayNameField";
 
 export function SourceSection({
   state,
   setState,
   project,
   service,
-}: SectionProps & { project: string; service: string }) {
+  deployedRepoURL,
+}: SectionProps & { project: string; service: string; deployedRepoURL: string }) {
   // Pull installations so the user can re-point to a repo behind a
   // different GH App install. Best-effort: we don't gate the rest of
   // the section on this query landing. /api/github/installations is
@@ -115,19 +118,7 @@ export function SourceSection({
       ? <>GitHub, cloned through the <span className="text-[var(--text-primary)]">{autoResolved.accountLogin}</span> GitHub App installation</>
       : "GitHub";
 
-  const displayNameField = (
-    <Field label="Display name" hint="Shown on the canvas and in the header. Doesn't change URLs or DNS." htmlFor="svc-display-name">
-      <Input
-        id="svc-display-name"
-        value={state.displayName}
-        onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
-        placeholder={service}
-        className={inputClass}
-        maxLength={60}
-        spellCheck={false}
-      />
-    </Field>
-  );
+  const displayNameField = <DisplayNameField project={project} service={service} />;
 
   // An image service has no repo, branch or watch paths: its source is
   // the registry image, which is edited in the Image section (#build).
@@ -189,6 +180,7 @@ export function SourceSection({
       <FieldGrid>
         <Field
           label="Branch"
+          anchorId="branch"
           hint={
             state.repoBranch
               ? "Production, and any environment without its own branch, deploys this."
@@ -196,12 +188,13 @@ export function SourceSection({
           }
           htmlFor="svc-branch"
         >
-          <Input
+          <BranchInput
+            project={project}
+            service={service}
             id="svc-branch"
             value={state.repoBranch || inheritedBranch}
-            onChange={(e) => setState((s) => ({ ...s, repoBranch: e.target.value === inheritedBranch && !s.repoBranch ? "" : e.target.value }))}
-            className={monoInputClass}
-            spellCheck={false}
+            onChange={(v) => setState((s) => ({ ...s, repoBranch: v === inheritedBranch && !s.repoBranch ? "" : v }))}
+            suggest={state.repoURL.trim() === deployedRepoURL.trim()}
           />
         </Field>
         <Field label="Root directory" hint="Subdirectory for monorepos. Blank builds from the repo root." htmlFor="svc-path">
