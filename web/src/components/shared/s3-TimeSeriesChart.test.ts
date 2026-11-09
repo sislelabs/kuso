@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { niceTicks, seriesShape, timeTicks, yAxisWidth } from "./s3-TimeSeriesChart";
+import { niceTicks, seriesMarks, seriesShape, timeTicks, yAxisWidth } from "./s3-TimeSeriesChart";
 import type { Point } from "./s3-TimeSeriesChart";
 
 describe("niceTicks", () => {
@@ -64,5 +64,27 @@ describe("seriesShape", () => {
     const runs = [0, 1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 34, 35, 36, 37, 40, 41, 42, 43].map((i) => at(i, 95));
     expect(seriesShape(runs, step * 2.5).sparse).toBe(false);
     expect(seriesShape(runs, step * 2.5, [0, 120 * step]).sparse).toBe(true);
+  });
+});
+
+describe("seriesMarks", () => {
+  const step = 30_000;
+  const at = (i: number, v: number | null): Point => [i * step, v];
+  const kinds = (ms: ReturnType<typeof seriesMarks>) => ms.map((m) => `${m.kind}:${m.points.length}`);
+
+  it("draws a sparse series as broken lines and dots, never as bars from zero", () => {
+    // The memory card's shape: a few samples at the end of the window.
+    const shape = seriesShape([at(0, 140), at(1, 145), at(5, 145), at(6, 146)], step * 2.5, [0, 120 * step]);
+    expect(shape.sparse).toBe(true);
+    const ms = seriesMarks(shape, true);
+    expect(ms.some((m) => m.kind === "area")).toBe(false);
+    expect(kinds(ms)).toEqual(["line:2", "line:2", "dot:1", "dot:1", "dot:1", "dot:1"]);
+  });
+
+  it("shades only dense runs, leaves gaps empty and marks a lone sample with a dot", () => {
+    const pts = [...Array.from({ length: 30 }, (_, i) => at(i, 100)), at(30, null), ...Array.from({ length: 30 }, (_, i) => at(31 + i, 120)), at(80, 90)];
+    const ms = seriesMarks(seriesShape(pts, step * 2.5), true);
+    expect(kinds(ms)).toEqual(["area:30", "area:30", "line:30", "line:30", "dot:1"]);
+    expect(kinds(seriesMarks(seriesShape(pts, step * 2.5), false))).toEqual(["line:30", "line:30", "dot:1"]);
   });
 });

@@ -10,6 +10,7 @@ import type { BuildSummary, ErrorGroup } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import {
   errorGroupState,
+  errorRowLabel,
   errorTitle,
   groupTitle,
   sinceDeployWindow,
@@ -24,6 +25,7 @@ import { fetchErrorTrace, getErrorDetail } from "@/features/logs";
 import type { ErrorGroupDetail, ErrorOccurrence } from "@/features/logs";
 import { envGroupName, serviceEnvOptions } from "@/lib/env-group";
 import { relativeTime, shortSha } from "@/lib/format";
+import { formatAbsoluteTime } from "@/lib/format-time";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -102,15 +104,19 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
   const viewInLogs = (needle: string, at: string) => {
     const t = Date.parse(at);
     const pad = 30_000;
+    // Error lines only, with the occurrence (stack trace included) marked
+    // and scrolled to. A text query would drop the trace lines, which
+    // don't contain the message.
     openLogsAt(project, service, {
-      q: needle,
+      q: Number.isNaN(t) ? needle : "",
       range: Number.isNaN(t)
         ? { kind: "preset", preset: since }
         : { kind: "abs", from: new Date(t - pad).toISOString(), to: new Date(t + pad).toISOString() },
-      levels: [],
+      levels: ["error"],
       pod: "",
       // A Logs view left on another env would hide the occurrence.
       env,
+      focus: Number.isNaN(t) ? null : { ts: at, needle },
     });
     onViewLogs?.();
   };
@@ -388,6 +394,7 @@ function ErrorRow({
       <button
         type="button"
         onClick={onToggle}
+        aria-label={errorRowLabel(title, group.count, relativeTime(group.lastSeen), state)}
         aria-expanded={isOpen}
         aria-controls={panelId}
         className="flex min-w-0 flex-1 items-start gap-3 px-3.5 py-3 text-left hover:bg-[var(--bg-tertiary)]/40"
@@ -398,7 +405,7 @@ function ErrorRow({
             {state === "recurred" && (
               <span
                 className="mr-1.5 inline-flex rounded border border-[var(--warning)]/40 px-1 align-[1px] font-sans text-[11px] font-medium text-[var(--warning)]"
-                title={`Resolved ${group.resolvedAt ? new Date(group.resolvedAt).toLocaleString() : ""}, then seen again`}
+                title={`Resolved ${group.resolvedAt ? formatAbsoluteTime(group.resolvedAt) : ""}, then seen again`}
               >
                 Recurred
               </span>
@@ -435,7 +442,7 @@ function ErrorRow({
             )}
             {group.sampleEnv && <span>{group.sampleEnv}</span>}
             {group.resolvedAt && (
-              <span className={state === "recurred" ? "text-[var(--warning)]" : undefined} title={new Date(group.resolvedAt).toLocaleString()}>
+              <span className={state === "recurred" ? "text-[var(--warning)]" : undefined} title={formatAbsoluteTime(group.resolvedAt)}>
                 Resolved {relativeTime(group.resolvedAt)}
               </span>
             )}
@@ -607,8 +614,8 @@ function ErrorDetail({
           </Button>
         )}
         {onViewLogs && (
-          <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]" title={`Searches “${needle}”`}>
-            Opens the Logs tab 30s either side of the latest occurrence
+          <span className="min-w-0 truncate text-xs text-[var(--text-tertiary)]" title={`Marks the line containing “${needle}”`}>
+            Opens error lines 30s either side, scrolled to this occurrence
           </span>
         )}
         <Link

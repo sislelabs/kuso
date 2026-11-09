@@ -15,6 +15,16 @@ export interface LogViewState {
   wrap: boolean;
   // Scroll position when the reader had scrolled away from the tail.
   scrollTop: number | null;
+  // An occurrence another tab sent the reader to (Errors → View in logs):
+  // its block is scrolled to, marked and kept visible through the level
+  // filter. Cleared when the reader changes the query or range.
+  focus?: LogFocus | null;
+}
+
+export interface LogFocus {
+  ts: string;
+  // Text of the occurrence's first line, highlighted in the view.
+  needle: string;
 }
 
 const states = new Map<string, LogViewState>();

@@ -14,9 +14,16 @@ import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
 import { openLogsAt } from "@/components/logs/logViewStore";
 import { timeRangeMs, timeRangeSpan } from "@/lib/time-range";
 import { MEMORY_WARN_RATIO, memoryPressure, parseMemoryQuantity, useBuilds, useService } from "@/features/services";
+import { envRevisionName, useRevisions } from "@/features/revisions";
+import { lastDeployedAt } from "@/features/projects/facts";
+import { formatAbsoluteTime } from "@/lib/format-time";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  deployMarkers,
+  fmtRequestCount,
   mergeSamples,
   parseCpuQuantity,
+  requestScale,
   stepToMs,
   USAGE_HISTORY_MIN_VERSION,
   useEnvPodMetrics,
@@ -24,7 +31,7 @@ import {
   useServiceUsageHistory,
 } from "@/features/service-metrics";
 import type { ResourceSample, TimeseriesResponse } from "@/features/service-metrics";
-import { formatCpu, shortSha } from "@/lib/format";
+import { formatCpu } from "@/lib/format";
 import { envGroupName } from "@/lib/env-group";
 import { unavailableNotice } from "@/features/system-version";
 import { cn } from "@/lib/utils";
@@ -82,21 +89,28 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
   const domain: [number, number] = [now - rangeMs, now];
   const stepMs = stepToMs(traffic.data?.step ?? "") || rangeMs / 120;
 
+  const serviceRevs = useRevisions(project, "service", service);
+  const envRevs = useRevisions(project, "environment", envName ? envRevisionName(project, envName) : undefined);
+  const lastDeployAt = lastDeployedAt(env);
+  const envBranch = env?.spec?.branch;
   const markers: ChartMarker[] = useMemo(
     () =>
-      (builds.data ?? [])
-        .filter((b) => b.status === "succeeded" && b.finishedAt)
-        .map((b) => ({
-          t: Date.parse(b.finishedAt!),
-          label: `Deploy ${b.commitSha ? shortSha(b.commitSha) : (b.ref ?? b.id)}`,
-          detail: b.commitMessage?.split("\n")[0],
-        }))
-        .filter((m) => !Number.isNaN(m.t)),
-    [builds.data],
+      deployMarkers({
+        builds: builds.data ?? [],
+        revisions: [...(serviceRevs.data ?? []), ...(envRevs.data ?? [])],
+        envBranch,
+        lastDeployAt,
+      }),
+    [builds.data, serviceRevs.data, envRevs.data, envBranch, lastDeployAt],
   );
 
   const series = traffic.data?.series;
-  const req: Point[] = useMemo(() => (series?.requests ?? []).map(([t, v]) => [t * 1000, v]), [series]);
+  const reqPerSec: Point[] = useMemo(() => (series?.requests ?? []).map(([t, v]) => [t * 1000, v]), [series]);
+  const reqScale = requestScale(stats(reqPerSec).max, stepMs);
+  const req: Point[] = useMemo(
+    () => (reqScale.perBucket ? reqPerSec.map(([t, v]) => [t, v === null ? null : v * reqScale.bucketSec]) : reqPerSec),
+    [reqPerSec, reqScale.perBucket, reqScale.bucketSec],
+  );
   // Error rate is undefined where there was no traffic; the server's
   // clamp_min(…,1) turns that into 0, which would draw a reassuring
   // flat line over a dead service.
@@ -107,6 +121,8 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
   const p95: Point[] = useMemo(() => (series?.p95ms ?? []).map(([t, v]) => [t * 1000, v]), [series]);
 
   const reqStats = stats(req);
+  // Requests over the whole range: average per-second rate × seconds.
+  const reqTotal = (stats(reqPerSec).avg ?? 0) * (rangeMs / 1000);
   const errOverall = useMemo(() => {
     const reqAt = new Map((series?.requests ?? []).map(([t, v]) => [t, v]));
     let num = 0;
@@ -146,7 +162,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
 
   // One crosshair time for every chart on the tab.
   const [hoverT, setHoverT] = useState<number | null>(null);
-  const deploysInRange = markers.filter((m) => m.t >= domain[0] && m.t <= domain[1]).length;
+  const deploysInRange = markers.filter((m) => m.t >= domain[0] && m.t <= domain[1]);
 
   // Logs around the picked moment: one sample step either side, at
   // least a minute, so the spike's own lines are in view.
@@ -158,6 +174,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
           range: { kind: "abs", from: new Date(t - half).toISOString(), to: new Date(Math.min(Date.now(), t + half)).toISOString() },
           levels: [],
           pod: "",
+          focus: null,
         });
         onViewLogs();
       }
@@ -193,7 +210,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
           <p className="text-xs text-[var(--text-secondary)]">{envGroupName(env)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <DeployLegend count={deploysInRange} />
+          <DeployLegend markers={deploysInRange} />
           <TimeRangePicker presets={RANGES} value={range} onChange={setRange} ariaLabel="Metrics time range" />
         </div>
       </div>
@@ -226,20 +243,31 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
           <div className="grid gap-3 @2xl:grid-cols-3">
             <ChartCard
               title="Requests"
-              value={reqStats.avg === null ? "—" : fmtRate(reqStats.avg)}
-              valueNote="avg / s"
-              foot={reqStats.max !== null ? `peak ${fmtRate(reqStats.max)}/s · ≈${fmtCount((reqStats.avg ?? 0) * (rangeMs / 1000))} requests` : undefined}
+              titleNote={reqScale.perBucket ? reqScale.unit : undefined}
+              value={reqStats.avg === null ? "—" : reqScale.perBucket ? `≈${fmtRequestCount(reqTotal)}` : fmtRate(reqStats.avg)}
+              valueNote={reqScale.perBucket ? `requests in ${rangeLabel(range)}` : "avg / s"}
+              foot={
+                reqStats.max === null
+                  ? undefined
+                  : reqScale.perBucket
+                    ? `peak ${fmtRequestCount(reqStats.max)} ${reqScale.unit} · under 1 request/s`
+                    : `peak ${fmtRate(reqStats.max)}/s · ≈${fmtCount(reqTotal)} requests`
+              }
               loading={traffic.isPending}
               empty={!traffic.isPending && req.length === 0 ? <NoTraffic state={trafficState} /> : undefined}
             >
               <TimeSeriesChart
                 points={req}
                 domain={domain}
-                format={(v) => `${fmtRate(v)}/s`}
-                ariaLabel={`Requests per second, last ${rangeLabel(range)}. Average ${fmtRate(reqStats.avg ?? 0)}, peak ${fmtRate(reqStats.max ?? 0)}.`}
+                format={reqScale.perBucket ? fmtRequestCount : (v) => `${fmtRate(v)}/s`}
+                ariaLabel={
+                  reqScale.perBucket
+                    ? `Requests ${reqScale.unit}, last ${rangeLabel(range)}. About ${fmtRequestCount(reqTotal)} in total, peak ${fmtRequestCount(reqStats.max ?? 0)} ${reqScale.unit}.`
+                    : `Requests per second, last ${rangeLabel(range)}. Average ${fmtRate(reqStats.avg ?? 0)}, peak ${fmtRate(reqStats.max ?? 0)}.`
+                }
                 gapMs={trafficGapMs}
                 markers={markers}
-                minYMax={0.1}
+                minYMax={reqScale.perBucket ? 1 : 0.1}
                 hoverT={hoverT}
                 onHoverT={setHoverT}
                 onPick={pickTraffic}
@@ -483,19 +511,41 @@ function ResourceCharts({
   );
 }
 
-// The deploy-marker key: what ◆ on the charts means, and how many fall
-// in the selected range.
-function DeployLegend({ count }: { count: number }) {
+const LEGEND_TEXT = "Each ◆ and dashed line on the charts marks a deploy: a build, an image deploy, a rollback or a config change that rolled the pods.";
+
+// The deploy-marker key: what ◆ on the charts means and which deploys fall
+// in the range. A button, so keyboard and screen-reader users get the list
+// the charts only show on hover.
+function DeployLegend({ markers }: { markers: ChartMarker[] }) {
+  const count = markers.length;
   return (
-    <span
-      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2 text-xs text-[var(--text-secondary)]"
-      title="Each ◆ and dashed line marks a successful deploy. Hover one for its commit."
-    >
-      <svg aria-hidden width="10" height="10" viewBox="0 0 10 10" className="shrink-0">
-        <path d="M5,0 L10,5 L5,10 L0,5 Z" fill="var(--text-primary)" />
-      </svg>
-      {count === 0 ? "No deploys in range" : `${count} ${count === 1 ? "deploy" : "deploys"}`}
-    </span>
+    <Popover>
+      <PopoverTrigger
+        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/40"
+        aria-label={`${count === 0 ? "No deploys" : `${count} ${count === 1 ? "deploy" : "deploys"}`} in this range. ${LEGEND_TEXT} Show the list.`}
+      >
+        <svg aria-hidden width="10" height="10" viewBox="0 0 10 10" className="shrink-0">
+          <path d="M5,0 L10,5 L5,10 L0,5 Z" fill="var(--text-primary)" />
+        </svg>
+        {count === 0 ? "No deploys in range" : `${count} ${count === 1 ? "deploy" : "deploys"}`}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 gap-2 p-3 text-xs">
+        <p className="text-[var(--text-secondary)]">{LEGEND_TEXT}</p>
+        {count > 0 && (
+          <ul className="max-h-60 space-y-1 overflow-y-auto border-t border-[var(--border-subtle)] pt-2">
+            {[...markers].reverse().map((m) => (
+              <li key={`${m.t}-${m.label}`} className="flex gap-2">
+                <span className="w-24 shrink-0 tabular-nums text-[var(--text-tertiary)]">{formatAbsoluteTime(m.t, { zone: false })}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-[var(--text-primary)]">{m.label}</span>
+                  {m.detail && <span className="block truncate text-[var(--text-tertiary)]">{m.detail}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -619,7 +669,8 @@ function samplingNote(shape: SeriesShape, domain: [number, number], gapMs: numbe
   if (segs.length === 0) return undefined;
   const lastStart = segs[segs.length - 1][0][0];
   const firstStart = segs[0][0][0];
-  const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // 24h like the chart axes.
+  const clock = (t: number) => formatAbsoluteTime(t, { date: false, zone: false });
   if (segs.length > 1) return `Gap in sampling · resumed at ${clock(lastStart)}`;
   if (firstStart - domain[0] > gapMs) {
     return live ? `Collecting since ${clock(firstStart)} · every 15s` : `No samples before ${clock(firstStart)}`;

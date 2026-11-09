@@ -44,6 +44,16 @@ export function errorGroupState(g: { lastSeen: string; resolvedAt?: string }): E
   return Date.parse(g.lastSeen) > Date.parse(g.resolvedAt) ? "recurred" : "resolved";
 }
 
+// errorRowLabel is an error group row's accessible name: the row wraps
+// the title, frames and several meta lines, which a screen reader would
+// otherwise read out in full.
+export function errorRowLabel(title: string, count: number, lastSeen: string, state: ErrorGroupState): string {
+  const t = title.length > 120 ? `${title.slice(0, 119)}…` : title;
+  const n = `${count.toLocaleString()} ${count === 1 ? "occurrence" : "occurrences"}`;
+  const s = state === "open" ? "" : ` · ${state}`;
+  return `${t} · ${n} · last seen ${lastSeen}${s}`;
+}
+
 function listWithResolved(project: string, service: string, since: string, env: string): Promise<ErrorGroup[]> {
   const q = new URLSearchParams({ since, resolved: "include" });
   if (env) q.set("env", env);
