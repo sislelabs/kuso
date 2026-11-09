@@ -1018,9 +1018,11 @@ export function ServiceOverlay({
                     {tab === "errors" && (
                       <div className="p-5">
                         <ServiceErrorsPanel
+                          key={envGroup}
                           project={project}
                           service={service ?? ""}
                           onViewLogs={() => guardedSetTab("logs")}
+                          defaultEnv={envGroup}
                         />
                       </div>
                     )}
