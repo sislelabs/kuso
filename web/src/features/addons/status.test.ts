@@ -53,4 +53,14 @@ describe("addonHealthFrom", () => {
     expect(h.status.label).toBe("Failing");
     expect(h.detail).toBe("No pods running");
   });
+  it("doesn't call a database on the shared instance postgres failing for having no pods", () => {
+    const shared = {
+      metadata: { name: "bukvite-db" },
+      spec: { kind: "postgres", useInstanceAddon: "pg" },
+      status: { conditions: [{ type: "Deployed", status: "True" }] },
+    } as unknown as KusoAddon;
+    const h = addonHealthFrom(shared, { pending: false, error: false, pods: [] });
+    expect(h.status.label).toBe("Live");
+    expect(h.detail).toBe("Runs on the shared instance database pg");
+  });
 });

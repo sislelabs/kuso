@@ -81,8 +81,9 @@ export function OverviewTab({
         group={cr ? resourceGroup(cr.metadata.labels) : undefined}
       />
 
-      {/* External addons render no workload unless a pooler fronts them. */}
-      {(!cr?.spec.external || cr.spec.pooler?.enabled) && (
+      {/* External addons render no workload unless a pooler fronts them;
+          a database on the shared instance postgres has none of its own. */}
+      {(!cr?.spec.external || cr.spec.pooler?.enabled) && !cr?.spec.useInstanceAddon && (
         <AddonPodsSection project={project} addon={addon} />
       )}
 

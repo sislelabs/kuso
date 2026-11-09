@@ -33,7 +33,9 @@ export function runningImageOf(data: unknown): { runningVersion?: string; runnin
 // version. Older servers without a rollup fold the pod list here.
 export function useAddonHealth(project: string, addon: string, cr: KusoAddon | undefined): AddonHealth {
   const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
-  const pods = useAddonPods(project, external ? "" : addon);
+  // A database on the shared instance postgres has no pods of its own.
+  const shared = !!cr?.spec.useInstanceAddon;
+  const pods = useAddonPods(project, external || shared ? "" : addon);
   return addonHealthFrom(cr, {
     pending: !external && pods.isPending,
     error: pods.isError,
@@ -48,6 +50,17 @@ export function addonHealthFrom(
 ): AddonHealth {
   const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
   if (external) return { status: ADDON_STATUS.external, detail: "Managed outside kuso", pending: false };
+  // The server skips its rollup for these (no pods to read), so the pod
+  // fallback below would call every one of them failing. Its Helm
+  // conditions are the answer, the same one the canvas node gives.
+  if (cr?.spec.useInstanceAddon) {
+    const server = addonStatusFromServer(cr);
+    return {
+      status: ADDON_STATUS[server.status],
+      detail: server.detail ?? `Runs on the shared instance database ${cr.spec.useInstanceAddon}`,
+      pending: false,
+    };
+  }
   const list = q.pods ?? [];
   const ready = list.filter((p) => p.ready).length;
   const restarts = list.reduce((n, p) => n + (p.restarts ?? 0), 0);
