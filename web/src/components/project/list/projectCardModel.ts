@@ -284,3 +284,16 @@ export function formatBytes(b: number): string {
   }
   return `${Math.round(b / MiB)} MiB`;
 }
+
+const FOLDED_ORDER: ReadonlyArray<ProjectStatus> = ["failing", "building", "live", "sleeping", "stopped", "empty"];
+const FOLDED_WORD: Partial<Record<ProjectStatus, string>> = { empty: "empty" };
+
+// collapsedSummary is what a folded group still tells you: how many of
+// each state it hides, problems first ("1 failing · 4 live").
+export function collapsedSummary(models: ReadonlyArray<Pick<ProjectCardModel, "status">>): string {
+  const counts = new Map<ProjectStatus, number>();
+  for (const m of models) counts.set(m.status, (counts.get(m.status) ?? 0) + 1);
+  return FOLDED_ORDER.filter((s) => counts.get(s))
+    .map((s) => `${counts.get(s)} ${FOLDED_WORD[s] ?? s}`)
+    .join(" · ");
+}

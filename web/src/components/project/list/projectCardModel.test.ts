@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem } from "@/features/projects";
-import { buildCardModel, matchesQuery, projectStatusSummary, rollupStatus } from "./projectCardModel";
+import { buildCardModel, collapsedSummary, matchesQuery, projectStatusSummary, rollupStatus } from "./projectCardModel";
 
 const project: KusoProject = {
   metadata: { name: "shop", creationTimestamp: "2026-01-01T00:00:00Z" },
@@ -133,5 +133,12 @@ describe("projectStatusSummary", () => {
     expect(m.status).toBe("failing");
     expect(projectStatusSummary(m.counts, m.serviceCount)).toBe("1 of 2 live · 1 degraded");
     expect(m.tone).toBe("warning");
+  });
+});
+
+describe("collapsedSummary", () => {
+  it("counts each state, problems first, skipping pending", () => {
+    const ms = [{ status: "live" }, { status: "stopped" }, { status: "live" }, { status: "failing" }, { status: "pending" }] as const;
+    expect(collapsedSummary(ms)).toBe("1 failing · 2 live · 1 stopped");
   });
 });

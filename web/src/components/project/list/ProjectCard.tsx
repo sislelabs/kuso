@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { AlertCircle, GitBranch, Globe, Star } from "lucide-react";
-import { ERRORS_UNAVAILABLE, errorCountLabel, useProjectErrorCounts } from "@/features/errors";
+import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { useLiveProjectDomain } from "@/features/projects/liveDomain";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusChip } from "@/components/ui/status-chip";
@@ -56,21 +56,11 @@ const NO_SERVICES: readonly string[] = [];
 
 // Log errors over 24h, from the same per-project summary the canvas
 // badges read (shared cache key). Separate from the Failing status, which
-// is rollout health: a live service can still log errors. Servers without
-// the summary endpoint 404 once and the chip stays hidden.
+// is rollout health: a live service can still log errors.
 function ErrorsChip({ project }: { project: string }) {
   const { total, unavailable } = useProjectErrorCounts(project, NO_SERVICES);
-  if (unavailable) {
-    return (
-      <span
-        title="This kuso server doesn't report error counts yet, so a clean card doesn't mean no errors."
-        className="inline-flex h-5 shrink-0 items-center rounded-md border border-[var(--border-subtle)] px-1.5 text-2xs text-[var(--text-tertiary)]"
-      >
-        {ERRORS_UNAVAILABLE}
-      </span>
-    );
-  }
-  if (!total) return null;
+  // ProjectsList says "unavailable" once for the page, not per card.
+  if (unavailable || !total) return null;
   const label = errorCountLabel(total);
   return (
     <StatusChip tone="danger" icon={AlertCircle} title={`${label}: logged in the last 24 hours`}>

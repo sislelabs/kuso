@@ -1,7 +1,7 @@
 "use client";
 
 import { useRovingGrid } from "@/lib/use-roving-grid";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Box, ChevronDown, ExternalLink, Folder, Pause, Power, SearchX, Settings, Star } from "lucide-react";
 import {
@@ -11,6 +11,8 @@ import {
   type ProjectSummaryItem,
 } from "@/features/projects";
 import { useCan, Perms } from "@/features/auth";
+import { ERRORS_UNAVAILABLE, useProjectErrorCounts } from "@/features/errors";
+import { Callout } from "@/components/ui/callout";
 import { useProjectPrefs, useSetProjectPref } from "@/features/userprefs";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CanvasContextMenu, type ContextMenuEntry } from "@/components/canvas/CanvasContextMenu";
@@ -21,6 +23,7 @@ import type { ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectsToolbar } from "./ProjectsToolbar";
 import {
   buildCardModel,
+  collapsedSummary,
   matchesQuery,
   matchesStatus,
   type ProjectCardModel,
@@ -32,6 +35,36 @@ interface Entry {
   model: ProjectCardModel;
   starred: boolean;
   folder: string;
+}
+
+const NO_SERVICES: readonly string[] = [];
+const COLLAPSED_KEY = "kuso.projects.collapsed";
+
+// Folded groups survive a reload (per browser). Read after mount so the
+// static prerender and first client render agree.
+function useCollapsedSections(): [ReadonlySet<string>, (key: string) => void] {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    try {
+      const v: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+      if (Array.isArray(v)) setCollapsed(new Set(v.filter((x): x is string => typeof x === "string")));
+    } catch {
+      // Storage blocked or malformed: everything open.
+    }
+  }, []);
+  const toggle = useCallback((key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        // Not persisted; still toggles for this visit.
+      }
+      return next;
+    });
+  }, []);
+  return [collapsed, toggle];
 }
 
 const EMPTY_COUNTS: Record<StatusFilter, number> = { all: 0, live: 0, failing: 0, building: 0, sleeping: 0, stopped: 0 };
@@ -52,6 +85,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; items: ContextMenuEntry[] } | null>(null);
   const [query, setQuery] = useState("");
   const [prefs, setPrefs] = useListPrefs();
+  const [collapsed, toggleSection] = useCollapsedSections();
 
   const { byProject } = useProjectPrefs();
   const setPref = useSetProjectPref();
@@ -84,6 +118,11 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
       }),
     [projects, byProject, summaryByName],
   );
+
+  // Error counts are a server capability: probe it through one project's
+  // summary (the cache entry its card reads anyway) and say so once.
+  const probe = entries.find((e) => e.model.serviceCount > 0)?.model.name ?? "";
+  const errorsUnavailable = useProjectErrorCounts(probe, NO_SERVICES).unavailable;
 
   const counts = useMemo(() => {
     if (!summaryQuery.data) return null;
@@ -203,6 +242,13 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
         onSort={(sort) => setPrefs({ sort })}
       />
 
+      {errorsUnavailable && (
+        <Callout tone="neutral" className="mb-5 py-2 text-[13px] text-[var(--text-secondary)]">
+          {ERRORS_UNAVAILABLE}: this kuso server doesn&apos;t report log error counts yet, so a card without an error chip
+          doesn&apos;t mean no errors. Upgrading the server turns them on.
+        </Callout>
+      )}
+
       {visible.length === 0 ? (
         <div className="flex flex-col items-center rounded-lg border border-dashed border-[var(--border-subtle)] px-6 py-14 text-center">
           <SearchX className="h-6 w-6 text-[var(--text-tertiary)]" aria-hidden />
@@ -232,20 +278,39 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
       ) : (
         <div className="space-y-7">
           {starred.length > 0 && (
-            <Section icon={<Star className="h-3.5 w-3.5 fill-current text-[var(--warning)]" />} label="Starred" count={starred.length}>
+            <Section
+              icon={<Star className="h-3.5 w-3.5 fill-current text-[var(--warning)]" />}
+              label="Starred"
+              items={starred}
+              open={!collapsed.has("starred")}
+              onToggle={() => toggleSection("starred")}
+            >
               {renderGrid(starred)}
             </Section>
           )}
           {folderNames.map((f) => {
             const items = rest.filter((e) => e.folder === f);
             return (
-              <Section key={f} icon={<Folder className="h-3.5 w-3.5" />} label={f} count={items.length}>
+              <Section
+                key={f}
+                icon={<Folder className="h-3.5 w-3.5" />}
+                label={f}
+                items={items}
+                open={!collapsed.has(`folder:${f}`)}
+                onToggle={() => toggleSection(`folder:${f}`)}
+              >
                 {renderGrid(items)}
               </Section>
             );
           })}
           {unfiled.length > 0 && (
-            <Section label="Other projects" count={unfiled.length} muted>
+            <Section
+              label="Other projects"
+              items={unfiled}
+              muted
+              open={!collapsed.has("unfiled")}
+              onToggle={() => toggleSection("unfiled")}
+            >
               {renderGrid(unfiled)}
             </Section>
           )}
@@ -288,22 +353,28 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
 function Section({
   icon,
   label,
-  count,
+  items,
   muted,
+  open,
+  onToggle,
   children,
 }: {
   icon?: React.ReactNode;
   label: string;
-  count: number;
+  items: ReadonlyArray<Entry>;
   muted?: boolean;
+  open: boolean;
+  onToggle: () => void;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(true);
+  const names = items.map((e) => e.model.name);
+  const shown = names.slice(0, 4).join(", ");
+  const summary = collapsedSummary(items.map((e) => e.model));
   return (
     <section>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         aria-expanded={open}
         className={cn(
           "mb-2.5 inline-flex items-center gap-1.5 rounded-sm text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
@@ -316,9 +387,25 @@ function Section({
         />
         {icon}
         <span>{label}</span>
-        <span className="tabular-nums text-[var(--text-tertiary)]">{count}</span>
+        <span className="tabular-nums text-[var(--text-tertiary)]">{items.length}</span>
       </button>
-      {open && children}
+      {open ? (
+        children
+      ) : (
+        // Folded: still say what's inside, and the row itself unfolds it.
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={`Show ${items.length} project${items.length === 1 ? "" : "s"} in ${label}: ${summary}`}
+          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-dashed border-[var(--border-default)] px-4 py-2.5 text-left text-xs outline-none hover:border-[var(--border-strong)] hover:bg-[var(--bg-secondary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+        >
+          <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
+            {shown}
+            {names.length > 4 && <span className="text-[var(--text-tertiary)]"> +{names.length - 4} more</span>}
+          </span>
+          {summary && <span className="shrink-0 tabular-nums text-[var(--text-tertiary)]">{summary}</span>}
+        </button>
+      )}
     </section>
   );
 }
