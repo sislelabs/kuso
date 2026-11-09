@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.27] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
+
 ## [0.25.26] — 2026-09-02
 
 ### 🐛 Bug Fixes

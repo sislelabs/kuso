@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.38.0] — 2026-11-09
+
+### Other
+- Create new addons on current majors ([a684b89](https://github.com/sislelabs/kuso/commit/a684b89636c1990d12e0da351f367d26b9e07b1f))
+
+### 🐛 Bug Fixes
+- Fix RabbitMQ crash-looping after a restart and Meilisearch never starting ([7e188c9](https://github.com/sislelabs/kuso/commit/7e188c9ae7e101ab53f972425bab8e77ffd48b91))
+
 ## [0.37.0] — 2026-11-08
 
 ### Other
@@ -620,11 +628,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addon): pooler accepts 1000 client connections, not 200 ([f20ecac](https://github.com/sislelabs/kuso/commit/f20ecacc6ca0c6ce6f37083555a43606c4ca0ad7))
-
-## [0.25.27] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
 
 
 ---
