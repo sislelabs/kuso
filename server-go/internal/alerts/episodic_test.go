@@ -59,7 +59,7 @@ func TestDecideEpisode(t *testing.T) {
 		{"new target joining an episode fires for it alone",
 			db.AlertRule{ThrottleSeconds: 600, FiringSince: ago(time.Hour), LastFiredAt: ago(time.Hour), FiringTargets: []string{"a"}},
 			breach("a", "b"), actFire, []string{"b"}, []string{"a", "b"}},
-		{"target leaving an open episode is recorded, not announced",
+		{"target leaving an open episode is recorded and gets its own all-clear",
 			db.AlertRule{ThrottleSeconds: 600, FiringSince: ago(time.Hour), LastFiredAt: ago(time.Hour), FiringTargets: []string{"a", "b"}},
 			breach("a"), actUpdate, nil, []string{"a"}},
 		// a recovered (and was dropped above) while b kept the episode
@@ -90,6 +90,9 @@ func TestDecideEpisode(t *testing.T) {
 			}
 			if (tc.wantAction == actFire || tc.wantAction == actUpdate) && strings.Join(d.targets, ",") != strings.Join(tc.wantState, ",") {
 				t.Errorf("targets = %v, want %v", d.targets, tc.wantState)
+			}
+			if tc.wantAction == actUpdate && strings.Join(d.recovered, ",") != "b" {
+				t.Errorf("recovered = %v, want [b]", d.recovered)
 			}
 		})
 	}

@@ -145,9 +145,20 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 // recovery, an alert followed by its resolution, an uptime failure
 // followed by its recovery, a node back online — is no longer attention,
 // and neither is the closing row itself (an alert's all-clear keeps the
-// alert.fired type for channel delivery).
+// alert.fired type for channel delivery). A rule firing for several
+// targets closes a fire row once every target it named ("targets") has
+// had its own all-clear, even while the rule keeps firing for others.
 const attentionPredicate = `(("severity" IN ('warn','error') OR "type" = 'alert.fired' OR "type" = 'update.available' OR "type" LIKE 'security.%')
 	AND NOT ("type" = 'alert.fired' AND COALESCE(NULLIF("extra", '')::jsonb->>'state', '') = 'resolved')
+	AND NOT ("type" = 'alert.fired' AND COALESCE(NULLIF("extra", '')::jsonb->>'targets', '') <> ''
+		AND NOT EXISTS (
+			SELECT 1 FROM unnest(string_to_array(NULLIF("NotificationEvent"."extra", '')::jsonb->>'targets', ',')) AS tgt(name)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM "NotificationEvent" p
+				WHERE p."id" > "NotificationEvent"."id" AND p."type" = 'alert.fired'
+				  AND NULLIF(p."extra", '')::jsonb->>'state' = 'resolved'
+				  AND NULLIF(p."extra", '')::jsonb->>'rule_id' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'rule_id'
+				  AND tgt.name = ANY(string_to_array(NULLIF(p."extra", '')::jsonb->>'targets', ',')))))
 	AND NOT EXISTS (
 		SELECT 1 FROM "NotificationEvent" r
 		WHERE r."id" > "NotificationEvent"."id"
@@ -155,6 +166,7 @@ const attentionPredicate = `(("severity" IN ('warn','error') OR "type" = 'alert.
 		  AND (
 		    ("NotificationEvent"."type" = 'alert.fired' AND r."type" = 'alert.fired'
 		      AND NULLIF(r."extra", '')::jsonb->>'state' = 'resolved'
+		      AND COALESCE(NULLIF(r."extra", '')::jsonb->>'partial', '') = ''
 		      AND NULLIF(r."extra", '')::jsonb->>'rule_id' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'rule_id')
 		    OR (r."service" IS NOT DISTINCT FROM "NotificationEvent"."service"
 		      AND (COALESCE(NULLIF(r."extra", '')::jsonb->>'env', '') = ''

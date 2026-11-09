@@ -67,8 +67,8 @@ const (
 	actNone episodeAction = iota
 	actFire
 	actResolve
-	// actUpdate persists a shrunken target set without notifying: a
-	// target that recovered while others keep the episode open.
+	// actUpdate persists a shrunken target set: a target that recovered
+	// while others keep the episode open.
 	actUpdate
 )
 
@@ -78,6 +78,9 @@ type episodeDecision struct {
 	newTargets []string
 	// targets is the episode's target set to persist after a fire.
 	targets []string
+	// recovered are targets that left a still-open episode; each gets
+	// its own all-clear so its fire row stops needing attention.
+	recovered []string
 }
 
 // decideEpisode is the episode state machine. ThrottleSeconds acts as a
@@ -107,16 +110,27 @@ func decideEpisode(r *db.AlertRule, f finding, now time.Time) episodeDecision {
 		}
 	}
 	sort.Strings(still)
-	shrunk := len(still) != len(r.FiringTargets)
+	var recovered []string
+	if r.FiringSince != nil {
+		breaching := make(map[string]struct{}, len(still))
+		for _, t := range still {
+			breaching[t] = struct{}{}
+		}
+		for _, t := range r.FiringTargets {
+			if _, ok := breaching[t]; !ok {
+				recovered = append(recovered, t)
+			}
+		}
+	}
 	if len(fresh) == 0 || (r.LastFiredAt != nil && now.Sub(*r.LastFiredAt) < time.Duration(r.ThrottleSeconds)*time.Second) {
-		if shrunk && r.FiringSince != nil {
-			return episodeDecision{action: actUpdate, targets: still}
+		if len(recovered) > 0 {
+			return episodeDecision{action: actUpdate, targets: still, recovered: recovered}
 		}
 		return episodeDecision{action: actNone}
 	}
 	targets := append(still, fresh...)
 	sort.Strings(targets)
-	return episodeDecision{action: actFire, newTargets: fresh, targets: targets}
+	return episodeDecision{action: actFire, newTargets: fresh, targets: targets, recovered: recovered}
 }
 
 // evalEpisode evaluates an episodic rule and applies the decision:
@@ -150,11 +164,18 @@ func (e *Engine) evalEpisode(ctx context.Context, r *db.AlertRule, now time.Time
 			e.Logger.Warn("alert episode stamp failed; not notifying, will retry next tick", "rule", r.Name, "err", err)
 			return
 		}
-		e.emit(alertEvent(r, fireBody(f, d.newTargets, len(d.targets))))
+		ev := alertEvent(r, fireBody(f, d.newTargets, len(d.targets)))
+		ev.Extra["targets"] = strings.Join(d.newTargets, ",")
+		e.emit(ev)
+		if len(d.recovered) > 0 {
+			e.emit(partialResolvedEvent(r, d.recovered, d.targets))
+		}
 	case actUpdate:
 		if err := e.DB.SetAlertEpisode(wctx, r.ID, r.FiringSince, d.targets, nil); err != nil {
 			e.Logger.Warn("alert episode update failed", "rule", r.Name, "err", err)
+			return
 		}
+		e.emit(partialResolvedEvent(r, d.recovered, d.targets))
 	case actResolve:
 		if err := e.DB.SetAlertEpisode(wctx, r.ID, nil, nil, nil); err != nil {
 			e.Logger.Warn("alert episode clear failed; not notifying, will retry next tick", "rule", r.Name, "err", err)
@@ -191,6 +212,20 @@ func resolvedEvent(r *db.AlertRule, now time.Time) notify.Event {
 		extra["service"] = r.Service
 	}
 	return notify.AlertResolved(r.Name, body, extra)
+}
+
+// partialResolvedEvent is the all-clear for targets that recovered while
+// the rule keeps firing for others. Extra["targets"] lets the feed close
+// exactly the fire rows those targets opened.
+func partialResolvedEvent(r *db.AlertRule, recovered, still []string) notify.Event {
+	ev := resolvedEvent(r, time.Now())
+	ev.Body = "Back to normal for " + strings.Join(recovered, ", ")
+	if len(still) > 0 {
+		ev.Body += " — still firing for " + strings.Join(still, ", ")
+	}
+	ev.Extra["targets"] = strings.Join(recovered, ",")
+	ev.Extra["partial"] = "true"
+	return ev
 }
 
 func shortDuration(d time.Duration) string {
