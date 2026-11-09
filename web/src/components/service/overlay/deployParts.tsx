@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { GitCompare, GitCommitHorizontal } from "lucide-react";
 import type { BuildSummary } from "@/features/services/api";
-import { buildRefLabel, githubCommitUrl, githubCompareUrl, type DeployBuild } from "@/features/builds";
+import { buildRefLabel, githubCommitUrl, githubCompareUrl, type BuildTrigger, type DeployBuild } from "@/features/builds";
 import { CopyButton } from "@/components/ui/copy-button";
 import { cn } from "@/lib/utils";
 
@@ -52,6 +52,28 @@ export function triggerLabel(b: BuildSummary): string {
   if (src === "api") return "via API";
   if (src === "system") return "via system";
   return "";
+}
+
+// actorLabel is who started a build ("by alice"); how is the TriggerChip.
+export function actorLabel(b: BuildSummary): string {
+  return b.triggeredByUser ? `by ${b.triggeredByUser}` : "";
+}
+
+// TriggerChip is the neutral "Push" / "Manual" / "Retry" / "Rollback" tag
+// beside a build's title.
+export function TriggerChip({ trigger, className }: { trigger?: BuildTrigger; className?: string }) {
+  if (!trigger) return null;
+  return (
+    <span
+      title={trigger.hint}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded border border-[var(--border-default)] px-1.5 py-px text-xs font-normal leading-4 text-[var(--text-secondary)]",
+        className,
+      )}
+    >
+      {trigger.label}
+    </span>
+  );
 }
 
 // CommitRef is the short SHA, linked to GitHub when the repo is there, with

@@ -6,11 +6,11 @@ import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { CopyButton } from "@/components/ui/copy-button";
-import { buildRefLabel, useRollbackToBuild, type DeployBuild } from "@/features/builds";
+import { buildRefLabel, buildTitle, useRollbackToBuild, type BuildTrigger, type DeployBuild } from "@/features/builds";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
-import { buildDurationLabel, CommitRef, CompareLink, Dot, triggerLabel } from "./deployParts";
+import { actorLabel, buildDurationLabel, CommitRef, CompareLink, Dot, TriggerChip } from "./deployParts";
 
 export type LiveHealth = { label: string; tone: "ok" | "warn" | "bad" | "idle" };
 
@@ -40,6 +40,7 @@ export function LiveDeploymentCard({
   extra,
   releaseFailed,
   onShowBuild,
+  trigger,
 }: {
   project: string;
   service: string;
@@ -63,19 +64,24 @@ export function LiveDeploymentCard({
   releaseFailed?: DeployBuild;
   // Opens a history row (the failed release) and scrolls to it.
   onShowBuild?: (buildId: string) => void;
+  trigger?: BuildTrigger;
 }) {
   const [logOpen, setLogOpen] = useState(false);
   const went = deployedAt || build.finishedAt || build.startedAt;
-  const who = triggerLabel(build);
+  const who = actorLabel(build);
   const dur = buildDurationLabel(build);
   const rolledBack = !!rolledBackFrom;
+  const sha = buildRefLabel(build, 7) || build.id;
+  const chip: BuildTrigger | undefined = rolledBack
+    ? { kind: "rollback", label: "Rollback", hint: `Pointed back at ${sha} from ${buildRefLabel(rolledBackFrom, 7) || rolledBackFrom.id}` }
+    : trigger;
 
   return (
     <section
       aria-label={`${serving ? "Live" : "Current deployment"} in ${envGroup}`}
       className={cn(
         "overflow-hidden rounded-lg border bg-[var(--bg-secondary)]",
-        rolledBack ? "border-[var(--warning)]/45" : serving ? "border-[var(--success)]/35" : "border-[var(--border-default)]",
+        rolledBack ? "border-[var(--border-strong)]" : serving ? "border-[var(--success)]/35" : "border-[var(--border-default)]",
       )}
     >
       <div className="space-y-3 p-4">
@@ -117,17 +123,28 @@ export function LiveDeploymentCard({
               </span>
             </button>
           )}
-          {rolledBack && (
-            <span className="rounded-full border border-[var(--warning)]/45 bg-[var(--warning-subtle)] px-2 py-0.5 font-medium text-[var(--warning)]">
-              Rolled back
-            </span>
-          )}
         </div>
 
         <div className="min-w-0">
-          <p className="break-words text-base font-semibold leading-snug text-[var(--text-primary)]">
-            {build.commitMessage || (build.triggeredBy === "user" ? "Manual redeploy" : `Deploy ${buildRefLabel(build, 7) || build.id}`)}
-          </p>
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 break-words text-base font-semibold leading-snug text-[var(--text-primary)]">
+              {rolledBack ? (
+                <>
+                  Rolled back to <span className="font-mono">{sha}</span>
+                  <span className="font-normal text-[var(--text-secondary)]">
+                    {" "}
+                    · from <span className="font-mono">{buildRefLabel(rolledBackFrom, 7) || rolledBackFrom.id}</span>
+                  </span>
+                </>
+              ) : (
+                buildTitle(build)
+              )}
+            </p>
+            <TriggerChip trigger={chip} className="mt-0.5" />
+          </div>
+          {rolledBack && build.commitMessage && (
+            <p className="mt-0.5 break-words text-sm text-[var(--text-secondary)]">{buildTitle(build)}</p>
+          )}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--text-secondary)]">
             <CommitRef build={build} repoUrl={repoUrl} />
             <Dot />
@@ -233,9 +250,9 @@ function RolledBackStrip({
   const m = useRollbackToBuild(project, service, envGroup);
   const sha = buildRefLabel(from, 7) || from.id;
   return (
-    <div className="flex flex-wrap items-center gap-3 border-t border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-4 py-2.5 text-xs text-[var(--text-secondary)]">
+    <div className="flex flex-wrap items-center gap-3 border-t border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-4 py-2.5 text-xs text-[var(--text-secondary)]">
       <p className="min-w-0 flex-1">
-        Rolled back from <span className="font-mono text-[var(--text-primary)]">{sha}</span>. The next push to{" "}
+        <span className="font-mono text-[var(--text-primary)]">{sha}</span> is newer and still built. The next push to{" "}
         <span className="font-mono text-[var(--text-primary)]">{branch || "the branch"}</span> deploys over this.
       </p>
       {canDeploy && (
@@ -243,7 +260,7 @@ function RolledBackStrip({
           type="button"
           onClick={() => setConfirm(true)}
           disabled={m.isPending}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--warning)]/50 bg-[var(--bg-primary)] px-2.5 font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-default)] bg-[var(--bg-primary)] px-2.5 font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
         >
           <Undo2 className="h-3.5 w-3.5 -scale-x-100" />
           Undo rollback
