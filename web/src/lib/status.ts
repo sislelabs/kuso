@@ -97,8 +97,6 @@ export function serverStateCause(state: string | undefined): string | undefined 
       return "Release hook failed; previous build still serving";
     case "stuck":
       return "Can't start";
-    case "rollout_failing":
-      return "New version failing; previous version still serving";
     default:
       return undefined;
   }
