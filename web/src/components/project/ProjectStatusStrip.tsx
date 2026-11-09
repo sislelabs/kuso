@@ -21,11 +21,14 @@ export function ProjectStatusStrip({
   selectedEnv,
   view,
   onViewChange,
+  onOpenService,
 }: {
   project: string;
   selectedEnv: string;
   view?: ProjectViewMode;
   onViewChange?: (v: ProjectViewMode) => void;
+  // Opens a service's overlay (its health strip leads the default tab).
+  onOpenService?: (shortName: string) => void;
 }) {
   const metrics = useProjectMetrics(project, selectedEnv);
   const uptime = useProjectUptime(project);
@@ -35,7 +38,7 @@ export function ProjectStatusStrip({
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 text-xs text-[var(--text-secondary)]">
       {view && onViewChange && <ViewToggle value={view} onChange={onViewChange} />}
       <MetricsSummary metrics={metrics} env={selectedEnv} />
-      {selectedEnv === "production" && <UptimeSummary uptime={uptime} />}
+      {selectedEnv === "production" && <UptimeSummary uptime={uptime} onOpenService={onOpenService} />}
       <Button
         type="button"
         variant="ghost"
@@ -100,7 +103,13 @@ function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjec
   );
 }
 
-function UptimeSummary({ uptime }: { uptime: ReturnType<typeof useProjectUptime> }) {
+function UptimeSummary({
+  uptime,
+  onOpenService,
+}: {
+  uptime: ReturnType<typeof useProjectUptime>;
+  onOpenService?: (shortName: string) => void;
+}) {
   if (uptime.isPending) return null;
   if (uptime.isError) {
     return (
@@ -130,8 +139,32 @@ function UptimeSummary({ uptime }: { uptime: ReturnType<typeof useProjectUptime>
         {s.up}/{s.checked} health {s.checked === 1 ? "check" : "checks"} up
       </span>
       {bad.length > 0 && (
-        <span className={s.down > 0 ? "text-[var(--error)]" : "text-[var(--warning)]"}>
-          · {bad.map((x) => `${x.service} ${x.state}`).join(", ")}
+        <span className="inline-flex flex-wrap items-center gap-x-1">
+          <span aria-hidden>·</span>
+          {bad.map((x, i) => {
+            const text = `${x.service} ${x.state}`;
+            const tone = x.state === "down" ? "text-[var(--error)]" : "text-[var(--warning)]";
+            return (
+              <span key={`${x.service}-${x.env}`} className="inline-flex items-center">
+                {onOpenService ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenService(x.service)}
+                    title={`Open ${x.service}: ${uptimeTitle(x)}`}
+                    className={cn(
+                      "rounded-sm underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+                      tone,
+                    )}
+                  >
+                    {text}
+                  </button>
+                ) : (
+                  <span className={tone}>{text}</span>
+                )}
+                {i < bad.length - 1 && <span aria-hidden>,</span>}
+              </span>
+            );
+          })}
         </span>
       )}
     </span>

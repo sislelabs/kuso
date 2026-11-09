@@ -419,6 +419,7 @@ export function ProjectDetailView() {
           selectedEnv={selectedEnv}
           view={viewMode}
           onViewChange={changeViewMode}
+          onOpenService={selectService}
         />
         {viewMode === "list" ? (
           <ProjectListView
