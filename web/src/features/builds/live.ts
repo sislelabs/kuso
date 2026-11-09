@@ -147,3 +147,23 @@ export function newerReleaseFailure(builds: DeployBuild[], live: DeployBuild): D
   const newest = newer[0];
   return newest && lower(newest.status) === "release-failed" ? newest : undefined;
 }
+
+// previousDeployTarget is what "roll back to the previous build" means for
+// an env: the newest older successful build on the live build's branch
+// whose image still exists, preferring a different commit (rolling back to
+// an older image of the same commit changes no code).
+export function previousDeployTarget(
+  builds: DeployBuild[],
+  group: string,
+): { live: DeployBuild; target: DeployBuild; sameCommit: boolean } | undefined {
+  const liveId = liveBuildId(builds, group);
+  const live = builds.find((b) => b.id === liveId);
+  if (!live) return undefined;
+  const older = builds
+    .slice(builds.indexOf(live) + 1)
+    .filter((b) => lower(b.status) === "succeeded" && !!b.imageTag && (b.branch ?? "") === (live.branch ?? ""));
+  const other = older.find((b) => !b.commitSha || b.commitSha !== live.commitSha);
+  const target = other ?? older[0];
+  if (!target) return undefined;
+  return { live, target, sameCommit: !other };
+}

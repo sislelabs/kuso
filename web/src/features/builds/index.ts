@@ -13,6 +13,7 @@ export {
   previousSucceeded,
   rollForwardTarget,
   newerReleaseFailure,
+  previousDeployTarget,
 } from "./live";
 export { useStoredBuildLog, useLiveBuildLog, extractFailureLines, fetchBuildLog } from "./logs";
 export type { BuildLogLine, LiveLogState } from "./logs";

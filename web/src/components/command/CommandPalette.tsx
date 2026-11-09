@@ -47,6 +47,7 @@ import {
   TriangleAlert,
   Variable,
   Shield,
+  Undo2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
@@ -55,11 +56,13 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { getProjectsSummary, projectsSummaryQueryKey, useAddons } from "@/features/projects";
 import { useProjectPrefs } from "@/features/userprefs";
 import { useSession, useSignOut } from "@/features/auth";
-import { buildTriggerMessage, restartService, triggerBuild } from "@/features/services";
+import { buildTriggerMessage, buildsQueryKey, restartService, triggerBuild, useBuilds } from "@/features/services";
+import { buildRefLabel, buildTitle, previousDeployTarget, rollbackToBuild } from "@/features/builds";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
 import {
   buildPaletteIndex,
+  canRedeploy,
   envVarHref,
   matchScore,
   loadIndexSnapshot,
@@ -91,6 +94,7 @@ const ACTION_ICON: Record<ServiceActionKind, ReactNode> = {
   metrics: <Activity />,
   settings: <Settings />,
   redeploy: <Play />,
+  rollback: <Undo2 />,
   restart: <RotateCw />,
 };
 
@@ -100,7 +104,7 @@ type Page =
   | { kind: "project"; project: string }
   | { kind: "service"; project: string; name: string; group: string };
 
-type PendingAction = { kind: "redeploy" | "restart"; svc: PaletteService };
+type PendingAction = { kind: "redeploy" | "restart" | "rollback"; svc: PaletteService };
 
 function currentProjectFromPath(pathname: string | null): string {
   if (!pathname) return "";
@@ -620,7 +624,7 @@ export function CommandPalette() {
           <Group heading="Service actions" limit={30}>
             {actions.map((a) => {
               const recent: RecentItem = { kind: "service", project: a.svc.project, name: a.svc.name, group: a.svc.group };
-              const confirmKind = a.kind === "redeploy" || a.kind === "restart" ? a.kind : null;
+              const confirmKind = a.kind === "redeploy" || a.kind === "restart" || a.kind === "rollback" ? a.kind : null;
               return (
                 <Row
                   key={`act-${a.kind}-${a.svc.project}-${a.svc.name}`}
@@ -886,7 +890,7 @@ export function CommandPalette() {
             ))}
           </Group>
           <Group heading="Actions">
-            {svc.runtime !== "image" && svc.runtime !== "worker" && (
+            {canRedeploy(svc) && (
               <Row
                 value="redeploy"
                 keywords={["deploy", "build", "trigger", "latest"]}
@@ -897,7 +901,21 @@ export function CommandPalette() {
                 icon={<Play />}
                 hint={svc.branch ? `from ${svc.branch}` : "from the tracked branch"}
               >
-                Deploy latest commit
+                Redeploy latest commit
+              </Row>
+            )}
+            {canRedeploy(svc) && (
+              <Row
+                value="rollback"
+                keywords={["revert", "undo", "previous", "roll back"]}
+                onSelect={() => {
+                  close();
+                  setPending({ kind: "rollback", svc });
+                }}
+                icon={<Undo2 />}
+                hint={svc.group}
+              >
+                Roll back to previous build
               </Row>
             )}
             <Row
@@ -946,9 +964,10 @@ export function CommandPalette() {
 
   return (
     <>
+      <RollbackConfirm pending={pending?.kind === "rollback" ? pending.svc : null} onClose={() => setPending(null)} />
       <ConfirmDialog
-        open={pending != null}
-        title={pending?.kind === "restart" ? `Restart ${pending.svc.display}?` : `Deploy ${pending?.svc.display ?? ""}?`}
+        open={pending != null && pending.kind !== "rollback"}
+        title={pending?.kind === "restart" ? `Restart ${pending.svc.display}?` : `Redeploy ${pending?.svc.display ?? ""}?`}
         body={
           pending?.kind === "restart"
             ? `Rolls the ${pending.svc.group} pods in place with the same image. Expect a brief blip if it runs a single replica.`
@@ -956,7 +975,7 @@ export function CommandPalette() {
                 pending?.svc.branch ? `branch ${pending.svc.branch}` : "the tracked branch"
               } and rolls the service when it's green.`
         }
-        confirmLabel={pending?.kind === "restart" ? "Restart" : "Deploy"}
+        confirmLabel={pending?.kind === "restart" ? "Restart" : "Redeploy"}
         destructive={false}
         onCancel={() => setPending(null)}
         onConfirm={() => {
@@ -1082,5 +1101,61 @@ export function CommandTrigger() {
         <Kbd>K</Kbd>
       </span>
     </button>
+  );
+}
+
+// RollbackConfirm resolves "the previous build" for the service's env when
+// it opens, names both builds, and only then lets the user confirm.
+function RollbackConfirm({ pending: svc, onClose }: { pending: PaletteService | null; onClose: () => void }) {
+  const qc = useQueryClient();
+  const builds = useBuilds(svc?.project ?? "", svc?.name ?? "");
+  const [busy, setBusy] = useState(false);
+  const plan = svc && builds.data ? previousDeployTarget(builds.data, svc.group) : undefined;
+  const run = async () => {
+    if (!svc || !plan) return;
+    setBusy(true);
+    try {
+      await rollbackToBuild(svc.project, svc.name, plan.target.id, svc.group);
+      toast.success(`${svc.display} (${svc.group}) now runs ${buildRefLabel(plan.target, 7) || plan.target.id}`);
+      void qc.invalidateQueries({ queryKey: buildsQueryKey(svc.project, svc.name) });
+      onClose();
+    } catch (err) {
+      toastError(err, `Couldn't roll back ${svc.display}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ref = (b: { commitSha?: string; ref?: string; id: string }) => buildRefLabel(b, 7) || b.id;
+  return (
+    <ConfirmDialog
+      open={!!svc}
+      title={svc ? `Roll back ${svc.display}?` : ""}
+      destructive={false}
+      confirmLabel={plan ? `Roll back to ${ref(plan.target)}` : "Roll back"}
+      pending={busy || builds.isPending || !plan}
+      body={
+        !svc ? null : builds.isPending ? (
+          "Finding the previous build…"
+        ) : builds.isError ? (
+          "Couldn't load this service's builds."
+        ) : !plan ? (
+          `There's no earlier build of ${svc.display} in ${svc.group} with an image to go back to.`
+        ) : (
+          <span className="block space-y-2">
+            <span className="block">
+              <strong className="text-[var(--text-primary)]">{svc.group}</strong> switches from{" "}
+              <span className="font-mono">{ref(plan.live)}</span> to{" "}
+              <span className="font-mono">{ref(plan.target)}</span> ({buildTitle(plan.target)}) right away, with no rebuild.
+            </span>
+            {plan.sameCommit && (
+              <span className="block">Same commit, older image: the code doesn&apos;t change.</span>
+            )}
+            <span className="block">The next push to {plan.target.branch || "the branch"} deploys over it.</span>
+          </span>
+        )
+      }
+      onCancel={onClose}
+      onConfirm={() => void run()}
+    />
   );
 }

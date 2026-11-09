@@ -32,3 +32,15 @@ describe("buildTrigger", () => {
     expect(buildTrigger(fresh, [fresh, ok])?.kind).toBe("manual");
   });
 });
+
+describe("previousDeployTarget", () => {
+  it("skips older images of the live commit when another commit exists", async () => {
+    const { previousDeployTarget } = await import("./live");
+    const live = b({ id: "3", commitSha: "aaa", branch: "main", imageTag: "t3", liveEnvs: ["production"] });
+    const same = b({ id: "2", commitSha: "aaa", branch: "main", imageTag: "t2" });
+    const prev = b({ id: "1", commitSha: "bbb", branch: "main", imageTag: "t1" });
+    expect(previousDeployTarget([live, same, prev], "production")).toMatchObject({ target: { id: "1" }, sameCommit: false });
+    expect(previousDeployTarget([live, same], "production")).toMatchObject({ target: { id: "2" }, sameCommit: true });
+    expect(previousDeployTarget([live], "production")).toBeUndefined();
+  });
+});

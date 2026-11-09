@@ -254,7 +254,15 @@ export function matchScore(query: string, label: string, keywords: string[] = []
 // Global service actions: "Logs: shop/web", "Redeploy: shop/web", … for
 // every service in every project, so a verb typed anywhere finds its
 // target without drilling into a project first.
-export type ServiceActionKind = "logs" | "deployments" | "variables" | "metrics" | "settings" | "redeploy" | "restart";
+export type ServiceActionKind =
+  | "logs"
+  | "deployments"
+  | "variables"
+  | "metrics"
+  | "settings"
+  | "redeploy"
+  | "rollback"
+  | "restart";
 
 export interface ServiceAction {
   kind: ServiceActionKind;
@@ -273,6 +281,7 @@ const ACTION_DEFS: { kind: ServiceActionKind; verb: string; tab?: string; keywor
   { kind: "metrics", verb: "Metrics", tab: "metrics", keywords: ["cpu", "memory", "latency", "requests"] },
   { kind: "settings", verb: "Settings", tab: "settings", keywords: ["config", "domain", "scale", "port"] },
   { kind: "redeploy", verb: "Redeploy", keywords: ["deploy", "build", "trigger", "latest"] },
+  { kind: "rollback", verb: "Roll back to previous build", keywords: ["rollback", "revert", "undo", "previous"] },
   { kind: "restart", verb: "Restart", keywords: ["reboot", "roll", "pods"] },
 ];
 
@@ -285,7 +294,7 @@ export function serviceActions(services: PaletteService[]): ServiceAction[] {
   const out: ServiceAction[] = [];
   for (const def of ACTION_DEFS) {
     for (const svc of services) {
-      if (def.kind === "redeploy" && !canRedeploy(svc)) continue;
+      if ((def.kind === "redeploy" || def.kind === "rollback") && !canRedeploy(svc)) continue;
       out.push({
         kind: def.kind,
         verb: def.verb,
