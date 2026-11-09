@@ -8,7 +8,9 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"time"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -30,6 +32,37 @@ type envTimeseries struct {
 	Range  string                  `json:"range"`
 	Step   string                  `json:"step"`
 	Series map[string][][2]float64 `json:"series"`
+	// Traffic says why the request series is empty: ok | idle | never |
+	// unscraped | unavailable. Absent on older servers.
+	Traffic string `json:"traffic,omitempty"`
+}
+
+// usageHistory is GET .../usage/history: the server-kept CPU/memory
+// samples (in memory, up to 24h) for one env.
+type usageHistory struct {
+	StepSeconds int `json:"stepSeconds"`
+	Samples     []struct {
+		T        int64   `json:"t"`
+		CPUMilli float64 `json:"cpuMillicores"`
+		MemBytes int64   `json:"memBytes"`
+		Pods     int     `json:"pods"`
+	} `json:"samples"`
+	Since *int64 `json:"since"`
+}
+
+// trafficNote explains an empty traffic table.
+func trafficNote(state string) string {
+	switch state {
+	case "idle":
+		return "no requests reached this env in the window"
+	case "never":
+		return "this env has never received a request"
+	case "unscraped":
+		return "Prometheus isn't scraping Traefik, so there is no traffic data"
+	case "unavailable":
+		return "traffic data unavailable: Prometheus didn't answer"
+	}
+	return ""
 }
 
 // seriesStats summarises one [t, v] series: last value, mean, max.
@@ -55,7 +88,8 @@ func newServiceMetricsCmd() *cobra.Command {
 		Short: "Show a service's pod CPU/memory and request rate, error rate and p95 latency",
 		Long: `Show per-pod CPU and memory for one environment of a service (from
 metrics-server) and its traffic over --range: requests/s, 5xx error ratio
-and p95 latency (from the in-cluster Prometheus, measured at Traefik).
+and p95 latency (from the in-cluster Prometheus, measured at Traefik),
+plus the pods' CPU/memory history the server keeps (up to 24h).
 
 Missing backends produce empty results, not errors: no pods means the env
 is scaled to zero or metrics-server isn't installed; no traffic series
@@ -88,8 +122,18 @@ means nothing hit the env in the window.`,
 			if err := json.Unmarshal(resp.Body(), &ts); err != nil {
 				return fmt.Errorf("decode timeseries: %w", err)
 			}
+			// Best-effort: servers before v0.36 have no usage history, and
+			// a range past the 24h it keeps is clamped server-side.
+			var hist *usageHistory
+			if hr, err := api.RawGet(fmt.Sprintf("/api/projects/%s/services/%s/usage/history?env=%s&range=%s",
+				escPath(args[0]), escPath(args[1]), url.QueryEscape(envCR), url.QueryEscape(rangeStr))); err == nil && hr.StatusCode() < 300 {
+				var h usageHistory
+				if json.Unmarshal(hr.Body(), &h) == nil {
+					hist = &h
+				}
+			}
 			if output == "json" {
-				return jsonOut(map[string]any{"metrics": pods, "timeseries": ts})
+				return jsonOut(map[string]any{"metrics": pods, "timeseries": ts, "usageHistory": hist})
 			}
 
 			fmt.Printf("env %s\n", envCR)
@@ -136,6 +180,24 @@ means nothing hit the env in the window.`,
 				t.Append([]string{m.label, f(last), f(avg), f(max)})
 			}
 			t.Render()
+			if note := trafficNote(ts.Traffic); note != "" {
+				fmt.Println(note)
+			}
+			if hist != nil && len(hist.Samples) > 0 {
+				var cpuSum, cpuMax float64
+				var memMax int64
+				podsMax := 0
+				for _, p := range hist.Samples {
+					cpuSum += p.CPUMilli
+					cpuMax = max(cpuMax, p.CPUMilli)
+					memMax = max(memMax, p.MemBytes)
+					podsMax = max(podsMax, p.Pods)
+				}
+				first := time.UnixMilli(hist.Samples[0].T)
+				fmt.Printf("\npod usage, last %s (%d samples, step %ds)\n", ageBetween(first, time.Now()), len(hist.Samples), hist.StepSeconds)
+				fmt.Printf("  cpu avg %s, max %s · memory max %s · pods max %d\n",
+					formatMilliCPU(int64(cpuSum/float64(len(hist.Samples)))), formatMilliCPU(int64(cpuMax)), humanBytes(memMax), podsMax)
+			}
 			return nil
 		},
 	}
