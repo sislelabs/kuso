@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Check, CheckCircle2, ExternalLink, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -140,6 +140,26 @@ const NEXT_STEPS: { label: string; tab: string; anchor?: string }[] = [
 
 const SEEN_KEY = (project: string, service: string) => `kuso:first-live-seen:${project}/${service}`;
 
+export function firstLiveSeen(project: string, service: string): boolean {
+  try {
+    return window.localStorage.getItem(SEEN_KEY(project, service)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markFirstLiveSeen(project: string, service: string) {
+  try {
+    window.localStorage.setItem(SEEN_KEY(project, service), "1");
+  } catch {
+    // Private mode: it just shows again next time.
+  }
+}
+
+// True under a workspace that shows the first-live moment in its header,
+// so the Deployments tab doesn't repeat it.
+export const FirstLiveHostContext = createContext(false);
+
 // FirstLiveCard closes the first deploy: the URL it's live at, front and
 // centre, with open and copy. Dismissal is remembered per service.
 export function FirstLiveCard({
@@ -158,21 +178,14 @@ export function FirstLiveCard({
   onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   const [hidden, setHidden] = useState(true);
+  const hosted = useContext(FirstLiveHostContext);
   useEffect(() => {
-    try {
-      setHidden(window.localStorage.getItem(SEEN_KEY(project, service)) === "1");
-    } catch {
-      setHidden(false);
-    }
+    setHidden(firstLiveSeen(project, service));
   }, [project, service]);
-  if (hidden) return null;
+  if (hidden || hosted) return null;
   const dismiss = () => {
     setHidden(true);
-    try {
-      window.localStorage.setItem(SEEN_KEY(project, service), "1");
-    } catch {
-      // Private mode: it just shows again next time.
-    }
+    markFirstLiveSeen(project, service);
   };
   const start = build.startedAt ? Date.parse(build.startedAt) : NaN;
   const end = build.finishedAt ? Date.parse(build.finishedAt) : NaN;

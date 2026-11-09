@@ -56,6 +56,7 @@ import { BuildRow } from "./BuildRow";
 import { buildDurationLabel } from "./deployParts";
 import { LiveDeploymentCard, type LiveHealth } from "./LiveDeploymentCard";
 import { AutoDeployBanner, pushDeployState } from "./AutoDeployBanner";
+import { buildMissingBranch } from "../workspace/fixFirst";
 import { RevisionGroup, RevisionRow } from "./RevisionRow";
 import { ServicePodsSection } from "./ServicePodsSection";
 import { ServiceEventsSection } from "./ServiceEventsSection";
@@ -496,7 +497,9 @@ function DeployList({
   ) : visible.length > 0 ? (
     <div className="rounded-lg border border-dashed border-[var(--border-default)] px-4 py-3 text-sm text-[var(--text-secondary)]">
       Nothing is live in <strong className="text-[var(--text-primary)]">{group}</strong> yet.{" "}
-      {newestStatus === "failed"
+      {newestStatus === "failed" && buildMissingBranch(newest)
+        ? "The latest build failed because its branch doesn't exist. Change the branch, and the next build can go live."
+        : newestStatus === "failed"
         ? autoDeploy
           ? `The latest build failed: fix the cause shown below and push, or press ${deployVerb} to try the same commit again.`
           : `The latest build failed: fix the cause shown below, then press ${deployVerb}. Auto-deploy is off, so pushes won't retry it.`
@@ -747,6 +750,9 @@ function ImageDeploymentCard({
 
   return (
     <div className="space-y-4">
+    {/* A failing rollout's card above already carries this rollout; a
+        second "Rolling out" card with a spinner would contradict it. */}
+    {envState !== "rollout_failing" && (
     <section aria-label={`Deployment in ${group}`} className={cn("rounded-lg border bg-[var(--bg-secondary)] p-4", tone)}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <RolloutBadge state={state} />
@@ -796,6 +802,7 @@ function ImageDeploymentCard({
         </div>
       )}
     </section>
+    )}
     <ImageReleaseHistory
       project={project}
       service={service}

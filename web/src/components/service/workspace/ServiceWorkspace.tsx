@@ -57,6 +57,10 @@ const ServiceTerminalPanel = dynamic(
   },
 );
 import { FailureBanner } from "../overlay/FailureBanner";
+import { FirstLiveHostContext } from "../overlay/FirstDeployProgress";
+import { FirstLiveNotice } from "./FirstLiveNotice";
+import { fixFirstAction } from "./fixFirst";
+import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
 import { OverlayTabs, type OverlayTabItem } from "../overlay/OverlayTabs";
 import { useOverlayKeyboard } from "../overlay/useOverlayKeyboard";
 import { ServiceHeaderActions } from "../overlay/ServiceHeaderActions";
@@ -578,6 +582,11 @@ export function ServiceWorkspace({
   const firstRun = useMemo(() => firstRunState(env, builds.data), [env, builds.data]);
   const neverRan = firstRun.kind === "never";
   const isWorker = svc.data?.spec?.runtime === "worker";
+  const fix = fixFirstAction({
+    env,
+    latestBuild: firstRun.kind === "never" ? firstRun.lastBuild : service ? latestBuilds.data?.[service] : undefined,
+    isImage: svc.data?.spec?.runtime === "image",
+  });
 
   const navigateTo = useCallback(
     (slug: string, anchor?: string) => {
@@ -673,8 +682,10 @@ export function ServiceWorkspace({
         env={env}
         stopped={stopped}
         showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
-        hideDeploy={neverRan}
+        hideDeploy={neverRan && fix?.id !== "image"}
         neverRan={neverRan}
+        fix={neverRan && fix?.id === "branch" ? undefined : fix}
+        onFix={(f) => navigateTo(f.tab, f.anchor)}
       />
     </>
   ) : null;
@@ -732,11 +743,24 @@ export function ServiceWorkspace({
       statusDetail={statusDetail}
       alert={alert}
       firstRun={firstRun}
+      fix={fix}
+      onDeployments={tab === "deployments"}
       onNavigate={navigateTo}
     />
   ) : null;
 
   const envChip = <EnvChip env={envGroup} />;
+
+  const firstLive = service ? (
+    <FirstLiveNotice
+      key={`${project}/${service}`}
+      project={project}
+      service={service}
+      env={env}
+      url={liveUrl}
+      live={derived.kind === "live"}
+    />
+  ) : null;
 
   const header = page ? (
     <header className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40">
@@ -764,6 +788,7 @@ export function ServiceWorkspace({
       {service ? (
         <div className="px-4 pb-3 sm:px-6 lg:px-8">
           {strip}
+          {firstLive}
           {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
         </div>
       ) : null}
@@ -818,6 +843,7 @@ export function ServiceWorkspace({
         ) : null}
       </div>
       {strip}
+      {firstLive}
       {diagnosticChip ? <div className="mt-2.5 flex flex-wrap items-center gap-1.5">{diagnosticChip}</div> : null}
     </header>
   );
@@ -863,6 +889,7 @@ export function ServiceWorkspace({
   ) : (
     <div ref={rootRef} tabIndex={-1} className="flex h-full min-h-0 flex-col outline-none">
       <FirstRunProvider value={firstRunCtx}>
+        <FirstLiveHostContext.Provider value>
         {header}
 
         <OverlayTabs
@@ -1011,6 +1038,7 @@ export function ServiceWorkspace({
             {actions}
           </div>
         ) : null}
+        </FirstLiveHostContext.Provider>
       </FirstRunProvider>
     </div>
   );
@@ -1068,7 +1096,8 @@ function HealthBanner({
   const label = (serverState && PROBLEM_LABEL[serverState]) || fallbackLabel;
   const runtime = problem === "runtime";
   const danger = runtime || problem === "stuck";
-  const shown = trimRepeatedCause(label, detail);
+  // On Deployments the failure card below names the cause; say it once.
+  const shown = onDeployments && !runtime ? undefined : trimRepeatedCause(label, detail);
   return (
     <div
       role="alert"
@@ -1145,11 +1174,18 @@ function RestartControl({
   const [confirming, setConfirming] = useState(false);
   const restart = useRestartService(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
+  const qc = useQueryClient();
 
   const onConfirm = async () => {
     try {
+      const snap = await snapshotRollout(project, service, envGroup);
       await restart.mutateAsync(envGroup);
-      toast.success(`Restarting ${service} (${envGroup})`);
+      trackRollout(snap, {
+        label: service,
+        qc,
+        rollingText: `Restarting ${service} (${envGroup})…`,
+        doneText: `Restarted ${service} (${envGroup})`,
+      });
       setConfirming(false);
     } catch (e) {
       toastError(e, "Restart failed");
@@ -1253,9 +1289,19 @@ function RollbackControl({
   );
   const m = useMutation({
     meta: { skipGlobalErrorToast: true },
-    mutationFn: (buildId: string) => rollbackBuild(project, service, buildId, envGroup),
-    onSuccess: () => {
-      toast.success(`Rolled ${envGroup} back to ${(target && buildRefLabel(target, 7)) || target?.id || "previous build"}`);
+    mutationFn: async (buildId: string) => {
+      const snap = await snapshotRollout(project, service, envGroup);
+      await rollbackBuild(project, service, buildId, envGroup);
+      return snap;
+    },
+    onSuccess: (snap) => {
+      const to = (target && buildRefLabel(target, 7)) || target?.id || "the previous build";
+      trackRollout(snap, {
+        label: service,
+        qc,
+        rollingText: `Rolling ${envGroup} back to ${to}…`,
+        doneText: `${envGroup} is back on ${to}`,
+      });
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       invalidateProjectDescribe(qc, project);

@@ -38,8 +38,25 @@ export function lastDeployedAt(env: KusoEnvironment | undefined): string | undef
   const best = newest([promotedIfLive(env), env.status?.lastDeployedAt, env.status?.rolloutCompletedAt]);
   // Mid failing rollout the completion stamp is gone; the serving
   // version's pod start is the closest record of when it went out.
-  return best ?? (env.status?.state === "rollout_failing" ? rolloutFacts(env.status)?.previousSince : undefined);
+  const computed =
+    best ?? (env.status?.state === "rollout_failing" ? rolloutFacts(env.status)?.previousSince : undefined);
+  // A rollout in flight drops the completion stamp, so the value would
+  // fall back to an older one ("14h ago") until the new pods are ready.
+  // Hold the last settled value instead; it moves when the rollout lands.
+  const key = env.metadata?.uid || `${env.metadata?.namespace ?? ""}/${env.metadata?.name ?? ""}`;
+  if (env.status?.state === "deploying") {
+    const held = settledDeploy.get(key);
+    if (held) return !computed || Date.parse(held) > Date.parse(computed) ? held : computed;
+    // Nothing ready means nothing from any deploy is serving yet (a first
+    // deploy): its own stamps don't count until the pods are up.
+    const ready = (env.status?.replicas as { ready?: number } | undefined)?.ready ?? 0;
+    return ready > 0 ? computed : undefined;
+  }
+  if (computed) settledDeploy.set(key, computed);
+  return computed;
 }
+
+const settledDeploy = new Map<string, string>();
 
 // promotedIfLive drops a promotion stamp whose rollout never finished: an
 // image that can't be pulled or a version failing its health check was

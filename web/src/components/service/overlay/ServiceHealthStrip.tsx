@@ -10,10 +10,11 @@ import { isCurrentPod, useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
-import { Rocket } from "lucide-react";
+import { Rocket, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCanOnProject, Perms } from "@/features/auth";
 import type { FirstRun } from "./firstRun";
+import type { FixFirst } from "../workspace/fixFirst";
 import { buildLogAnchor, neverStartedCause } from "./firstRunContext";
 import { useRedeploy } from "./ServiceHeaderActions";
 import { unretryableReason } from "./BuildRow";
@@ -33,6 +34,10 @@ export interface ServiceHealthStripProps {
   alert?: React.ReactNode;
   // Never-run services collapse the strip into one banner.
   firstRun?: FirstRun;
+  // A known failure's fix (Change branch, …): the banner's primary action.
+  fix?: FixFirst;
+  // The Deployments tab is open: its failed build row shows the reason.
+  onDeployments?: boolean;
   onNavigate: (tab: string, anchor?: string) => void;
 }
 
@@ -63,6 +68,8 @@ function NeverRanBanner({
   service,
   env,
   firstRun,
+  fix,
+  onDeployments,
   onNavigate,
 }: ServiceHealthStripProps & { firstRun: Extract<FirstRun, { kind: "never" }> }) {
   const redeploy = useRedeploy(project, service, env);
@@ -88,19 +95,25 @@ function NeverRanBanner({
         <p className="text-sm font-medium text-[var(--text-primary)]">
           Never deployed here · <span className={firstRun.failed ? "text-[var(--error)]" : undefined}>{neverStartedCause(firstRun).replace(/\.$/, "")}</span>
         </p>
-        {reason && (
+        {reason && !onDeployments && (
           <p className="mt-0.5 line-clamp-2 break-words text-xs text-[var(--text-secondary)]" title={reason}>
             {reason}
           </p>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {firstRun.lastBuild && (
+        {firstRun.lastBuild && !(onDeployments && firstRun.failed) && (
           <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => onNavigate("deployments", anchor)}>
             {firstRun.building ? "Follow the build" : "View build log"}
           </Button>
         )}
-        {!redeploy.isImage && !firstRun.building && (
+        {fix && fix.id !== "image" && firstRun.failed && (
+          <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => onNavigate(fix.tab, fix.anchor)} disabled={!canWrite}>
+            <Wrench className="h-3 w-3" aria-hidden />
+            {fix.label}
+          </Button>
+        )}
+        {!redeploy.isImage && !firstRun.building && !(fix && firstRun.failed) && (
           <Button
             size="sm"
             className="h-7 px-2.5 text-xs"

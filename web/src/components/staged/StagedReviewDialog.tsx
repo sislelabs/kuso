@@ -23,6 +23,7 @@ import {
 } from "@/features/staged";
 import { buildServicePatch } from "@/components/service/overlay/settings/buildServicePatch";
 import type { KusoService } from "@/types/projects";
+import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
 import { applyStagedService, refreshServiceQueries } from "./applyStaged";
 import { healthcheckCheck, overlaySettings, patchFieldDiff, planService, type HealthcheckCheck, type ServicePlan } from "./plan";
 
@@ -125,6 +126,8 @@ export function StagedReviewDialog({
       const current = getStagedState()[project]?.[service];
       if (!current) continue;
       setPhase((p) => ({ ...p, [service]: "applying" }));
+      const restarts = plans.find((p) => p.service === service)?.plan.restarts ?? true;
+      const snap = restarts ? await snapshotRollout(project, service) : undefined;
       try {
         const out = await applyStagedService(project, service, current, message);
         if (out.sequential) setSequentialNote(true);
@@ -135,7 +138,11 @@ export function StagedReviewDialog({
         const errCount = Object.keys(out.errors).length;
         setStagedErrors(project, service, errCount ? out.errors : undefined);
         if (errCount) failed++;
-        else ok++;
+        else {
+          ok++;
+          // "Deployed" waits for the new pods, not the request.
+          if (snap) trackRollout(snap, { label: service, qc });
+        }
         setPhase((p) => ({ ...p, [service]: errCount ? "failed" : "done" }));
       } catch (e) {
         failed++;
@@ -145,11 +152,7 @@ export function StagedReviewDialog({
     }
     setBusy(false);
     if (failed === 0) {
-      toast.success(
-        anyRestart
-          ? `Deployed changes to ${ok} ${ok === 1 ? "service" : "services"}. Each restarts once.`
-          : `Applied changes to ${ok} ${ok === 1 ? "service" : "services"}. No restart needed.`,
-      );
+      if (!anyRestart) toast.success(`Applied changes to ${ok} ${ok === 1 ? "service" : "services"}. No restart needed.`);
       setMessage("");
       setPhase({});
       onOpenChange(false);

@@ -4,8 +4,10 @@ import { hasPublicIngress, stopConsequence } from "./stopCopy";
 import { firstRunState } from "./firstRun";
 import { cloneElement, useId, useState } from "react";
 import Link from "next/link";
-import { BellPlus, MoreHorizontal, Package, Play, Rocket, RotateCw, Square } from "lucide-react";
+import { BellPlus, MoreHorizontal, Package, Play, Rocket, RotateCw, Square, Wrench } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -28,6 +30,7 @@ import { useCan, useCanOnProject, Perms } from "@/features/auth";
 import { envGroupName, isProductionGroup } from "@/lib/env-group";
 import { cn } from "@/lib/utils";
 import type { KusoEnvironment } from "@/types/projects";
+import type { FixFirst } from "../workspace/fixFirst";
 
 const NO_ACCESS = "Requires editor access on this project";
 
@@ -137,6 +140,8 @@ export function ServiceHeaderActions({
   showRestart,
   hideDeploy = false,
   neverRan: neverRanProp = false,
+  fix,
+  onFix,
 }: {
   project: string;
   service: string;
@@ -147,10 +152,15 @@ export function ServiceHeaderActions({
   hideDeploy?: boolean;
   // Nothing has ever run here (overlay's first-run state).
   neverRan?: boolean;
+  // A known failure's fix: it becomes the primary action, since deploying
+  // again would fail the same way.
+  fix?: FixFirst;
+  onFix?: (fix: FixFirst) => void;
 }) {
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const redeploy = useRedeploy(project, service, env);
   const restart = useRestartService(project, service);
+  const qc = useQueryClient();
   const stop = useStopService(project, service);
   const start = useStartService(project, service);
   const [confirm, setConfirm] = useState<"restart" | "stop" | null>(null);
@@ -160,8 +170,14 @@ export function ServiceHeaderActions({
 
   const onRestart = async () => {
     try {
+      const snap = await snapshotRollout(project, service, group);
       await restart.mutateAsync(group);
-      toast.success(`Restarting ${service} (${group})`);
+      trackRollout(snap, {
+        label: service,
+        qc,
+        rollingText: `Restarting ${service} (${group})…`,
+        doneText: `Restarted ${service} (${group})`,
+      });
       setConfirm(null);
     } catch (e) {
       toastError(e, "Restart failed");
@@ -199,10 +215,31 @@ export function ServiceHeaderActions({
 
   return (
     <>
-      {redeploy.isImage && !hideDeploy && <DeployImageControl project={project} service={service} canWrite={canWrite} />}
-      {!redeploy.isImage && !hideDeploy && (
+      {fix && fix.id !== "image" && onFix && (
+        <Button size="sm" onClick={() => onFix(fix)} className="h-7 px-2.5 text-xs">
+          <Wrench className="h-3 w-3" />
+          {fix.label}
+        </Button>
+      )}
+      {redeploy.isImage && !hideDeploy && (
+        <DeployImageControl
+          project={project}
+          service={service}
+          canWrite={canWrite}
+          label={fix?.id === "image" ? `${fix.label}…` : undefined}
+          secondary={!!fix && fix.id !== "image"}
+        />
+      )}
+      {/* A missing branch fails every build: no Redeploy until it's changed. */}
+      {!redeploy.isImage && !hideDeploy && fix?.id !== "branch" && (
         <Explained label={redeploy.verb} explain={canWrite ? redeploy.explain : NO_ACCESS}>
-          <Button size="sm" onClick={redeploy.request} disabled={!canWrite || redeploy.pending} className="h-7 px-2.5 text-xs">
+          <Button
+            size="sm"
+            variant={fix ? "secondary" : undefined}
+            onClick={redeploy.request}
+            disabled={!canWrite || redeploy.pending}
+            className="h-7 px-2.5 text-xs"
+          >
             <Rocket className="h-3 w-3" />
             {redeploy.pending ? "Starting…" : redeploy.verb}
           </Button>
@@ -361,10 +398,24 @@ export function ServiceHeaderActions({
 // shipping means pointing the service at another tag. Accepts a bare tag
 // or a pasted full reference (repo:tag); digests aren't supported because
 // the chart renders "<repository>:<tag>".
-function DeployImageControl({ project, service, canWrite }: { project: string; service: string; canWrite: boolean }) {
+function DeployImageControl({
+  project,
+  service,
+  canWrite,
+  label,
+  secondary,
+}: {
+  project: string;
+  service: string;
+  canWrite: boolean;
+  // "Change image…" when the current image can't be pulled.
+  label?: string;
+  secondary?: boolean;
+}) {
   const svc = useService(project, service).data;
   const envs = useEnvironments(project).data;
   const patch = usePatchService(project, service);
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [touched, setTouched] = useState(false);
@@ -382,8 +433,9 @@ function DeployImageControl({ project, service, canWrite }: { project: string; s
     setTouched(true);
     if (parsed.error || !parsed.tag) return;
     try {
+      const snap = await snapshotRollout(project, service);
       await patch.mutateAsync({ image: { repository: parsed.repository, tag: parsed.tag } });
-      toast.success(`Deploying ${parsed.repository}:${parsed.tag}`);
+      trackRollout(snap, { label: `${service} on ${parsed.tag}`, qc, startedText: `Deploying ${parsed.repository}:${parsed.tag}` });
       setOpen(false);
     } catch (e) {
       toastError(e, "Couldn't deploy the image");
@@ -401,12 +453,26 @@ function DeployImageControl({ project, service, canWrite }: { project: string; s
         }
       }}
     >
-      <Explained label="Deploy image" explain={canWrite ? "Roll out another tag of this image. No build runs." : NO_ACCESS}>
+      <Explained
+        label={label ? "Change image" : "Deploy image"}
+        explain={
+          !canWrite
+            ? NO_ACCESS
+            : label
+              ? "The current image can't be pulled. Roll out a tag or image that exists."
+              : "Roll out another tag of this image. No build runs."
+        }
+      >
         <PopoverTrigger
           render={
-            <Button size="sm" disabled={!canWrite || patch.isPending} className="h-7 px-2.5 text-xs">
+            <Button
+              size="sm"
+              variant={secondary ? "secondary" : undefined}
+              disabled={!canWrite || patch.isPending}
+              className="h-7 px-2.5 text-xs"
+            >
               <Package className="h-3 w-3" />
-              {patch.isPending ? "Deploying…" : "Deploy image…"}
+              {patch.isPending ? "Deploying…" : (label ?? "Deploy image…")}
             </Button>
           }
         />
