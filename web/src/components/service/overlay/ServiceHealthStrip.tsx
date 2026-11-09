@@ -6,7 +6,7 @@ import { SERVICE_STATUS, TONE_CLASSES, type StatusMeta, type StatusTone } from "
 import { cn } from "@/lib/utils";
 import { StatusDot } from "@/components/ui/status-pill";
 import { ERRORS_WINDOW, errorCountLabel, errorsEnvScope, useServiceErrorCount } from "@/features/errors";
-import { useServicePods } from "@/features/pods";
+import { isCurrentPod, useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
@@ -42,8 +42,9 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
   const uptime = useProjectUptime(project);
   const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
 
-  // Finished pods (old ReplicaSet, completed jobs) aren't instances.
-  const podList = pods.data?.pods?.filter((p) => p.phase !== "Succeeded" && p.phase !== "Failed") ?? null;
+  // Finished pods, a draining old ReplicaSet and release-hook pods aren't instances.
+  const podList =
+    pods.data?.pods?.filter((p) => isCurrentPod(p) && p.phase !== "Succeeded" && p.phase !== "Failed") ?? null;
   // Ready/desired from the env's rollup, the numbers the canvas and list
   // show; a pod list mid-rollout still holds the old ReplicaSet's pods.
   const replicas = env?.status?.replicas as { ready?: number; desired?: number } | undefined;

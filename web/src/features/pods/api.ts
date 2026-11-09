@@ -11,6 +11,18 @@ export interface ServicePod {
   reason?: string;
   message?: string;
   restarts?: number;
+  // reason/message in plain words, when the server could summarize them.
+  summary?: string;
+  // false for an older ReplicaSet's pods still draining mid-rollout and
+  // for release-hook Job pods. Absent on older servers.
+  current?: boolean;
+  createdAt?: string;
+}
+
+// isCurrentPod: only current pods count toward "N/M ready". A missing
+// flag (older server) counts as current.
+export function isCurrentPod(p: { current?: boolean }): boolean {
+  return p.current !== false;
 }
 
 export interface ServicePodList {
@@ -28,6 +40,7 @@ export interface AddonPod {
   component?: string;
   restarts?: number;
   message?: string;
+  summary?: string;
   containers?: string[];
 }
 

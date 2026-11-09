@@ -32,4 +32,12 @@ describe("imageRolloutState", () => {
     expect(imageRolloutState("stopped", [])?.status).toBe("idle");
     expect(imageRolloutState("sleeping", undefined)?.status).toBe("idle");
   });
+  it("counts only current pods; a draining old ReplicaSet isn't part of the rollout", () => {
+    const st = imageRolloutState("running", [pod({ name: "web-new", ready: true }), pod({ name: "web-old", ready: false, current: false })]);
+    expect(st).toMatchObject({ status: "done", ready: 1, total: 1 });
+  });
+  it("reads a stuck unschedulable rollout as failed with the plain summary", () => {
+    const st = imageRolloutState("stuck", [pod({ phase: "Pending", reason: "Unschedulable", message: "0/3 nodes are available", summary: "No node has enough memory" })]);
+    expect(st).toMatchObject({ status: "failed", detail: "No node has enough memory" });
+  });
 });

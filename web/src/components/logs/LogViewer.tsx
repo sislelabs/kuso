@@ -22,6 +22,7 @@ import {
 import { useLogStream, searchArchive } from "@/features/logs";
 import type { ArchivePage, StreamConnection } from "@/features/logs";
 import { useEnvironments } from "@/features/projects";
+import { isCurrentPod, useServicePods } from "@/features/pods";
 import { ERRORS_WINDOW, useServiceErrorCount } from "@/features/errors";
 import type { ServiceErrorCount } from "@/features/errors";
 import { serviceEnvOptions } from "@/lib/env-group";
@@ -264,6 +265,15 @@ export function LogViewer({
   }, [rows]);
 
   const pods = useMemo(() => [...new Set(rows.map((r) => r.pod))].sort(), [rows]);
+  // Live tail: lines from a draining old ReplicaSet (or a pod that's gone)
+  // stay pickable, but only current pods count as replicas.
+  const podQ = useServicePods(project, live ? (service ?? "") : "", streamEnv);
+  const { currentPods, previousPods } = useMemo(() => {
+    const listed = podQ.data?.pods;
+    if (!live || !listed) return { currentPods: pods, previousPods: [] as string[] };
+    const current = new Set(listed.filter(isCurrentPod).map((p) => p.name));
+    return { currentPods: pods.filter((p) => current.has(p)), previousPods: pods.filter((p) => !current.has(p)) };
+  }, [live, podQ.data, pods]);
   const multiPod = pods.length > 1 || !!view.pod;
 
   // ---- envs (archive filter) ----------------------------------------------
@@ -604,12 +614,21 @@ export function LogViewer({
               className="font-mono"
               wrapperClassName="max-w-[11rem]"
             >
-              <option value="">All replicas ({pods.length})</option>
-              {pods.map((p) => (
+              <option value="">All replicas ({currentPods.length})</option>
+              {currentPods.map((p) => (
                 <option key={p} value={p}>
                   {shortPod(p)}
                 </option>
               ))}
+              {previousPods.length > 0 && (
+                <optgroup label="Previous rollout">
+                  {previousPods.map((p) => (
+                    <option key={p} value={p}>
+                      {shortPod(p)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </Select>
           )}
           <span aria-hidden className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />

@@ -2,7 +2,7 @@
 
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useServicePods } from "@/features/pods";
+import { isCurrentPod, useServicePods } from "@/features/pods";
 import { cn } from "@/lib/utils";
 
 // ServicePodsSection lists the pods backing one env of a service — the
@@ -18,11 +18,21 @@ export function ServicePodsSection({
   envName?: string;
 }) {
   const pods = useServicePods(project, service, envName);
+  // Old-ReplicaSet and release-hook pods are listed but don't count.
+  const current = (pods.data?.pods ?? []).filter(isCurrentPod);
+  const currentReady = current.filter((p) => p.ready).length;
 
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
-        <h3 className="text-xs font-medium text-[var(--text-tertiary)]">Pods</h3>
+        <h3 className="text-xs font-medium text-[var(--text-tertiary)]">
+          Pods
+          {current.length > 0 && (
+            <span className="ml-1.5 font-normal">
+              {currentReady}/{current.length} ready
+            </span>
+          )}
+        </h3>
         {pods.data && (
           <span className="font-mono text-xs text-[var(--text-tertiary)]">{pods.data.namespace}</span>
         )}
@@ -44,12 +54,18 @@ export function ServicePodsSection({
       ) : (
         <ul className="divide-y divide-[var(--border-subtle)]">
           {(pods.data.pods ?? []).map((p) => (
-            <li key={p.name} className="flex items-center gap-2 px-3 py-2 font-mono text-xs">
+            <li key={p.name} className={cn("flex items-center gap-2 px-3 py-2 font-mono text-xs", !isCurrentPod(p) && "opacity-60")}>
               <span
                 aria-hidden
                 className={cn(
                   "h-1.5 w-1.5 shrink-0 rounded-full",
-                  p.ready ? "bg-[var(--success)]" : p.phase === "Pending" ? "bg-[var(--warning)]" : "bg-[var(--error)]",
+                  !isCurrentPod(p)
+                    ? "bg-[var(--text-tertiary)]"
+                    : p.ready
+                      ? "bg-[var(--success)]"
+                      : p.phase === "Pending"
+                        ? "bg-[var(--warning)]"
+                        : "bg-[var(--error)]",
                 )}
               />
               <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]" title={p.name}>
@@ -60,9 +76,15 @@ export function ServicePodsSection({
                   {p.containers?.length} containers
                 </span>
               )}
-              <span className={p.ready ? "text-[var(--text-secondary)]" : "text-[var(--warning)]"}>
-                {p.ready ? "ready" : (p.phase || "not ready").toLowerCase()}
-              </span>
+              {!isCurrentPod(p) ? (
+                <span className="text-[var(--text-tertiary)]" title="From the previous rollout or a release hook; not counted">
+                  previous
+                </span>
+              ) : (
+                <span className={p.ready ? "text-[var(--text-secondary)]" : "text-[var(--warning)]"}>
+                  {p.ready ? "ready" : (p.phase || "not ready").toLowerCase()}
+                </span>
+              )}
             </li>
           ))}
         </ul>
