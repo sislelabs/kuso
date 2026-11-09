@@ -104,3 +104,17 @@ export function healthcheckCheck(plan: ServicePlan, staged: StagedService): Heal
   if (!t || t.path !== path || t.port !== port) return { kind: "untested", path };
   return { kind: t.passed ? "passed" : "failed", summary: t.summary, path };
 }
+
+// reviewItemCount is how many rows the review shows for a service: one
+// per variable, one per changed setting (several form fields can make one
+// "Health check" row), plus the settings error if the patch can't build.
+// Without the deployed service (still loading) it falls back to the raw
+// staged count.
+export function reviewItemCount(svc: KusoService | undefined, staged: StagedService | undefined): number {
+  if (!staged) return 0;
+  const env = (staged.env?.set.length ?? 0) + (staged.env?.unset.length ?? 0);
+  const fields = Object.keys(staged.settings?.fields ?? {}).length;
+  if (!svc || fields === 0) return env + fields;
+  const plan = planService(svc, staged);
+  return env + plan.patchFields.length + (plan.settingsError ? 1 : 0);
+}

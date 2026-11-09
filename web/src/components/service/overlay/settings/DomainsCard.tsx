@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, Clock, ExternalLink, Globe, Info, Lock, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import type { KusoEnvironment } from "@/types/projects";
 import { Section, Callout, Code, monoInputClass } from "./_primitives";
 import {
   BUDGET_WARN_AT,
+  causeOf,
   diagnose,
   hostError,
   normalizeHostInput,
@@ -83,6 +84,8 @@ export function DomainsCard({
   const unsupported = status.error instanceof ApiError && (status.error.status === 404 || status.error.status === 405);
   const statusUnavailable = unsupported || (status.isError && !status.data);
   const customCount = rows.filter((r) => r.kind !== "auto").length;
+  // The domain just added, while it's still listed: confirmed next to the field.
+  const lastAdded = justAdded.length > 0 && rows.some((r) => r.host === justAdded[justAdded.length - 1]) ? justAdded[justAdded.length - 1] : undefined;
 
   const refreshStatus = () => qc.invalidateQueries({ queryKey: domainStatusKey(project, service, envName) });
 
@@ -225,7 +228,15 @@ export function DomainsCard({
                   <Plus className="h-3.5 w-3.5" />
                   Add domain
                 </Button>
-                {customCount > 0 && (
+                {lastAdded && (
+                  <p role="status" className="inline-flex items-center gap-1.5 text-xs text-[var(--text-primary)]">
+                    <CheckCircle2 aria-hidden className="h-3.5 w-3.5 text-[var(--success)]" />
+                    <span>
+                      <span className="font-mono">{lastAdded}</span> added. Point its DNS as shown above to finish.
+                    </span>
+                  </p>
+                )}
+                {customCount > 0 && !lastAdded && (
                   <p className="text-xs text-[var(--text-secondary)]">
                     If your app redirects to the default domain, set its base-URL variable (<Code>APP_URL</Code>,{" "}
                     <Code>NEXTAUTH_URL</Code>…) to the custom domain.
@@ -272,6 +283,17 @@ function fetchDomainStatus(project: string, service: string, env: string, fresh 
   return api<DomainStatusResponse>(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(env)}/domains/status${fresh ? "?fresh=1" : ""}`,
   );
+}
+
+// useCertIssuer says whether the cluster can issue certificates, from the
+// same status the domain rows read: true / false, undefined while unknown
+// (loading, an older server, or no host that needed a cert yet).
+export function useCertIssuer(project: string, service: string, env: string, enabled: boolean): boolean | undefined {
+  const status = useDomainStatus(project, service, env, enabled);
+  const domains = status.data?.domains;
+  if (!domains) return undefined;
+  if (domains.some((d) => causeOf(d) === "cert_manager_missing")) return false;
+  return domains.some((d) => d.tls.status === "ready") ? true : undefined;
 }
 
 function useDomainStatus(project: string, service: string, env: string, enabled: boolean) {

@@ -177,7 +177,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
                 <button
                   type="button"
                   onClick={() => rmLabel(i)}
-                  aria-label="Remove rule"
+                  aria-label="Remove label rule"
                   className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--error)]"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -187,7 +187,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
           })}
           <Button type="button" variant="outline" size="xs" onClick={addLabel}>
             <Plus className="h-3 w-3" />
-            Add rule
+            Add label rule
           </Button>
         </div>
       </Field>

@@ -345,7 +345,7 @@ export function Section({
       aria-labelledby={headingId}
       data-staged={staged || undefined}
       className={cn(
-        "scroll-mt-16 rounded-lg border bg-[var(--bg-secondary)]",
+        "scroll-mt-16 md:scroll-mt-4 rounded-lg border bg-[var(--bg-secondary)]",
         tone === "danger" ? "border-[var(--error)]/35" : "border-[var(--border-subtle)]",
         staged && "border-l-[3px] border-l-[var(--accent)]",
       )}

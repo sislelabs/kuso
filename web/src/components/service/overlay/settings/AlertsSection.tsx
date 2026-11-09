@@ -126,7 +126,7 @@ export function AlertsSection({
             onClick={() => setAdding(serviceRuleForm(defaultAlertKindFor(svc?.spec), project, service, env))}
           >
             <Plus aria-hidden className="h-3.5 w-3.5" />
-            New alert
+            New alert rule
           </Button>
           <Link href="/settings/alerts" className="text-xs text-[var(--text-secondary)] underline-offset-2 hover:underline">
             All alert rules

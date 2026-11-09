@@ -4,11 +4,11 @@ import { useState } from "react";
 import { Activity, AlertCircle, Boxes, Cpu, MemoryStick, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useProjectMetrics } from "@/features/project-overview";
-import { envScopeLabel, projectStatsLabel, serviceIssues } from "@/features/projects/facts";
+import { envScopeLabel, projectHealthLine, projectStatsLabel } from "@/features/projects/facts";
 import { deriveServiceStatus, useLatestBuilds } from "@/features/services";
 import { isProductionGroup } from "@/lib/env-group";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
-import { summarizeUptime, useProjectUptime } from "@/features/uptime";
+import { useProjectUptime } from "@/features/uptime";
 import { uptimeTitle } from "@/components/uptime/UptimeBadge";
 import { cn, serviceShortName } from "@/lib/utils";
 import { ProjectLogsSheet } from "./ProjectLogsSheet";
@@ -46,12 +46,12 @@ export function ProjectStatusStrip({
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-subtle)] px-6 py-1.5 text-xs text-[var(--text-secondary)]">
       {view && onViewChange && <ViewToggle value={view} onChange={onViewChange} />}
       <MetricsSummary metrics={metrics} env={selectedEnv} />
-      {selectedEnv === "production" && <UptimeSummary uptime={uptime} onOpenService={onOpenService} />}
-      <ServiceIssuesSummary
+      <HealthSummary
         project={project}
         selectedEnv={selectedEnv}
         services={services}
         envs={envs}
+        uptime={uptime}
         onOpenService={onOpenService}
       />
       <Button
@@ -118,87 +118,23 @@ function MetricsSummary({ metrics, env }: { metrics: ReturnType<typeof useProjec
   );
 }
 
-function UptimeSummary({
-  uptime,
-  onOpenService,
-}: {
-  uptime: ReturnType<typeof useProjectUptime>;
-  onOpenService?: (shortName: string) => void;
-}) {
-  if (uptime.isPending) return null;
-  if (uptime.isError) {
-    return (
-      <span className="text-[var(--error)]" title={uptime.error instanceof Error ? uptime.error.message : undefined}>
-        uptime unavailable
-      </span>
-    );
-  }
-  const services = uptime.data.services ?? [];
-  if (!uptime.data.enabled) return <span className="text-[var(--text-tertiary)]">uptime checks off</span>;
-  const s = summarizeUptime(services);
-  // Only checks that are on and have a result count toward "N/M up".
-  if (s.checked === 0) return null;
-  const bad = services.filter((x) => x.state === "down" || x.state === "failing");
-  return (
-    <span
-      className="inline-flex items-center gap-1.5"
-      title={services.map((x) => `${x.service}: ${uptimeTitle(x)}`).join("\n")}
-    >
-      <Activity
-        className={cn(
-          "h-3 w-3",
-          s.down > 0 ? "text-[var(--error)]" : s.failing > 0 ? "text-[var(--warning)]" : "text-[var(--success)]",
-        )}
-      />
-      <span className="tabular-nums">
-        {s.up}/{s.checked} uptime {s.checked === 1 ? "check" : "checks"} up
-      </span>
-      {bad.length > 0 && (
-        <span className="inline-flex flex-wrap items-center gap-x-1">
-          <span aria-hidden>·</span>
-          {bad.map((x, i) => {
-            const text = `${x.service} ${x.state}`;
-            const tone = x.state === "down" ? "text-[var(--error)]" : "text-[var(--warning)]";
-            return (
-              <span key={`${x.service}-${x.env}`} className="inline-flex items-center">
-                {onOpenService ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenService(x.service)}
-                    title={`Open ${x.service}: ${uptimeTitle(x)}`}
-                    className={cn(
-                      "rounded-sm underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
-                      tone,
-                    )}
-                  >
-                    {text}
-                  </button>
-                ) : (
-                  <span className={tone}>{text}</span>
-                )}
-                {i < bad.length - 1 && <span aria-hidden>,</span>}
-              </span>
-            );
-          })}
-        </span>
-      )}
-    </span>
-  );
-}
-
-// Uptime only pings public URLs; a crashing worker or a failed build
-// never shows there. This counts services the way the canvas nodes do.
-function ServiceIssuesSummary({
+// One line for coverage and problems: uptime only pings public URLs, so a
+// crashing worker or a failed build never shows there; the count of
+// failing services comes from the same status the canvas nodes show, with
+// a failing ping folded in. Uptime checks only run against production.
+function HealthSummary({
   project,
   selectedEnv,
   services,
   envs,
+  uptime,
   onOpenService,
 }: {
   project: string;
   selectedEnv: string;
   services: KusoService[];
   envs: KusoEnvironment[];
+  uptime: ReturnType<typeof useProjectUptime>;
   onOpenService?: (shortName: string) => void;
 }) {
   const latestBuilds = useLatestBuilds(project, selectedEnv);
@@ -209,29 +145,59 @@ function ServiceIssuesSummary({
     const status = deriveServiceStatus({ stopped: !!svc.spec.stopped, env, latestBuild: latestBuilds.data?.[short] });
     return { short, name: svc.spec.displayName?.trim() || short, status };
   });
-  const issues = serviceIssues(rows.map((r) => r.status));
-  if (!issues.text) return null;
-  const bad = rows.filter((r) => r.status.tone === "error" || r.status.kind === "degraded");
-  const first = bad[0];
-  const tone = issues.tone === "error" ? "text-[var(--error)]" : "text-[var(--warning)]";
-  const title = bad.map((r) => `${r.name}: ${r.status.label}${r.status.detail ? ` (${r.status.detail})` : ""}`).join("\n");
+  const production = selectedEnv === "production";
+  const checks = production && uptime.data?.enabled ? (uptime.data.services ?? []) : null;
+  const line = projectHealthLine(rows, checks);
+  const uptimeOff = production && uptime.data && !uptime.data.enabled;
+  const uptimeError = production && uptime.isError;
+  if (!line.text) {
+    if (uptimeError) {
+      return (
+        <span className="text-[var(--error)]" title={uptime.error instanceof Error ? uptime.error.message : undefined}>
+          uptime unavailable
+        </span>
+      );
+    }
+    return uptimeOff ? <span className="text-[var(--text-tertiary)]">uptime checks off</span> : null;
+  }
+  const checkOf = (short: string) => checks?.find((c) => c.service === short);
+  const title = rows
+    .map((r) => {
+      const c = checkOf(r.short);
+      const ping = c ? `uptime ${uptimeTitle(c)}` : "not checked";
+      return `${r.name}: ${r.status.label}${r.status.detail ? ` (${r.status.detail})` : ""} · ${ping}`;
+    })
+    .join("\n");
+  const tone =
+    line.tone === "error" ? "text-[var(--error)]" : line.tone === "warning" ? "text-[var(--warning)]" : "text-[var(--success)]";
+  const first = line.problems[0];
   return (
     <span className="inline-flex items-center gap-1.5" title={title}>
-      <AlertCircle aria-hidden className={cn("h-3 w-3", tone)} />
-      {first && onOpenService ? (
+      {line.tone === "ok" ? (
+        <Activity aria-hidden className={cn("h-3 w-3", tone)} />
+      ) : (
+        <AlertCircle aria-hidden className={cn("h-3 w-3", tone)} />
+      )}
+      {line.coverage && <span className="tabular-nums">{line.coverage}</span>}
+      {line.coverage && <span aria-hidden>·</span>}
+      {!line.issues ? (
+        <span>all up</span>
+      ) : first && onOpenService ? (
         <button
           type="button"
-          onClick={() => onOpenService(first.short)}
+          onClick={() => onOpenService(first)}
+          title={`Open ${first}`}
           className={cn(
             "rounded-sm underline decoration-dotted underline-offset-2 outline-none hover:decoration-solid focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
             tone,
           )}
         >
-          {issues.text}
+          {line.issues}
         </button>
       ) : (
-        <span className={tone}>{issues.text}</span>
+        <span className={tone}>{line.issues}</span>
       )}
+      {uptimeOff && <span className="text-[var(--text-tertiary)]">· uptime checks off</span>}
     </span>
   );
 }
