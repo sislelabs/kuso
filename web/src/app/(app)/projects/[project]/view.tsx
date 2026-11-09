@@ -453,6 +453,7 @@ export function ProjectDetailView() {
         defaultTab={selectedService ? selectedTab : undefined}
         failureKind={failureKind}
         onTabChange={changeTab}
+        onRestore={(s) => selectService(s)}
         onClose={closeOverlay}
       />
 
@@ -461,6 +462,7 @@ export function ProjectDetailView() {
         addon={selectedAddon}
         defaultTab={selectedAddon ? selectedTab : undefined}
         onTabChange={changeTab}
+        onRestore={(a) => selectAddon(a)}
         onClose={closeOverlay}
       />
     </>

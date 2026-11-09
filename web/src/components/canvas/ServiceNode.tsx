@@ -130,7 +130,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           <UrlPill url={url} />
         ) : (
           <>
-            <span className="shrink-0 text-xs text-[var(--text-tertiary)]">{internal ? "Internal only" : "No public URL"}</span>
+            <span className="shrink-0 text-xs text-[var(--text-tertiary)]">{data.service.spec.runtime === "worker" ? "Background worker" : internal ? "Internal only" : "No public URL"}</span>
             <BuildRef build={data.latestBuild} />
           </>
         )}

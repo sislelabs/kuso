@@ -1160,7 +1160,7 @@ function IconToggle({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors disabled:opacity-40",
+        "inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors disabled:opacity-40 pointer-coarse:h-11 pointer-coarse:w-11",
         pressed
           ? "border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
           : "border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",

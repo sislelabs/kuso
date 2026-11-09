@@ -263,8 +263,8 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
           confirmStop ? (
             <p>
               This stops all {confirmStop.count} service{confirmStop.count === 1 ? "" : "s"} in{" "}
-              <span className="font-mono text-[var(--text-primary)]">{confirmStop.name}</span>. Visitors get a 503
-              until you start it again.
+              <span className="font-mono text-[var(--text-primary)]">{confirmStop.name}</span>. Public services return a 503 and workers stop
+              processing until you start it again.
             </p>
           ) : null
         }

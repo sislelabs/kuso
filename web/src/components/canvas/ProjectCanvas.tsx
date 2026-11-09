@@ -1434,7 +1434,7 @@ export function ProjectCanvas({
       <ConfirmDialog
         open={!!confirmStop}
         title={`Stop ${confirmStop?.short ?? ""}`}
-        body="This takes the service offline; visitors get a 503 until you start it."
+        body="Scales the service to zero until you start it again. Public services return a 503 meanwhile; workers stop processing."
         confirmLabel="Stop service"
         pending={stopping}
         onCancel={() => setConfirmStop(null)}

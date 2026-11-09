@@ -521,7 +521,7 @@ function MobileServiceCard({
       <ConfirmDialog
         open={confirmingStop}
         title={`Stop ${shortName}`}
-        body="This takes the service offline; visitors get a 503 until you start it."
+        body="Scales the service to zero until you start it again. Public services return a 503 meanwhile; workers stop processing."
         confirmLabel="Stop service"
         destructive
         pending={stop.isPending}
