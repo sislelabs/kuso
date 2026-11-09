@@ -13,7 +13,6 @@ import { useSystemVersion } from "@/features/system-version";
 import { api } from "@/lib/api-client";
 import { describeError, toastError } from "@/lib/errors";
 import {
-  badgeCount,
   bellRows,
   forgetLocalReads,
   markLocallyRead,
@@ -27,6 +26,7 @@ import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { humanizeNotification } from "@/lib/format-notification";
 import { servicePageHref } from "@/components/service/workspace/hrefs";
+import { BELL_UNREAD_LIMIT, bellBadgeText, bellCount, bellUnreadLabel, type BellCount } from "./bellCount";
 
 // FeedEvent matches the server's NotificationEvent wire shape. Only
 // the fields the feed renders are typed.
@@ -75,7 +75,7 @@ function useNotificationFeed() {
   const unreadKey = ["notifications", "unread", prefs.countAll ? "all" : "attention"] as const;
   const unread = useQuery<FeedEvent[]>({
     queryKey: unreadKey,
-    queryFn: () => api(`/api/notifications/feed?unread=true&limit=200${prefs.countAll ? "" : "&attention=true"}`),
+    queryFn: () => api(`/api/notifications/feed?unread=true&limit=${BELL_UNREAD_LIMIT}${prefs.countAll ? "" : "&attention=true"}`),
     enabled: isAdmin,
     refetchInterval: 30_000,
     staleTime: 15_000,
@@ -156,7 +156,10 @@ function useNotificationFeed() {
 
   // Opening or closing the feed never marks anything read: a row is read
   // once it's opened, or after "Mark all read".
-  const unreadCount = unreadBellCount(unread.data ?? [], version.data?.needsUpdate, !prefs.countAll, locallyRead);
+  const unreadCount = bellCount(
+    unreadBellCount(unread.data ?? [], version.data?.needsUpdate, !prefs.countAll, locallyRead),
+    unread.data?.length ?? 0,
+  );
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) void unread.refetch();
@@ -177,12 +180,12 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
       <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
         <div className="flex min-w-0 items-baseline gap-2">
           <p className="text-sm font-semibold tracking-tight">Notifications</p>
-          {isAdmin && unreadCount > 0 && (
-            <span className="text-xs text-[var(--text-secondary)] tabular-nums">{unreadCount} unread</span>
+          {isAdmin && unreadCount.n > 0 && (
+            <span className="text-xs text-[var(--text-secondary)] tabular-nums">{bellUnreadLabel(unreadCount)}</span>
           )}
         </div>
         <div className="flex items-center gap-1">
-          {isAdmin && unreadCount > 0 && (
+          {isAdmin && unreadCount.n > 0 && (
             <button
               type="button"
               onClick={() => markRead.mutate()}
@@ -280,16 +283,16 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
   );
 }
 
-function BellIcon({ unread }: { unread: number }) {
+function BellIcon({ unread }: { unread: BellCount }) {
   return (
     <>
       <Bell className="size-4" aria-hidden />
-      {unread > 0 && (
+      {unread.n > 0 && (
         <span
           aria-hidden
           className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--text-primary)] px-1 text-2xs leading-none font-semibold tabular-nums text-[var(--bg-primary)] ring-2 ring-[var(--bg-primary)]"
         >
-          {badgeCount(unread)}
+          {bellBadgeText(unread)}
         </span>
       )}
     </>
@@ -300,18 +303,18 @@ export function NotificationsButton({ className }: { className?: string }) {
   const state = useNotificationFeed();
   // Controlled so a row's <Link> click closes the popover before routing.
   const { open, onOpenChange } = state;
-  const n = state.unreadCount;
+  const count = state.unreadCount;
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
-        aria-label={n > 0 ? `Notifications, ${n} unread` : "Notifications"}
+        aria-label={count.n > 0 ? `Notifications, ${bellUnreadLabel(count)}` : "Notifications"}
         title="Notifications"
         className={cn(
           "relative inline-flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]",
           className,
         )}
       >
-        <BellIcon unread={n} />
+        <BellIcon unread={count} />
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-1rem)] gap-0 p-0">
         <FeedPanel state={state} onClose={() => onOpenChange(false)} />
@@ -324,17 +327,17 @@ export function NotificationsButton({ className }: { className?: string }) {
 export function NotificationsSheetButton({ className, children }: { className?: string; children?: React.ReactNode }) {
   const state = useNotificationFeed();
   const { open, onOpenChange } = state;
-  const n = state.unreadCount;
+  const count = state.unreadCount;
   return (
     <>
       <button
         type="button"
         onClick={() => onOpenChange(true)}
-        aria-label={n > 0 ? `Notifications, ${n} unread` : "Notifications"}
+        aria-label={count.n > 0 ? `Notifications, ${bellUnreadLabel(count)}` : "Notifications"}
         className={className}
       >
         <span className="relative inline-flex size-6 items-center justify-center [&_svg]:size-5">
-          <BellIcon unread={n} />
+          <BellIcon unread={count} />
         </span>
         {children}
       </button>
