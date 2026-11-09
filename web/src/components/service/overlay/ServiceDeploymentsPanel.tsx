@@ -952,6 +952,7 @@ function ImageReleaseHistory({
               digest={r.current ? shortDigest(runningImageID) : ""}
               canRollBack={canDeploy && !r.current && r.ref !== currentRef}
               neverRan={neverRan(r, live)}
+              neverRanOf={(f) => neverRan(f, live)}
               envGroup={group}
             />
           );
@@ -977,6 +978,7 @@ function ImageReleaseRow({
   digest,
   canRollBack,
   neverRan,
+  neverRanOf,
   envGroup,
 }: {
   project: string;
@@ -986,6 +988,7 @@ function ImageReleaseRow({
   canRollBack: boolean;
   // The image never reached a ready rollout in this env.
   neverRan: boolean;
+  neverRanOf: (r: ImageRelease) => boolean;
   envGroup: string;
 }) {
   const [confirm, setConfirm] = useState(false);
@@ -1079,7 +1082,8 @@ function ImageReleaseRow({
           <ul className="mt-1.5 space-y-1 pl-3">
             {release.folded.map((f) => (
               <li key={f.revision.id}>
-                <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span> · {releaseWhy(f)} ·{" "}
+                <span className="font-mono text-[var(--text-secondary)]">{f.tag}</span>
+                {neverRanOf(f) ? " · never went live" : ""} · {releaseWhy(f)} ·{" "}
                 <time dateTime={f.revision.createdAt} title={new Date(f.revision.createdAt).toLocaleString()}>
                   {relativeTime(f.revision.createdAt)}
                 </time>
