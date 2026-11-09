@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.38.1] — 2026-11-09
+
+### Other
+- Tell agents which vulnerability findings their repo can fix ([902a9fa](https://github.com/sislelabs/kuso/commit/902a9faa9da4293b9b812dbc10bf4f11bf49f687))
+- Apply OS security updates to nixpacks images ([28cda58](https://github.com/sislelabs/kuso/commit/28cda58d4c14576befcc55dcc32fae2b99fc6830))
+
 ## [0.38.0] — 2026-11-09
 
 ### Other
@@ -620,14 +626,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): key the addon clone swap off the true source, not the clone name ([16bf9cc](https://github.com/sislelabs/kuso/commit/16bf9cc6eaa40ca72437a555dd969f27107fa0fc))
-
-## [0.25.28] — 2026-09-02
-
-### ✨ Features
-- Feat(cli): kuso version also prints the server's version ([b5f98c6](https://github.com/sislelabs/kuso/commit/b5f98c63df39ab6cda001e30e04df4f921a7397c))
-
-### 🐛 Bug Fixes
-- Fix(addon): pooler accepts 1000 client connections, not 200 ([f20ecac](https://github.com/sislelabs/kuso/commit/f20ecacc6ca0c6ce6f37083555a43606c4ca0ad7))
 
 
 ---
