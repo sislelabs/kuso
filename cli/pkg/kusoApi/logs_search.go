@@ -90,3 +90,10 @@ func (k *KusoClient) DisableAlert(id string) (*resty.Response, error) {
 func (k *KusoClient) TestAlert(id string) (*resty.Response, error) {
 	return k.client.Post("/api/alerts/" + esc(id) + "/test")
 }
+
+// UpdateAlert replaces a rule's definition (PUT /api/alerts/{id}); the
+// enabled state is kept. The body has the create shape.
+func (k *KusoClient) UpdateAlert(id string, req CreateAlertRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Put("/api/alerts/" + esc(id))
+}
