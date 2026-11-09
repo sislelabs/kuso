@@ -6,6 +6,11 @@
 {{- if and (eq .Values.kind "postgres") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $version := .Values.version | default "16" -}}
 {{- $database := .Values.database | default .Values.project -}}
+{{- /* Fast-restart settings ride along with the first image pin rather than
+       rendering for every addon: changing the pod template restarts the
+       database, and doing that to every addon at release time is the
+       uncontrolled restart the image updater exists to avoid. */ -}}
+{{- $pinned := eq ((.Values.imagePin | default dict).image | default "") (printf "postgres:%s" $version) -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $secretName := include "kusoaddon.connSecretName" . -}}
 {{/*
@@ -91,6 +96,10 @@ spec:
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
+      {{- if $pinned }}
+      # Room for the preStop fast shutdown's checkpoint before SIGKILL.
+      terminationGracePeriodSeconds: 60
+      {{- end }}
       {{- if $tlsOn }}
       # initContainer copies the TLS bundle into a writable dir with the
       # restrictive perms postgres demands (key mode 0600, owner postgres).
@@ -99,7 +108,7 @@ spec:
       # Only rendered when spec.tls=require.
       initContainers:
         - name: tls-prep
-          image: {{ printf "postgres:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "postgres:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command:
             - sh
@@ -120,7 +129,7 @@ spec:
       {{- end }}
       containers:
         - name: postgres
-          image: {{ printf "postgres:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "postgres:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: postgres
@@ -163,11 +172,27 @@ spec:
               mountPath: /tls
               readOnly: true
             {{- end }}
+          {{- if $pinned }}
+          # Kubernetes stops containers with SIGTERM, which Postgres treats
+          # as a smart shutdown: it waits for every client to disconnect,
+          # app pools never do, and the grace period ends in SIGKILL plus
+          # crash recovery on the next start. Fast shutdown disconnects
+          # clients and checkpoints instead.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "pg_ctl -D \"$PGDATA\" -m fast -w -t 55 stop || true"]
+          {{- end }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "kuso", "-d", {{ $database | quote }}]
+            {{- if $pinned }}
+            initialDelaySeconds: 1
+            periodSeconds: 2
+            {{- else }}
             initialDelaySeconds: 5
             periodSeconds: 5
+            {{- end }}
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
       {{- if $tlsOn }}

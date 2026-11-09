@@ -14,7 +14,7 @@ This file is the build spec AND the user doc. Sections marked _(contract)_ are b
 
 ### Scanning
 
-- A scan runs Trivy (`aquasec/trivy:0.76.1`, pinned by digest in code) as a Job in the `kuso` namespace. Never in a project namespace: project NetworkPolicies block registry egress there.
+- A scan runs Trivy (`aquasec/trivy:0.76.2`, pinned by digest in code) as a Job in the `kuso` namespace. Never in a project namespace: project NetworkPolicies block registry egress there.
 - Scans are keyed by **image digest**. The same digest is scanned at most once per 20h unless forced; a forced or nightly rescan re-evaluates against the latest Trivy DB, since new CVEs land on old images.
 - Global concurrency: **1** scan Job at a time (queue in Postgres). Job: `activeDeadlineSeconds: 600`, requests 200m/512Mi, limits 1 CPU/2Gi, drop ALL caps, `runAsNonRoot`, seccomp RuntimeDefault, `automountServiceAccountToken: false`, TTL 1h, `backoffLimit: 0`. Preferred node affinity away from `node-role.kubernetes.io/control-plane`.
 - Trivy DB is cached on a PVC `kuso-trivy-cache` (2Gi) in `kuso`, created on first use by the server.
@@ -58,6 +58,28 @@ Retention: keep the last 5 succeeded and the last 5 failed scans per digest (ran
 
 Per service (or per addon), per vulnerability ID, with a mandatory reason and optional expiry (`--expires 30d`, max 365d). Ignored findings are still shown (marked ignored) but excluded from gate and alerts. Instance-wide ignores (platform) are admin-only.
 
+### Addon image updates
+
+Addon images are upstream tags (`postgres:16`, `redis:7-alpine`, `ghcr.io/cloudnative-pg/postgresql:16`). Nodes pull a tag once and the chart's pull policy never re-pulls it, so without this an addon runs the build it first started on forever, missing upstream's security rebuilds.
+
+The updater (`internal/vulnscan/addonupdate.go`) runs on every sweep tick when `autoUpdateAddons` is on (and `scanAddons` is on and mode isn't `off`). Per native addon:
+
+1. Find the main image from the addon's own pods: the first container of its StatefulSet/Deployment/CNPG instance pods, skipping pooler and Job pods. The tag ref is that image without any digest. The running digest counts only when every such pod is Ready on one digest.
+2. Resolve the tag's current digest anonymously against its registry (HEAD, bearer-token challenge; at most once per 20h per addon, once per tag per tick).
+3. If it differs from the running digest, queue a scan of `repo@newDigest` and wait for it.
+4. **Roll** when the new image has no more fixable critical+high findings than the running one (or the running one was never scanned), and only between `nightlyHourUTC` and +4h. At most 2 addons roll per tick (10 min). Rolling stamps `spec.imagePin = {image: "<tag ref>", digest}` on the KusoAddon. The chart's `kusoaddon.image` helper renders `tag@digest` only while `imagePin.image` equals the ref it renders, so changing `spec.version` drops a stale pin by itself. Without a pin, rendering is unchanged.
+4a. **The restart itself** (`internal/vulnscan/addonroll.go`), run in the background so a tick or request never blocks on it:
+   - Pre-pull: one Job per node the addon runs on (in the `kuso` namespace, pinned with `nodeName`) pulls `repo@digest`. A failed pull aborts before anything restarts.
+   - Single-node Postgres: `CHECKPOINT`; pin; once the old pod is terminating, `PAUSE` the addon's PgBouncer (pooled queries wait instead of failing) and terminate client sessions until Postgres refuses new logins, then drop the updater's own session. A smart shutdown waits on every session, so without this it would sit out the grace period and be SIGKILLed into crash recovery. `RESUME` once the new pod is Ready, or after 25s (under the pooler's 30s `query_wait_timeout`).
+   - Pinned single-node Postgres pods also get a `pg_ctl -m fast` preStop hook, a 60s grace period and a 2s readiness probe. These render only with a pin, so shipping them restarts no database; each addon gets them with its first image update.
+   - HA Postgres: CNPG updates the replicas, then switches over (`primaryUpdateMethod: switchover`).
+   - Other kinds: pre-pull only.
+5. **Rollback**: if the pods aren't Ready on the new digest 30 minutes after the pin, the previous digest is pinned back (still in the node's cache) and the failed digest isn't tried again until the tag moves. Rolls in flight are watched even with auto-update off, so a manual update gets the same rollback.
+
+The version (major/minor) never changes. A newer build that scans worse is `rejected` and left alone. Per-addon state (`current | scanning | ready | rejected | scan-failed | updating | rolling | rolled-back | error`) lives in the Setting `vulnscan.addonImageUpdates` and is returned as `imageUpdate` on the addon vulns endpoint. `POST …/addons/{addon}/vulns/update-image` (editor; `kuso vulns update-image`) starts the same rollout immediately, skipping the window and the scan comparison; 409 while one is already running.
+
+Not covered: service images (rebuild them: `kuso build trigger`), fixed sidecar images in the charts (bumped per release), external and instance-shared addons (kuso runs no image for them).
+
 ### Notifications
 
 New event types (listed under the `other` group in notification settings):
@@ -67,6 +89,7 @@ New event types (listed under the `other` group in notification settings):
 | `security.vulnerabilities_found` | `error` if any critical else `warn` | nightly/forced scan finds new fixable critical/high for an owner |
 | `security.deploy_blocked` | `error` | gate blocked a build |
 | `security.scan_failed` | `warn` | a scan failed; for a gate, the build was promoted unscanned |
+| `security.addon_image_updated` | `info`, `warn` on rollback | an addon was moved onto a newer build of its tag, or such a move was rolled back |
 
 Deep link: service overlay `tab=vulnerabilities`.
 
@@ -76,11 +99,12 @@ Instance (Setting kv, keys `vulnscan.*`), admin only:
 
 ```json
 {
-  "mode": "enforce",          // enforce | report | off
+  "mode": "report",           // enforce | report | off
   "scanAddons": true,
   "scanPlatform": true,
   "nightlyHourUTC": 3,        // 0-23
-  "notifyMinSeverity": "high" // critical | high | none
+  "notifyMinSeverity": "high", // critical | high | none
+  "autoUpdateAddons": true      // roll addons onto newer builds of their tag nightly
 }
 ```
 
@@ -161,7 +185,8 @@ Endpoints:
 | `POST /api/admin/vulns/scan-all` | admin | — | `202 { queued: number }` — runs the nightly sweep now |
 | `GET /api/admin/vulns/scans/{id}` | admin | — | `VulnScanSummary` |
 | `GET /api/admin/settings/vulnscan` | admin | — | Settings object above |
-| `PUT /api/admin/settings/vulnscan` | admin | Settings object (full) | Settings object |
+| `PUT /api/admin/settings/vulnscan` | admin | Settings object (fields left out keep their current value) | Settings object |
+| `POST /api/projects/{p}/addons/{a}/vulns/update-image` | editor | — | `AddonImageUpdateState`; 409 when already on the newest build |
 
 Errors: 400 invalid input (unknown mode, bad vulnId, expiresInDays out of range), 404 unknown project/service/addon/scan, 409 nothing to scan (no live image). Message passed through as `{ "error": "…" }`.
 
@@ -183,7 +208,8 @@ kuso vulns ignore list <project> <service|--addon a>
 kuso vulns ignore rm <project> <service|--addon a> <id> [--yes]
 kuso vulns platform [--digest D]                            # admin
 kuso vulns scan-all                                         # admin
-kuso vulns settings get | set [--mode M] [--scan-addons bool] [--scan-platform bool] [--nightly-hour N] [--notify-min-severity S]   # admin
+kuso vulns settings get | set [--mode M] [--scan-addons bool] [--scan-platform bool] [--nightly-hour N] [--notify-min-severity S] [--auto-update-addons bool]   # admin
+kuso vulns update-image <project> <addon> [--yes]            # move an addon onto its tag's newest build now (restarts it)
 ```
 
 `-o json` emits the raw API JSON. Each command uses its own output-format flag var (never a shared global).
@@ -191,7 +217,7 @@ kuso vulns settings get | set [--mode M] [--scan-addons bool] [--scan-platform b
 ## Web _(contract)_
 
 - Service overlay: new tab **Vulnerabilities** (`tab=vulnerabilities`): effective mode + policy selector (editor), latest scan summary (counts, scanned at, DB date, status/error), "Rescan" button, findings table (severity badge, vuln ID linking `primaryURL`, package, installed → fixed, title) with filters (severity, fixable only, show ignored), per-row "Ignore…" dialog (reason required, expiry), ignore list with remove.
-- Addon overlay: a Vulnerabilities tab with the same findings table, rescan, ignores (no policy selector).
+- Addon overlay: a Vulnerabilities tab with the same findings table, rescan, ignores (no policy selector), and an **Image updates** panel: auto-update on/off, the updater's status for this addon, and "Update now" (confirm dialog).
 - Settings: new admin page **Vulnerability scanning** — instance settings form + platform images table (expand row → findings) + "Scan everything now".
 - Project overview/canvas: a small badge on a service/addon node when its live image has fixable criticals.
 - Build row: blocked builds already render as failed with the message; no extra UI required.

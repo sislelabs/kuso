@@ -43,7 +43,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: mysql
-          image: {{ printf "mysql:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "mysql:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: mysql

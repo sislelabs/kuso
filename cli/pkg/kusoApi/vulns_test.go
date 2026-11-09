@@ -78,7 +78,7 @@ func TestVulnsClient_Contract(t *testing.T) {
 		{"settings put", func() (*resty.Response, error) {
 			return k.PutVulnSettings(VulnSettings{Mode: "report", ScanAddons: true, NightlyHourUTC: 4, NotifyMinSeverity: "high"})
 		}, "PUT", "/api/admin/settings/vulnscan", "",
-			`{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":4,"notifyMinSeverity":"high"}`},
+			`{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":4,"notifyMinSeverity":"high","autoUpdateAddons":false}`},
 	}
 	for _, c := range cases {
 		got = seen{}

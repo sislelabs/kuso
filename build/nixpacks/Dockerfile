@@ -1,7 +1,7 @@
 # Init-container image for strategy=nixpacks builds: bakes the nixpacks
 # binary so each build doesn't fetch it from GitHub Releases. Tagged
 # with the nixpacks version (see hack/release.sh).
-FROM alpine:3.20
+FROM alpine:3.24
 
 ARG NIXPACKS_VERSION=1.41.0
 # Set by buildx; release.sh builds amd64, the sandbox builds host-native.

@@ -44,7 +44,7 @@
 #   KUSO_ADMIN_PASSWORD         override the auto-generated admin password
 #   KUSO_SKIP_K3S=1             assume k3s + traefik already installed
 #   KUSO_K3S_VERSION            pin the k3s release (e.g. v1.35.4+k3s1);
-#                               default: v1.36.5+k3s1 (bump deliberately)
+#                               default: v1.36.6+k3s1 (bump deliberately)
 #   KUSO_INSECURE_SECRETS=1     reuse the well-known dev secrets (kind/dev only)
 #   KUSO_SKIP_DNS_CHECK=1       skip the pre-flight DNS resolve
 #   KUSO_LE_ENV=staging|prod    which Let's Encrypt environment to use
@@ -66,8 +66,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.34.1}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.35.0}"
+KUSO_VERSION="${KUSO_VERSION:-v0.38.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.38.1}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 # Public-TCP entrypoint pool for addons (docs/superpowers/specs/
@@ -126,7 +126,7 @@ Flags / env:
   --github-wizard (KUSO_GITHUB_WIZARD=1) interactive GitHub App setup
   KUSO_ADMIN_PASSWORD                    override the generated admin password
   KUSO_SKIP_K3S=1                        assume k3s + traefik already installed
-  KUSO_K3S_VERSION                       pin the k3s release (default: v1.36.5+k3s1)
+  KUSO_K3S_VERSION                       pin the k3s release (default: v1.36.6+k3s1)
   KUSO_TCP_PROXY_PORTS                   traefik entrypoint pool for addon
                                          public-TCP endpoints (default
                                          30000-30019; 0 disables)
@@ -299,7 +299,7 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   # choice carries to every node added later.
   # Pinned, not "stable channel": a fresh install months from now must
   # get the k3s minor this release was tested against. Bump deliberately.
-  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-v1.36.5+k3s1}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-v1.36.6+k3s1}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
 else
   log "k3s already present; skipping install"
 fi
@@ -380,10 +380,10 @@ log "k3s ready"
 #
 # Bumping: set HELM_VERSION, then update the checksum from
 # https://get.helm.sh/helm-<version>-linux-<arch>.tar.gz.sha256sum
-HELM_VERSION="${KUSO_HELM_VERSION:-v3.16.3}"
+HELM_VERSION="${KUSO_HELM_VERSION:-v3.22.1}"
 declare -A HELM_SHA256=(
-  ["linux-amd64"]="f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea"
-  ["linux-arm64"]="5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798"
+  ["linux-amd64"]="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
+  ["linux-arm64"]="4c29e286b279d170fa048ddfc3e4e83dcd069ca9c52102766ba672d7149e694d"
 )
 
 install_helm() {
@@ -497,11 +497,11 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
   # values below; losing ExternalName support breaks every slept or
   # stopped service (activator routing). Bump deliberately.
   helm upgrade --install traefik traefik/traefik \
-    --version "${KUSO_TRAEFIK_CHART_VERSION:-42.3.0}" \
+    --version "${KUSO_TRAEFIK_CHART_VERSION:-42.3.1}" \
     -n traefik --create-namespace \
     --set ports.web.expose.default=true \
     --set ports.websecure.expose.default=true \
-    --set service.type=LoadBalancer \
+    --set service.spec.type=LoadBalancer \
     --set providers.kubernetesIngress.allowExternalNameServices=true \
     "${TRAEFIK_HA_ARGS[@]}" \
     "${TCP_POOL_ARGS[@]}" \
@@ -533,7 +533,7 @@ fi
 # -------- 5. cert-manager --------
 if ! kubectl get ns cert-manager >/dev/null 2>&1; then
   log "installing cert-manager"
-  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.19.0/cert-manager.yaml >/dev/null
+  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.3/cert-manager.yaml >/dev/null
   log "waiting for cert-manager-webhook (up to 3 min)..."
   cm_deadline=$((SECONDS + 180))
   until kubectl wait --for=condition=Available --timeout=5s deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do
@@ -687,8 +687,8 @@ EOF
 #
 # ~150 MB image, ~64 MiB steady-state. Idempotent — re-applying the
 # CNPG release manifest is a no-op when CRDs already exist.
-CNPG_VERSION="${KUSO_CNPG_VERSION:-1.24.0}"
-CNPG_RELEASE_BRANCH="${KUSO_CNPG_BRANCH:-release-1.24}"
+CNPG_VERSION="${KUSO_CNPG_VERSION:-1.30.1}"
+CNPG_RELEASE_BRANCH="${KUSO_CNPG_BRANCH:-release-1.30}"
 if kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1; then
   log "CloudNativePG already installed; skipping operator install"
 else
@@ -771,8 +771,8 @@ else
   # ALTER ROLE, which would override password_encryption and re-break
   # the md5 pooler with `wrong password type (08P01)`. This annotation
   # opts out of operator-side hashing so PostgreSQL honours
-  # password_encryption=md5. No-op on the CNPG 1.24 we pin today;
-  # present so a future CNPG bump doesn't silently reintroduce the bug.
+  # password_encryption=md5. Required on the CNPG 1.30 we pin: without
+  # it the kuso role is stored as SCRAM and the md5 pooler breaks.
   kubectl annotate secret kuso-postgres-conn -n kuso \
     cnpg.io/passwordPassthrough=enabled --overwrite >/dev/null 2>&1 || true
 

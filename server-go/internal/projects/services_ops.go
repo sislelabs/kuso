@@ -48,6 +48,28 @@ func toStaticSpec(in *ServiceStaticSpec) *kube.KusoStaticSpec {
 	}
 }
 
+// NewStaticBuilderImage is the builder a NEW static service is created
+// with. Services without a builder image fall back to the build
+// controller's default (node:20) at build time, so this is stamped on
+// create rather than changing that fallback: bumping it must not change
+// an existing site's next build.
+const NewStaticBuilderImage = "node:22-alpine"
+
+// newServiceStaticSpec is toStaticSpec for a service being created.
+func newServiceStaticSpec(runtime string, in *ServiceStaticSpec) *kube.KusoStaticSpec {
+	s := toStaticSpec(in)
+	if runtime != "static" {
+		return s
+	}
+	if s == nil {
+		s = &kube.KusoStaticSpec{}
+	}
+	if s.BuilderImage == "" {
+		s.BuilderImage = NewStaticBuilderImage
+	}
+	return s
+}
+
 func toBuildpacksSpec(in *ServiceBuildpacksSpec) *kube.KusoBuildpacksSpec {
 	if in == nil {
 		return nil
@@ -653,7 +675,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			EnvVars:              convertEnvVars(req.EnvVars),
 			Scale:                scale,
 			Sleep:                sleep,
-			Static:               toStaticSpec(req.Static),
+			Static:               newServiceStaticSpec(req.Runtime, req.Static),
 			Buildpacks:           toBuildpacksSpec(req.Buildpacks),
 			Image:                imgSpec,
 			Release:              releaseSpec,

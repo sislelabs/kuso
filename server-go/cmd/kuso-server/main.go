@@ -1502,6 +1502,16 @@ func main() {
 					Cluster: vulnscan.KubeCluster{Kube: kubeClient},
 					Notify:  notifyDisp,
 					Logger:  logger.With("component", "vulnscan"),
+					Updater: &vulnscan.AddonUpdater{
+						DB:        database,
+						Cluster:   vulnscan.KubeCluster{Kube: kubeClient},
+						Addons:    vulnscan.KubeAddons{Kube: kubeClient},
+						Resolver:  vulnscan.PublicDigests{},
+						Notify:    notifyDisp,
+						Logger:    logger.With("component", "addon-image-updater"),
+						Kube:      kubeClient.Clientset,
+						Namespace: *namespace,
+					},
 				}
 				vulnWorker := &vulnscan.Worker{
 					Kube:      kubeClient.Clientset,
@@ -1824,7 +1834,7 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 // Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
 // runRegistryOrphanSweep untags registry repos of deleted projects and
 // services (builds.SweepOrphanRepositories). KUSO_REGISTRY_ORPHAN_SWEEP
-// = dryrun (default: log only) | on | off. It recovers its own panic so
+// = on (default) | dryrun (log only) | off. It recovers its own panic so
 // a registry surprise can't stop the rest of the daily cleanup loop.
 func runRegistryOrphanSweep(ctx context.Context, kc *kube.Client, logger *slog.Logger) {
 	defer func() {
@@ -1832,7 +1842,7 @@ func runRegistryOrphanSweep(ctx context.Context, kc *kube.Client, logger *slog.L
 			logger.Error("registry orphan-sweep panicked", "panic", r, "stack", string(debug.Stack()))
 		}
 	}()
-	mode := builds.ParseOrphanSweepMode(envOr("KUSO_REGISTRY_ORPHAN_SWEEP", string(builds.OrphanSweepDryRun)))
+	mode := builds.ParseOrphanSweepMode(envOr("KUSO_REGISTRY_ORPHAN_SWEEP", string(builds.OrphanSweepOn)))
 	if mode == builds.OrphanSweepOff {
 		return
 	}

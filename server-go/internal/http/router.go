@@ -572,11 +572,21 @@ func mountAuthenticatedRoutes(
 			if d.Kube != nil && d.Projects != nil && d.Addons != nil {
 				sweeper := &vulnscan.Sweeper{DB: d.DB, Cluster: vulnscan.KubeCluster{Kube: d.Kube}, Logger: d.Logger}
 				(&httphandlers.VulnsHandler{
-					DB:               d.DB,
-					Services:         d.Projects,
-					Addons:           d.Addons,
-					Live:             vulnscan.Live{Kube: d.Kube, DB: d.DB, Digests: vulnscan.RegistryDigests{}},
-					Sweep:            sweeper.Sweep,
+					DB:       d.DB,
+					Services: d.Projects,
+					Addons:   d.Addons,
+					Live:     vulnscan.Live{Kube: d.Kube, DB: d.DB, Digests: vulnscan.RegistryDigests{}},
+					Sweep:    sweeper.Sweep,
+					Updater: &vulnscan.AddonUpdater{
+						DB:        d.DB,
+						Cluster:   vulnscan.KubeCluster{Kube: d.Kube},
+						Addons:    vulnscan.KubeAddons{Kube: d.Kube},
+						Resolver:  vulnscan.PublicDigests{},
+						Notify:    d.Notify,
+						Logger:    d.Logger,
+						Kube:      d.Kube.Clientset,
+						Namespace: d.Namespace,
+					},
 					OnSettingsChange: d.VulnGateInvalidate,
 					Logger:           d.Logger,
 				}).Mount(r)

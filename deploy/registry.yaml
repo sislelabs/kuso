@@ -38,7 +38,7 @@ spec:
     spec:
       containers:
         - name: registry
-          image: registry:2.8.3
+          image: registry:3.1.2
           ports:
             - name: registry
               containerPort: 5000
@@ -49,6 +49,13 @@ spec:
             # job that prunes preview-env builds.
             - name: REGISTRY_STORAGE_DELETE_ENABLED
               value: "true"
+            # The registry:3 image's bundled config logs at debug and
+            # serves pprof + /metrics on :5001; keep registry:2's info
+            # logging and no debug listener.
+            - name: REGISTRY_LOG_LEVEL
+              value: info
+            - name: REGISTRY_HTTP_DEBUG_ADDR
+              value: ""
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry
@@ -147,7 +154,7 @@ spec:
           # back up either way.
           initContainers:
             - name: scaler-down
-              image: alpine/k8s:1.30.4
+              image: alpine/k8s:1.35.10
               command: [/bin/sh, -ec]
               args:
                 - |
@@ -157,13 +164,13 @@ spec:
                   kubectl -n kuso wait --for=delete pod -l app.kubernetes.io/name=kuso-registry --timeout=120s || true
           containers:
             - name: gc
-              image: registry:2.8.3
+              image: registry:3.1.2
               command: [/bin/sh, -ec]
               args:
                 - |
                   set -e
                   echo "[gc] running garbage-collect"
-                  registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true
+                  registry garbage-collect /etc/distribution/config.yml --delete-untagged=true
                   echo "[gc] done"
               volumeMounts:
                 - { name: data, mountPath: /var/lib/registry }
@@ -197,7 +204,7 @@ spec:
               #   - pod killed (Job backoffLimit exhausted deletes the
               #     pod) → TERM trap restores on the way out, inside
               #     the pod's 30s grace period.
-              image: alpine/k8s:1.30.4
+              image: alpine/k8s:1.35.10
               command: [/bin/sh, -ec]
               args:
                 - |

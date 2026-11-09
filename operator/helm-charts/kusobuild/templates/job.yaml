@@ -113,7 +113,7 @@ spec:
         # paths via subPath without "no such file or directory" race.
         # Idempotent — `mkdir -p` on an existing PVC is a no-op.
         - name: cache-init
-          image: alpine:3.20
+          image: alpine:3.24
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -146,7 +146,7 @@ spec:
               mountPath: /cache
         {{- end }}
         - name: clone
-          image: alpine/git:2.45.2
+          image: alpine/git:2.54.0
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -212,7 +212,7 @@ spec:
         # log parser can extract it without false positives from app
         # output that happens to look JSON-shaped.
         - name: env-detect
-          image: {{ printf "%s:%s" (.Values.envDetect.image | default "ghcr.io/sislelabs/kuso-env-detect") (.Values.envDetect.tag | default "v1") | quote }}
+          image: {{ printf "%s:%s" (.Values.envDetect.image | default "ghcr.io/sislelabs/kuso-env-detect") (.Values.envDetect.tag | default "v2") | quote }}
           # Baked image ships ripgrep + jq, so the container runs as
           # 1000:1000 (matches cache-init). No apk add at runtime,
           # no root, full cap drop. Matches the rest of the Job's
@@ -497,7 +497,7 @@ spec:
               # kaniko's --context picks it up. The `COPY $OUT` works
               # because $OUT is already relative to the build context.
               cat > .kuso-static.Dockerfile <<EOF
-              FROM {{ .Values.static.runtimeImage | default "nginx:1.27-alpine" }}
+              FROM {{ .Values.static.runtimeImage | default "nginx:1.30-alpine" }}
               COPY $OUT /usr/share/nginx/html
               EOF
               echo "--- generated Dockerfile ---"
@@ -521,7 +521,7 @@ spec:
         # Runs as the lifecycle UID/GID (1000:1000) — that's a baked-in
         # contract of the lifecycle image.
         - name: buildpacks
-          image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.20.5" | quote }}
+          image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.21.28" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -612,7 +612,7 @@ spec:
         # No special caps needed here: buildctl is just a TCP
         # client. The privilege boundary lives in the daemon.
         - name: buildkit
-          image: moby/buildkit:v0.16.0
+          image: moby/buildkit:v0.34.2
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -697,7 +697,7 @@ spec:
                 --local dockerfile="$CTX" \
                 --opt filename="$DF" \
                 $BUILD_ARGS \
-                --output type=image,name="$IMAGE",push=true,registry.insecure=true \
+                --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=true \
                 --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
                 --import-cache type=registry,ref="$CACHE",registry.insecure=true \
                 --progress plain

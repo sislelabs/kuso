@@ -229,12 +229,12 @@ func TestVulnsSettingsSetSendsMergedObject(t *testing.T) {
 			put = body
 			return 200, body
 		}
-		return 200, `{"mode":"enforce","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":3,"notifyMinSeverity":"high"}`
+		return 200, `{"mode":"enforce","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":3,"notifyMinSeverity":"high","autoUpdateAddons":true}`
 	})
 	if _, err := runRoot(t, "vulns", "settings", "set", "--mode", "report", "--scan-platform=false"); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":3,"notifyMinSeverity":"high"}`
+	want := `{"mode":"report","scanAddons":true,"scanPlatform":false,"nightlyHourUTC":3,"notifyMinSeverity":"high","autoUpdateAddons":true}`
 	if put != want {
 		t.Errorf("PUT body = %s, want %s", put, want)
 	}
@@ -282,5 +282,33 @@ func TestVulnsIgnoreRmRefusesOffTTYWithoutYes(t *testing.T) {
 	}
 	if want := "DELETE /api/projects/shop/addons/db/vulns/ignores/7 "; len(fs.reqs) != 1 || fs.reqs[0] != want {
 		t.Errorf("reqs = %q, want [%q]", fs.reqs, want)
+	}
+}
+
+func TestFilterReportJSONByOrigin(t *testing.T) {
+	body := []byte(`{"effectiveMode":"report","counts":{"critical":1},"findings":[
+		{"vulnId":"CVE-1","pkgName":"tar","severity":"CRITICAL","fixedVersion":"7.5.19","origin":"image","pkgPath":"root/.cache/x/tar/package.json","ignored":false},
+		{"vulnId":"CVE-2","pkgName":"next","severity":"HIGH","fixedVersion":"15.0.1","origin":"app","pkgPath":"app/node_modules/next/package.json","ignored":false},
+		{"vulnId":"CVE-3","pkgName":"sudo","severity":"HIGH","origin":"os","ignored":false}]}`)
+	out, err := filterReportJSON(body, findingFilter{origins: []string{"app", "os"}, fixableOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		EffectiveMode string                `json:"effectiveMode"`
+		Counts        map[string]int        `json:"counts"`
+		Findings      []kusoApi.VulnFinding `json:"findings"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectiveMode != "report" || got.Counts["critical"] != 1 {
+		t.Errorf("report fields not kept: %s", out)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].VulnID != "CVE-2" || got.Findings[0].PkgPath == "" {
+		t.Errorf("findings = %+v", got.Findings)
+	}
+	if _, err := parseOriginFilter("app,lib"); err == nil {
+		t.Error("unknown origin accepted")
 	}
 }

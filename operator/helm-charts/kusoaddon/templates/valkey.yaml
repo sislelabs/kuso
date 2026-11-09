@@ -39,7 +39,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: valkey
-          image: {{ printf "valkey/valkey:%s-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "valkey/valkey:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["valkey-server", "--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes"]
           ports:

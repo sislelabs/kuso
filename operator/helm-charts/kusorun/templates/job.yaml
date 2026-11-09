@@ -107,7 +107,7 @@ spec:
       */}}
       initContainers:
         - name: wait-for-addons
-          image: busybox:1.36
+          image: busybox:1.38
           command: ["sh", "-c", {{ include "kusorun.waitForAddonsScript" . | quote }}]
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}

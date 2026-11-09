@@ -17,8 +17,8 @@ func TestKusoEnvironmentChart_WaitForAddonsInit(t *testing.T) {
 	if !strings.Contains(out, "initContainers:") || !strings.Contains(out, "name: wait-for-addons") {
 		t.Fatalf("deployment has no wait-for-addons initContainer.\nRendered:\n%s", out)
 	}
-	if !strings.Contains(out, "image: busybox:1.36") {
-		t.Errorf("init image should match the release Job's (busybox:1.36)")
+	if !strings.Contains(out, "image: busybox:1.38") {
+		t.Errorf("init image should match the release Job's (busybox:1.38)")
 	}
 	// It must see the same conn secrets as the app, or it waits on nothing.
 	initIdx := strings.Index(out, "name: wait-for-addons")

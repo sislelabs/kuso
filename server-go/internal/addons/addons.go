@@ -456,6 +456,9 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if req.Version != "" && !addonVersionRe.MatchString(req.Version) {
 		return nil, fmt.Errorf("%w: version must be an image tag (letters, digits, '.', '_', '-'; max 128 chars)", ErrInvalid)
 	}
+	if req.Version == "" && req.External == nil && req.UseInstanceAddon == "" {
+		req.Version = DefaultAddonVersion(req.Kind, req.HA)
+	}
 	// Project CR always lives in the home namespace. We also need its
 	// UID for the ownerReferences cascade below — so kube garbage-
 	// collects the addon CR (and the helm release that owns the

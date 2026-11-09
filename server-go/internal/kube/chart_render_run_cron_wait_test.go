@@ -57,7 +57,7 @@ func initBlock(t *testing.T, out, mainMarker string) string {
 func assertWaitInit(t *testing.T, init string) {
 	t.Helper()
 	for _, want := range []string{
-		"image: busybox:1.36",
+		"image: busybox:1.38",
 		"wait-for-addons: waiting for",
 		`name: "alpha-db-conn"`,
 		"allowPrivilegeEscalation: false",

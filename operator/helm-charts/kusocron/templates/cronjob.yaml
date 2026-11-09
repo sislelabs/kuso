@@ -171,7 +171,7 @@ spec:
           {{- if ne (default "service" .Values.kind) "http" }}
           initContainers:
             - name: wait-for-addons
-              image: busybox:1.36
+              image: busybox:1.38
               command: ["sh", "-c", {{ include "kusocron.waitForAddonsScript" . | quote }}]
               securityContext:
                 allowPrivilegeEscalation: false
@@ -207,7 +207,7 @@ spec:
                      kind=service / kind=command honour what the
                      server stamped on the spec. */}}
               {{- if eq (default "service" .Values.kind) "http" }}
-              image: "curlimages/curl:8.10.1"
+              image: "curlimages/curl:8.23.0"
               imagePullPolicy: IfNotPresent
               {{- /* SECURITY: the URL is passed as an ENV VAR and
                      referenced as "$PROBE_URL", never interpolated into

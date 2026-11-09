@@ -5,7 +5,10 @@ SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SANDBOX_DIR}/../.." && pwd)"
 STATE_DIR="${SANDBOX_DIR}/.state"
 
-NODE="kuso-sandbox-node"
+# KUSO_SANDBOX_NAME lets a second checkout run its own sandbox next to
+# another one (with its own KUSO_SANDBOX_PORT / KUSO_SANDBOX_API_PORT).
+export KUSO_SANDBOX_NAME="${KUSO_SANDBOX_NAME:-kuso-sandbox}"
+NODE="${KUSO_SANDBOX_NAME}-node"
 export KUSO_SANDBOX_PORT="${KUSO_SANDBOX_PORT:-80}"
 export KUSO_SANDBOX_API_PORT="${KUSO_SANDBOX_API_PORT:-16443}"
 SANDBOX_DOMAIN="kuso.localhost"

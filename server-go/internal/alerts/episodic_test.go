@@ -295,6 +295,28 @@ func TestEvaluateHTTP5xxRateScopesToServiceAndEnv(t *testing.T) {
 	}
 }
 
+func TestEvaluateHTTPShortWindowFloorsPromRange(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{db.AlertKindHTTP5xxRate, db.AlertKindHTTPP95Latency} {
+		var queries []string
+		prom := fakeProm(t, map[string]map[string]string{reqKey: {}}, &queries)
+		e := testEngine(fakeKube(shopEnvs()...), prom.URL)
+		if _, err := e.evaluateEpisodic(context.Background(), &db.AlertRule{
+			ID: "r", Kind: kind, Project: "shop", ThresholdFloat: f64(5), WindowSeconds: 15,
+		}, time.Now()); err != nil {
+			t.Fatalf("%s: evaluate: %v", kind, err)
+		}
+		if len(queries) == 0 {
+			t.Fatalf("%s: no prometheus queries issued", kind)
+		}
+		for _, q := range queries {
+			if !strings.Contains(q, "[60s]") {
+				t.Errorf("%s: query %q: want range floored to [60s]", kind, q)
+			}
+		}
+	}
+}
+
 func TestEvaluateHTTPPromDownIsAnError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

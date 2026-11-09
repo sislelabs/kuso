@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,7 @@ type findingFilter struct {
 	severities  []string
 	fixableOnly bool
 	hideIgnored bool
+	origins     []string
 }
 
 // filterAndSortFindings returns a new slice, CRITICAL first, then by
@@ -80,6 +82,10 @@ func filterAndSortFindings(in []kusoApi.VulnFinding, f findingFilter) []kusoApi.
 	keep := map[string]bool{}
 	for _, s := range f.severities {
 		keep[s] = true
+	}
+	keepOrigin := map[string]bool{}
+	for _, o := range f.origins {
+		keepOrigin[o] = true
 	}
 	out := make([]kusoApi.VulnFinding, 0, len(in))
 	for _, v := range in {
@@ -90,6 +96,9 @@ func filterAndSortFindings(in []kusoApi.VulnFinding, f findingFilter) []kusoApi.
 			continue
 		}
 		if f.hideIgnored && v.Ignored {
+			continue
+		}
+		if len(keepOrigin) > 0 && !keepOrigin[v.Origin] {
 			continue
 		}
 		out = append(out, v)
@@ -244,7 +253,7 @@ func renderVulnReport(w io.Writer, title string, rep kusoApi.VulnReport, f findi
 	}
 	fmt.Fprintln(w)
 	t := tablewriter.NewWriter(w)
-	t.SetHeader([]string{"SEVERITY", "ID", "PACKAGE", "INSTALLED", "FIXED", "IGNORED", "TITLE"})
+	t.SetHeader([]string{"SEVERITY", "ID", "PACKAGE", "ORIGIN", "INSTALLED", "FIXED", "IGNORED", "TITLE"})
 	t.SetAutoWrapText(false)
 	for _, v := range findings {
 		ignored := ""
@@ -254,7 +263,7 @@ func renderVulnReport(w io.Writer, title string, rep kusoApi.VulnReport, f findi
 				ignored = fmt.Sprintf("#%d", *v.IgnoreID)
 			}
 		}
-		t.Append([]string{colorSeverity(v.Severity), v.VulnID, v.PkgName, v.InstalledVersion,
+		t.Append([]string{colorSeverity(v.Severity), v.VulnID, v.PkgName, dash(v.Origin), v.InstalledVersion,
 			dash(v.FixedVersion), ignored, truncateRunes(v.Title, 60)})
 	}
 	t.Render()
@@ -289,4 +298,42 @@ func printRawJSON(body []byte) error {
 	buf.WriteByte('\n')
 	_, err := buf.WriteTo(os.Stdout)
 	return err
+}
+
+var findingOrigins = []string{"app", "os", "image"}
+
+func parseOriginFilter(s string) ([]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, o := range strings.Split(s, ",") {
+		o = strings.ToLower(strings.TrimSpace(o))
+		if !slices.Contains(findingOrigins, o) {
+			return nil, fmt.Errorf("unknown origin %q (want %s)", o, strings.Join(findingOrigins, ", "))
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+// filterReportJSON applies the client-side filters to a report body and
+// keeps every other field as the server sent it.
+func filterReportJSON(body []byte, f findingFilter) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode vulnerability report: %w", err)
+	}
+	var findings []kusoApi.VulnFinding
+	if fs, ok := raw["findings"]; ok {
+		if err := json.Unmarshal(fs, &findings); err != nil {
+			return nil, fmt.Errorf("decode findings: %w", err)
+		}
+	}
+	kept, err := json.Marshal(filterAndSortFindings(findings, f))
+	if err != nil {
+		return nil, err
+	}
+	raw["findings"] = kept
+	return json.Marshal(raw)
 }

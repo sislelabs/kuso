@@ -96,6 +96,7 @@ type VulnFinding struct {
 	Title            string
 	PrimaryURL       string
 	Target           string
+	PkgPath          string
 }
 
 // VulnImage is one inventory row: an image digest some owner runs.
@@ -417,13 +418,13 @@ func (d *DB) CompleteVulnScan(ctx context.Context, id int64, res VulnScanResult)
 	}
 	if len(res.Findings) > 0 {
 		stmt, err := tx.PrepareContext(ctx, pq.CopyIn("VulnFinding", "scanId", "vulnId", "pkgName", "pkgType",
-			"installedVersion", "fixedVersion", "severity", "title", "primaryURL", "target"))
+			"installedVersion", "fixedVersion", "severity", "title", "primaryURL", "target", "pkgPath"))
 		if err != nil {
 			return fmt.Errorf("complete vuln scan: prepare copy: %w", err)
 		}
 		for _, f := range res.Findings {
 			if _, err := stmt.ExecContext(ctx, id, f.VulnID, f.PkgName, f.PkgType, f.InstalledVersion,
-				f.FixedVersion, f.Severity, f.Title, f.PrimaryURL, f.Target); err != nil {
+				f.FixedVersion, f.Severity, f.Title, f.PrimaryURL, f.Target, f.PkgPath); err != nil {
 				_ = stmt.Close()
 				return fmt.Errorf("complete vuln scan: copy finding: %w", err)
 			}
@@ -455,7 +456,7 @@ func (d *DB) FailVulnScan(ctx context.Context, id int64, msg string) error {
 // ListVulnFindings returns a scan's findings, most severe first.
 func (d *DB) ListVulnFindings(ctx context.Context, scanID int64) ([]VulnFinding, error) {
 	rows, err := d.QueryContext(ctx, `
-		SELECT "vulnId","pkgName","pkgType","installedVersion","fixedVersion","severity","title","primaryURL","target"
+		SELECT "vulnId","pkgName","pkgType","installedVersion","fixedVersion","severity","title","primaryURL","target","pkgPath"
 		FROM "VulnFinding" WHERE "scanId" = $1
 		ORDER BY CASE "severity" WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END,
 			"vulnId", "pkgName"`, scanID)
@@ -467,7 +468,7 @@ func (d *DB) ListVulnFindings(ctx context.Context, scanID int64) ([]VulnFinding,
 	for rows.Next() {
 		var f VulnFinding
 		if err := rows.Scan(&f.VulnID, &f.PkgName, &f.PkgType, &f.InstalledVersion, &f.FixedVersion,
-			&f.Severity, &f.Title, &f.PrimaryURL, &f.Target); err != nil {
+			&f.Severity, &f.Title, &f.PrimaryURL, &f.Target, &f.PkgPath); err != nil {
 			return nil, fmt.Errorf("scan vuln finding: %w", err)
 		}
 		out = append(out, f)
@@ -739,11 +740,14 @@ type VulnScanSettings struct {
 	ScanPlatform      bool   `json:"scanPlatform"`
 	NightlyHourUTC    int    `json:"nightlyHourUTC"`
 	NotifyMinSeverity string `json:"notifyMinSeverity"`
+	// AutoUpdateAddons rolls addons onto their tag's newest image in the
+	// nightly window when that image scans no worse (vulnscan.AddonUpdater).
+	AutoUpdateAddons bool `json:"autoUpdateAddons"`
 }
 
 // DefaultVulnScanSettings is a fresh install's config.
 func DefaultVulnScanSettings() VulnScanSettings {
-	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high"}
+	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high", AutoUpdateAddons: true}
 }
 
 // GetVulnScanSettings reads vulnscan.* over the defaults.
@@ -780,6 +784,10 @@ func (d *DB) GetVulnScanSettings(ctx context.Context) (VulnScanSettings, error) 
 			if s := unquote(v); s != "" {
 				out.NotifyMinSeverity = s
 			}
+		case "vulnscan.autoUpdateAddons":
+			if b, err := strconv.ParseBool(v); err == nil {
+				out.AutoUpdateAddons = b
+			}
 		}
 	}
 	return out, rows.Err()
@@ -793,6 +801,7 @@ func (d *DB) SetVulnScanSettings(ctx context.Context, in VulnScanSettings, updat
 		{"vulnscan.scanPlatform", strconv.FormatBool(in.ScanPlatform)},
 		{"vulnscan.nightlyHourUTC", strconv.Itoa(in.NightlyHourUTC)},
 		{"vulnscan.notifyMinSeverity", quote(in.NotifyMinSeverity)},
+		{"vulnscan.autoUpdateAddons", strconv.FormatBool(in.AutoUpdateAddons)},
 	}
 	for _, p := range pairs {
 		if err := d.SetSetting(ctx, p.key, p.value, updatedBy); err != nil {

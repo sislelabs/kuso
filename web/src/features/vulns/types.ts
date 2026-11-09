@@ -84,9 +84,46 @@ export type ServiceVulnsResponse = {
   findings: VulnFinding[];
 };
 
+export type AddonImageUpdateStatus =
+  | "current"
+  | "scanning"
+  | "ready"
+  | "rejected"
+  | "scan-failed"
+  | "updating"
+  | "rolling"
+  | "rolled-back"
+  | "error";
+
+export type AddonImageUpdateState = {
+  // Tag reference the chart renders, e.g. "postgres:16".
+  image: string;
+  running?: string;
+  latest?: string;
+  checkedAt: string;
+  status: AddonImageUpdateStatus;
+  message?: string;
+  // Fixable critical+high; -1 = not scanned.
+  fixableRunning: number;
+  fixableLatest: number;
+  appliedAt?: string;
+  startedAt?: string;
+  manual?: boolean;
+};
+
+export type AddonImageUpdate = {
+  auto: boolean;
+  windowHourUTC: number;
+  // False for external / instance-shared addons kuso runs no image for.
+  available: boolean;
+  state: AddonImageUpdateState | null;
+};
+
 export type AddonVulnsResponse = {
   image: VulnImageReport | null;
   findings: VulnFinding[];
+  // Absent on servers older than the addon image updater.
+  imageUpdate?: AddonImageUpdate;
 };
 
 export type VulnPolicyResponse = { mode: VulnPolicy; effectiveMode: VulnMode };
@@ -106,6 +143,7 @@ export type VulnScanSettings = {
   // 0-23
   nightlyHourUTC: number;
   notifyMinSeverity: "critical" | "high" | "none";
+  autoUpdateAddons: boolean;
 };
 
 export type AddVulnIgnoreInput = { vulnId: string; reason: string; expiresInDays?: number };

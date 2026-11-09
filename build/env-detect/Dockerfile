@@ -1,6 +1,6 @@
 # Init-container image for the build Jobs' env-detect step: ripgrep + jq
 # on alpine, so the step doesn't apk-install on every build.
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache \
       bash \

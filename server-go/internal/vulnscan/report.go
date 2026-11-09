@@ -37,6 +37,8 @@ type FindingJSON struct {
 	Title            string `json:"title,omitempty"`
 	PrimaryURL       string `json:"primaryURL,omitempty"`
 	Target           string `json:"target,omitempty"`
+	PkgPath          string `json:"pkgPath,omitempty"`
+	Origin           string `json:"origin,omitempty"`
 	Ignored          bool   `json:"ignored"`
 	IgnoreID         *int64 `json:"ignoreId,omitempty"`
 }
@@ -113,7 +115,7 @@ func FindingsToJSON(fs []Finding, severities map[string]bool, includeIgnored boo
 		j := FindingJSON{
 			VulnID: f.VulnID, PkgName: f.PkgName, PkgType: f.PkgType, InstalledVersion: f.InstalledVersion,
 			FixedVersion: f.FixedVersion, Severity: f.Severity, Title: f.Title, PrimaryURL: f.PrimaryURL,
-			Target: f.Target, Ignored: f.Ignored,
+			Target: f.Target, PkgPath: f.PkgPath, Origin: FindingOrigin(f.PkgType, f.PkgPath), Ignored: f.Ignored,
 		}
 		if f.Ignored {
 			id := f.IgnoreID

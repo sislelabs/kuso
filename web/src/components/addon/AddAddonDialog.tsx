@@ -404,7 +404,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                             id="addon-version"
                             value={version}
                             onChange={(e) => setVersion(e.target.value)}
-                            placeholder="(chart default)"
+                            placeholder="(newest supported)"
                             className="mt-1 h-7 font-mono text-xs"
                             spellCheck={false}
                           />

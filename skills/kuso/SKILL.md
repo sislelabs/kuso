@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.35.0**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
+This skill is current to **v0.38.1**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
 > **Env vars & secrets — the default rule:** set most variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
@@ -883,12 +883,12 @@ To unblock a `vuln-blocked` build, pick one:
 
 ```bash
 kuso vulns list <project>                             # every service/addon image: status, C/H/M/L, fixable C/H
-kuso vulns show <p> <svc> [--env staging] [--severity CRITICAL,HIGH] [--fixable] [--hide-ignored]
+kuso vulns show <p> <svc> [--env staging] [--severity CRITICAL,HIGH] [--fixable] [--hide-ignored] [--origin app,os,image]
 kuso vulns show <p> --addon <addon>
 kuso vulns scan <p> <svc> [--env E] --wait            # rescan the live image; non-zero exit if the scan failed
 kuso vulns scan <p> --addon <addon> --wait
 kuso vulns policy <p> <svc> [inherit|enforce|report|off]   # no mode = print current + effective
-kuso vulns ignore add <p> <svc> <VULN-ID> --reason "…" [--expires 30d]   # or <p> --addon <a> <VULN-ID>; max 365d
+kuso vulns ignore add <p> <svc> <VULN-ID>... --reason "…" [--expires 30d]   # several IDs at once; or <p> --addon <a> <ID>...; max 365d
 kuso vulns ignore list <p> <svc>                      # or <p> --addon <a>
 kuso vulns ignore rm <p> <svc> <id> --yes             # the finding counts toward the gate again
 # admin
@@ -903,8 +903,33 @@ kuso vulns settings set [--mode enforce|report|off] [--scan-addons=false] [--sca
 - A scan with `status: failed` (image pull error, DB download error) does not mean the image
   is clean. Read the error in `show`.
 - Instance mode `off` turns the whole feature off: no gate, no nightly scans.
-- Every command except `ignore rm` takes `-o json` (raw API JSON). From MCP, `get_vulnerabilities` gives the same
-  read-only view as `show`.
+- Every command except `ignore rm` takes `-o json` (raw API JSON; `show`'s `--fixable`/`--origin`
+  filter it too). From MCP, `get_vulnerabilities` gives the same read-only view as `show`.
+
+### Working through a service's findings ("check the vulns and fix them")
+
+Each finding has an `origin` (and, in JSON, the `pkgPath` it was found at). The origin
+decides what to do:
+
+| origin | what it is | action |
+| --- | --- | --- |
+| `app` | a dependency in the app's own tree (lockfile, go.mod, requirements, …) | bump it in the repo to `fixedVersion` or later (a direct dep, or an override/resolution for a transitive one), push, let it rebuild |
+| `image` | software the image carries outside the app: a package manager's bundled deps (`root/.cache/node/corepack/pnpm/…`), the npm bundled with Node, a language toolchain | bump the tool itself (`"packageManager": "pnpm@<newer>"` in package.json, the Node/Go version, the Dockerfile base); if there is no newer release or it only runs at build time, ignore with a reason and an expiry |
+| `os` | a distro package of the base image | Dockerfile: bump the base image tag (or add `apt-get upgrade`/`apk upgrade`). nixpacks: kuso applies OS updates on each build (refreshed weekly), so a rebuild clears these; ignore what has no fix |
+| blank | scanned before kuso recorded paths | `kuso vulns scan <p> <svc> --wait`, then read again |
+
+```bash
+kuso vulns show <p> <svc> --fixable -o json              # everything with a fix, with origin + pkgPath
+kuso vulns show <p> <svc> --origin app --fixable          # what the repo itself must change
+# after the fix is pushed and the build is live:
+kuso vulns scan <p> <svc> --wait                          # confirm the counts dropped
+kuso vulns ignore add <p> <svc> CVE-… GHSA-… --reason "pnpm's bundled tar, build-time only" --expires 30d
+```
+
+Rules for agents: fix `app` findings in code before ignoring anything. Never ignore a finding
+just to make the count go down; the reason must say why it can't be exploited here or why
+there is no fix yet. Give every ignore an `--expires`, so the finding comes back for review.
+Don't change `kuso vulns policy` or instance settings unless the user asks.
 
 ## Preview (PR) environments
 

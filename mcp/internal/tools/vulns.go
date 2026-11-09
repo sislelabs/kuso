@@ -62,6 +62,8 @@ type vulnFinding struct {
 	Severity         string `json:"severity"`
 	Title            string `json:"title,omitempty"`
 	PrimaryURL       string `json:"primaryURL,omitempty"`
+	PkgPath          string `json:"pkgPath,omitempty"`
+	Origin           string `json:"origin,omitempty"`
 	Ignored          bool   `json:"ignored"`
 }
 

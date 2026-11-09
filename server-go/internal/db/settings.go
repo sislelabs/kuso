@@ -277,3 +277,33 @@ func (d *DB) SetSetting(ctx context.Context, key, value, updatedBy string) error
 	}
 	return nil
 }
+
+// UpdateSettingLocked rewrites one Setting under a row lock: fn gets
+// the current raw value ("" when unset) and returns the new one.
+// Concurrent writers of the same key serialise instead of clobbering.
+func (d *DB) UpdateSettingLocked(ctx context.Context, key, updatedBy string, fn func(old string) (string, error)) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("UpdateSettingLocked %s: %w", key, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Make sure the row exists so FOR UPDATE has something to lock.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy") VALUES ($1, '', $2, $3)
+		ON CONFLICT (key) DO NOTHING`, key, time.Now().UTC(), updatedBy); err != nil {
+		return fmt.Errorf("UpdateSettingLocked %s: %w", key, err)
+	}
+	var old string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM "Setting" WHERE key = $1 FOR UPDATE`, key).Scan(&old); err != nil {
+		return fmt.Errorf("UpdateSettingLocked %s: %w", key, err)
+	}
+	next, err := fn(old)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE "Setting" SET value = $2, "updatedAt" = $3, "updatedBy" = $4 WHERE key = $1`,
+		key, next, time.Now().UTC(), updatedBy); err != nil {
+		return fmt.Errorf("UpdateSettingLocked %s: %w", key, err)
+	}
+	return tx.Commit()
+}

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 #
 # kuso-incident-agent — the container the incident Job runs.
 #
@@ -19,11 +19,11 @@
 # build/* images). Pin KUSO_CLI_VERSION to the release whose CLI artifact
 # we download; defaults to the current server version at build time.
 #
-# Base: node:20-bookworm-slim because the Claude Code CLI is an npm
+# Base: node:24-bookworm-slim because the Claude Code CLI is an npm
 # package and wants a real Node runtime — alpine/musl is unsupported by
 # some of its native deps. Debian-slim also gives us apt for kubectl/gh/git.
 
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 
 # Which kuso CLI release artifact to bake in. The CLI is published on the
 # GitHub release as kuso-linux-<arch> (see hack/release.sh). Override at
@@ -57,9 +57,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       apt-transport-https; \
     # --- kubectl (pinned stable channel, official Kubernetes apt repo) ---
     mkdir -p /etc/apt/keyrings; \
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key \
       | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg; \
-    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' \
+    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' \
       > /etc/apt/sources.list.d/kubernetes.list; \
     # --- gh (GitHub CLI, official apt repo) ---
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

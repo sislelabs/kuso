@@ -204,7 +204,7 @@ spec:
             - name: upload
               # Official image already carries the aws CLI — nothing to
               # install at runtime. Pinned for reproducibility.
-              image: amazon/aws-cli:2.22.35
+              image: amazon/aws-cli:2.39.6
               command: ["/bin/sh", "-eu", "-c"]
               args:
                 - |
@@ -248,6 +248,13 @@ spec:
                 # HOME must be writable for the aws CLI's config/cache.
                 - name: HOME
                   value: /tmp
+                # aws-cli >= 2.23 adds x-amz-checksum-* headers to every
+                # upload by default; Hetzner Object Storage and Backblaze
+                # B2 reject them. when_required is harmless on AWS S3.
+                - name: AWS_REQUEST_CHECKSUM_CALCULATION
+                  value: when_required
+                - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+                  value: when_required
                 # S3-compatible target. The kuso-postgres-backup Secret
                 # is operator-supplied; all refs optional so the CronJob
                 # no-ops (never errors) until it exists. Set up via:

@@ -103,3 +103,25 @@ func TestNewInClusterImageDeleter_NilForEmptyHost(t *testing.T) {
 		t.Error("non-empty host should yield a deleter")
 	}
 }
+
+// TestRegistryClient_ResolveTagDigest_OCIManifest: buildkit pushes OCI
+// manifests, and the registry 404s a HEAD whose Accept omits the OCI
+// type — the tag must still resolve.
+func TestRegistryClient_ResolveTagDigest_OCIManifest(t *testing.T) {
+	const digest = "sha256:0c1"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && r.URL.Path == "/v2/proj/web/manifests/oci" &&
+			strings.Contains(r.Header.Get("Accept"), "application/vnd.oci.image.manifest.v1+json") {
+			w.Header().Set("Docker-Content-Digest", digest)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newRegistryClient(strings.TrimPrefix(srv.URL, "http://"))
+	if got, err := c.ResolveTagDigest(context.Background(), "proj/web", "oci"); err != nil || got != digest {
+		t.Errorf("ResolveTagDigest(oci) = %q, %v; want %q, nil", got, err, digest)
+	}
+}

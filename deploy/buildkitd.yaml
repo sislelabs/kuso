@@ -117,7 +117,7 @@ spec:
                     operator: DoesNotExist
       containers:
         - name: buildkitd
-          image: moby/buildkit:v0.16.0
+          image: moby/buildkit:v0.34.2
           args:
             # Listen on TCP so build Jobs can connect from
             # whatever namespace they live in. No mutual TLS yet

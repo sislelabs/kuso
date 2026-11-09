@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -33,6 +34,7 @@ var (
 
 	vulnsShowEnv, vulnsShowAddon, vulnsShowSeverity string
 	vulnsShowFixable, vulnsShowHideIgnored          bool
+	vulnsShowOrigin                                 string
 
 	vulnsScanEnv, vulnsScanAddon string
 	vulnsScanWait                bool
@@ -148,9 +150,21 @@ var vulnsShowCmd = &cobra.Command{
 	Short: "Findings for a service's or addon's live image",
 	Long: `Show the latest scan of a service's (or addon's) live image: gate mode,
 counts and the findings table, CRITICAL first. Ignored findings are listed and
-marked unless --hide-ignored.`,
+marked unless --hide-ignored.
+
+Each finding has an ORIGIN, so you can tell what the app's repo can fix:
+  app    a dependency of the app (lockfile, go.mod, requirements, …): bump it
+  os     a distro package from the base image: rebuild picks up patches, or
+         move to a newer base image
+  image  prebuilt software the image carries outside the app, like a package
+         manager's own deps or a language toolchain: bump that tool (e.g.
+         "packageManager" in package.json) or ignore it with a reason
+The JSON output carries origin plus pkgPath, the file the package was found
+in. Origin is blank for findings scanned before kuso recorded paths: run
+"kuso vulns scan … --wait" to refresh. --fixable/--origin also filter -o json.`,
 	Example: `  kuso vulns show shop web
   kuso vulns show shop web --env staging --severity CRITICAL,HIGH --fixable
+  kuso vulns show shop web --origin app --fixable -o json
   kuso vulns show shop --addon db`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -169,6 +183,10 @@ marked unless --hide-ignored.`,
 		if err != nil {
 			return err
 		}
+		origins, err := parseOriginFilter(vulnsShowOrigin)
+		if err != nil {
+			return err
+		}
 		if err := requireAPI(); err != nil {
 			return err
 		}
@@ -180,17 +198,49 @@ marked unless --hide-ignored.`,
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("vulns show: %w", err)
 		}
+		filter := findingFilter{severities: sevs, fixableOnly: vulnsShowFixable, hideIgnored: vulnsShowHideIgnored, origins: origins}
 		if asJSON {
-			return printRawJSON(resp.Body())
+			if !vulnsShowFixable && len(origins) == 0 {
+				return printRawJSON(resp.Body())
+			}
+			body, err := filterReportJSON(resp.Body(), filter)
+			if err != nil {
+				return err
+			}
+			return printRawJSON(body)
 		}
 		rep, err := decodeVulnReport(resp.Body())
 		if err != nil {
 			return err
 		}
-		renderVulnReport(os.Stdout, targetTitle(t, rep, vulnsShowEnv), rep,
-			findingFilter{severities: sevs, fixableOnly: vulnsShowFixable, hideIgnored: vulnsShowHideIgnored})
+		renderVulnReport(os.Stdout, targetTitle(t, rep, vulnsShowEnv), rep, filter)
+		renderImageUpdate(os.Stdout, rep.ImageUpdate)
 		return nil
 	},
+}
+
+func renderImageUpdate(w io.Writer, u *kusoApi.AddonImageUpdate) {
+	if u == nil || !u.Available {
+		return
+	}
+	auto := "off (kuso vulns settings set --auto-update-addons)"
+	if u.Auto {
+		auto = fmt.Sprintf("on, rolls start %02d:00-%02d:00 UTC", u.WindowHourUTC, (u.WindowHourUTC+4)%24)
+	}
+	fmt.Fprintf(w, "\nimage updates: %s\n", auto)
+	st := u.State
+	if st == nil {
+		fmt.Fprintln(w, "  not checked yet")
+		return
+	}
+	fmt.Fprintf(w, "  %s: %s", st.Image, st.Status)
+	if st.Latest != "" && st.Latest != st.Running {
+		fmt.Fprintf(w, " (running %s, newest %s)", shortDigest(st.Running), shortDigest(st.Latest))
+	}
+	if st.Message != "" {
+		fmt.Fprintf(w, " — %s", st.Message)
+	}
+	fmt.Fprintln(w)
 }
 
 var vulnsScanCmd = &cobra.Command{
@@ -470,6 +520,7 @@ func printVulnSettings(s kusoApi.VulnSettings) {
 	fmt.Printf("scan platform:       %t\n", s.ScanPlatform)
 	fmt.Printf("nightly hour (UTC):  %d\n", s.NightlyHourUTC)
 	fmt.Printf("notify min severity: %s\n", s.NotifyMinSeverity)
+	fmt.Printf("auto-update addons:  %t\n", s.AutoUpdateAddons)
 }
 
 var vulnsSettingsSetCmd = &cobra.Command{
@@ -478,7 +529,9 @@ var vulnsSettingsSetCmd = &cobra.Command{
 	Long: `Change only the flags you pass; the rest keep their current values.
 
   --mode enforce|report|off   off disables scanning, the gate and nightly sweeps
-  --notify-min-severity critical|high|none`,
+  --notify-min-severity critical|high|none
+  --auto-update-addons        roll addons onto their tag's newest image in the
+                              nightly window when it scans no worse`,
 	Example: `  kuso vulns settings set --mode report
   kuso vulns settings set --scan-platform=false --nightly-hour 2`,
 	Args: cobra.NoArgs,
@@ -489,8 +542,8 @@ var vulnsSettingsSetCmd = &cobra.Command{
 		}
 		fl := cmd.Flags()
 		if !fl.Changed("mode") && !fl.Changed("scan-addons") && !fl.Changed("scan-platform") &&
-			!fl.Changed("nightly-hour") && !fl.Changed("notify-min-severity") {
-			return errors.New("nothing to set; pass at least one of --mode, --scan-addons, --scan-platform, --nightly-hour, --notify-min-severity")
+			!fl.Changed("nightly-hour") && !fl.Changed("notify-min-severity") && !fl.Changed("auto-update-addons") {
+			return errors.New("nothing to set; pass at least one of --mode, --scan-addons, --scan-platform, --nightly-hour, --notify-min-severity, --auto-update-addons")
 		}
 		mode := strings.ToLower(vulnsSetMode)
 		if fl.Changed("mode") && !containsStr([]string{"enforce", "report", "off"}, mode) {
@@ -530,6 +583,9 @@ var vulnsSettingsSetCmd = &cobra.Command{
 		if fl.Changed("notify-min-severity") {
 			s.NotifyMinSeverity = notifyMin
 		}
+		if fl.Changed("auto-update-addons") {
+			s.AutoUpdateAddons = vulnsSetAutoUpdate
+		}
 		put, err := api.PutVulnSettings(s)
 		if err := checkRespErr(put, err); err != nil {
 			return fmt.Errorf("update settings: %w", err)
@@ -549,7 +605,7 @@ var vulnsSettingsSetCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(vulnsCmd)
 	vulnsCmd.AddCommand(vulnsListCmd, vulnsShowCmd, vulnsScanCmd, vulnsPolicyCmd,
-		vulnsPlatformCmd, vulnsScanAllCmd, vulnsSettingsCmd)
+		vulnsPlatformCmd, vulnsScanAllCmd, vulnsSettingsCmd, vulnsUpdateImageCmd)
 	vulnsSettingsCmd.AddCommand(vulnsSettingsGetCmd, vulnsSettingsSetCmd)
 
 	for cmd, v := range map[*cobra.Command]*string{
@@ -571,6 +627,7 @@ func init() {
 	f.StringVar(&vulnsShowSeverity, "severity", "", "only these severities, e.g. CRITICAL,HIGH")
 	f.BoolVar(&vulnsShowFixable, "fixable", false, "only findings with a fixed version available")
 	f.BoolVar(&vulnsShowHideIgnored, "hide-ignored", false, "omit ignored findings")
+	f.StringVar(&vulnsShowOrigin, "origin", "", "only these origins: app, os, image (comma-separated)")
 
 	f = vulnsScanCmd.Flags()
 	f.StringVar(&vulnsScanEnv, "env", "", "environment (default production)")
@@ -585,4 +642,54 @@ func init() {
 	f.BoolVar(&vulnsSetScanPlatform, "scan-platform", false, "scan platform images nightly (true/false)")
 	f.IntVar(&vulnsSetNightlyHour, "nightly-hour", 0, "UTC hour (0-23) the nightly sweep starts")
 	f.StringVar(&vulnsSetNotifyMin, "notify-min-severity", "", "lowest severity that notifies: critical, high or none")
+	f.BoolVar(&vulnsSetAutoUpdate, "auto-update-addons", false, "auto-update addon images nightly (true/false)")
+
+	vulnsUpdateImageCmd.Flags().BoolVarP(&vulnsUpdateImageYes, "yes", "y", false, "skip the confirmation prompt")
+	vulnsUpdateImageCmd.Flags().StringVarP(&vulnsUpdateImageOut, "output", "o", "table", "output format [table, json]")
+}
+
+var (
+	vulnsSetAutoUpdate  bool
+	vulnsUpdateImageYes bool
+	vulnsUpdateImageOut string
+)
+
+var vulnsUpdateImageCmd = &cobra.Command{
+	Use:   "update-image <project> <addon>",
+	Short: "Move an addon onto the newest image of its tag now (restarts it)",
+	Long: `Move the addon onto the image its tag (e.g. postgres:16) points at today.
+The version doesn't change; only the build of it does. The new image is pulled
+onto the node first, then the addon restarts: a few seconds in which direct
+connections drop (pooled Postgres connections wait). Runs in the background;
+` + "`kuso vulns show <project> --addon <addon>`" + ` shows progress. With auto-update on
+(kuso vulns settings set --auto-update-addons) this happens nightly by itself
+once the newer image has been scanned. Asks for confirmation; pass --yes in
+scripts.`,
+	Example: `  kuso vulns update-image shop db --yes`,
+	Args:    cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		asJSON, err := vulnsOutput(vulnsUpdateImageOut)
+		if err != nil {
+			return err
+		}
+		if err := requireAPI(); err != nil {
+			return err
+		}
+		if err := confirmDestructive(vulnsUpdateImageYes, fmt.Sprintf("Restart addon %s/%s onto the newest image of its tag?", args[0], args[1])); err != nil {
+			return err
+		}
+		resp, err := api.UpdateAddonImage(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("update image: %w", err)
+		}
+		if asJSON {
+			return printRawJSON(resp.Body())
+		}
+		var st kusoApi.AddonImageUpdateState
+		if err := json.Unmarshal(resp.Body(), &st); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		fmt.Printf("%s/%s: update started (%s %s → %s); follow it with `kuso vulns show %s --addon %s`\n", args[0], args[1], st.Image, shortDigest(st.Running), shortDigest(st.Latest), args[0], args[1])
+		return nil
+	},
 }

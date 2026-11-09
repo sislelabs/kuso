@@ -49,6 +49,8 @@ type VulnsHandler struct {
 	Live     VulnLive
 	// Sweep runs the nightly sweep now (scan-all); returns scans queued.
 	Sweep func(ctx context.Context) (int, error)
+	// Updater backs the addon "update image" action; nil disables it.
+	Updater *vulnscan.AddonUpdater
 	// OnSettingsChange drops the gate's cached settings.
 	OnSettingsChange func()
 	Logger           *slog.Logger
@@ -68,6 +70,7 @@ func (h *VulnsHandler) Mount(r chi.Router) {
 
 	r.Get("/api/projects/{project}/addons/{addon}/vulns", h.AddonShow)
 	r.Post("/api/projects/{project}/addons/{addon}/vulns/scan", h.AddonScan)
+	r.Post("/api/projects/{project}/addons/{addon}/vulns/update-image", h.AddonUpdateImage)
 	r.Get("/api/projects/{project}/addons/{addon}/vulns/ignores", h.AddonIgnores)
 	r.Post("/api/projects/{project}/addons/{addon}/vulns/ignores", h.AddonIgnoreAdd)
 	r.Delete("/api/projects/{project}/addons/{addon}/vulns/ignores/{id}", h.AddonIgnoreDelete)
@@ -109,7 +112,7 @@ func (h *VulnsHandler) fail(w http.ResponseWriter, op string, err error) {
 		writeErr(w, http.StatusNotFound, notFoundMsg(err, db.ErrNotFound, kindFromOp(op)))
 	case errors.Is(err, vulnscan.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, errVulnNothingToScan):
+	case errors.Is(err, errVulnNothingToScan), errors.Is(err, vulnscan.ErrAlreadyCurrent), errors.Is(err, vulnscan.ErrUpdateInProgress):
 		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		if status, ok := kubeErrStatus(err); ok {
@@ -456,7 +459,42 @@ func (h *VulnsHandler) AddonShow(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "read findings", err)
 		return
 	}
+	st, err := vulnscan.AddonUpdateStateFor(r.Context(), h.DB, *a)
+	if err != nil {
+		h.fail(w, "read image update state", err)
+		return
+	}
+	settings, err := h.settings(r.Context())
+	if err != nil {
+		h.fail(w, "read settings", err)
+		return
+	}
+	out["imageUpdate"] = map[string]any{
+		"auto":          settings.AutoUpdateAddons && settings.ScanAddons && settings.Mode != vulnscan.ModeOff,
+		"windowHourUTC": settings.NightlyHourUTC,
+		"available":     h.Updater != nil && a.Spec.External == nil && a.Spec.UseInstanceAddon == "",
+		"state":         st,
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// AddonUpdateImage pins the addon to its tag's newest image now. The
+// addon restarts.
+func (h *VulnsHandler) AddonUpdateImage(w http.ResponseWriter, r *http.Request) {
+	_, a, ok := h.addon(w, r, db.ProjectRoleEditor)
+	if !ok {
+		return
+	}
+	if h.Updater == nil {
+		writeErr(w, http.StatusServiceUnavailable, "image updates are not available on this server")
+		return
+	}
+	st, err := h.Updater.UpdateNow(r.Context(), *a)
+	if err != nil {
+		h.fail(w, "update image", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (h *VulnsHandler) AddonScan(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +626,13 @@ func (h *VulnsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	var in db.VulnScanSettings
+	// Decode over the current settings so a client that doesn't know a
+	// newer field (autoUpdateAddons) leaves it as it was.
+	in, err := h.settings(r.Context())
+	if err != nil {
+		h.fail(w, "read settings", err)
+		return
+	}
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return

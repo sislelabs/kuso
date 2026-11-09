@@ -2,6 +2,29 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.28] — 2026-09-02
+
+### ✨ Features
+- Feat(cli): kuso version also prints the server's version ([b5f98c6](https://github.com/sislelabs/kuso/commit/b5f98c63df39ab6cda001e30e04df4f921a7397c))
+
+### 🐛 Bug Fixes
+- Fix(addon): pooler accepts 1000 client connections, not 200 ([f20ecac](https://github.com/sislelabs/kuso/commit/f20ecacc6ca0c6ce6f37083555a43606c4ca0ad7))
+
+## [0.25.27] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
+
+## [0.25.26] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
+
+## [0.25.25] — 2026-09-02
+
+### 🐛 Bug Fixes
+- Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
+
 ## [0.25.24] — 2026-09-02
 
 ### 🐛 Bug Fixes

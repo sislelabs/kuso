@@ -638,7 +638,7 @@ for k in $KUSO_BUILDARG_KEYS; do
   esac
 done
 nixpacks build . --out . "$@"
-` + nixpacksEnvInjectScript
+` + nixpacksEnvInjectScript + nixpacksOSPatchScript
 
 	env := []corev1.EnvVar{
 		{Name: "REPO_PATH", Value: path},
@@ -743,6 +743,28 @@ fi
 echo "--- Dockerfile FROM + injected ENV keys ---"
 grep -E '^FROM ' .nixpacks/Dockerfile | head -3
 grep -E '^ENV ' .nixpacks/Dockerfile | sed -E 's/^ENV[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/ENV \1/' | head -80
+`
+
+// nixpacksOSPatchScript inserts a RUN right after the first FROM of the
+// generated .nixpacks/Dockerfile that applies the distro's pending updates.
+// nixpacks is in maintenance mode and its Ubuntu base image is frozen, so
+// without this every nixpacks image ships whatever sudo/openssl/git were
+// current when that base was cut.
+//
+// The ISO week is part of the RUN line, so it is the layer's cache key: the
+// upgrade layer (and the layers after it) is rebuilt once a week instead of on
+// every build or never. Running before the injected ENV lines keeps a
+// build-env change from re-running it. A failed upgrade (mirror outage) logs a
+// warning and keeps the base image's packages rather than failing the deploy.
+const nixpacksOSPatchScript = `
+KUSO_OS_PATCH_WEEK="$(date -u +%G-W%V)"
+export KUSO_OS_PATCH_LINE="RUN if command -v apt-get >/dev/null 2>&1; then echo 'kuso: applying OS security updates (${KUSO_OS_PATCH_WEEK})' && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::=--force-confold && apt-get clean && rm -rf /var/lib/apt/lists/* || echo 'kuso: WARNING: OS package upgrade failed; keeping the base image packages'; fi"
+awk '
+  /^FROM / && !inserted { print; print ENVIRON["KUSO_OS_PATCH_LINE"]; inserted = 1; next }
+  { print }
+' .nixpacks/Dockerfile > .nixpacks/Dockerfile.patched
+mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
+echo "--- OS security updates: on (cache week ${KUSO_OS_PATCH_WEEK}) ---"
 `
 
 // envKeyRE is the POSIX env-var identifier. buildEnv keys are interpolated
@@ -1213,11 +1235,14 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     --local dockerfile="$CTX" \
     --opt filename="$DF" \
     "$@" \
-    --output type=image,name="$IMAGE",push=false,registry.insecure=$INSECURE \
+    --output type=image,name="$IMAGE",push=false,oci-mediatypes=false,registry.insecure=$INSECURE \
     --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
     --progress plain
 fi
 
+# oci-mediatypes=false: buildkit >= v0.31 pushes OCI manifests by default, and
+# registry 2.8 answers the docker-v2-only HEAD in builds/registry_client.go
+# (image-retention sweep) with 404 for those, silently disabling the sweep.
 exec buildctl \
   --addr "$BUILDKIT_HOST" \
   build \
@@ -1226,7 +1251,7 @@ exec buildctl \
   --local dockerfile="$CTX" \
   --opt filename="$DF" \
   "$@" \
-  --output type=image,name="$IMAGE",push=true,registry.insecure=$INSECURE \
+  --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=$INSECURE \
   --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE \
   --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
   --progress plain

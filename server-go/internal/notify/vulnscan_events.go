@@ -121,3 +121,45 @@ func VulnBaselineComplete(images, withFixableCritical int) Event {
 		Severity:    sev,
 	}
 }
+
+// AddonImageUpdated: an addon was moved onto a newer image of the same
+// tag. fixedBefore/fixedAfter are fixable critical+high counts.
+func AddonImageUpdated(project, addon, image, digest string, fixedBefore, fixedAfter int, manual bool) Event {
+	o := VulnOwner{Kind: "addon", Project: project, Addon: addon}
+	how := "automatically"
+	if manual {
+		how = "on request"
+	}
+	msg := fmt.Sprintf("Rolling onto the newest `%s` image %s. Fixable critical+high: %d → %d.", image, how, fixedBefore, fixedAfter)
+	if fixedBefore < 0 {
+		msg = fmt.Sprintf("Rolling onto the newest `%s` image %s.", image, how)
+	}
+	return Event{
+		Type:        EventAddonImageUpdated,
+		Title:       "Addon image updated · " + o.label(),
+		Description: msg,
+		Body:        msg,
+		Project:     project,
+		URL:         o.link(),
+		Severity:    "info",
+		Fields:      []EventField{{Name: "Image", Value: "`" + image + "@" + digest + "`"}},
+		Extra:       map[string]string{"ownerKind": "addon", "addon": addon},
+	}
+}
+
+// AddonImageRolledBack: an image update never got Ready and the addon
+// was pinned back to the image it ran before.
+func AddonImageRolledBack(project, addon, image, failedDigest, msg string) Event {
+	o := VulnOwner{Kind: "addon", Project: project, Addon: addon}
+	return Event{
+		Type:        EventAddonImageUpdated,
+		Title:       "⚠ Addon image update rolled back · " + o.label(),
+		Description: msg,
+		Body:        msg,
+		Project:     project,
+		URL:         o.link(),
+		Severity:    "warn",
+		Fields:      []EventField{{Name: "Image", Value: "`" + image + "@" + failedDigest + "`"}},
+		Extra:       map[string]string{"ownerKind": "addon", "addon": addon},
+	}
+}

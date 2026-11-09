@@ -1,11 +1,11 @@
 # Single-node kuso sandbox. Driven by up.sh / down.sh — see README.md.
-name: kuso-sandbox
+name: ${KUSO_SANDBOX_NAME:-kuso-sandbox}
 
 services:
   node:
-    image: ${KUSO_SANDBOX_K3S_IMAGE:-rancher/k3s:v1.31.9-k3s1}
-    container_name: kuso-sandbox-node
-    hostname: kuso-sandbox
+    image: ${KUSO_SANDBOX_K3S_IMAGE:-rancher/k3s:v1.36.6-k3s1}
+    container_name: ${KUSO_SANDBOX_NAME:-kuso-sandbox}-node
+    hostname: ${KUSO_SANDBOX_NAME:-kuso-sandbox}
     command:
       - server
       # Same as install.sh: kuso installs its own traefik.
@@ -44,7 +44,7 @@ services:
   # kubectl + helm. Shares the node's network namespace so the kubeconfig's
   # https://127.0.0.1:6443 works unmodified. Run on demand, never as a daemon.
   tools:
-    image: alpine/k8s:1.30.4
+    image: alpine/k8s:1.36.6
     profiles: [tools]
     network_mode: service:node
     environment:

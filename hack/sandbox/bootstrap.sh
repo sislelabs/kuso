@@ -66,10 +66,11 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
   helm repo add traefik https://traefik.github.io/charts >/dev/null 2>&1 || true
   helm repo update >/dev/null
   helm upgrade --install traefik traefik/traefik \
+    --version "${KUSO_TRAEFIK_CHART_VERSION:-42.3.1}" \
     -n traefik --create-namespace \
     --set ports.web.expose.default=true \
     --set ports.websecure.expose.default=true \
-    --set service.type=LoadBalancer \
+    --set service.spec.type=LoadBalancer \
     --set providers.kubernetesIngress.allowExternalNameServices=true \
     --wait --timeout=300s >/dev/null
 fi

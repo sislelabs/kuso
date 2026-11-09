@@ -40,9 +40,21 @@ spec:
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
+      initContainers:
+        # Erlang refuses to start unless .erlang.cookie is owner-only, and
+        # the kubelet's fsGroup pass adds group read to everything on the
+        # volume each time the pod is recreated — so every restart after
+        # the first left RabbitMQ crash-looping. Put the mode back first.
+        - name: cookie-perms
+          image: {{ include "kusoaddon.image" (list $ (printf "rabbitmq:%s-management-alpine" $version)) }}
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["sh", "-c", "[ ! -f /var/lib/rabbitmq/.erlang.cookie ] || chmod 400 /var/lib/rabbitmq/.erlang.cookie"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
       containers:
         - name: rabbitmq
-          image: {{ printf "rabbitmq:%s-management-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "rabbitmq:%s-management-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: amqp

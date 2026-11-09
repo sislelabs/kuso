@@ -1,5 +1,5 @@
 {{- if and (eq .Values.kind "s3") (not .Values.external) (not .Values.useInstanceAddon) -}}
-{{- $version := .Values.version | default "RELEASE.2024-08-17T01-24-54Z" -}}
+{{- $version := .Values.version | default "RELEASE.2026-08-04T00-00-00Z" -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $secretName := include "kusoaddon.connSecretName" . -}}
 {{- $bucket := .Values.database | default $name -}}
@@ -10,6 +10,12 @@
   reconcile so reconciles don't rotate credentials. The bucket is
   auto-created on first boot via a one-shot init job that uses
   `mc` against the local MinIO (minio image bundles mc).
+
+  Images come from pgsty/minio + pgsty/mc, the community fork that
+  kept publishing builds after minio/minio and minio/mc were pulled
+  from Docker Hub. Same tag scheme, entrypoint and on-disk format: a
+  data dir written by minio/minio:RELEASE.2024-08-17 reads back
+  unchanged.
 
   Why MinIO: Apache 2 license, well-maintained image, real
   production-quality sigv4 auth. The kuso backup pipeline already
@@ -49,7 +55,7 @@ spec:
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: minio
-          image: {{ printf "minio/minio:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "pgsty/minio:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           args: ["server", "/data", "--console-address", ":9001"]
           ports:
@@ -190,7 +196,7 @@ spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       containers:
         - name: init
-          image: "minio/mc:RELEASE.2024-08-17T11-33-50Z"
+          image: "pgsty/mc:RELEASE.2026-10-26T00-00-00Z"
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: [sh, -c]
           args:
@@ -224,7 +230,7 @@ spec:
             # defaults to "/" and the mkdir fails with EACCES. The
             # emptyDir mount below + this HOME pin together give mc
             # a writable scratch dir without needing to know the
-            # exact UID layout of the minio/mc image.
+            # exact UID layout of the mc image.
             - name: HOME
               value: /tmp
           volumeMounts:

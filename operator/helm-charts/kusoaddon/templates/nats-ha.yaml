@@ -118,7 +118,7 @@ spec:
               {{- include "kusoaddon.selectorLabels" . | nindent 14 }}
       initContainers:
         - name: render-conf
-          image: alpine:3.20
+          image: alpine:3.24
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           args:
@@ -139,7 +139,7 @@ spec:
               mountPath: /etc/nats
       containers:
         - name: nats
-          image: {{ printf "nats:%s" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "nats:%s" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           # POD_NAME is interpolated into server_name so each replica

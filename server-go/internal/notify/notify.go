@@ -103,6 +103,9 @@ const (
 	EventVulnsFound    EventType = "security.vulnerabilities_found"
 	EventDeployBlocked EventType = "security.deploy_blocked"
 	EventScanFailed    EventType = "security.scan_failed"
+	// EventAddonImageUpdated: the addon image updater rolled an addon
+	// onto a newer image of its tag.
+	EventAddonImageUpdated EventType = "security.addon_image_updated"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -162,6 +165,7 @@ var EventCatalogue = []EventTypeInfo{
 	{EventVulnsFound, "New vulnerabilities found", "other", ""},
 	{EventDeployBlocked, "Deploy blocked by vulnerabilities", "other", "@here"},
 	{EventScanFailed, "Vulnerability scan failed", "other", ""},
+	{EventAddonImageUpdated, "Addon image updated", "other", ""},
 	{EventUpdateAvailable, "kuso update available", "other", ""},
 }
 

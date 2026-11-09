@@ -155,7 +155,7 @@ spec:
         # pod start. Redis can't read env vars in directives like
         # `requirepass`; sed is the standard workaround.
         - name: render-conf
-          image: {{ printf "redis:%s-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "redis:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           args:
@@ -182,7 +182,7 @@ spec:
               mountPath: /conf
       containers:
         - name: redis
-          image: {{ printf "redis:%s-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "redis:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           # Pod 0 starts as the primary; pods 1+ start as replicas of
           # pod 0. Sentinel takes over election after the cluster
@@ -275,7 +275,7 @@ spec:
               kuso.sislelabs.com/component: sentinel
       initContainers:
         - name: render-conf
-          image: {{ printf "redis:%s-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "redis:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           # Sentinel rewrites its own config file at runtime (adds
@@ -300,7 +300,7 @@ spec:
               mountPath: /conf
       containers:
         - name: sentinel
-          image: {{ printf "redis:%s-alpine" $version | quote }}
+          image: {{ include "kusoaddon.image" (list $ (printf "redis:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["redis-sentinel", "/conf/sentinel.conf"]
           ports:

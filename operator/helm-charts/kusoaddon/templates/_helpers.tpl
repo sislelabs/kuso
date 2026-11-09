@@ -367,3 +367,20 @@ volumeMounts:
   - name: scratch
     mountPath: /tmp
 {{- end -}}
+
+{{/*
+kusoaddon.image renders the main image ref, quoted. Call with
+(list $ "<repo>:<tag>"). spec.imagePin (stamped by the server's addon
+image updater) appends its digest only while pin.image equals this
+exact ref, so changing spec.version drops a stale pin by itself.
+*/}}
+{{- define "kusoaddon.image" -}}
+{{- $root := index . 0 -}}
+{{- $ref := index . 1 -}}
+{{- $pin := $root.Values.imagePin | default dict -}}
+{{- if and (eq ($pin.image | default "") $ref) ($pin.digest | default "") -}}
+{{- printf "%s@%s" $ref $pin.digest | quote -}}
+{{- else -}}
+{{- $ref | quote -}}
+{{- end -}}
+{{- end -}}

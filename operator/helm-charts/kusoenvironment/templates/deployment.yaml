@@ -229,7 +229,7 @@ spec:
       */}}
       initContainers:
         - name: wait-for-addons
-          image: busybox:1.36
+          image: busybox:1.38
           command: ["sh", "-c", {{ include "kusoenvironment.waitForAddonsScript" . | quote }}]
           securityContext:
             allowPrivilegeEscalation: false

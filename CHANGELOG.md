@@ -19,6 +19,36 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.38.1] — 2026-11-09
+
+### Other
+- Tell agents which vulnerability findings their repo can fix ([902a9fa](https://github.com/sislelabs/kuso/commit/902a9faa9da4293b9b812dbc10bf4f11bf49f687))
+- Apply OS security updates to nixpacks images ([28cda58](https://github.com/sislelabs/kuso/commit/28cda58d4c14576befcc55dcc32fae2b99fc6830))
+
+## [0.38.0] — 2026-11-09
+
+### Other
+- Create new addons on current majors ([a684b89](https://github.com/sislelabs/kuso/commit/a684b89636c1990d12e0da351f367d26b9e07b1f))
+
+### 🐛 Bug Fixes
+- Fix RabbitMQ crash-looping after a restart and Meilisearch never starting ([7e188c9](https://github.com/sislelabs/kuso/commit/7e188c9ae7e101ab53f972425bab8e77ffd48b91))
+
+## [0.37.0] — 2026-11-08
+
+### Other
+- Pull the sandbox's Docker Hub images through mirror.gcr.io ([89aa324](https://github.com/sislelabs/kuso/commit/89aa324649e4cd1ef57d086667c818e001675388))
+- Upgrade Prometheus to v3.16.0 ([4b3c31d](https://github.com/sislelabs/kuso/commit/4b3c31d980d314a018f750123372c55804e9ff68))
+- Upgrade buildkit to v0.34.2 and the registry to 3.1.2 ([f70521b](https://github.com/sislelabs/kuso/commit/f70521ba96d26bb49cbb0cfdf0c0609304036452))
+- Build new static services with node:22 ([c26b108](https://github.com/sislelabs/kuso/commit/c26b108616af47e5cf706bbb4d183f55be9e3870))
+- Pull S3 addon images from pgsty/minio and pgsty/mc ([49fcd84](https://github.com/sislelabs/kuso/commit/49fcd84cde80305acd9ab7c830fcd2dfbeb33a07))
+
+## [0.36.0] — 2026-11-08
+
+### Other
+- Keep addon images current: scan, pre-pull and roll newer builds of their tag ([7daec78](https://github.com/sislelabs/kuso/commit/7daec78f7a3aff990992bad9d8b9f06f415c9042))
+- Let a second sandbox run beside another and pin its traefik chart ([11a8d43](https://github.com/sislelabs/kuso/commit/11a8d4392facdb08f5e4d397f27bbf7f922505f7))
+- Delete orphaned registry repos by default ([f840349](https://github.com/sislelabs/kuso/commit/f8403496d45d20b268a996d9f7979d7aedde178d))
+
 ## [0.35.0] — 2026-11-07
 
 ### Other
@@ -596,29 +626,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): key the addon clone swap off the true source, not the clone name ([16bf9cc](https://github.com/sislelabs/kuso/commit/16bf9cc6eaa40ca72437a555dd969f27107fa0fc))
-
-## [0.25.28] — 2026-09-02
-
-### ✨ Features
-- Feat(cli): kuso version also prints the server's version ([b5f98c6](https://github.com/sislelabs/kuso/commit/b5f98c63df39ab6cda001e30e04df4f921a7397c))
-
-### 🐛 Bug Fixes
-- Fix(addon): pooler accepts 1000 client connections, not 200 ([f20ecac](https://github.com/sislelabs/kuso/commit/f20ecacc6ca0c6ce6f37083555a43606c4ca0ad7))
-
-## [0.25.27] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addons): env refresh keeps the env's envFrom order ([5142e29](https://github.com/sislelabs/kuso/commit/5142e290ac5ef500649bf308b058e8720b78dd36))
-
-## [0.25.26] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(addon): external-backend pooler pods get public egress ([57498fc](https://github.com/sislelabs/kuso/commit/57498fc10bb19d4719b8da9aa11cbf109ff36b7e))
-
-## [0.25.25] — 2026-09-02
-
-### 🐛 Bug Fixes
-- Fix(backup): make postgres restore survive a newer pg_dump than the server ([312239c](https://github.com/sislelabs/kuso/commit/312239c8ce33812035414a4251ed4d653612cafe))
 
 
 ---
