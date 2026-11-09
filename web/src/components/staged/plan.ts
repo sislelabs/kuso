@@ -22,6 +22,11 @@ const ROLLING_PATCH_FIELDS = new Set([
   "publicEnv",
 ]);
 
+// Patch fields that change what gets built. The server stores them but
+// doesn't rebuild, so the review triggers a build when any of them is
+// staged.
+const SOURCE_PATCH_FIELDS = new Set(["repo", "dockerfile", "runtime", "buildArgs", "static", "buildpacks"]);
+
 export interface ServicePlan {
   envSet: { name: string; value: string }[];
   envUnset: string[];
@@ -35,6 +40,9 @@ export interface ServicePlan {
   // Form fields someone else changed since they were staged.
   conflicts: string[];
   restarts: boolean;
+  // Applying should also start a build: a source/build setting changed, or
+  // the service has never deployed. Never for image services.
+  builds: boolean;
 }
 
 // overlaySettings is the deployed form state with the staged fields on top.
@@ -49,7 +57,11 @@ function same(a: unknown, b: unknown): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function planService(svc: KusoService | undefined, staged: StagedService): ServicePlan {
+export function planService(
+  svc: KusoService | undefined,
+  staged: StagedService,
+  opts: { neverDeployed?: boolean } = {},
+): ServicePlan {
   const baseline = fromSvc(svc);
   const fields = staged.settings?.fields;
   const target = overlaySettings(baseline, fields);
@@ -70,6 +82,12 @@ export function planService(svc: KusoService | undefined, staged: StagedService)
   const patchFields = Object.keys(patch ?? {});
   const envSet = (staged.env?.set ?? []).map((e) => ({ name: e.name, value: e.value }));
   const envUnset = (staged.env?.unset ?? []).map((u) => u.name);
+  const builtFromSource = !!svc && target.runtime !== "image";
+  const builds =
+    builtFromSource &&
+    !settingsError &&
+    (patchFields.some((f) => SOURCE_PATCH_FIELDS.has(f)) ||
+      (!!opts.neverDeployed && (envSet.length > 0 || envUnset.length > 0 || patchFields.length > 0)));
   return {
     envSet,
     envUnset,
@@ -80,6 +98,7 @@ export function planService(svc: KusoService | undefined, staged: StagedService)
     settingsError,
     conflicts,
     restarts: envSet.length > 0 || envUnset.length > 0 || patchFields.some((f) => ROLLING_PATCH_FIELDS.has(f)),
+    builds,
   };
 }
 

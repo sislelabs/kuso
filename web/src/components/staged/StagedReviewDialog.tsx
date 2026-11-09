@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { serviceBlast } from "@/lib/blast-radius";
-import { getService } from "@/features/services/api";
-import { serviceQueryKey } from "@/features/services/hooks";
+import { getService, listBuilds } from "@/features/services/api";
+import { buildsQueryKey, serviceQueryKey } from "@/features/services/hooks";
+import { buildTriggerMessage } from "@/features/services/buildTrigger";
 import {
   clearApplied,
   fingerprint,
@@ -100,14 +101,32 @@ export function StagedReviewDialog({
     })),
   });
   const svcByName = new Map<string, KusoService | undefined>(services.map((s, i) => [s, svcQueries[i]?.data]));
+  const buildQueries = useQueries({
+    queries: services.map((s) => ({
+      queryKey: buildsQueryKey(project, s),
+      queryFn: () => listBuilds(project, s),
+      enabled: open,
+    })),
+  });
+  // Nothing has ever built: the first apply has to start the first build.
+  const neverDeployed = (i: number) => {
+    const builds = buildQueries[i]?.data;
+    const svc = svcByName.get(services[i] ?? "");
+    return !!builds && !!svc?.spec.repo?.url && !builds.some((b) => b.status?.toLowerCase() === "succeeded");
+  };
   const [message, setMessage] = useState("");
   const [phase, setPhase] = useState<Record<string, Phase>>({});
   const [busy, setBusy] = useState(false);
   const [sequentialNote, setSequentialNote] = useState(false);
   const qc = useQueryClient();
 
-  const plans = services.map((s) => ({ service: s, staged: staged![s], plan: planService(svcByName.get(s), staged![s]) }));
+  const plans = services.map((s, i) => ({
+    service: s,
+    staged: staged![s],
+    plan: planService(svcByName.get(s), staged![s], { neverDeployed: neverDeployed(i) }),
+  }));
   const anyRestart = plans.some((p) => p.plan.restarts);
+  const anyBuild = plans.some((p) => p.plan.builds);
   const failingChecks = plans.filter((p) => healthcheckCheck(p.plan, p.staged)?.kind === "failed").map((p) => p.service);
   const blocked = plans.some((p) => p.plan.settingsError);
   // A failed health check test needs a second, explicit "Deploy anyway".
@@ -126,15 +145,28 @@ export function StagedReviewDialog({
       const current = getStagedState()[project]?.[service];
       if (!current) continue;
       setPhase((p) => ({ ...p, [service]: "applying" }));
-      const restarts = plans.find((p) => p.service === service)?.plan.restarts ?? true;
-      const snap = restarts ? await snapshotRollout(project, service) : undefined;
+      const svcPlan = plans.find((p) => p.service === service)?.plan;
+      const restarts = svcPlan?.restarts ?? true;
+      const builds = svcPlan?.builds ?? false;
+      // A build's rollout lands minutes later; the build row tracks it.
+      const snap = restarts && !builds ? await snapshotRollout(project, service) : undefined;
       try {
-        const out = await applyStagedService(project, service, current, message);
+        const out = await applyStagedService(project, service, current, message, {
+          neverDeployed: neverDeployed(services.indexOf(service)),
+        });
         if (out.sequential) setSequentialNote(true);
         // Refetch before un-staging so the editors re-seed from the new
         // deployed values instead of flashing the old ones.
         await refreshServiceQueries(qc, project, service);
         clearApplied(project, service, { env: out.appliedEnv, settings: out.settingsApplied });
+        if (out.build?.ok) {
+          void qc.invalidateQueries({ queryKey: buildsQueryKey(project, service) });
+          toast.success(buildTriggerMessage(out.build.result, `Build started for ${service}`, service));
+        } else if (out.build) {
+          toast.error(`${service}: settings applied, but the build didn't start`, {
+            description: `${out.build.error}. Use Redeploy to build.`,
+          });
+        }
         const errCount = Object.keys(out.errors).length;
         setStagedErrors(project, service, errCount ? out.errors : undefined);
         if (errCount) failed++;
@@ -152,7 +184,7 @@ export function StagedReviewDialog({
     }
     setBusy(false);
     if (failed === 0) {
-      if (!anyRestart) toast.success(`Applied changes to ${ok} ${ok === 1 ? "service" : "services"}. No restart needed.`);
+      if (!anyRestart && !anyBuild) toast.success(`Applied changes to ${ok} ${ok === 1 ? "service" : "services"}. No restart needed.`);
       setMessage("");
       setPhase({});
       onOpenChange(false);
@@ -219,6 +251,11 @@ export function StagedReviewDialog({
                       )}
                     >
                       {plan.restarts ? "Restarts pods once" : "No restart"}
+                    </span>
+                  )}
+                  {!loading && plan.builds && (
+                    <span className="rounded-full border border-[var(--accent)]/40 px-2 py-px text-xs text-[var(--text-primary)]">
+                      Builds and deploys
                     </span>
                   )}
                   <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" aria-live="polite">
@@ -371,6 +408,8 @@ export function StagedReviewDialog({
                 <>
                   <RotateCw /> Retry
                 </>
+              ) : anyBuild ? (
+                "Apply & build"
               ) : anyRestart ? (
                 "Deploy changes"
               ) : (
