@@ -90,6 +90,7 @@ import Link from "next/link";
 import { projectCanvasHref } from "./hrefs";
 import { opensInPage, setComplexTabsInPage } from "./peekPref";
 import { PackageX } from "lucide-react";
+import { useReverting } from "@/features/revisions";
 
 type Tab =
   | "deployments"
@@ -1133,7 +1134,9 @@ function HealthBanner({
   otherEnvGroups: string[];
   onNavigate: (tab: string) => void;
 }) {
-  const label = (serverState && PROBLEM_LABEL[serverState]) || fallbackLabel;
+  // Matches the header button and Deployments card while a revert is in flight.
+  const reverting = useReverting(project, service, serverState === "rollout_failing");
+  const label = reverting ? "Reverting…" : (serverState && PROBLEM_LABEL[serverState]) || fallbackLabel;
   const runtime = problem === "runtime";
   const danger = runtime || problem === "stuck";
   // On Deployments the failure card below names the cause; say it once.
