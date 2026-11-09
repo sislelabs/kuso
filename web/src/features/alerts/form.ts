@@ -1,4 +1,4 @@
-import type { AlertKind, AlertRule, CreateAlertBody } from "./api";
+import type { AlertKind, AlertRule, AlertTestResult, CreateAlertBody } from "./api";
 
 // What the settings form shows for each kind. `threshold` stores into
 // thresholdFloat (percent / ms) or thresholdInt (matches / days) —
@@ -368,4 +368,49 @@ export function serviceRuleForm(kind: AlertKind, project: string, service: strin
   if (ALERT_KINDS[kind].scope === "env") f.env = env;
   f.name = autoRuleName(f);
   return f;
+}
+
+// secToDur writes seconds in the largest whole unit ("300" → "5m"), so an
+// edited rule shows the window it was saved with.
+export function secToDur(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n % 86_400 === 0) return `${n / 86_400}d`;
+  if (n % 3600 === 0) return `${n / 3600}h`;
+  if (n % 60 === 0) return `${n / 60}m`;
+  return `${n}s`;
+}
+
+// ruleToForm is the edit form for a saved rule; buildCreateBody(ruleToForm(r))
+// round-trips the rule.
+export function ruleToForm(rule: AlertRule): RuleFormState {
+  const meta = ALERT_KINDS[rule.kind] as KindMeta | undefined;
+  const base = emptyRuleForm(meta ? rule.kind : "log_match");
+  const threshold = meta?.threshold
+    ? rule[meta.threshold.field]
+    : undefined;
+  return {
+    ...base,
+    kind: rule.kind,
+    name: rule.name,
+    project: rule.project ?? "",
+    service: rule.service ?? "",
+    env: rule.env ?? "",
+    query: rule.query ?? "",
+    threshold: threshold !== undefined && threshold !== null ? String(threshold) : "",
+    minRequests: meta?.minRequests && rule.thresholdInt !== undefined && rule.thresholdInt !== null ? String(rule.thresholdInt) : base.minRequests,
+    window: secToDur(rule.windowSeconds) || base.window,
+    throttle: secToDur(rule.throttleSeconds) || base.throttle,
+    severity: rule.severity,
+  };
+}
+
+// testSummary words a test send's outcome for a toast or status line.
+export function testSummary(r: AlertTestResult): { ok: boolean; text: string } {
+  if (r.results.length === 0) {
+    return { ok: false, text: "No notification channel receives this rule's alerts. Check the channels' events and project filters." };
+  }
+  const failed = r.results.filter((d) => !d.ok);
+  const parts = r.results.map((d) => (d.ok ? `${d.name}: delivered` : `${d.name}: ${d.error ?? "failed"}`));
+  const muted = r.muted ? " The project is muted, so real warning and info alerts are held back." : "";
+  return { ok: failed.length === 0, text: parts.join(" · ") + "." + muted };
 }

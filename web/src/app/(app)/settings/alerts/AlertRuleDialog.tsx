@@ -10,6 +10,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SettingsSelect } from "@/components/settings/SettingsSection";
 import {
   createAlert,
+  updateAlert,
+  testAlert,
+  testSummary,
   ALERT_KINDS,
   DUR_UNITS,
   autoRuleName,
@@ -20,6 +23,8 @@ import {
   alertKindsFor,
   type AlertAccessSession,
   type AlertKind,
+  type AlertRule,
+  type AlertTestResult,
   type DurUnit,
   type RuleFormState,
 } from "@/features/alerts";
@@ -67,11 +72,13 @@ function DurationInput({
   );
 }
 
-// AlertRuleDialog is the create form for one alert rule. The settings
-// page opens it unscoped; a service's Alerts card opens it in place with
-// `serviceScope`, which hides cluster-wide node kinds.
+// AlertRuleDialog is the create and edit form for one alert rule. The
+// settings page opens it unscoped; a service's Alerts card opens it in
+// place with `serviceScope`, which hides cluster-wide node kinds. With
+// `editing` it saves over that rule (initial is ruleToForm(editing)).
 export function AlertRuleDialog({
   initial,
+  editing,
   access,
   projects,
   projectsLoading,
@@ -80,6 +87,7 @@ export function AlertRuleDialog({
   serviceScope = false,
 }: {
   initial: RuleFormState;
+  editing?: AlertRule;
   serviceScope?: boolean;
   access: AlertAccessSession;
   /** Projects the caller may scope a rule to. */
@@ -91,6 +99,7 @@ export function AlertRuleDialog({
   const isAdmin = access.adminAll;
   const kinds = alertKindsFor(access).filter((k) => !serviceScope || ALERT_KINDS[k].scope !== "none");
   const [initialForm] = useState<RuleFormState>(() => {
+    if (editing) return initial;
     // A deep link can name a project or kind this member can't use; drop
     // it rather than open a form that can only fail.
     if (isAdmin && !serviceScope) return initial;
@@ -103,7 +112,7 @@ export function AlertRuleDialog({
   });
   const [form, setFormRaw] = useState<RuleFormState>(initialForm);
   // The name follows kind and scope until the user edits it.
-  const [nameAuto, setNameAuto] = useState(() => !initialForm.name || initialForm.name === autoRuleName(initialForm));
+  const [nameAuto, setNameAuto] = useState(() => !editing && (!initialForm.name || initialForm.name === autoRuleName(initialForm)));
   const setForm = (update: (f: RuleFormState) => RuleFormState) =>
     setFormRaw((f) => {
       const next = update(f);
@@ -138,17 +147,37 @@ export function AlertRuleDialog({
   const setProject = (project: string) => setForm((f) => ({ ...f, project, service: "", env: "" }));
   const noProjectReason = "Pick a project first";
 
+  // A test sends the SAVED rule's card through every channel it reaches.
+  const [testResult, setTestResult] = useState<AlertTestResult | null>(null);
+  const [testing, setTesting] = useState(false);
+  const sendTest = async (id: string) => {
+    setTesting(true);
+    try {
+      const r = await testAlert(id);
+      setTestResult(r);
+      const sum = testSummary(r);
+      if (sum.ok) toast.success("Test notification sent", { description: sum.text });
+      else toast.error("Test notification didn't reach every channel", { description: sum.text });
+    } catch (e) {
+      toastError(e, "Couldn't send the test notification");
+    } finally {
+      setTesting(false);
+    }
+  };
   const create = useMutation({
-    mutationFn: () => {
+    mutationFn: async ({ test }: { test: boolean }) => {
       if (!built.ok) throw new Error(built.error);
-      return createAlert(built.body);
+      const rule = editing ? await updateAlert(editing.id, built.body) : await createAlert(built.body);
+      return { rule, test };
     },
-    onSuccess: () => {
-      toast.success(`Alert ${form.name.trim()} created`);
+    onSuccess: async ({ rule, test }) => {
+      toast.success(editing ? `Saved ${form.name.trim()}` : `Alert ${form.name.trim()} created`);
+      if (test && rule?.id) await sendTest(rule.id);
       onCreated();
     },
-    onError: (e) => toastError(e, "Couldn't create the alert rule"),
+    onError: (e) => toastError(e, editing ? "Couldn't save the alert rule" : "Couldn't create the alert rule"),
   });
+  const busy = create.isPending || testing;
 
   const changeKind = (kind: AlertKind) =>
     setForm((f) => ({ ...emptyRuleForm(kind), name: f.name, project: f.project, service: f.service, severity: f.severity }));
@@ -157,7 +186,7 @@ export function AlertRuleDialog({
     <Dialog
       open
       onOpenChange={(next, details) => {
-        if (next || create.isPending) return;
+        if (next || busy) return;
         // A stray backdrop click shouldn't throw away a half-built rule.
         if (dirty && details.reason === "outside-press") return;
         onClose();
@@ -169,7 +198,7 @@ export function AlertRuleDialog({
       >
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
           <div>
-            <DialogTitle className="text-base font-semibold">New alert rule</DialogTitle>
+            <DialogTitle className="text-base font-semibold">{editing ? "Edit alert rule" : "New alert rule"}</DialogTitle>
             <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
               Evaluated every minute. Fires through your notification channels.
             </p>
@@ -343,17 +372,54 @@ export function AlertRuleDialog({
               {built.error}
             </p>
           )}
-          <Button size="sm" variant="ghost" onClick={onClose} disabled={create.isPending}>
+          <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
+          {editing ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void sendTest(editing.id)}
+              title={dirty ? "Tests the saved rule; save first to test your changes" : "Sends this rule's alert to every channel it reaches"}
+            >
+              {testing ? "Sending…" : "Send test notification"}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!built.ok || busy}
+              onClick={() => create.mutate({ test: true })}
+              title="Creates the rule, then sends its alert to every channel it reaches"
+            >
+              {testing ? "Sending test…" : "Create & send test"}
+            </Button>
+          )}
           <Button
             size="sm"
-            disabled={!built.ok || create.isPending}
+            disabled={!built.ok || busy || (!!editing && !dirty)}
             aria-describedby={!built.ok ? "alert-rule-blocked" : undefined}
-            onClick={() => create.mutate()}
+            onClick={() => create.mutate({ test: false })}
           >
-            {create.isPending ? "Creating…" : "Create rule"}
+            {create.isPending ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create rule"}
           </Button>
+          {testResult && editing && (
+            <ul role="status" className="w-full space-y-0.5 pt-1 text-xs">
+              {testResult.results.length === 0 ? (
+                <li className="text-[var(--text-secondary)]">{testSummary(testResult).text}</li>
+              ) : (
+                testResult.results.map((d) => (
+                  <li key={d.channel} className={d.ok ? "text-[var(--text-secondary)]" : "text-[var(--error)]"}>
+                    {d.name} ({d.type}): {d.ok ? "delivered" : (d.error ?? "failed")}
+                  </li>
+                ))
+              )}
+              {testResult.muted && (
+                <li className="text-[var(--text-tertiary)]">The project is muted, so real warning and info alerts are held back.</li>
+              )}
+            </ul>
+          )}
         </footer>
       </DialogContent>
     </Dialog>

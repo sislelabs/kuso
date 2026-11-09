@@ -10,6 +10,7 @@ import {
   parseDur,
   prefillRuleForm,
   ruleStatus,
+  ruleToForm,
   splitDur,
   type RuleFormState,
 } from "./form";
@@ -178,5 +179,51 @@ describe("service-scoped alert defaults", () => {
   it("prefills project, service and env", () => {
     const f = serviceRuleForm("crashloop", "shop", "worker", "production");
     expect([f.project, f.service, f.env, f.name]).toEqual(["shop", "worker", "production", "worker Crash loop"]);
+  });
+});
+
+describe("ruleToForm", () => {
+  const saved = (over: Partial<AlertRule>): AlertRule => ({
+    id: "r1",
+    name: "shop web 5xx",
+    enabled: true,
+    kind: "http_5xx_rate",
+    project: "shop",
+    service: "web",
+    env: "staging",
+    thresholdFloat: 2.5,
+    thresholdInt: 50,
+    windowSeconds: 900,
+    severity: "error",
+    throttleSeconds: 3600,
+    createdAt: "",
+    updatedAt: "",
+    ...over,
+  });
+
+  it("round-trips a saved rule through the form", () => {
+    const built = buildCreateBody(ruleToForm(saved({})));
+    expect(built).toEqual({
+      ok: true,
+      body: {
+        name: "shop web 5xx",
+        kind: "http_5xx_rate",
+        severity: "error",
+        project: "shop",
+        service: "web",
+        env: "staging",
+        thresholdFloat: 2.5,
+        thresholdInt: 50,
+        windowSeconds: 900,
+        throttleSeconds: 3600,
+      },
+    });
+  });
+
+  it("keeps odd durations exact and log queries", () => {
+    const f = ruleToForm(saved({ kind: "log_match", query: "panic", thresholdInt: 3, thresholdFloat: undefined, windowSeconds: 90, env: "" }));
+    expect(f.window).toBe("90s");
+    expect(f.query).toBe("panic");
+    expect(f.threshold).toBe("3");
   });
 });
