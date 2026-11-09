@@ -294,6 +294,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Delete("/api/projects/{project}/services/{service}/domains/{host}", h.RemoveDomain)
 	r.Put("/api/projects/{project}/services/{service}/env-vars/{name}", h.SetEnvVar)
 	r.Delete("/api/projects/{project}/services/{service}/env-vars/{name}", h.UnsetEnvVar)
+	// Staged changes: variable writes/removals plus a spec patch applied
+	// together, so each env CR is written (and rolled) once.
+	r.Post("/api/projects/{project}/services/{service}/changes", h.ApplyServiceChanges)
 	// Rename is a separate endpoint because it's clone-then-delete
 	// rather than a normal patch — the URL the new resource lives
 	// at is different from the one the request came in on, and
@@ -1350,6 +1353,62 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ApplyServiceChanges applies a staged batch (env writes, env removals,
+// one spec patch) and rolls each env once. Per-item failures come back in
+// the 200 body so the client can retry just those; a request-level error
+// (bad body, no access, unknown service) maps like the other handlers.
+func (h *ProjectsHandler) ApplyServiceChanges(w http.ResponseWriter, r *http.Request) {
+	var req projects.ServiceChangesRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	// Same mask-sentinel guard as SetEnvVar/SetEnv.
+	for _, e := range req.EnvSet {
+		if e.Value == envMaskSentinel {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("refusing to write masked sentinel value for %q — supply a real value", e.Name))
+			return
+		}
+	}
+	if req.Patch != nil && req.Patch.Repo != nil &&
+		!h.requireRepoBound(ctx, w, project, []string{req.Patch.Repo.URL}, []int64{req.Patch.Repo.InstallationID}) {
+		return
+	}
+	res, err := h.Svc.ApplyServiceChanges(ctx, project, service, req)
+	if err != nil {
+		h.fail(w, "apply service changes", err)
+		return
+	}
+	names := make([]string, 0, len(req.EnvSet)+len(req.EnvUnset))
+	for _, e := range req.EnvSet {
+		names = append(names, e.Name)
+		if h.DB != nil {
+			_ = h.DB.DeleteEnvHint(ctx, project, project+"-"+service, e.Name)
+		}
+	}
+	names = append(names, req.EnvUnset...)
+	if h.Audit != nil {
+		// Names only, never values.
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "service.applyChanges",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("applied staged changes: env %v, patch=%v", names, req.Patch != nil),
+		})
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // UnsetEnvVar removes a single env var by name. ErrNotFound on

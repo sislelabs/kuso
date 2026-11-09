@@ -119,6 +119,11 @@ type changedFields struct {
 	// unconditional, but a healthcheck-only PATCH still needs a flag or
 	// propagateChangedToEnvs returns early and the probe never changes.
 	Healthcheck bool
+	// SecretsRev, when set, is stamped on every env in the same write.
+	// Only a rollout batch sets it, so a batch's secret-value edits and
+	// spec edits land as one env update (one rollout) instead of a
+	// separate secretsRev patch. Not a bool, so any() ignores it.
+	SecretsRev string
 }
 
 // any reports whether any field changed.
@@ -148,7 +153,11 @@ func (c changedFields) any() bool {
 // Long-term fix is to teach the chart to merge both CRs; until then
 // this is the single place to keep correct.
 func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService, changed changedFields) error {
-	if !changed.any() {
+	if !changed.any() && changed.SecretsRev == "" {
+		return nil
+	}
+	if b := rolloutBatchFrom(ctx); b != nil {
+		b.record(changed)
 		return nil
 	}
 	if changed.EnvVars && svc.Spec.SharedEnvKeys == nil {
@@ -238,6 +247,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			// propagation pass — cheap, idempotent, and decoupled from the
 			// changed-flags that gate the env-var merge below.
 			env.Spec.PublicEnv = svc.Spec.PublicEnv
+			if changed.SecretsRev != "" {
+				env.Spec.SecretsRev = changed.SecretsRev
+			}
 			// Healthcheck likewise mirrors unconditionally — a service-level
 			// edit (add/remove the HTTP probe) must reach every env so the
 			// chart re-renders the probe block. Idempotent when unchanged.

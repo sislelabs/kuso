@@ -755,6 +755,10 @@ func (s *Service) removeManagedSecretKey(ctx context.Context, ns, project, servi
 // running pods keep the stale value until the next unrelated save. Mirrors
 // secrets.bumpRev (same {"spec":{"secretsRev":...}} patch shape).
 func (s *Service) bumpSecretsRevForService(ctx context.Context, ns, project, service string) error {
+	if b := rolloutBatchFrom(ctx); b != nil {
+		b.markSecretsRev()
+		return nil
+	}
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		labelProject: project,
 		labelService: service,

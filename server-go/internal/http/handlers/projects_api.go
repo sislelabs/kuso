@@ -60,6 +60,7 @@ type ProjectsAPI interface {
 	// decides storage from the value + service build declarations.
 	SetEnvValue(ctx context.Context, project, service, name, value string) (*kube.KusoService, error)
 	UnsetEnvVar(ctx context.Context, project, service, name string) (*kube.KusoService, error)
+	ApplyServiceChanges(ctx context.Context, project, service string, req projects.ServiceChangesRequest) (*projects.ServiceChangesResult, error)
 	GetEnv(ctx context.Context, project, service string) ([]projects.EnvVar, error)
 	GetEnvScoped(ctx context.Context, project, service, envName string, reveal bool) ([]projects.EnvVar, error)
 	// GetEnvRevealed resolves every value to plaintext (admin-only reveal).
