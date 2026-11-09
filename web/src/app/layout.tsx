@@ -1,13 +1,21 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Sans, Geist_Mono } from "next/font/google";
+import { Archivo, Instrument_Sans, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { QueryProvider } from "@/lib/query-client";
 import { ThemedToaster } from "@/components/shared/ThemedToaster";
 import { ReducedMotion } from "@/lib/reduced-motion";
 import "./globals.css";
 
-// One UI family for prose, labels and headings; Geist Mono only for
-// literal values (hashes, hosts, keys, logs).
+// Archivo (width axis, set semi-expanded) is the display face for page
+// titles, dialog titles, the wordmark and canvas node names; Instrument
+// Sans for prose and labels; Geist Mono only for literal values (hashes,
+// hosts, keys, logs).
+const display = Archivo({
+  subsets: ["latin"],
+  axes: ["wdth"],
+  variable: "--font-archivo",
+  display: "swap",
+});
 const uiSans = Instrument_Sans({
   subsets: ["latin"],
   variable: "--font-ui",
@@ -42,8 +50,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#FBFBF7" },
-    { media: "(prefers-color-scheme: dark)", color: "#0A0C15" },
+    { media: "(prefers-color-scheme: light)", color: "#FAF9F4" },
+    { media: "(prefers-color-scheme: dark)", color: "#090B12" },
   ],
 };
 
@@ -52,7 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${uiSans.variable} ${geistMono.variable}`}
+      className={`${display.variable} ${uiSans.variable} ${geistMono.variable}`}
     >
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>

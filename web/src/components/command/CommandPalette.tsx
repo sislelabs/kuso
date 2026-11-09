@@ -88,6 +88,7 @@ import {
   type ServiceActionKind,
 } from "./paletteIndex";
 import { SETTINGS_NAV } from "@/components/settings/nav";
+import { addonPageHref, servicePageHref } from "@/components/service/workspace/hrefs";
 
 const ACTION_ICON: Record<ServiceActionKind, ReactNode> = {
   logs: <ScrollText />,
@@ -542,7 +543,7 @@ export function CommandPalette() {
       keywords={[a.spec.kind ?? "", "database"]}
       boost={tierBoost(rankCtx, { project, key: `a:${project}/${a.metadata.name}` })}
       onSelect={() =>
-        go(`/projects/${encodeURIComponent(project)}?addon=${encodeURIComponent(a.metadata.name)}`, {
+        go(addonPageHref(project, a.metadata.name), {
           kind: "addon",
           project,
           name: a.metadata.name,
@@ -603,7 +604,7 @@ export function CommandPalette() {
                         id={`recent-${recentKey(row.r)}`}
                         value={pathLabel(row.r.project, row.addon ?? "")}
                         onSelect={() =>
-                          go(`/projects/${encodeURIComponent(row.r.project)}?addon=${encodeURIComponent(row.addon ?? "")}`, row.r)
+                          go(addonPageHref(row.r.project, row.addon ?? ""), row.r)
                         }
                         icon={<Database />}
                       >
@@ -891,7 +892,7 @@ export function CommandPalette() {
     if (!svc) {
       body = (
         <Group heading={page.name}>
-          <Row value="open service" onSelect={() => go(`/projects/${encodeURIComponent(page.project)}?service=${encodeURIComponent(page.name)}`)} icon={<CornerDownLeft />}>
+          <Row value="open service" onSelect={() => go(servicePageHref(page.project, page.name, { env: page.group }))} icon={<CornerDownLeft />}>
             Open service
           </Row>
         </Group>

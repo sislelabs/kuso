@@ -17,9 +17,9 @@ const touchTarget =
 // `default`, `accent`, `neutral` and `outline` are kept as aliases so
 // existing call sites keep compiling; prefer the canonical names.
 const primary =
-  "border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)]"
+  "border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm),var(--btn-highlight)] hover:bg-[var(--btn-primary-bg-hover)]"
 const secondary =
-  "border-[var(--btn-secondary-border)] bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] shadow-[var(--shadow-sm)] hover:border-[var(--border-strong)] hover:bg-[var(--btn-secondary-bg-hover)] aria-expanded:bg-[var(--btn-secondary-bg-hover)]"
+  "border-[var(--btn-secondary-border)] bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] shadow-[var(--shadow-sm),var(--highlight)] hover:border-[var(--border-strong)] hover:bg-[var(--btn-secondary-bg-hover)] aria-expanded:bg-[var(--btn-secondary-bg-hover)]"
 
 const buttonVariants = cva(
   touchTarget + " " + "group/button relative inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow] duration-150 outline-none select-none active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",

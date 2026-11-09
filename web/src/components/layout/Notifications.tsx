@@ -26,6 +26,7 @@ import {
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { humanizeNotification } from "@/lib/format-notification";
+import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 // FeedEvent matches the server's NotificationEvent wire shape. Only
 // the fields the feed renders are typed.
@@ -402,7 +403,7 @@ function NotificationRow({
   const href =
     event.url ||
     (event.project && event.service
-      ? `/projects/${encodeURIComponent(event.project)}?service=${encodeURIComponent(event.service)}`
+      ? servicePageHref(event.project, event.service)
       : event.project
         ? `/projects/${encodeURIComponent(event.project)}`
         : "");

@@ -10,6 +10,7 @@ import type { VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 import { addonVersionLabel } from "@/features/addons/version";
+import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
 
 export interface AddonNodeData extends CanvasNodeA11y {
   project: string;
@@ -44,12 +45,14 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
       className={cn(
         // 3 grid units tall (services are 5) so addons read as supporting
         // pieces; both snap to the same 24px grid.
-        "group relative flex h-[72px] w-[220px] flex-col justify-center rounded-2xl border-2 bg-[var(--bg-elevated)] px-3 py-2 transition-colors cursor-pointer hover:border-[var(--border-strong)]",
-        tone.border,
+        nodeCardClass,
+        "flex h-[72px] w-[220px] flex-col justify-center px-3 py-2",
+        nodeBorderClass(status.tone, tone.border),
         nodeFocusClass,
       )}
     >
       <NodeHandles />
+      <span aria-hidden className={cn(nodeRailClass, tone.dot)} />
       <button
         tabIndex={-1}
         type="button"
@@ -59,14 +62,14 @@ export function AddonNode({ id, data }: { id: string; data: AddonNodeData }) {
           e.stopPropagation();
           data.__onContext?.(e);
         }}
-        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+        className={nodeActionButtonClass}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
       <div className="flex items-center gap-2.5 pr-6">
         <AddonIcon kind={data.addon.spec.kind} className="h-5 w-5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+          <p className={cn(nodeNameClass, "flex min-w-0 items-center gap-1.5")}>
             <span className="truncate" title={data.addon.metadata.name}>{shortName}</span>
             <VulnBadge tabIndex={-1} summary={data.vulns} onOpen={() => data.__onOpenTab?.("vulnerabilities")} />
           </p>

@@ -3,6 +3,7 @@ import type { ProjectSummaryItem } from "@/features/projects";
 import {
   buildPaletteIndex,
   envVarHref,
+  serviceHref,
   matchScore,
   parseIndexSnapshot,
   parseRecents,
@@ -86,7 +87,12 @@ describe("buildPaletteIndex", () => {
 
   it("builds the variables highlight deep link", () => {
     const web = idx.services.find((s) => s.name === "web")!;
-    expect(envVarHref(web, "API_URL")).toBe("/projects/shop?service=web&tab=variables&highlight=API_URL");
+    expect(envVarHref(web, "API_URL")).toBe("/projects/shop/services/web?tab=variables&highlight=API_URL");
+  });
+
+  it("links non-production services to their env on the full page", () => {
+    const staging = idx.services.find((s) => s.group === "staging")!;
+    expect(serviceHref(staging, "logs")).toBe(`/projects/shop/services/${staging.name}?env=staging&tab=logs`);
   });
 });
 

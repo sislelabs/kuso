@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { deriveCronStatus, STATUS_TONE } from "@/features/services";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
+import { nodeActionButtonClass, nodeCardClass, nodeNameClass } from "./nodeStyle";
 
 // Canvas node for KusoCron. Smaller than the service/addon nodes so
 // crons read as a different class of object at a glance — they're
@@ -110,10 +111,12 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
         // 220×96: smaller than the 280×120 service tiles so the visual
         // hierarchy stays. Crons have no live health, so the border stays
         // neutral; paused crons dim.
-        "group relative flex h-[96px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-2.5 transition-colors cursor-pointer",
+        nodeCardClass,
+        // Dashed: a cron is a schedule, not a running thing.
+        "flex h-[96px] w-[220px] flex-col border-dashed p-2.5",
         suspended
           ? "opacity-70 border-[var(--border-default)]"
-          : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]",
+          : "border-[var(--border-strong)]/70 hover:border-[var(--border-strong)]",
         nodeFocusClass,
       )}
     >
@@ -127,14 +130,14 @@ export function CronNode({ id, data }: { id: string; data: CronNodeData }) {
           e.stopPropagation();
           data.__onContext?.(e);
         }}
-        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+        className={nodeActionButtonClass}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
       <div className="flex items-center gap-1.5 pr-7">
         <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{displayName}</span>
+        <span className={nodeNameClass}>{displayName}</span>
       </div>
 
       <div className="mt-1 truncate font-mono text-xs text-[var(--text-secondary)]" title={detail}>

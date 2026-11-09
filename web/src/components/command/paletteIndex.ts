@@ -3,6 +3,7 @@ import { ENV_GROUP_LABEL, envGroupName } from "@/lib/env-group";
 import { serviceShortName } from "@/lib/utils";
 import { serviceUrl } from "@/features/services/serviceUrl";
 import { liveUrlFallback, type LiveUrlFallback } from "@/features/projects/liveDomain";
+import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 // One status vocabulary for every palette row, folded from the
 // server's unified env state (projects/state.go).
@@ -204,12 +205,14 @@ export function saveRecents(list: RecentItem[]): void {
 // Deep link to a service's Variables tab with one key highlighted.
 // Contract with the Variables panel (S5): `highlight=<KEY>` scrolls to
 // and flashes that row.
-export function envVarHref(s: Pick<PaletteService, "project" | "query">, key: string): string {
-  return `/projects/${encodeURIComponent(s.project)}?${s.query}&tab=variables&highlight=${encodeURIComponent(key)}`;
+export function envVarHref(s: Pick<PaletteService, "project" | "name" | "group">, key: string): string {
+  return servicePageHref(s.project, s.name, { env: s.group, tab: "variables", highlight: key });
 }
 
-export function serviceHref(s: Pick<PaletteService, "project" | "query">, tab?: string): string {
-  return `/projects/${encodeURIComponent(s.project)}?${s.query}${tab ? `&tab=${tab}` : ""}`;
+// The palette opens the full-page service view (the canvas peek is for
+// browsing from the canvas itself).
+export function serviceHref(s: Pick<PaletteService, "project" | "name" | "group">, tab?: string): string {
+  return servicePageHref(s.project, s.name, { env: s.group, tab });
 }
 
 function isSubsequence(needle: string, hay: string): boolean {

@@ -92,7 +92,7 @@ export default function WelcomePage() {
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:p-8">
       <header className="mb-8">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Welcome to kuso</h1>
+        <h1 className="font-heading text-3xl font-bold">Welcome to kuso</h1>
         <p className="mt-2 text-sm text-[var(--text-secondary)]">
           Three steps from here to a running service. Leave whenever you like:{" "}
           <Link href="/projects" className="text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--accent)]">
@@ -119,7 +119,7 @@ export default function WelcomePage() {
         onSelect={(n) => setStep(n, n === 3 && project ? { project } : {})}
       />
 
-      <div className="mt-6 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 sm:p-6">
+      <div className="mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-5 shadow-node sm:p-6">
         {step === 1 && (
           <Step1InstallGitHub
             installCount={installCount}

@@ -23,6 +23,7 @@ import type { ErrorSummary, VulnSummary } from "./badgeSummary";
 import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 import { serviceNodeWidth } from "./geometry";
+import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
 
 export interface ServiceNodeData extends CanvasNodeA11y {
   project: string;
@@ -85,14 +86,15 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
       style={{ width: serviceNodeWidth(displayName) }}
       title={[status.detail, url ? buildRefText(data.latestBuild)?.title : ""].filter(Boolean).join("\n") || undefined}
       className={cn(
-        "group relative flex min-h-[120px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
-        tone.border,
-        "hover:border-[var(--border-strong)]",
+        nodeCardClass,
+        "flex min-h-[120px] flex-col p-3 pt-3.5",
+        nodeBorderClass(status.tone, tone.border),
         dimmed && "opacity-70",
         nodeFocusClass,
       )}
     >
       <NodeHandles />
+      <span aria-hidden className={cn(nodeRailClass, tone.dot)} />
 
       <button
         tabIndex={-1}
@@ -103,7 +105,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           e.stopPropagation();
           data.__onContext?.(e, url);
         }}
-        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+        className={nodeActionButtonClass}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
@@ -112,7 +114,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
           their own row so they never squeeze it. */}
       <div className="flex min-w-0 items-center gap-2 pr-6">
         <RuntimeIcon runtime={data.service.spec.runtime} />
-        <span className="truncate text-sm font-medium text-[var(--text-primary)]" title={displayName}>
+        <span className={nodeNameClass} title={displayName}>
           {displayName}
         </span>
       </div>
@@ -249,29 +251,28 @@ function UrlPill({ url }: { url: string }) {
     }
   };
 
+  // Only the two small icons are their own targets; the host text is
+  // part of the card, so clicking it opens the service like the rest.
   return (
-    <span
-      // The pill is its own target; don't let the click open the overlay.
-      onClick={(e) => e.stopPropagation()}
-      className="nodrag inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-1 font-mono text-xs text-[var(--text-secondary)]"
-    >
+    <span className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] py-0.5 pl-2 pr-0.5 font-mono text-xs text-[var(--text-secondary)]">
+      <span className="truncate pr-1" title={url}>{display}</span>
       <a
         tabIndex={-1}
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="inline-flex min-w-0 items-center gap-1 hover:text-[var(--accent)]"
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`Open ${display} in a new tab`}
+        className="nodrag inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--accent)]"
       >
-        <span className="truncate">{display}</span>
-        <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
-        <span className="sr-only">(opens in a new tab)</span>
+        <ExternalLink className="h-3 w-3" aria-hidden />
       </a>
       <button
         tabIndex={-1}
         type="button"
         onClick={onCopy}
         aria-label={`Copy ${display}`}
-        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
+        className="nodrag inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
       >
         {copied ? <Check className="h-3 w-3 text-[var(--success)]" /> : <Copy className="h-3 w-3" />}
       </button>

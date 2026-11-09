@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { NESTED_SURFACE_SELECTOR } from "@/lib/escape-layer";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
@@ -33,20 +34,29 @@ export function useOverlayKeyboard({
   open,
   panelRef,
   chords,
+  keys,
   restoreKey,
+  manageFocus = true,
 }: {
   open: boolean;
   panelRef: React.RefObject<HTMLElement | null>;
   chords: Record<string, () => void>;
+  // Single-key shortcuts (no "g" prefix), e.g. "o" opens the full page.
+  keys?: Record<string, () => void>;
   restoreKey?: string;
+  // Dialog behaviour: move focus in on open, trap Tab, restore on close.
+  // Off for the full-page workspace, which is a page, not a dialog.
+  manageFocus?: boolean;
 }) {
   const chordsRef = useRef(chords);
+  const keysRef = useRef(keys);
   const restoreKeyRef = useRef(restoreKey);
   // Last mounted panel element, for the close-time focus check (the ref
   // itself may be empty or already pointing elsewhere by then).
   const lastPanelRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     chordsRef.current = chords;
+    keysRef.current = keys;
     if (restoreKey) restoreKeyRef.current = restoreKey;
     if (panelRef.current) lastPanelRef.current = panelRef.current;
   });
@@ -56,6 +66,7 @@ export function useOverlayKeyboard({
     const restoreTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Wait a frame so the panel has mounted before we move focus into it.
     const raf = requestAnimationFrame(() => {
+      if (!manageFocus) return;
       const panel = panelRef.current;
       if (!panel || panel.contains(document.activeElement)) return;
       // The panel itself (tabIndex=-1) takes focus so screen readers land
@@ -70,9 +81,15 @@ export function useOverlayKeyboard({
       // Dialogs/popovers opened from the overlay portal out of it; leave
       // their keyboard handling alone.
       const target = e.target as Node | null;
-      const insideOrBody = !target || target === document.body || panel.contains(target);
+      // On the full page the whole document is the workspace's, except
+      // dialogs and popovers stacked on top of it.
+      const insideOrBody =
+        !target ||
+        target === document.body ||
+        panel.contains(target) ||
+        (!manageFocus && !(target instanceof Element && target.closest(NESTED_SURFACE_SELECTOR)));
 
-      if (e.key === "Tab" && insideOrBody) {
+      if (e.key === "Tab" && insideOrBody && manageFocus) {
         const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
           (el) => el.offsetParent !== null || el === document.activeElement,
         );
@@ -103,6 +120,13 @@ export function useOverlayKeyboard({
         }
         return;
       }
+      const single = keysRef.current?.[key];
+      if (single && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        single();
+        return;
+      }
       if (key === "g" && !e.shiftKey) {
         pendingG = now;
         // Keep the canvas/global handlers from also starting a "g" chord.
@@ -114,13 +138,14 @@ export function useOverlayKeyboard({
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onKey, true);
+      if (!manageFocus) return;
       const key = restoreKeyRef.current;
       const panelEl = lastPanelRef.current;
       // After the exit frame: the panel's own focus is gone by then and
       // a re-rendered canvas node is back in the DOM.
       requestAnimationFrame(() => restoreFocus(key, restoreTo, panelEl));
     };
-  }, [open, panelRef]);
+  }, [open, panelRef, manageFocus]);
 }
 
 function visible(el: HTMLElement | null): el is HTMLElement {
