@@ -76,6 +76,7 @@ import { RawEnvEditor, type RawEnvEditorHandle } from "@/components/service/envv
 import { EnvExampleDialog } from "@/components/service/envvars/EnvExampleDialog";
 import { AddReferenceDialog, RefValueInput, type RefValueInputHandle } from "@/components/service/envvars/refCatalog";
 import { restartNote, type RestartImpact } from "@/components/service/envvars/restartImpact";
+import { addonPageHref } from "@/components/service/workspace/hrefs";
 
 // Row + the pure transform helpers live in ./envVarTransforms; raw-mode
 // parsing, diffing and the sensitivity heuristic live in ./envvars. This
@@ -980,7 +981,7 @@ export function EnvVarsEditor({
           </span>
           {dangling.pooler && (
             <Link
-              href={`/projects/${encodeURIComponent(project)}?addon=${encodeURIComponent(dangling.addon)}&tab=settings`}
+              href={addonPageHref(project, dangling.addon, { tab: "settings" })}
               className="text-xs font-medium text-[var(--text-primary)] underline underline-offset-2 hover:text-[var(--link)]"
             >
               Enable pooler

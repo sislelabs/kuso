@@ -50,6 +50,7 @@ import { useRepoDetection } from "../[project]/services/new/useRepoDetection";
 import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "../[project]/services/new/RepoInsights";
 import { EnvPastePanel, useDotenv } from "../[project]/services/new/EnvPastePanel";
 import { reportCreateOutcome } from "../[project]/services/new/reportCreateOutcome";
+import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 type Secondary = "archive" | "empty" | null;
 
@@ -233,7 +234,7 @@ export default function NewProjectPage() {
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
       reportCreateOutcome(out, `${pName}/${sBody.name}`, branch);
       const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(`${projectHref}?service=${encodeURIComponent(sBody.name)}&tab=${tab}`);
+      router.replace(servicePageHref(pName, sBody.name, { tab }));
     } catch (err) {
       // The project exists; send the user to finish the service there
       // rather than leaving them on a form that would now 409.
@@ -287,7 +288,7 @@ export default function NewProjectPage() {
       await qc.invalidateQueries({ queryKey: projectQueryKey(pName) });
       reportCreateOutcome(out, `${pName}/${sBody.name}`);
       const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(`${projectHref}?service=${encodeURIComponent(sBody.name)}&tab=${tab}`);
+      router.replace(servicePageHref(pName, sBody.name, { tab }));
     } catch (err) {
       toast.error(
         `Project ${pName} was created, but its service wasn't: ${friendlyApiError(err, "unknown error")}. Add the service again below.`,

@@ -33,6 +33,7 @@ import { detectionCopy, type DetectionCopy, type Provenance } from "./detectionC
 import { AccessCheck, RepoReadFailureCallout, RuntimeExplainer } from "./RepoInsights";
 import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
 import { reportCreateOutcome } from "./reportCreateOutcome";
+import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 // Addon kinds a scan suggestion can turn into with one click — the
 // scanner also reports kinds kuso has no chart for (kafka, memcached…).
@@ -328,7 +329,7 @@ export function AddServiceView() {
       await qc.invalidateQueries({ queryKey: projectQueryKey(project) });
       reportCreateOutcome(out, `Service ${name.trim()}`, willBuild ? picked?.repo.defaultBranch : undefined);
       const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(`/projects/${encodeURIComponent(project)}?service=${encodeURIComponent(body.name)}&tab=${tab}`);
+      router.replace(servicePageHref(project, body.name, { tab }));
     } catch (e) {
       toast.error(friendlyApiError(e, "Failed to add service"));
     } finally {
