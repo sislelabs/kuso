@@ -3,6 +3,7 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { useEffect } from "react";
 import Link from "next/link";
+import { DraftingGrid } from "@/components/layout/DraftingGrid";
 import { useRouter } from "next/navigation";
 import { Compass, LayoutGrid, Plus, Store } from "lucide-react";
 import { useProjects } from "@/features/projects";
@@ -96,11 +97,12 @@ export default function ProjectsPage() {
       )}
 
       {!isPending && !isError && count === 0 && (
-        <div className="flex flex-col items-center rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-6 py-16 text-center">
-          <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]">
+        <div className="relative isolate flex flex-col items-center overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--canvas-bg)] px-6 py-16 text-center">
+          <DraftingGrid fade className="-z-10" />
+          <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--accent)] shadow-node">
             <LayoutGrid className="h-5 w-5" aria-hidden />
           </span>
-          <h2 className="mt-4 font-heading text-lg font-semibold tracking-tight text-[var(--text-primary)]">
+          <h2 className="mt-4 font-heading text-xl font-semibold text-[var(--text-primary)]">
             {canCreate ? "Deploy your first project" : "No projects yet"}
           </h2>
           <p className="mt-1.5 max-w-md text-sm text-[var(--text-secondary)]">

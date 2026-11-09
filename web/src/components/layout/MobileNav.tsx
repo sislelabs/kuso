@@ -11,7 +11,7 @@ import { NotificationsSheetButton } from "./Notifications";
 export function MobileNav() {
   const pathname = usePathname() ?? "";
   const item =
-    "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 pt-1.5 pb-1 text-xs font-medium text-[var(--text-tertiary)] outline-none focus-visible:text-[var(--text-primary)] aria-[current=page]:text-[var(--text-primary)]";
+    "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 pt-1.5 pb-1 text-xs font-medium text-[var(--text-tertiary)] outline-none focus-visible:text-[var(--text-primary)] aria-[current=page]:text-[var(--text-primary)] before:absolute before:inset-x-7 before:top-0 before:h-0.5 before:rounded-b-full aria-[current=page]:before:bg-[var(--accent)] aria-[current=page]:[&_svg]:text-[var(--accent)]";
   const openPalette = () =>
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true }));
 

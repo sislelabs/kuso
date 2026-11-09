@@ -93,9 +93,11 @@ export function ProjectCard({
     <li className="h-full" data-roving-cell onContextMenu={onContextMenu}>
       <div
         className={cn(
-          "group relative flex h-full flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors",
-          "hover:border-[var(--border-strong)] has-[a[data-card-link]:focus-visible]:border-[var(--ring)] has-[a[data-card-link]:focus-visible]:ring-2 has-[a[data-card-link]:focus-visible]:ring-[var(--ring)]/40",
-          "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
+          // Same card recipe as the canvas nodes: lit surface, depth, and
+          // the status LED rail along the top edge.
+          "group relative flex h-full flex-col rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-4 shadow-node transition-[border-color,box-shadow]",
+          "hover:border-[var(--border-strong)] hover:shadow-node-hover has-[a[data-card-link]:focus-visible]:border-[var(--ring)] has-[a[data-card-link]:focus-visible]:ring-2 has-[a[data-card-link]:focus-visible]:ring-[var(--ring)]/40",
+          "before:absolute before:inset-x-4 before:top-0 before:h-[2px] before:rounded-b-full",
           TONE_RAIL[model.tone],
         )}
       >
@@ -104,11 +106,11 @@ export function ProjectCard({
           data-card-link
           data-roving-item
           aria-label={`Open project ${model.name}`}
-          className="absolute inset-0 z-10 rounded-lg outline-none"
+          className="absolute inset-0 z-10 rounded-xl outline-none"
         />
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] font-semibold tracking-tight text-[var(--text-primary)]">
+            <h2 className="truncate font-display text-base font-semibold [font-stretch:104%] text-[var(--text-primary)]">
               {model.name}
             </h2>
             <div className="mt-1 h-4">
@@ -186,7 +188,7 @@ export function ProjectCard({
 
 export function ProjectCardSkeleton() {
   return (
-    <li className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+    <li className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4 shadow-node">
       <Skeleton className="h-4 w-32 rounded" />
       <Skeleton className="mt-2 h-3.5 w-24 rounded" />
       <Skeleton className="mt-4 h-3 w-48 rounded" />

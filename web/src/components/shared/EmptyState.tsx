@@ -56,14 +56,14 @@ export function EmptyState({
         <div
           aria-hidden
           className={cn(
-            "mb-4 flex items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-[var(--shadow-sm)] [&_svg]:size-5",
+            "mb-4 flex items-center justify-center rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--accent)] shadow-node [&_svg]:size-5",
             size === "sm" ? "size-9" : "size-11",
           )}
         >
           {icon}
         </div>
       )}
-      <h3 className={cn("font-semibold tracking-tight text-[var(--text-primary)]", size === "sm" ? "text-sm" : "text-base")}>
+      <h3 className={cn("font-display font-semibold text-[var(--text-primary)]", size === "sm" ? "text-sm" : "text-base")}>
         {title}
       </h3>
       {description && <p className="mt-1.5 max-w-md text-sm text-[var(--text-secondary)]">{description}</p>}
