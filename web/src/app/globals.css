@@ -96,7 +96,8 @@
  * lightness, with a top-edge highlight so raised surfaces read as lit.
  *
  * Every text token clears WCAG AA (4.5:1) on every surface it sits on
- * (bg-primary/secondary/tertiary/elevated); placeholder is deliberately
+ * (bg-primary/secondary/tertiary/elevated), and the tertiary/meta tier
+ * gets 5.5:1 since it's set at 11–12px; placeholder is deliberately
  * ~3:1 so it can't be mistaken for a typed value. Enforced by
  * src/lib/theme-contrast.test.ts.
  */
@@ -115,7 +116,7 @@
   --bg-inverse: #271F30;
   --text-primary: #191C2B;
   --text-secondary: #474C63;
-  --text-tertiary: #5C6075;
+  --text-tertiary: #555A70;
   --text-placeholder: #85827A;
   --text-inverse: #FAF9F4;
 
@@ -242,7 +243,7 @@
 
   --text-primary: #ECEAE0;
   --text-secondary: #B4B8C6;
-  --text-tertiary: #8C91A3;
+  --text-tertiary: #9EA3B5;
   --text-placeholder: #6B7082;
   --text-inverse: #090B12;
 

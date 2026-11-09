@@ -38,6 +38,11 @@ const NON_TEXT = ["text-placeholder", "border-strong", "focus", "selected-border
 // Canvas wires carry meaning (which service reads which addon), so they
 // need 3:1 against the canvas ground they're drawn on.
 const WIRES = ["edge-addon", "edge-ref", "edge-lit"];
+// Meta text (timestamps, counts, card footers, captions) is set at
+// 11–12px, where AA's 4.5:1 still reads faint on the dark navy cards, so
+// it gets headroom on every surface, popovers and hovered rows included.
+const META = ["text-tertiary", "muted-foreground"];
+const META_SURFACES = [...SURFACES, "popover", "card"];
 const FILLS: [string, string][] = [
   ["btn-primary-fg", "btn-primary-bg"],
   ["btn-primary-fg", "btn-primary-bg-hover"],
@@ -51,6 +56,10 @@ for (const [theme, vars] of [["light", root], ["dark", { ...root, ...tokens(".da
     const get = resolver(vars);
     it.each(TEXT)("--%s reaches 4.5:1 on every surface", (tok) => {
       for (const s of SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(4.5);
+    });
+    it.each(META)("--%s reaches 5.5:1 on every surface and 5:1 on a hovered row", (tok) => {
+      for (const s of META_SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(5.5);
+      expect(contrastRatio(get(tok), get("border-subtle")), `${tok} on border-subtle`).toBeGreaterThanOrEqual(5);
     });
     it.each(NON_TEXT)("--%s reaches 3:1 on every surface", (tok) => {
       for (const s of SURFACES) expect(contrastRatio(get(tok), get(s)), `${tok} on ${s}`).toBeGreaterThanOrEqual(3);
