@@ -20,6 +20,7 @@ import (
 	"kuso/server/internal/addons"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/rollout"
 )
 
 // List returns every KusoProject in the configured namespace.
@@ -1027,7 +1028,7 @@ func (s *Service) listEnvsForProjectWithServices(ctx context.Context, project st
 		s.populateLiveStatus(ctx, ns, &e, svcByName)
 		// After populateLiveStatus so the replica counts it stored on
 		// status.replicas are reused instead of re-fetched.
-		s.populateRollupState(&e, buildsBySvc)
+		s.populateRollupState(ctx, ns, &e, buildsBySvc)
 		out = append(out, e)
 	}
 	return out, nil
@@ -1239,6 +1240,16 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 		"max":       max,
 		"available": dep.Status.AvailableReplicas,
 		"updated":   dep.Status.UpdatedReplicas,
+	}
+	// When the current ReplicaSet finished rolling out. The controller
+	// sets Progressing=NewReplicaSetAvailable once per ReplicaSet, so a
+	// config change, image change, rollback or restart moves it while an
+	// HPA scale or a wake from sleep doesn't. "Last deploy" reads it.
+	// A Deployment held at 0 replicas (no image yet, stopped, asleep)
+	// "completes" trivially; that isn't a deploy.
+	hasImage := (e.Spec.Image != nil && e.Spec.Image.Repository != "") || (e.Spec.PendingImage != nil && e.Spec.PendingImage.Repository != "")
+	if t := rollout.CompletedAt(dep); !t.IsZero() && desired > 0 && hasImage {
+		e.Status["rolloutCompletedAt"] = t.UTC().Format(time.RFC3339)
 	}
 	// Pull a coarse CPU percentage from metrics-server. We sum
 	// usage across pods, divide by (replicas * limit) to get a

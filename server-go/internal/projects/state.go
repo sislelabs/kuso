@@ -39,6 +39,7 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/podreason"
+	"kuso/server/internal/rollout"
 	"kuso/server/internal/scaledown"
 )
 
@@ -46,18 +47,19 @@ import (
 // JSON consumers) so spellings are frozen — add new states, never
 // reword existing ones.
 const (
-	stateRunning       = "running"        // desired replicas all ready
-	stateDegraded      = "degraded"       // some (but not all) replicas ready
-	stateCrashLooping  = "crashlooping"   // CrashLoopBackOff / restart storm
-	stateDeploying     = "deploying"      // rollout in progress
-	stateBuilding      = "building"       // active build for this env
-	stateBuildFailed   = "build_failed"   // latest build failed, nothing healthy serving
-	stateReleaseFailed = "release_failed" // release hook failed (last green keeps serving BY DESIGN)
-	stateSleeping      = "sleeping"       // scaled to zero by the sleep controller
-	stateStopped       = "stopped"        // deliberately down (kuso stop, or scaled to 0)
-	stateNoImage       = "no_image"       // never built / no image ever deployed
-	stateStuck         = "stuck"          // pods can't start: unschedulable, image pull, bad config, or rollout stalled >10m
-	stateUnknown       = "unknown"        // not enough data to say
+	stateRunning        = "running"         // desired replicas all ready
+	stateDegraded       = "degraded"        // some (but not all) replicas ready
+	stateCrashLooping   = "crashlooping"    // CrashLoopBackOff / restart storm
+	stateDeploying      = "deploying"       // rollout in progress
+	stateBuilding       = "building"        // active build for this env
+	stateBuildFailed    = "build_failed"    // latest build failed, nothing healthy serving
+	stateReleaseFailed  = "release_failed"  // release hook failed (last green keeps serving BY DESIGN)
+	stateSleeping       = "sleeping"        // scaled to zero by the sleep controller
+	stateStopped        = "stopped"         // deliberately down (kuso stop, or scaled to 0)
+	stateNoImage        = "no_image"        // never built / no image ever deployed
+	stateStuck          = "stuck"           // pods can't start: unschedulable, image pull, bad config, or rollout stalled >10m
+	stateRolloutFailing = "rollout_failing" // the new version's pods fail while the previous version keeps serving
+	stateUnknown        = "unknown"         // not enough data to say
 )
 
 // envStateInput is the pure input set for deriveEnvState. Kept flat
@@ -79,6 +81,9 @@ type envStateInput struct {
 	CrashDetail  string
 	// Stuck is the worst pod issue podreason found (nil = none).
 	Stuck *podreason.Issue
+	// Rollout: the Deployment is mid-way between two ReplicaSets
+	// (analyzeRollout over the same pod snapshot).
+	Rollout rollout.Facts
 	// BuildPhase is the latest branch-matching, non-dry-run build's
 	// phase ("" = no build known — includes builds older than the 24h
 	// CR retention window; see populateRollupState).
@@ -102,6 +107,11 @@ type envStateInput struct {
 //     hook failed → release_failed; else no_image.
 //  4. sleeping       — scale-to-zero by the sleep controller is
 //     healthy-idle, not an outage.
+//     4b. rollout_failing — the new ReplicaSet's pods fail (health check,
+//     crash, image pull, config) while an older ReplicaSet's
+//     pods still serve. Outranks crashlooping/stuck: those
+//     describe the new pod, but the service is up on the
+//     previous version and the fix is the change, not the pod.
 //  5. crashlooping   — pod-level truth beats deployment arithmetic:
 //     a crashlooping pod often still counts toward
 //     "updated" and can flap ready.
@@ -148,6 +158,9 @@ func deriveEnvState(in envStateInput) (string, string) {
 	if in.SleepMarked && in.Ready == 0 && (!in.HasReplicaInfo || in.Desired == 0) {
 		return stateSleeping, "scaled to zero by sleep; wakes on the next request"
 	}
+	if in.Rollout.Failing && in.Rollout.PreviousServing && in.Ready > 0 {
+		return stateRolloutFailing, in.Rollout.Cause + "; the previous version is still serving"
+	}
 	if in.CrashLooping {
 		if in.CrashDetail != "" {
 			return stateCrashLooping, in.CrashDetail
@@ -187,6 +200,11 @@ func deriveEnvState(in envStateInput) (string, string) {
 			return stateBuildFailed, "nothing is running"
 		}
 		return stateDeploying, fmt.Sprintf("0/%d replicas ready — rollout in progress", in.Desired)
+	}
+	// Old pods still around next to fully-updated new ones: the deployment
+	// arithmetic says done, but the previous version hasn't been replaced.
+	if in.Rollout.InFlight && in.Updated >= in.Desired {
+		return stateDeploying, failedNote + "rolling out — the previous version is serving until the new one is ready"
 	}
 	if in.Updated < in.Desired {
 		return stateDeploying, fmt.Sprintf("%srolling out — %d/%d replicas updated", failedNote, in.Updated, in.Desired)
@@ -294,7 +312,7 @@ func latestBuildFor(e *kube.KusoEnvironment, svcBuilds []kube.KusoBuild) *kube.K
 // only — a cold cache degrades to "no pod knowledge", it never falls
 // back to a live LIST (that would reintroduce the per-env N+1 the
 // describe path was scrubbed of).
-func (s *Service) populateRollupState(e *kube.KusoEnvironment, buildsBySvc map[string][]kube.KusoBuild) {
+func (s *Service) populateRollupState(ctx context.Context, ns string, e *kube.KusoEnvironment, buildsBySvc map[string][]kube.KusoBuild) {
 	if e.Status == nil {
 		e.Status = map[string]any{}
 	}
@@ -325,9 +343,24 @@ func (s *Service) populateRollupState(e *kube.KusoEnvironment, buildsBySvc map[s
 		if pods, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
 			in.CrashLooping, in.CrashDetail = crashLoopSignal(pods)
 			in.Stuck = podreason.Worst(pods, time.Now())
+			dep, _ := s.Kube.Cache.GetDeployment(ns, e.Name)
+			in.Rollout = rollout.Analyze(pods, e.Spec.Healthcheck, rollout.DeadlineExceeded(dep), time.Now())
+		}
+	}
+	probe := ""
+	if in.Rollout.Failing && in.Rollout.Kind == rollout.KindHealthcheck && e.Spec.Healthcheck != nil {
+		if probe = s.probeFailure(ctx, ns, in.Rollout.NewPod); probe != "" {
+			in.Rollout.Cause = fmt.Sprintf("the new version fails its health check (GET %s → %s)", e.Spec.Healthcheck.Path, probe)
 		}
 	}
 	state, detail := deriveEnvState(in)
+	if state == stateRolloutFailing {
+		hcPath := ""
+		if e.Spec.Healthcheck != nil {
+			hcPath = e.Spec.Healthcheck.Path
+		}
+		e.Status["rollout"] = rolloutStatus(in.Rollout, hcPath, probe)
+	}
 	e.Status["state"] = state
 	if detail != "" {
 		e.Status["stateDetail"] = detail
