@@ -219,9 +219,10 @@ function ProjectAlerts({
     throwOnError: false,
   });
 
-  const events = (feed.data ?? []).filter((e) => e.project === project).slice(0, 6);
+  const events = (feed.data ?? []).filter((e) => e.project === project);
   const problems = events.filter((e) => e.severity === "error" || e.severity === "warn");
-  const shown = problems.length > 0 ? problems : events;
+  // The same alert firing repeatedly reads as one row "×N", newest first.
+  const shown = groupRepeats(problems.length > 0 ? problems : events).slice(0, 6);
 
   return (
     <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
@@ -236,7 +237,7 @@ function ProjectAlerts({
         </div>
       ) : (
         <ul className="mt-3 space-y-2.5">
-          {shown.map((e) => (
+          {shown.map(({ event: e, count }) => (
             <li key={e.id} className="flex items-start gap-2.5">
               <span
                 className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -253,7 +254,14 @@ function ProjectAlerts({
                 className="min-w-0 flex-1 text-left"
               >
                 <AlertText event={e} />
-                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{relativeTime(e.createdAt)}</p>
+                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
+                  {relativeTime(e.createdAt)}
+                  {count > 1 && (
+                    <span className="ml-1.5 rounded bg-[var(--bg-tertiary)] px-1 font-medium tabular-nums text-[var(--text-secondary)]">
+                      ×{count}
+                    </span>
+                  )}
+                </p>
               </button>
             </li>
           ))}
@@ -263,13 +271,26 @@ function ProjectAlerts({
   );
 }
 
+export function groupRepeats<E extends { type: string; title: string; service?: string }>(
+  events: readonly E[],
+): { event: E; count: number }[] {
+  const byKey = new Map<string, { event: E; count: number }>();
+  for (const e of events) {
+    const k = [e.type, e.service ?? "", e.title].join("\u0000");
+    const g = byKey.get(k);
+    if (g) g.count++;
+    else byKey.set(k, { event: e, count: 1 });
+  }
+  return [...byKey.values()];
+}
+
 // Feed text is written for chat (backticks, Go durations, build CR names);
 // the shared humanizer turns it into dashboard copy.
 function AlertText({ event }: { event: FeedEvent }) {
   const text = humanizeNotification(event);
   return (
     <>
-      <p className="truncate text-sm font-medium">{text.title}</p>
+      <p className="line-clamp-2 text-sm font-medium break-words">{text.title}</p>
       {text.body.length > 0 && (
         <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs text-[var(--text-secondary)]">
           {text.body.map((p, i) =>
