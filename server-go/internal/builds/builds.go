@@ -3115,13 +3115,10 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// hid a Redeploy button that could never deploy.
 	if classification.Kind == failures.KindCloneRefMissing && b.Spec.Branch != "" &&
 		b.Spec.Branch == p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service) {
-		classification.Summary = fmt.Sprintf("Branch %q was not found in the repository.", b.Spec.Branch)
-		classification.Remediation = &failures.Remediation{
-			Title:  "Point the service at a branch that exists",
-			Detail: fmt.Sprintf("This service deploys branch %q, but the clone could not find it. If the repository uses a different default branch (for example master), set it as the service's branch and redeploy.", b.Spec.Branch),
-		}
+		failures.BranchMissing(&classification, b.Spec.Branch)
 	} else if classification.Kind == failures.KindCloneRefMissing {
 		if cerr := p.Svc.cancelBuild(ctx, b.Spec.Project, b.Name, "ref deleted (branch deleted or force-pushed while build was queued)"); cerr == nil {
+			failures.RefDeletedWhileQueued(&classification)
 			// Persist the classification so an explicit `kuso build why
 			// <id>` still explains a ref-deleted cancel (the auto-pick only
 			// scans failed builds; this one is cancelled). Best-effort.

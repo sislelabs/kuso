@@ -53,3 +53,20 @@ func specificClass(lines []string) (failures.Classification, bool) {
 	c := failures.Classify(lines, failures.Signal{})
 	return c, c.Kind != "" && c.Kind != failures.KindGeneric
 }
+
+// explainMissingBranch gives every FAILED clone_ref_missing build the
+// "branch no longer exists" copy. The poller cancels builds whose ref was
+// a throwaway branch, so one that still reads failed was building the
+// service's own branch; records persisted before that split carry the
+// cancelled-build "nothing to fix" copy next to a Failed status.
+func explainMissingBranch(out []buildSummary) {
+	for i := range out {
+		b := &out[i]
+		if b.Status != "failed" || b.FailureClass == nil || b.FailureClass.Kind != failures.KindCloneRefMissing || b.Branch == "" {
+			continue
+		}
+		c := *b.FailureClass
+		failures.BranchMissing(&c, b.Branch)
+		b.FailureClass = &c
+	}
+}

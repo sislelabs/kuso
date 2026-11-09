@@ -654,6 +654,7 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 			return h.DB.GetBuildLog(ctx, project, build)
 		})
 	}
+	explainMissingBranch(out)
 	if truncated {
 		setTruncationHeaders(w, headerNextOffset, strconv.Itoa(next))
 	}
