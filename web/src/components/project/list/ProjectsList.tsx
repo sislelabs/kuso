@@ -244,8 +244,7 @@ export function ProjectsList({ projects }: { projects: ReadonlyArray<KusoProject
 
       {errorsUnavailable && (
         <Callout tone="neutral" className="mb-5 py-2 text-[13px] text-[var(--text-secondary)]">
-          {ERRORS_UNAVAILABLE}: this kuso server doesn&apos;t report log error counts yet, so a card without an error chip
-          doesn&apos;t mean no errors. Upgrading the server turns them on.
+          {ERRORS_UNAVAILABLE}, so cards show no error counts. That doesn&apos;t mean no errors; upgrade kuso to count them.
         </Callout>
       )}
 
