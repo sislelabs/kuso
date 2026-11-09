@@ -27,6 +27,8 @@ var (
 	notifFeedUnreadCount bool
 	notifFeedReadAll     bool
 	notifFeedClear       bool
+	notifFeedAttention   bool
+	notifFeedProject     string
 )
 
 var notificationsFeedCmd = &cobra.Command{
@@ -43,6 +45,7 @@ are mutually exclusive with each other and with the list:
 	Example: `  kuso notifications feed
   kuso notifications feed --unread --limit 20
   kuso notifications feed --unread-count
+  kuso notifications feed --attention --project shop
   kuso notifications feed --read-all
   kuso notifications feed --clear`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,7 +66,7 @@ are mutually exclusive with each other and with the list:
 
 		switch {
 		case notifFeedUnreadCount:
-			resp, err := api.NotificationFeedUnreadCount()
+			resp, err := api.NotificationFeedUnreadCount(notifFeedAttention)
 			if err := checkRespErr(resp, err); err != nil {
 				return err
 			}
@@ -98,7 +101,7 @@ are mutually exclusive with each other and with the list:
 		}
 
 		// Default: list.
-		resp, err := api.NotificationFeed(notifFeedLimit, notifFeedUnread)
+		resp, err := api.NotificationFeed(kusoApi.FeedFilter{Limit: notifFeedLimit, Unread: notifFeedUnread, Attention: notifFeedAttention, Project: notifFeedProject})
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
@@ -159,7 +162,7 @@ their project memberships. Read-only — no unread/read-all/clear.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.NotificationMyFeed(notifMyFeedLimit)
+		resp, err := api.NotificationMyFeed(kusoApi.FeedFilter{Limit: notifMyFeedLimit, Attention: notifFeedAttention, Project: notifFeedProject})
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
@@ -243,6 +246,10 @@ func init() {
 	notificationsFeedCmd.Flags().BoolVar(&notifFeedReadAll, "read-all", false, "mark every event read")
 	notificationsFeedCmd.Flags().BoolVar(&notifFeedClear, "clear", false, "delete every event in the feed")
 	notificationsFeedCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	for _, c := range []*cobra.Command{notificationsFeedCmd, notificationsMyFeedCmd} {
+		c.Flags().BoolVar(&notifFeedAttention, "attention", false, "only events that need action (failures and warnings; resolved episodes drop out)")
+		c.Flags().StringVar(&notifFeedProject, "project", "", "only this project's events")
+	}
 	notificationsCmd.AddCommand(notificationsFeedCmd)
 
 	notificationsMyFeedCmd.Flags().IntVar(&notifMyFeedLimit, "limit", 0, "max events (default 50 server-side)")
