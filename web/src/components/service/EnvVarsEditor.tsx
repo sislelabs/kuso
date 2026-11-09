@@ -956,10 +956,14 @@ export function EnvVarsEditor({
       // The addon's conn Secret carries the key but no value (e.g. its
       // pooler is off); the pod gets an empty string.
       const dangling = !masked && !isChanged(r) ? danglingRef(r, addonNames) : null;
+      // Addon-injected keys (DATABASE_URL) and explicit refs
+      // (${{ db.DIRECT_URL }}) are the same thing to the user: one chip.
+      const addonBacked = !!r.addon && !isRef && !!r.secretBacked && !isChanged(r);
+      const refText = isRef ? r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "") : addonBacked ? `${r.addon}.${r.name}` : null;
       const badges = (
         <>
           {secretValued && <SecretLock />}
-          {r.addon && <VarBadge title={`Injected by the ${r.addon} addon`}>{r.addon}</VarBadge>}
+          {r.addon && !addonBacked && <VarBadge title={`Injected by the ${r.addon} addon`}>{r.addon}</VarBadge>}
           {buildTimePrefix(r.name) && (
             <VarBadge title="Inlined into the browser bundle at build time. A change needs a rebuild.">build</VarBadge>
           )}
@@ -1004,11 +1008,8 @@ export function EnvVarsEditor({
             </button>
           )}
         </span>
-      ) : isRef && !(shownValues.has(key) || revealAll) ? (
-          <span className="inline-flex max-w-full items-center gap-1 text-[var(--text-secondary)]">
-            <Link2 className="h-3 w-3 shrink-0" />
-            <span className="truncate">{r.value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")}</span>
-          </span>
+      ) : refText && !(shownValues.has(key) || revealAll) ? (
+          <RefChip text={refText} title={r.addon ? `From the ${r.addon} addon` : `Reference to ${refText}`} />
         ) : (
           valueText(key, plaintext, sensitive)
         );
@@ -1484,5 +1485,17 @@ export function EnvVarsEditor({
         }}
       />
     </div>
+  );
+}
+
+function RefChip({ text, title }: { text: string; title: string }) {
+  return (
+    <span
+      title={title}
+      className="inline-flex max-w-full items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-1.5 py-px font-mono text-xs text-[var(--text-secondary)]"
+    >
+      <Link2 aria-hidden className="h-3 w-3 shrink-0" />
+      <span className="truncate">{text}</span>
+    </span>
   );
 }
