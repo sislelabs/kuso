@@ -35,7 +35,6 @@ import { EnvPastePanel, useDotenv } from "./EnvPastePanel";
 import { RegistryLoginInline, RuntimeConstraints } from "./ImageHelp";
 import { reportCreateOutcome } from "./reportCreateOutcome";
 import { ConnectAddons, connectedByDefault, existingAddons, subscriptionFor, type ExistingAddon } from "./ConnectAddons";
-import { setSubscribedAddons } from "@/features/addons";
 import { servicePageHref } from "@/components/service/workspace/hrefs";
 
 // Addon kinds a scan suggestion can turn into with one click — the
@@ -321,37 +320,24 @@ export function AddServiceView() {
             sizing: sized,
           });
 
+    const newAddons = [...addonPicks].filter((k) => addonSuggestions.some((s) => s.kind === k));
     setSubmitting(true);
     try {
       const out = await createServiceWithEnv(project, body, {
         envVars: env.vars,
+        // Unchecked addons aren't mounted: the service gets an explicit list,
+        // including the addons created just after it (they mount on arrival).
+        subscribedAddons: subscriptionFor(existing, isConnected, newAddons),
         deploy,
         // Addons come after the service so a rejected service POST can't
-        // leave a database behind. A service with no explicit subscription
-        // list mounts every project addon, so it still gets DATABASE_URL.
+        // leave a database behind.
         beforeBuild: async () => {
           const failed: string[] = [];
-          const created: string[] = [];
-          for (const addonKind of addonPicks) {
-            if (!addonSuggestions.some((s) => s.kind === addonKind)) continue;
+          for (const addonKind of newAddons) {
             try {
               await addAddon(project, { name: addonKind, kind: addonKind });
-              created.push(addonKind);
             } catch (ae) {
               if (!(ae instanceof ApiError && ae.status === 409)) failed.push(`${addonKind} (${friendlyApiError(ae, "failed")})`);
-            }
-          }
-          // Unchecked addons aren't mounted: the service gets an explicit
-          // list (plus the addons it was just created with).
-          const subscription = subscriptionFor(existing, isConnected, created);
-          if (subscription) {
-            try {
-              await setSubscribedAddons(project, body.name, subscription);
-            } catch (se) {
-              toast.warning(`Service created, but its addon connections weren't saved (${friendlyApiError(se, "failed")}). It's connected to every addon; change that in Variables.`, {
-                duration: Infinity,
-                closeButton: true,
-              });
             }
           }
           if (failed.length > 0) {
@@ -366,8 +352,7 @@ export function AddServiceView() {
       // first service can land on the "Empty project" state.
       await qc.invalidateQueries({ queryKey: projectQueryKey(project) });
       reportCreateOutcome(out, `Service ${name.trim()}`, willBuild ? picked?.repo.defaultBranch : undefined);
-      const tab = out.envFailed.length > 0 ? "variables" : "deployments";
-      router.replace(servicePageHref(project, body.name, { tab }));
+      router.replace(servicePageHref(project, body.name, { tab: "deployments" }));
     } catch (e) {
       toast.error(friendlyApiError(e, "Failed to add service"));
     } finally {

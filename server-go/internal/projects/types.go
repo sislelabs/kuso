@@ -155,6 +155,18 @@ type CreateServiceRequest struct {
 	Uptime  *UpdateUptimeSpec `json:"uptime,omitempty"`
 	// RequestLimits sets the service's ingress limits at creation.
 	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
+	// EnvValues are stored like SetEnvValue stores them (chooseEnvStorage):
+	// refs and build-time names join EnvVars, every other value goes to the
+	// managed <service>-secrets Secret before the production env exists.
+	EnvValues []EnvValue `json:"envValues,omitempty"`
+	// SubscribedAddons seeds spec.subscribedAddons. nil = mount every addon.
+	SubscribedAddons *[]string `json:"subscribedAddons,omitempty"`
+}
+
+// EnvValue is a {name, value} pair whose storage the server picks.
+type EnvValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

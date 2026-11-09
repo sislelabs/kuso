@@ -473,6 +473,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// apply` creates services whose refs may point at an addon still
 	// mid-provisioning; SetEnvPending has the same tolerance) — the
 	// ownership guard runs on the resolved output regardless.
+	secretValues, err := splitCreateEnvValues(&req)
+	if err != nil {
+		return nil, err
+	}
+	if len(secretValues) > 0 && s.Kube.Clientset == nil {
+		return nil, fmt.Errorf("store variables: no kube clientset")
+	}
 	envVars, err := s.validateAndRewriteEnvVars(ctx, ns, project, req.Name, req.EnvVars, SetEnvOpts{AllowPending: true})
 	if err != nil {
 		return nil, err
@@ -697,6 +704,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if req.GitHub != nil && req.GitHub.InstallationID > 0 {
 		svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.GitHub.InstallationID}
 	}
+	if req.SubscribedAddons != nil {
+		svc.Spec.SubscribedAddons = cleanAddonNames(*req.SubscribedAddons)
+	}
 	// Seed the subscription with every key the shared secrets carry now —
 	// the per-key equivalent of the old mount-all, minus the instance-addon
 	// admin DSN. A nil list meant the env blanket-mounted kuso-instance-shared
@@ -724,6 +734,21 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			return nil, fmt.Errorf("%w: service %s/%s already exists", ErrConflict, project, req.Name)
 		}
 		return nil, fmt.Errorf("create service: %w", err)
+	}
+	// Secret-stored create values land before the production env exists,
+	// so its first pod already reads them (the env mounts <svc>-secrets).
+	dropSecrets := func(vals []EnvValue) {
+		for _, v := range vals {
+			_, _ = s.removeManagedSecretKey(ctx, ns, project, req.Name, v.Name)
+		}
+	}
+	for i, v := range secretValues {
+		if err := s.upsertManagedSecretKey(ctx, ns, project, req.Name, v.Name, v.Value); err != nil {
+			dropSecrets(secretValues[:i])
+			_ = s.Kube.DeleteKusoService(ctx, ns, fqn)
+			dropToken()
+			return nil, fmt.Errorf("store variables: %w", err)
+		}
 	}
 
 	// Auto-create production env. Image is left blank — first build
@@ -927,6 +952,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		// Best-effort cleanup so we don't leak a service without its env.
 		_ = s.Kube.DeleteKusoService(ctx, ns, fqn)
 		dropToken()
+		dropSecrets(secretValues)
 		return nil, fmt.Errorf("create production env: %w", err)
 	}
 	// An image service's first tag is the oldest release it can roll back
@@ -1031,6 +1057,41 @@ var reservedEnvNames = map[string]string{
 // reason on conflict; empty string when allowed. Names matching
 // `KUBERNETES_*` are also rejected (catch-all for the in-cluster
 // service-account env).
+// splitCreateEnvValues applies SetEnvValue's storage choice to the create
+// request's EnvValues: refs and build-time names are appended to EnvVars
+// (so they go through the same rewrite and validation), and the values
+// bound for the managed Secret are returned.
+func splitCreateEnvValues(req *CreateServiceRequest) ([]EnvValue, error) {
+	if len(req.EnvValues) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(req.EnvVars)+len(req.EnvValues))
+	for _, e := range req.EnvVars {
+		seen[e.Name] = true
+	}
+	build := &kube.KusoService{Spec: kube.KusoServiceSpec{PublicEnv: req.PublicEnv, BuildArgs: req.BuildArgs}}
+	var secrets []EnvValue
+	for _, v := range req.EnvValues {
+		name := strings.TrimSpace(v.Name)
+		if !validEnvVarName(name) {
+			return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+		}
+		if reason := envNameReserved(name); reason != "" {
+			return nil, fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("%w: env var %q is listed twice", ErrInvalid, name)
+		}
+		seen[name] = true
+		if chooseEnvStorage(name, v.Value, build) == StorageSecret {
+			secrets = append(secrets, EnvValue{Name: name, Value: v.Value})
+		} else {
+			req.EnvVars = append(req.EnvVars, EnvVar{Name: name, Value: v.Value})
+		}
+	}
+	return secrets, nil
+}
+
 func envNameReserved(name string) string {
 	if msg, ok := reservedEnvNames[name]; ok {
 		return msg
