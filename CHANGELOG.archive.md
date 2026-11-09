@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.25.29] — 2026-09-03
+
+### 🐛 Bug Fixes
+- Fix(previews): key the addon clone swap off the true source, not the clone name ([16bf9cc](https://github.com/sislelabs/kuso/commit/16bf9cc6eaa40ca72437a555dd969f27107fa0fc))
+
 ## [0.25.28] — 2026-09-02
 
 ### ✨ Features
