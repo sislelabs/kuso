@@ -79,6 +79,8 @@ export {
   deriveAddonStatus,
   deriveCronStatus,
   lastDeployAt,
+  podServingSplit,
+  rolloutInFlight,
   STATUS_TONE,
 } from "./nodeStatus";
 export type { NodeStatus, NodeStatusKind, NodeStatusTone, ServiceStatusInput } from "./nodeStatus";

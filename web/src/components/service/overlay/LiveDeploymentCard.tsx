@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, ExternalLink, Undo2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ExternalLink, Loader2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -41,6 +41,7 @@ export function LiveDeploymentCard({
   canDeploy,
   extra,
   releaseFailed,
+  incoming,
   onShowBuild,
   trigger,
 }: {
@@ -68,6 +69,9 @@ export function LiveDeploymentCard({
   // A newer build whose release hook (migration) failed, so this one is
   // still serving.
   releaseFailed?: DeployBuild;
+  // A newer build promoted to this env whose pods aren't ready yet:
+  // `build` keeps serving until they are (or for good, if it fails).
+  incoming?: { build: DeployBuild; failing: boolean };
   // Opens a history row (the failed release) and scrolls to it.
   onShowBuild?: (buildId: string) => void;
   trigger?: BuildTrigger;
@@ -121,6 +125,31 @@ export function LiveDeploymentCard({
             </span>
           )}
           {extra}
+          {incoming && (
+            <button
+              type="button"
+              onClick={() => onShowBuild?.(incoming.build.id)}
+              disabled={!onShowBuild}
+              title={`${buildRefLabel(incoming.build, 7) || incoming.build.id} is deployed to ${envGroup} but its pods aren't ready yet. Show it in the history.`}
+              className={cn(
+                "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
+                incoming.failing
+                  ? "border-[var(--warning)]/45 bg-[var(--warning-subtle)] text-[var(--warning)] hover:border-[var(--warning)]"
+                  : "border-[var(--info)]/40 bg-[var(--info-subtle)] text-[var(--info)] hover:border-[var(--info)]",
+              )}
+            >
+              {incoming.failing ? (
+                <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" />
+              ) : (
+                <Loader2 aria-hidden className="h-3 w-3 shrink-0 motion-safe:animate-spin" />
+              )}
+              <span className="min-w-0">
+                {incoming.failing ? "Rollout of " : "Rolling out "}
+                <span className="font-mono">{buildRefLabel(incoming.build, 7) || incoming.build.id}</span>
+                {incoming.failing ? " stuck" : ""} · this one still serving
+              </span>
+            </button>
+          )}
           {releaseFailed && (
             <button
               type="button"
@@ -181,7 +210,7 @@ export function LiveDeploymentCard({
                       : new Date(went).toLocaleString()
                   }
                 >
-                  {rolledBack ? "rolled back" : "deployed"} {relativeTime(went)}
+                  {rolledBack ? "rolled back" : "rolled out"} {relativeTime(went)}
                 </time>
               </>
             )}

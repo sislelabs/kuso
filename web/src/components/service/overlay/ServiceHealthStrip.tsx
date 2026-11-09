@@ -5,6 +5,7 @@ import { formatLatency, relativeTime } from "@/lib/format";
 import { TONE_CLASSES, type StatusMeta, type StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { isCurrentPod, useServicePods } from "@/features/pods";
+import { podServingSplit, rolloutInFlight } from "@/features/services";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
@@ -109,7 +110,8 @@ function NeverRanBanner({
             {firstRun.building ? "Follow the build" : "View build log"}
           </Button>
         )}
-        {fix && fix.id !== "image" && firstRun.failed && (
+        {/* On Deployments the failed build's row carries the same fix. */}
+        {fix && fix.id !== "image" && firstRun.failed && !onDeployments && (
           <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => onNavigate(fix.tab, fix.anchor)} disabled={!canWrite}>
             <Wrench className="h-3 w-3" aria-hidden />
             {fix.label}
@@ -133,7 +135,22 @@ function NeverRanBanner({
   );
 }
 
-function HealthCells({ project, service, env, envGroup, status, statusDetail, alert, lead, onNavigate }: ServiceHealthStripProps) {
+// Problems the Deployments tab explains in its own panel (the failing
+// rollout card, the failed build's row): there the strip doesn't repeat them.
+const PANEL_STATES = new Set(["rollout_failing", "build_failed", "release_failed"]);
+
+function HealthCells({
+  project,
+  service,
+  env,
+  envGroup,
+  status,
+  statusDetail,
+  alert: banner,
+  lead,
+  onDeployments,
+  onNavigate,
+}: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
 
@@ -146,9 +163,14 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
   const hasRollup = typeof replicas?.desired === "number";
   const ready = hasRollup ? (replicas?.ready ?? 0) : (podList?.filter((p) => p.ready).length ?? 0);
   const total = hasRollup ? (replicas?.desired ?? 0) : (podList?.length ?? 0);
-  // While the status is a problem, "1/1 ready" or "uptime ok" next to it
-  // reads as a contradiction; the cause takes their place.
+  // While the status is a problem, "1/1 ready" next to it reads as a
+  // contradiction; the cause takes its place.
   const problem = status.tone === "danger" || status.tone === "warning";
+  // Mid-rollout the previous version's pods serve while the new ones start.
+  const inFlight = rolloutInFlight(env);
+  // The Deployments tab's own panel already says it, once.
+  const panelSaysIt = !!onDeployments && PANEL_STATES.has(env?.status?.state ?? "");
+  const alert = panelSaysIt ? null : banner;
   const httpService = !env || !!env.spec.host || (env.spec.additionalHosts?.length ?? 0) > 0;
   const restarts = podList?.reduce((n, p) => n + (p.restarts ?? 0), 0) ?? 0;
   const crashing = podList?.some((p) => /crashloop/i.test(p.reason ?? "")) ?? false;
@@ -157,7 +179,7 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
   // The status itself is the header pill and the error count is the Errors
   // tab badge, so the line only carries what neither shows.
   const facts: Fact[] = [];
-  if (problem && !alert) {
+  if (problem && !alert && !panelSaysIt) {
     facts.push({
       id: "reason",
       text: statusDetail || status.label,
@@ -166,7 +188,15 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
       tab: "deployments",
     });
   }
-  if (!problem && total > 0) {
+  if (inFlight && pods.data?.pods) {
+    facts.push({
+      id: "ready",
+      text: podServingSplit(pods.data.pods, replicas?.desired),
+      tone: inFlight.failing ? "warning" : "plain",
+      title: statusDetail || "The previous version serves until the new pods are ready",
+      tab: "deployments",
+    });
+  } else if (!problem && total > 0) {
     facts.push({
       id: "ready",
       text: `${ready}/${total} ready`,
@@ -175,10 +205,10 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
       tab: "deployments",
     });
   }
-  if (!problem) {
-    const up = uptimeFact(uptime.data?.enabled, pickUptime(uptime.data?.services ?? null, service, env, envGroup), uptime.error, httpService);
-    if (up) facts.push(up);
-  }
+  // Uptime stays in every state so the line keeps its shape; it reports
+  // what the ping saw, which during a failing rollout is the old version.
+  const up = uptimeFact(uptime.data?.enabled, pickUptime(uptime.data?.services ?? null, service, env, envGroup), uptime.error, httpService);
+  if (up) facts.push(up);
   if (restarts > 0) {
     facts.push({
       id: "restarts",
@@ -191,9 +221,9 @@ function HealthCells({ project, service, env, envGroup, status, statusDetail, al
   if (deployedAt) {
     facts.push({
       id: "deploy",
-      text: `deployed ${relativeTime(deployedAt)}`,
+      text: `rolled out ${relativeTime(deployedAt)}`,
       tone: "plain",
-      title: `Current release went live ${new Date(deployedAt).toLocaleString()}`,
+      title: `Last rollout finished ${new Date(deployedAt).toLocaleString()} (a new build or image, a config change or a rollback)`,
       tab: "deployments",
     });
   }

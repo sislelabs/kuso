@@ -1,6 +1,6 @@
 import { failedStepFromBuild } from "@/features/builds";
 import type { BuildSummary, NodeStatus } from "@/features/services";
-import { rolloutFacts, stuckFacts } from "@/lib/status";
+import { imageTag, pullProblem, rolloutFacts, stuckFacts } from "@/lib/status";
 
 // The server's failure classes, in the few words a canvas card has room for.
 const KIND_CAUSE: Record<string, string> = {
@@ -44,6 +44,10 @@ export function failureCause(status: NodeStatus, envStatus: EnvStatus, build?: B
   const rollout = rolloutFacts(envStatus);
   if (rollout?.kind === "healthcheck") {
     return rollout.probeResult ? `Health check ${rollout.probeResult}` : "Health check failing";
+  }
+  if (rollout?.kind === "image_pull" && rollout.pullCause) {
+    const short = pullProblem(rollout.pullCause, imageTag(rollout.newImage)).short;
+    return short.charAt(0).toUpperCase() + short.slice(1);
   }
   if (rollout?.kind && ROLLOUT_CAUSE[rollout.kind]) return ROLLOUT_CAUSE[rollout.kind];
 

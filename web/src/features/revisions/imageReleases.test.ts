@@ -71,6 +71,16 @@ describe("collapseFlipFlops", () => {
     expect(collapseFlipFlops(tags(["1.29", "1.28", "1.27"])).map((r) => r.folded)).toEqual([undefined, undefined, undefined]);
   });
 
+  it("keeps a failed release as its own row after the rollback", () => {
+    // 1.11 → v9-nope (never ran) → rolled back to 1.11.
+    const out = collapseFlipFlops(tags(["1.11", "v9-nope", "1.11"]), (r) => r.tag === "v9-nope");
+    expect(out.map((r) => [r.tag, r.folded?.length ?? 0])).toEqual([
+      ["1.11", 0],
+      ["v9-nope", 0],
+      ["1.11", 0],
+    ]);
+  });
+
   it("needs three steps to fold", () => {
     expect(collapseFlipFlops(tags(["1.28", "1.27"])).length).toBe(2);
   });

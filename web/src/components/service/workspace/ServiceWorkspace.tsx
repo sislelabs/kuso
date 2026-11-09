@@ -1098,7 +1098,6 @@ const PROBLEM_LABEL: Record<string, string> = {
   build_failed: "Build failed",
   release_failed: "Release failed",
   stuck: "Stuck",
-  rollout_failing: "Rollout failing",
 };
 
 function HealthBanner({

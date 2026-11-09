@@ -3,6 +3,8 @@
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isCurrentPod, useServicePods } from "@/features/pods";
+import { podServingSplit, rolloutInFlight } from "@/features/services";
+import type { KusoEnvironment } from "@/types/projects";
 import { cn } from "@/lib/utils";
 import { NeverStartedState, useFirstRun } from "./firstRunContext";
 
@@ -12,28 +14,37 @@ export function ServicePodsSection({
   project,
   service,
   envName,
+  env,
 }: {
   project: string;
   service: string;
   // Env CR name; undefined while the envs list loads or before a first deploy.
   envName?: string;
+  env?: KusoEnvironment;
 }) {
   const pods = useServicePods(project, service, envName);
   const { firstRun } = useFirstRun();
   // Old-ReplicaSet and release-hook pods are listed but don't count.
   const current = (pods.data?.pods ?? []).filter(isCurrentPod);
   const currentReady = current.filter((p) => p.ready).length;
+  // Mid-rollout "0/1 ready" would hide the previous pod that still serves.
+  const split =
+    rolloutInFlight(env) && pods.data?.pods
+      ? podServingSplit(pods.data.pods, (env?.status?.replicas as { desired?: number } | undefined)?.desired)
+      : undefined;
 
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
         <h3 className="text-xs font-medium text-[var(--text-tertiary)]">
           Pods
-          {current.length > 0 && (
+          {split ? (
+            <span className="ml-1.5 font-normal">{split}</span>
+          ) : current.length > 0 ? (
             <span className="ml-1.5 font-normal">
               {currentReady}/{current.length} ready
             </span>
-          )}
+          ) : null}
         </h3>
         {pods.data && (
           <span className="font-mono text-xs text-[var(--text-tertiary)]">{pods.data.namespace}</span>

@@ -9,6 +9,7 @@ import { useAnnounceChange } from "@/components/shared/LiveAnnouncer";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import {
   deriveServiceStatus,
+  rolloutInFlight,
   serviceUrl,
   STATUS_TONE,
   type BuildSummary,
@@ -229,14 +230,21 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
               Rolled back
             </StatusChip>
           )}
-          {/* A stuck rollout isn't "deployed 1m ago"; its reason takes the slot. */}
+          {/* A stuck or in-flight rollout isn't "rolled out 1m ago"; its reason takes the slot. */}
           {cause ? null : status.kind === "stuck" ? (
             <span className="truncate text-[var(--text-secondary)]" title={status.detail}>
               · {status.detail || stuckFacts(data.env?.status)?.summary || "Can't start"}
             </span>
+          ) : status.kind === "deploying" && status.detail && rolloutInFlight(data.env) ? (
+            <span className="truncate text-[var(--text-secondary)]" title={status.detail}>
+              · {status.detail}
+            </span>
           ) : deployedAt && (
-            <span className="truncate text-[var(--text-tertiary)]" title={`Deployed ${new Date(deployedAt).toLocaleString()}`}>
-              · {live?.rolledBack ? "" : "deployed "}{relativeTime(deployedAt)}
+            <span
+              className="truncate text-[var(--text-tertiary)]"
+              title={`Last rollout finished ${new Date(deployedAt).toLocaleString()} (a new build or image, a config change or a rollback)`}
+            >
+              · rolled out {relativeTime(deployedAt)}
             </span>
           )}
         </span>

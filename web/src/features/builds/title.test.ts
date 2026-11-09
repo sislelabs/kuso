@@ -11,7 +11,7 @@ describe("buildTitle", () => {
   });
   it("never says 'Manual redeploy' when the message is missing", () => {
     expect(buildTitle(b({ commitSha: SHA, branch: "main", triggeredBy: "user" }))).toBe("Commit c850e9b on main");
-    expect(buildTitle(b({ ref: "main-x7k2p", branch: "main" }))).toBe("Latest main");
+    expect(buildTitle(b({ ref: "main-x7k2p", branch: "main" }))).toBe("Build of main");
   });
 });
 

@@ -16,7 +16,7 @@ export function buildTitle(b: DeployBuild): string {
   const ref = buildRefLabel(b, 7);
   if (b.commitSha && b.branch) return `Commit ${ref} on ${b.branch}`;
   if (b.commitSha) return `Commit ${ref}`;
-  return b.branch ? `Latest ${b.branch}` : ref || "Build";
+  return b.branch ? `Build of ${b.branch}` : ref || "Build";
 }
 
 export type BuildTriggerKind = "push" | "manual" | "retry" | "rebuild" | "api" | "first" | "rollback";

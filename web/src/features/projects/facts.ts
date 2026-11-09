@@ -78,6 +78,8 @@ export function promotedIfLive(env: KusoEnvironment): string | undefined {
     const ready = (env.status?.replicas as { ready?: number } | undefined)?.ready ?? 0;
     return ready > 0 ? promoted : undefined;
   }
+  // The promoted image is still rolling out over the previous version.
+  if (state === "deploying" && rolloutFacts(env.status)) return undefined;
   return promoted;
 }
 

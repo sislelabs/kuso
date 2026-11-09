@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KusoAddon, KusoEnvironment } from "@/types/projects";
 import type { BuildSummary } from "./api";
-import { deriveAddonStatus, deriveCronStatus, deriveServiceStatus, lastDeployAt } from "./nodeStatus";
+import { deriveAddonStatus, deriveCronStatus, deriveServiceStatus, lastDeployAt, podServingSplit, rolloutInFlight } from "./nodeStatus";
 
 function env(status: NonNullable<KusoEnvironment["status"]> = {}, annotations?: Record<string, string>): KusoEnvironment {
   return {
@@ -16,6 +16,14 @@ function build(status: string, finishedAt = "2026-11-01T10:00:00Z"): BuildSummar
 }
 
 const kind = (input: Parameters<typeof deriveServiceStatus>[0]) => deriveServiceStatus(input).kind;
+
+// env.status.rollout mid-rollout, as server-go/internal/projects/rollout.go sends it.
+const inFlight = {
+  failing: false,
+  previousServing: true,
+  newImage: "traefik/whoami:v9.9.9-nope",
+  previousImage: "traefik/whoami:v1.11.0",
+};
 
 describe("deriveServiceStatus", () => {
   it("stopped wins over a live env and a running build", () => {
@@ -171,6 +179,64 @@ describe("deriveServiceStatus rollout", () => {
 
   it("doesn't call a never-served promotion a deploy", () => {
     expect(lastDeployAt(env({ state: "stuck" }, { "kuso.sislelabs.com/promoted-at": "2026-11-09T10:00:00Z" }))).toBeUndefined();
+  });
+
+  it("says what is rolling out over what until the new pods are ready", () => {
+    const s = deriveServiceStatus({ env: env({ state: "deploying", rollout: inFlight }) });
+    expect([s.kind, s.label, s.tone, s.detail]).toEqual([
+      "deploying",
+      "Rolling out",
+      "progress",
+      "v9.9.9-nope · v1.11.0 still serving",
+    ]);
+  });
+
+  it("names a stuck pull by the registry's answer while the old version serves", () => {
+    const failing = { ...inFlight, failing: true, kind: "image_pull" };
+    const notFound = deriveServiceStatus({ env: env({ state: "rollout_failing", rollout: { ...failing, pullCause: "not_found" } }) });
+    expect([notFound.kind, notFound.label, notFound.tone, notFound.detail]).toEqual([
+      "rollout_failing",
+      "Rollout stuck",
+      "warning",
+      "Tag v9.9.9-nope not found (v1.11.0 still serving)",
+    ]);
+    const denied = deriveServiceStatus({ env: env({ state: "rollout_failing", rollout: { ...failing, pullCause: "unauthorized" } }) });
+    expect(denied.detail).toBe("Registry denied access (v1.11.0 still serving)");
+  });
+
+  it("names a stuck pull's cause when nothing else serves", () => {
+    const e = env({ state: "stuck", stuck: { reason: "image_pull", summary: "The image can't be pulled", pullCause: "not_found" } });
+    e.spec = { ...e.spec, image: { repository: "traefik/whoami", tag: "v9" } } as KusoEnvironment["spec"];
+    expect(deriveServiceStatus({ env: e }).detail).toBe("Tag v9 not found");
+  });
+
+  it("doesn't count the in-flight promotion as the last deploy", () => {
+    const e = env(
+      { state: "deploying", rollout: inFlight, rolloutCompletedAt: "2026-11-09T08:00:00Z" },
+      { "kuso.sislelabs.com/promoted-at": "2026-11-09T10:00:00Z" },
+    );
+    e.metadata.uid = "rolling-out-test";
+    expect(lastDeployAt(e)).toBe("2026-11-09T08:00:00Z");
+  });
+});
+
+describe("podServingSplit", () => {
+  it("separates the previous version's serving pods from the new ones", () => {
+    const pods = [
+      { current: false, ready: true, phase: "Running" },
+      { current: true, ready: false, phase: "Pending" },
+    ];
+    expect(podServingSplit(pods, 1)).toBe("1 serving (previous) · 0/1 new");
+  });
+
+  it("counts every pod as previous before the change is applied", () => {
+    expect(podServingSplit([{ current: true, ready: true, phase: "Running" }], 1)).toBe("1 serving (previous) · 0/1 new");
+  });
+
+  it("knows which env is mid-rollout", () => {
+    expect(rolloutInFlight(env({ state: "deploying", rollout: inFlight }))).toBeTruthy();
+    expect(rolloutInFlight(env({ state: "running", rollout: inFlight }))).toBeUndefined();
+    expect(rolloutInFlight(env({ state: "deploying" }))).toBeUndefined();
   });
 });
 
