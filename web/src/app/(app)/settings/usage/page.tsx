@@ -24,7 +24,7 @@ import { describeError } from "@/lib/errors";
 import { formatCpu } from "@/lib/format";
 import { useProjects } from "@/features/projects";
 import { Cpu, MemoryStick, Server, Folder, ChevronDown, ChevronRight, Database, Archive } from "lucide-react";
-import Link from "next/link";
+import { CostRatesSection } from "@/components/settings/CostRatesSection";
 
 // Rows are keyed by the pods' project label, which also covers the
 // synthetic instance-addon project and history from projects deleted
@@ -133,7 +133,7 @@ export default function UsagePage() {
       description={
         <>
           Where CPU and memory go, by project. Figures look ahead 30 days at the pace of the last {windowDays} days;
-          cost uses the rates set in Cluster config.
+          cost uses the rates at the bottom of this page.
           {/* Matches projectmetrics.Sampler: running pods carrying the project label, every 5 min. */}
           <span className="mt-1 block text-xs text-[var(--text-tertiary)]">
             All environments (production, staging, previews), addons and cron jobs · sampled every 5 minutes over the
@@ -185,11 +185,10 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
       {ratesUnset && (
         <SettingsNotice tone="info" title="No cost rates set">
           <div>
-            Usage is tracked, but there are no prices to turn it into cost. Add a price per CPU-hour and per
-            GB-hour of memory in the Raw spec section of{" "}
-            <Link href="/settings/config" className="underline">
-              Cluster config
-            </Link>{" "}
+            Usage is tracked, but there are no prices to turn it into cost.{" "}
+            <a href="#cost-rates" className="underline">
+              Add a price per CPU-hour and per GB-hour of memory
+            </a>{" "}
             to see what each project costs.
           </div>
         </SettingsNotice>
@@ -202,7 +201,7 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
           big={ratesUnset ? "—" : money(data.clusterTotal.costTotal, data.rates.currency)}
           hint={
             ratesUnset
-              ? "Set rates in Cluster config to see cost"
+              ? "Set cost rates below to see cost"
               : `At ${rate(data.rates.cpuPerHour, data.rates.currency)} per CPU-hour and ${rate(data.rates.memGBPerHour, data.rates.currency)} per GB-hour of memory`
           }
         />
@@ -268,6 +267,8 @@ function UsageBody({ data, windowDays }: { data: ProjectUsageResponse; windowDay
 
       {/* Secondary: per-node breakdown, collapsed by default. */}
       <NodeBreakdown windowDays={windowDays} />
+
+      <CostRatesSection id="cost-rates" rates={data.rates} />
     </div>
   );
 }
