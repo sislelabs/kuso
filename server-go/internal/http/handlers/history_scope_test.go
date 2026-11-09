@@ -28,17 +28,20 @@ import (
 func recreatedServiceKube(t *testing.T, born time.Time) *kube.Client {
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		kube.GVRProjects: "KusoProjectList", kube.GVRServices: "KusoServiceList",
+		kube.GVRProjects: "KusoProjectList", kube.GVRServices: "KusoServiceList", kube.GVREnvironments: "KusoEnvironmentList",
 	})
 	for _, o := range []struct {
 		gvr        schema.GroupVersionResource
 		kind, name string
-	}{{kube.GVRProjects, "KusoProject", "shop"}, {kube.GVRServices, "KusoService", "shop-api"}} {
+	}{{kube.GVRProjects, "KusoProject", "shop"}, {kube.GVRServices, "KusoService", "shop-api"}, {kube.GVREnvironments, "KusoEnvironment", "shop-api-production"}} {
 		u := &unstructured.Unstructured{Object: map[string]interface{}{}}
 		u.SetGroupVersionKind(o.gvr.GroupVersion().WithKind(o.kind))
 		u.SetName(o.name)
 		u.SetNamespace("kuso")
 		u.SetCreationTimestamp(metav1.NewTime(born))
+		if o.kind == "KusoEnvironment" {
+			u.SetLabels(map[string]string{kube.LabelService: "api"})
+		}
 		if err := dyn.Tracker().Create(o.gvr, u, "kuso"); err != nil {
 			t.Fatal(err)
 		}
@@ -86,6 +89,9 @@ func TestRecreatedService_DoesNotInheritHistory(t *testing.T) {
 		if err := d.InsertRevision(ctx, db.Revision{Project: "shop", Kind: "service", Name: "api", Snapshot: json.RawMessage(`{}`), CreatedAt: at}); err != nil {
 			t.Fatal(err)
 		}
+		if err := d.InsertRevision(ctx, db.Revision{Project: "shop", Kind: "environment", Name: "api-production", Snapshot: json.RawMessage(`{}`), CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, at := range []time.Time{before, after} {
 		if _, err := d.DB.ExecContext(ctx, `
@@ -120,6 +126,13 @@ VALUES ($1, 'normal', 'update', 'kuso', 'production', 'api', 'shop', 'service', 
 	adminGet(t, r, "/api/projects/shop/revisions/service/api", &revs)
 	if len(revs) != 1 || revs[0].CreatedAt.Before(born) {
 		t.Errorf("revisions = %+v; want only the one after re-creation", revs)
+	}
+	// The history panel folds env revisions into the same "N config
+	// changes" group, so they clamp to the service's lifetime too.
+	var envRevs []db.Revision
+	adminGet(t, r, "/api/projects/shop/revisions/environment/api-production", &envRevs)
+	if len(envRevs) != 1 || envRevs[0].CreatedAt.Before(born) {
+		t.Errorf("env revisions = %+v; want only the one after re-creation", envRevs)
 	}
 
 	var trail struct {

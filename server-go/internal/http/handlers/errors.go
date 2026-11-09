@@ -286,6 +286,30 @@ func serviceBornAt(ctx context.Context, kc *kube.Client, homeNS, project, servic
 	return u.GetCreationTimestamp().Time
 }
 
+// envServiceBornAt is serviceBornAt for the service owning env CR
+// <project>-<env>; zero when the env or its service can't be read.
+func envServiceBornAt(ctx context.Context, kc *kube.Client, homeNS, project, env string) time.Time {
+	if kc == nil || kc.Dynamic == nil {
+		return time.Time{}
+	}
+	ns := projectNamespace(ctx, kc, homeNS, project)
+	if ns == "" {
+		return time.Time{}
+	}
+	u, err := lookupCR(ctx, kc, kube.GVREnvironments, ns, project+"-"+strings.TrimPrefix(env, project+"-"))
+	if err != nil {
+		return time.Time{}
+	}
+	service := u.GetLabels()[kube.LabelService]
+	if service == "" {
+		service, _, _ = unstructured.NestedString(u.Object, "spec", "service")
+	}
+	if service == "" {
+		return time.Time{}
+	}
+	return serviceBornAt(ctx, kc, homeNS, project, service)
+}
+
 // projectNamespace resolves the namespace a project's CRs live in, or ""
 // when the project can't be read.
 func projectNamespace(ctx context.Context, kc *kube.Client, homeNS, project string) string {

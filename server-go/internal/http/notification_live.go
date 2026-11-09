@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/kube"
@@ -23,7 +24,10 @@ func liveNotificationScopes(ctx context.Context, k *kube.Client) (httphandlers.L
 	}
 	out := make(httphandlers.LiveScopes, len(projs))
 	for i := range projs {
-		out[projs[i].Name] = map[string]bool{}
+		out[projs[i].Name] = httphandlers.LiveProject{
+			Born:     projs[i].CreationTimestamp.Time,
+			Services: map[string]time.Time{},
+		}
 	}
 	for i := range svcs {
 		s := &svcs[i]
@@ -35,8 +39,8 @@ func liveNotificationScopes(ctx context.Context, k *kube.Client) (httphandlers.L
 		if short == "" {
 			short = strings.TrimPrefix(s.Name, project+"-")
 		}
-		if m, ok := out[project]; ok {
-			m[short] = true
+		if p, ok := out[project]; ok {
+			p.Services[short] = s.CreationTimestamp.Time
 		}
 	}
 	return out, nil
