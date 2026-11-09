@@ -236,6 +236,23 @@ var envSetCmd = &cobra.Command{
 			return nil
 		}
 
+		// Several keys go in one batch so the pods roll once, not once
+		// per key. An older server without the endpoint falls through to
+		// the per-key writes below.
+		if len(kvs) > 1 {
+			sets, err := parseKeyValues(kvs)
+			if err != nil {
+				return err
+			}
+			res, err := applyServiceChanges(project, service, kusoApi.ServiceChangesRequest{EnvSet: sets})
+			if err != errChangesUnsupported {
+				if res != nil {
+					fmt.Printf("set %d env var(s) on %s/%s (%s)\n", len(kvs), project, service, rolloutNote(res))
+				}
+				return err
+			}
+		}
+
 		// Default (no --secret, no --env): the UNIFIED "one secret primitive"
 		// write. Each KEY=VALUE goes to the single-var PUT with {value, auto:
 		// true} and the SERVER decides storage — a ${{ ref }} becomes
@@ -306,6 +323,18 @@ var envUnsetCmd = &cobra.Command{
 			}
 			fmt.Printf("unset %d env override(s) on %s/%s [env=%s]\n", len(keys), project, service, envScopeFlag)
 			return nil
+		}
+
+		// Several keys: one batch, one rollout (missing keys count as
+		// removed, as below). Older servers fall through to per-key.
+		if len(keys) > 1 {
+			res, err := applyServiceChanges(project, service, kusoApi.ServiceChangesRequest{EnvUnset: keys})
+			if err != errChangesUnsupported {
+				if res != nil {
+					fmt.Printf("unset %d env var(s) on %s/%s (%s)\n", len(keys), project, service, rolloutNote(res))
+				}
+				return err
+			}
 		}
 
 		// Per-key DELETE for each name. The server's UnsetEnvVar removes
