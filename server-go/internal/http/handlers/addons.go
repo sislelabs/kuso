@@ -405,7 +405,7 @@ func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list addons", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, h.Svc.WithLiveStatus(out))
 }
 
 func (h *AddonsHandler) Pods(w http.ResponseWriter, r *http.Request) {

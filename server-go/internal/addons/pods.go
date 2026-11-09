@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/podreason"
 )
 
 // containerProblem renders a stuck container's reason into one line.
@@ -36,12 +39,14 @@ func containerProblem(name string, waiting *corev1.ContainerStateWaiting, termin
 // container stuck on a missing Secret key — so the failure explains itself
 // instead of requiring cluster access to diagnose.
 type AddonPodSummary struct {
-	Name       string   `json:"name"`
-	Ready      bool     `json:"ready"`
-	Phase      string   `json:"phase,omitempty"`
-	Component  string   `json:"component,omitempty"`
-	Restarts   int32    `json:"restarts,omitempty"`
-	Message    string   `json:"message,omitempty"`
+	Name      string `json:"name"`
+	Ready     bool   `json:"ready"`
+	Phase     string `json:"phase,omitempty"`
+	Component string `json:"component,omitempty"`
+	Restarts  int32  `json:"restarts,omitempty"`
+	Message   string `json:"message,omitempty"`
+	// Summary is Message in plain words (podreason), for pods that can't start.
+	Summary    string   `json:"summary,omitempty"`
 	Containers []string `json:"containers,omitempty"`
 }
 
@@ -98,6 +103,9 @@ func (s *Service) ListPods(ctx context.Context, project, addon string) (*AddonPo
 			sum.Containers = append(sum.Containers, c.Name)
 		}
 		sum.Message = podProblem(p)
+		if is := podreason.ForPod(p, time.Now()); is != nil {
+			sum.Summary = is.Summary
+		}
 		out.Pods = append(out.Pods, sum)
 		// Every addon chart puts the datastore first in containers.
 		if out.RunningImage == "" && isMainAddonPod(p, cr.Name) && p.Status.Phase == corev1.PodRunning && len(p.Spec.Containers) > 0 {
