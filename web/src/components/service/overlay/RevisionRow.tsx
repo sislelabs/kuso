@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { ChevronDown, Undo2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { describeRevision, useRevertRevision, type Revision } from "@/features/revisions";
+import { describeRevision, useRevertRevision, type Revision, type RolloutOutcome } from "@/features/revisions";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { RevisionDiff } from "./RevisionChanges";
@@ -28,18 +28,43 @@ function RailDot({ className }: { className?: string }) {
   );
 }
 
+const OUTCOME_TONE: Record<RolloutOutcome["tone"], string> = {
+  ok: "text-[var(--success)]",
+  warn: "text-[var(--warning)]",
+  progress: "text-[var(--building)]",
+};
+
+// OutcomeChip: what the pods did with a config change (rolled out,
+// rolling, failing), so a config-only rollout reads as a deploy.
+export function OutcomeChip({ outcome }: { outcome: RolloutOutcome }) {
+  return (
+    <span className={cn("shrink-0 font-medium", OUTCOME_TONE[outcome.tone])}>
+      {outcome.label}
+      {outcome.at ? (
+        <time dateTime={outcome.at} title={new Date(outcome.at).toLocaleString()} className="font-normal text-[var(--text-tertiary)]">
+          {" "}
+          {relativeTime(outcome.at)}
+        </time>
+      ) : null}
+    </span>
+  );
+}
+
 // RevisionRow is a compact config-change entry interleaved with builds.
 export function RevisionRow({
   project,
   revision,
   canRevert,
   history,
+  outcome,
 }: {
   project: string;
   revision: Revision;
   canRevert: boolean;
   // history: the revision list for the same resource, used to show old → new.
   history?: readonly Revision[];
+  // Pod outcome when this change triggered the latest rollout.
+  outcome?: RolloutOutcome;
 }) {
   const [open, setOpen] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
@@ -69,6 +94,7 @@ export function RevisionRow({
           </span>
         ))}
       </span>
+      {outcome && <OutcomeChip outcome={outcome} />}
       {canRevert && v.revertable && (
         <button
           type="button"
@@ -131,11 +157,15 @@ export function RevisionGroup({
   project,
   revisions,
   canRevert,
+  outcome,
 }: {
   project: string;
   revisions: Revision[];
   canRevert: boolean;
+  // The latest rollout's outcome, when one of these changes triggered it.
+  outcome?: { id: string; outcome: RolloutOutcome } | null;
 }) {
+  const inGroup = outcome && revisions.some((r) => r.id === outcome.id) ? outcome : null;
   const [open, setOpen] = useState(false);
   const newest = revisions[0];
   const oldest = revisions[revisions.length - 1];
@@ -158,12 +188,20 @@ export function RevisionGroup({
             ? relativeTime(newest.createdAt)
             : `${relativeTime(oldest.createdAt)} – ${relativeTime(newest.createdAt)}`}
         </span>
+        {inGroup && <OutcomeChip outcome={inGroup.outcome} />}
         <ChevronDown aria-hidden className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
         <ul>
           {revisions.map((r) => (
-            <RevisionRow key={r.id} project={project} revision={r} canRevert={canRevert} history={revisions} />
+            <RevisionRow
+              key={r.id}
+              project={project}
+              revision={r}
+              canRevert={canRevert}
+              history={revisions}
+              outcome={inGroup?.id === r.id ? inGroup.outcome : undefined}
+            />
           ))}
         </ul>
       )}
