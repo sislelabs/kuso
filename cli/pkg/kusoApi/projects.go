@@ -196,6 +196,7 @@ type PatchServiceRequest struct {
 	PrivateEgress     *bool                        `json:"privateEgress,omitempty"`
 	PlatformAPIEgress *bool                        `json:"platformApiEgress,omitempty"`
 	WaitForCI         *bool                        `json:"waitForCI,omitempty"`
+	AutoDeployPaused  *bool                        `json:"autoDeployPaused,omitempty"`
 	Uptime            *UptimePatch                 `json:"uptime,omitempty"`
 	RequestLimits     *RequestLimitsPatch          `json:"requestLimits,omitempty"`
 	Scale             *PatchScaleRequest           `json:"scale,omitempty"`

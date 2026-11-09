@@ -550,6 +550,12 @@ spec:
                     addon(s) BEFORE the release hook runs, so a bad migration
                     has a one-click restore. Only fires when a release hook is
                     also present. Mirrored onto every owned KusoEnvironment.
+                autoDeployPaused:
+                  type: boolean
+                  description: |
+                    When true, GitHub pushes don't build this service. Manual
+                    deploys, deploy hooks and PR previews are unaffected.
+                    Absent/false = pushes deploy as usual.
                 waitForCI:
                   type: boolean
                   description: |

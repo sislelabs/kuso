@@ -333,7 +333,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             <PlacementSection state={state} setState={setState} />
             <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
             <BuildSection state={state} setState={setState} project={project} />
-            <DeploySection project={project} state={state} setState={setState} />
+            <DeploySection project={project} service={service} state={state} setState={setState} />
             <ReleaseSection state={state} setState={setState} />
             {healthcheckApplies && (
               <HealthcheckSection state={state} setState={setState} project={project} service={service} env={envName} />

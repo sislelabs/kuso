@@ -26,10 +26,13 @@ import {
   newerReleaseFailure,
   previousSucceeded,
   rollForwardTarget,
+  useSetAutoDeployPaused,
   type DeployBuild,
 } from "@/features/builds";
 import { envRevisionName, groupRevisionRuns, interleaveTimeline, useRevisions } from "@/features/revisions";
 import type { KusoEnvironment } from "@/types/projects";
+import { toast } from "sonner";
+import { toastError } from "@/lib/errors";
 import { Check, ExternalLink, Loader2, Rocket, Undo2, X } from "lucide-react";
 import { envGroupName } from "@/lib/env-group";
 import { BuildRow } from "./BuildRow";
@@ -101,6 +104,13 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
   const uptimeStatus =
     group === "production" ? (uptime.data?.services ?? []).find((s) => s.service === service) : undefined;
 
+  const setPaused = useSetAutoDeployPaused(project, service);
+  const resumeAutoDeploy = () =>
+    setPaused.mutate(false, {
+      onSuccess: () => toast.success("Auto-deploy resumed"),
+      onError: (e) => toastError(e, "Couldn't resume auto-deploy"),
+    });
+
   const pushDeploy = pushDeployState({
     spec: svc.data?.spec,
     projectRepoUrl: proj.data?.project.spec.defaultRepo?.url,
@@ -127,7 +137,14 @@ export function ServiceDeploymentsPanel({ project, service, env, url, onNavigate
         </div>
       </div>
 
-      {pushDeploy && !pushDeploy.on && <AutoDeployBanner state={pushDeploy} onNavigate={onNavigate} />}
+      {pushDeploy && !pushDeploy.on && (
+        <AutoDeployBanner
+          state={pushDeploy}
+          onNavigate={onNavigate}
+          onResume={canDeploy ? resumeAutoDeploy : undefined}
+          resuming={setPaused.isPending}
+        />
+      )}
 
       {isImage ? (
         <ImageDeploymentCard

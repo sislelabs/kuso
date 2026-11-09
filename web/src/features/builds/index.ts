@@ -1,6 +1,6 @@
-export { rollbackToBuild, retryRelease } from "./api";
+export { rollbackToBuild, retryRelease, setAutoDeployPaused } from "./api";
 export type { RetryReleaseResult } from "./api";
-export { useRollbackToBuild, useRetryRelease } from "./hooks";
+export { useRollbackToBuild, useRetryRelease, useSetAutoDeployPaused } from "./hooks";
 export {
   hasLiveInfo,
   liveBuildId,
