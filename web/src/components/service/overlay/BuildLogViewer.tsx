@@ -48,6 +48,7 @@ export const BuildLogViewer = memo(function BuildLogViewer({
   live,
   failed,
   onStage,
+  jumpTo,
   className,
 }: {
   project: string;
@@ -55,6 +56,9 @@ export const BuildLogViewer = memo(function BuildLogViewer({
   buildId: string;
   live: boolean;
   failed: boolean;
+  // Scrolls the raw log to this 1-based line and marks it; seq re-triggers
+  // a jump to the same line.
+  jumpTo?: { line: number; seq: number };
   // Reports how far a running build has got (first-deploy progress).
   onStage?: (stage: DeployStage) => void;
   className?: string;
@@ -81,6 +85,21 @@ export const BuildLogViewer = memo(function BuildLogViewer({
 
   const scroller = useRef<HTMLDivElement>(null);
   const [follow, setFollow] = useState(true);
+  const [marked, setMarked] = useState(0);
+  const jumpLine = jumpTo?.line ?? 0;
+  const jumpSeq = jumpTo?.seq ?? 0;
+  useEffect(() => {
+    if (!jumpLine) return;
+    setView("raw");
+    setFilter("");
+    setMarked(jumpLine);
+  }, [jumpLine, jumpSeq]);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!marked || !el) return;
+    const row = el.querySelector<HTMLElement>(`[data-line="${marked}"]`);
+    if (row) el.scrollTop = Math.max(0, row.offsetTop - el.clientHeight / 2);
+  }, [marked, jumpSeq, viewPref, lines.length]);
   useEffect(() => {
     if (!live || !follow) return;
     const el = scroller.current;
@@ -230,7 +249,15 @@ export const BuildLogViewer = memo(function BuildLogViewer({
           ) : (
             <ol className="py-2">
               {rawShown.map((l) => (
-                <li key={l.idx} className="flex gap-3 px-3">
+                <li
+                  key={l.idx}
+                  data-line={l.idx + 1}
+                  aria-current={l.idx + 1 === marked ? "true" : undefined}
+                  className={cn(
+                    "flex gap-3 border-l-2 px-3",
+                    l.idx + 1 === marked ? "border-[var(--danger)] bg-[var(--danger)]/10" : "border-transparent",
+                  )}
+                >
                   <span aria-hidden className="w-8 shrink-0 select-none text-right text-[var(--text-tertiary)]">
                     {l.idx + 1}
                   </span>

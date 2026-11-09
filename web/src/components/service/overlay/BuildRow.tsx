@@ -38,6 +38,7 @@ import {
   isErrorLine,
   parseBuildLog,
   useStoredBuildLog,
+  hintLineNumber,
   githubCommitUrl,
   githubCompareUrl,
   isBranchMismatch,
@@ -142,6 +143,7 @@ export function BuildRow({
   const failed = s === "failed";
   const compareHref = githubCompareUrl(repoUrl, previous?.commitSha, b.commitSha);
   const logId = `build-log-${b.id}`;
+  const [jump, setJump] = useState<{ line: number; seq: number } | null>(null);
   const rowRef = useRef<HTMLLIElement>(null);
   const peek = useLogPeek(project, service, b.id, failed && !!peekLog);
   const failedStep = peek.step ?? failedStepFromBuild(b);
@@ -323,8 +325,16 @@ export function BuildRow({
             </>
           ) : (
             <>
-              {failed && <Remediation failureClass={b.failureClass} />}
-              <BuildLogViewer project={project} service={service} buildId={b.id} live={live} failed={failed} />
+              {failed && (
+                <Remediation
+                  failureClass={b.failureClass}
+                  project={project}
+                  service={service}
+                  buildId={b.id}
+                  onJump={(line) => setJump((j) => ({ line, seq: (j?.seq ?? 0) + 1 }))}
+                />
+              )}
+              <BuildLogViewer project={project} service={service} buildId={b.id} live={live} failed={failed} jumpTo={jump ?? undefined} />
             </>
           )}
         </div>
@@ -487,14 +497,44 @@ function RowMenu({
 }
 
 // Remediation renders the classifier's fix for a failed build above the log.
-function Remediation({ failureClass }: { failureClass?: BuildFailureClass }) {
+// The quoted line links into the log below.
+function Remediation({
+  failureClass,
+  project,
+  service,
+  buildId,
+  onJump,
+}: {
+  failureClass?: BuildFailureClass;
+  project: string;
+  service: string;
+  buildId: string;
+  onJump: (line: number) => void;
+}) {
+  const log = useStoredBuildLog(project, service, buildId, !!failureClass?.lineHint);
+  const lineNo = useMemo(
+    () => hintLineNumber((log.data ?? []).map((l) => l.line), failureClass?.lineHint),
+    [log.data, failureClass?.lineHint],
+  );
   const rem = failureClass?.remediation;
   if (!failureClass?.lineHint && !rem) return null;
   return (
     <div className="space-y-2 border-b border-[var(--border-subtle)] bg-[var(--error-subtle)] px-3 py-2.5 sm:px-4">
       {failureClass?.lineHint && (
         <p className="break-words font-mono text-xs text-[var(--text-secondary)]">
-          {failureClass.lineNum ? `line ${failureClass.lineNum}: ` : ""}
+          {lineNo > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => onJump(lineNo)}
+                className="underline decoration-dotted underline-offset-2 hover:text-[var(--text-primary)]"
+                title="Show this line in the log"
+              >
+                line {lineNo}
+              </button>
+              {": "}
+            </>
+          )}
           {failureClass.lineHint}
         </p>
       )}

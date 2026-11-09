@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractFailureLines } from "./logs";
+import { extractFailureLines, hintLineNumber } from "./logs";
 
 describe("extractFailureLines", () => {
   it("returns buildkit's failure summary block when present", () => {
@@ -30,5 +30,17 @@ describe("extractFailureLines", () => {
 
   it("returns nothing for a clean log", () => {
     expect(extractFailureLines(["step 1", "step 2", "ok"])).toEqual([]);
+  });
+});
+
+describe("hintLineNumber", () => {
+  const log = ["#1 [internal] load build definition", "Cloning into '/workspace'...", "\x1b[31mfatal: Remote branch main not found in upstream origin\x1b[0m", "exit 128"];
+  it("finds the quoted line in the shown log, 1-based", () => {
+    expect(hintLineNumber(log, "fatal: Remote branch main not found in upstream origin")).toBe(3);
+  });
+  it("matches a truncated hint and returns 0 when the line isn't there", () => {
+    expect(hintLineNumber(log, "fatal: Remote branch main…")).toBe(3);
+    expect(hintLineNumber(log, "something else")).toBe(0);
+    expect(hintLineNumber(log, "")).toBe(0);
   });
 });

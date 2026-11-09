@@ -166,3 +166,19 @@ function findLastIndex<T>(arr: T[], pred: (v: T) => boolean): number {
   for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i])) return i;
   return -1;
 }
+
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+// hintLineNumber finds the 1-based line of the stored log that the failure
+// classifier quoted. The server's own line number counts inside the tail
+// it classified (one container's last 50 lines), not the log shown, so the
+// line is located by its text; 0 when it isn't in the log.
+export function hintLineNumber(lines: readonly string[], hint: string | undefined): number {
+  const needle = (hint ?? "").replace(ANSI_RE, "").replace(/…$/, "").trim().slice(0, 160);
+  if (!needle) return 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].replace(ANSI_RE, "").includes(needle)) return i + 1;
+  }
+  return 0;
+}
