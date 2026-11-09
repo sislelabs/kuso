@@ -347,7 +347,13 @@ function uptimeCell(
 ): Cell {
   const base = { id: "uptime", label: "Uptime", tab: "settings", anchor: "uptime" } as const;
   if (!httpService) {
-    return { ...base, value: "—", tone: "plain", title: "No public HTTP endpoint, so there's nothing for the uptime check to ping" };
+    return {
+      ...base,
+      value: "Not checked",
+      secondary: { text: "no public endpoint", tone: "plain" },
+      tone: "neutral",
+      title: "No public HTTP endpoint, so there's nothing for the uptime check to ping",
+    };
   }
   if (error instanceof ApiError && error.status === 404) {
     return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report uptime checks" };

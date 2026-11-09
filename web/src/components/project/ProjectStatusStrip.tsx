@@ -178,7 +178,12 @@ function HealthSummary({
       ) : (
         <AlertCircle aria-hidden className={cn("h-3 w-3", tone)} />
       )}
-      {line.coverage && <span className="tabular-nums">{line.coverage}</span>}
+      {/* "Uptime:" says this is ping coverage, not a health rollup. */}
+      {line.coverage && (
+        <span className="tabular-nums">
+          <span className="text-[var(--text-tertiary)]">Uptime:</span> {line.coverage}
+        </span>
+      )}
       {line.coverage && <span aria-hidden>·</span>}
       {!line.issues ? (
         <span>all up</span>
