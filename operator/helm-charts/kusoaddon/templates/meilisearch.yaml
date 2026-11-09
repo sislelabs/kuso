@@ -62,6 +62,13 @@ spec:
               value: "production"
             - name: MEILI_DB_PATH
               value: /data/meili
+            # Dumps and snapshots default to dirs under the image's
+            # root-owned workdir, which the non-root UID can't create:
+            # every Meilisearch addon died with "Permission denied".
+            - name: MEILI_DUMP_DIR
+              value: /data/dumps
+            - name: MEILI_SNAPSHOT_DIR
+              value: /data/snapshots
             # Disable the public health "i'm here" telemetry — many
             # indie projects ship to clients who don't want vendor
             # pings, and the analytics value is low.
