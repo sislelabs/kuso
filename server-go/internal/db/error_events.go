@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // ErrorEvent is one occurrence of a captured error.
@@ -309,16 +311,30 @@ type ServiceErrorSummary struct {
 // call per service. Service is the stored FQ `<project>-<service>` name.
 // Services with no errors in the window are absent. env, when non-empty,
 // restricts to one environment like ListErrorGroups.
-func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, since time.Time) ([]ServiceErrorSummary, error) {
+//
+// bornAt optionally maps an FQ service name to the moment its current
+// incarnation was created; that service's events from before it are
+// skipped, so a re-created name doesn't inherit the old one's errors.
+func (d *DB) SummarizeProjectErrors(ctx context.Context, project, env string, since time.Time, bornAt map[string]time.Time) ([]ServiceErrorSummary, error) {
+	names := make([]string, 0, len(bornAt))
+	births := make([]string, 0, len(bornAt))
+	for n, t := range bornAt {
+		if !t.IsZero() {
+			names = append(names, n)
+			births = append(births, t.UTC().Format(time.RFC3339Nano))
+		}
+	}
 	rows, err := d.QueryContext(ctx, `
 		SELECT service, COUNT(*), COUNT(DISTINCT fingerprint), MAX(ts)
 		FROM "ErrorEvent" e
+		LEFT JOIN unnest($6::text[], $7::timestamptz[]) AS b(svc, born) ON b.svc = e.service
 		WHERE project = $1 AND service <> '' AND ts >= $2 AND ($3 = '' OR env = $3)
+		  AND (b.born IS NULL OR ts >= b.born)
 		  AND NOT ("rawLine" ~ $4 OR pod ~ $5)
 		  AND `+hideSplitContinuation+`
 		GROUP BY service
 		ORDER BY service`,
-		project, since.UTC(), env, BuildkitStepPattern, ReleasePodPattern,
+		project, since.UTC(), env, BuildkitStepPattern, ReleasePodPattern, pq.StringArray(names), pq.StringArray(births),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("SummarizeProjectErrors: %w", err)

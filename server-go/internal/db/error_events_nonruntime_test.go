@@ -43,7 +43,7 @@ func TestErrorReadersHideNonRuntimeRows(t *testing.T) {
 		t.Errorf("sample pod = %q; want the runtime pod, not the newer release-hook one", groups[0].SamplePod)
 	}
 
-	sum, err := d.SummarizeProjectErrors(ctx, "p", "", since)
+	sum, err := d.SummarizeProjectErrors(ctx, "p", "", since, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

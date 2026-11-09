@@ -24,7 +24,7 @@ func TestSummarizeProjectErrors(t *testing.T) {
 	}
 	since := now.Add(-24 * time.Hour)
 
-	all, err := d.SummarizeProjectErrors(ctx, "p", "", since)
+	all, err := d.SummarizeProjectErrors(ctx, "p", "", since, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestSummarizeProjectErrors(t *testing.T) {
 		t.Errorf("p-web = %+v; want 1 occurrence (the 48h-old one is outside the window)", all[1])
 	}
 
-	prod, err := d.SummarizeProjectErrors(ctx, "p", "production", since)
+	prod, err := d.SummarizeProjectErrors(ctx, "p", "production", since, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

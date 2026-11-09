@@ -101,6 +101,19 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	out = visible
+	// A service re-created under a deleted one's name starts a fresh
+	// history; the old incarnation's revisions aren't replayable onto it.
+	if kind == "service" {
+		if born := serviceBornAt(ctx, h.Kube, h.Namespace, project, name); !born.IsZero() {
+			kept := out[:0]
+			for _, rev := range out {
+				if !rev.CreatedAt.Before(born) {
+					kept = append(kept, rev)
+				}
+			}
+			out = kept
+		}
+	}
 	for i := range out {
 		redactRevisionSnapshotIfNeeded(ctx, h.DB, project, &out[i])
 		out[i].ChangedKeys = projects.RevisionChangedKeys(out[i].Snapshot)
