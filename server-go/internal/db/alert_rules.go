@@ -31,6 +31,7 @@ const (
 	AlertKindCrashloop          = "crashloop"           // a container is in CrashLoopBackOff, or restarted >= ThresholdInt times with the last restart inside the window
 	AlertKindDeployFailed       = "deploy_failed"       // a service's newest finished build failed or its release hook failed
 	AlertKindHealthcheckFailing = "healthcheck_failing" // the uptime check has failed for >= ThresholdInt minutes
+	AlertKindRolloutFailing     = "rollout_failing"     // a rollout's new pods fail (health check, crash, image pull) while the previous version keeps serving
 )
 
 // IsEpisodicAlertKind reports whether kind uses fire-once + resolve
@@ -38,7 +39,7 @@ const (
 func IsEpisodicAlertKind(kind string) bool {
 	switch kind {
 	case AlertKindHTTP5xxRate, AlertKindHTTPP95Latency, AlertKindCertExpiry, AlertKindDNSMismatch,
-		AlertKindCrashloop, AlertKindDeployFailed, AlertKindHealthcheckFailing:
+		AlertKindCrashloop, AlertKindDeployFailed, AlertKindHealthcheckFailing, AlertKindRolloutFailing:
 		return true
 	}
 	return false
