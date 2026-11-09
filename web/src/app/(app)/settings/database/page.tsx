@@ -16,6 +16,7 @@ import { toastError } from "@/lib/errors";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { SharedDatabaseOverview } from "@/components/settings/SharedDatabaseOverview";
 
 // /settings/database — first-class home for the cluster-shared
 // Postgres. One of three states:
@@ -98,7 +99,7 @@ export default function DatabasePage() {
 
   if (!isAdmin) {
     return (
-      <SettingsPage title="Database">
+      <SettingsPage title="Shared database">
         <SettingsNotice tone="neutral">Cluster database configuration is admin-only.</SettingsNotice>
       </SettingsPage>
     );
@@ -106,9 +107,11 @@ export default function DatabasePage() {
 
   return (
     <SettingsPage
-      title="Database"
+      title="Shared database"
       description="One Postgres serves every project that opts in. Each project gets its own logical database and user inside it; no project sees another's data."
     >
+      {/* What's on each shared server right now. Setup lives below. */}
+      <SharedServers />
 
       {status.isPending && <Skeleton className="h-40 w-full rounded-md" />}
       {status.isError && (
@@ -492,6 +495,22 @@ interface InstanceAddon {
 // by name via the canvas Add Addon dialog → Instance. The primary
 // managed/external slot above auto-registers as "pg", so we filter it
 // out here to avoid showing it twice — it's the card at the top.
+function SharedServers() {
+  const list = useQuery<{ addons: InstanceAddon[] }>({
+    queryKey: ["instance-addons"],
+    queryFn: () => api("/api/instance-addons"),
+  });
+  const servers = (list.data?.addons ?? []).filter((a) => a.kind === "postgres");
+  if (servers.length === 0) return null;
+  return (
+    <div className="space-y-4">
+      {servers.map((a) => (
+        <SharedDatabaseOverview key={a.name} name={a.name} />
+      ))}
+    </div>
+  );
+}
+
 function AdditionalServers() {
   const qc = useQueryClient();
   const list = useQuery<{ addons: InstanceAddon[] }>({

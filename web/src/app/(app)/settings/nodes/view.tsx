@@ -19,7 +19,6 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { nodePressures, roleLabels } from "@/components/layout/nodeHealth";
-import { DbHealthTile } from "@/components/shared/DbHealthTile";
 
 interface Label {
   key: string;
@@ -299,7 +298,6 @@ export function NodesView() {
           busy count means the control plane is saturated. Lives here
           because /settings/nodes is the operational-health page and
           this is a node-adjacent process-level signal. */}
-      <DbHealthTile />
 
       {/* Floating save bar — appears the moment any node is dirty.
           Covers every dirty node in one click. Same shape as the

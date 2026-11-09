@@ -100,6 +100,7 @@ type AddonsHandler struct {
 // Mount registers the routes onto the given chi router.
 func (h *AddonsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/addons", h.List)
+	r.Get("/api/instance-addons/{name}/overview", h.InstanceOverview)
 	r.Post("/api/projects/{project}/addons", h.Add)
 	r.Delete("/api/projects/{project}/addons/{addon}", h.Delete)
 	// Edit version / size / HA / storageSize / database.
@@ -587,6 +588,21 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // headerKusoWarning carries a non-fatal problem on an otherwise
 // successful write (the change landed; a follow-up step didn't).
 const headerKusoWarning = "X-Kuso-Warning"
+
+// InstanceOverview reports one shared instance Postgres: the server, every
+// database on it and who uses each. Admin-only (it reads every project).
+// GET /api/instance-addons/{name}/overview.
+func (h *AddonsHandler) InstanceOverview(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	out, err := h.Svc.InstanceOverview(r.Context(), chi.URLParam(r, "name"))
+	if err != nil {
+		h.fail(w, "instance overview", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
 
 func (h *AddonsHandler) fail(w http.ResponseWriter, op string, err error) {
 	switch {
