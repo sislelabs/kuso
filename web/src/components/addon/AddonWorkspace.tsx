@@ -469,9 +469,9 @@ function BackupNowButton({
   const fix = !fixable
     ? null
     : listState.kind === "no-s3"
-      ? { text: "S3 isn't set up", action: "Set up S3", href: "/settings/backups#s3-storage" }
+      ? { text: "Needs S3 storage", action: "Set up S3", href: "/settings/backups#s3-storage" }
       : !cr?.spec.backup?.schedule?.trim()
-        ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
+        ? { text: "Needs a backup schedule", action: "Set one up", onClick: onOpenBackups }
         : null;
   return (
     <>
@@ -489,9 +489,6 @@ function BackupNowButton({
             >
               <DatabaseBackup className="h-3 w-3" aria-hidden />
               {run.isPending ? "Starting…" : "Back up now"}
-              <span id={reasonId} className="sr-only">
-                {state.reason}
-              </span>
             </button>
           }
         />
@@ -499,6 +496,10 @@ function BackupNowButton({
           {state.reason}
         </TooltipContent>
       </Tooltip>
+      {/* Outside the button so it describes it without joining its name. */}
+      <span id={reasonId} className="sr-only">
+        {state.reason}
+      </span>
       {/* A blocked button says why in plain sight, not only on hover. */}
       {!fix && !state.enabled && !!cr && listState.kind !== "loading" && (
         <span className="text-xs text-[var(--text-tertiary)]">{state.reason}</span>

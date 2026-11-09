@@ -4,9 +4,11 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { AlertTriangle, Check, CheckCircle2, ExternalLink, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
-import { buildRefLabel, buildStall, type DeployBuild, type DeployStage } from "@/features/builds";
+import { Perms, useCanOnProject } from "@/features/auth";
+import { buildRefLabel, stallHeadline, stallNote, stallStage, type DeployBuild, type DeployStage } from "@/features/builds";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
+import { CancelButton } from "./BuildRow";
 import { formatDuration, LiveDuration } from "./deployParts";
 
 export type FirstDeployStep = "clone" | "build" | "push" | "start" | "live";
@@ -41,14 +43,18 @@ export function FirstDeployProgress({
 }) {
   const [stage, setStage] = useState<DeployStage>("clone");
   const onStage = useCallback((s: DeployStage) => setStage(s), []);
-  const current: FirstDeployStep = status === "start" ? "start" : status === "running" ? stage : "clone";
+  const canCancel = useCanOnProject(project, Perms.ServicesWrite) && status !== "start";
+  const stall = status === "pending" || status === "running" ? build.stalled : undefined;
+  // The log only shows steps that printed; the stuck container (env-detect
+  // after a finished clone) says which step is really waiting.
+  const stuckAt = stallStage(stall?.container);
+  const current: FirstDeployStep = status === "start" ? "start" : (stuckAt ?? (status === "running" ? stage : "clone"));
   const idx = STEPS.findIndex((s) => s.step === current);
   const sha = buildRefLabel(build, 7);
   const repo = repoUrl?.replace(/^https?:\/\/(www\.)?(github\.com\/)?/, "");
-  const stall = status === "start" ? undefined : buildStall(build, status);
 
   const headline = stall
-    ? stall.summary
+    ? stallHeadline(stall)
     : status === "queued"
       ? build.queuePosition
         ? `Queued behind ${build.queuePosition - 1 > 0 ? `${build.queuePosition - 1} other build${build.queuePosition - 1 === 1 ? "" : "s"}` : "another build"}`
@@ -65,7 +71,8 @@ export function FirstDeployProgress({
       className="overflow-hidden rounded-lg border border-[var(--building)]/35 bg-[var(--bg-secondary)]"
     >
       <div className="p-4">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
+        <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-secondary)]">
           <span className="inline-flex items-center gap-1.5 font-medium text-[var(--building)]">
             <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />
             First deploy
@@ -87,6 +94,8 @@ export function FirstDeployProgress({
             </>
           )}
         </div>
+        {canCancel && <CancelButton project={project} service={service} buildId={build.id} />}
+        </div>
         <p
           className={cn("mt-2 text-base font-semibold", stall ? "text-[var(--warning)]" : "text-[var(--text-primary)]")}
           role="status"
@@ -94,6 +103,7 @@ export function FirstDeployProgress({
         >
           {headline}
         </p>
+        {stall && <p className="mt-0.5 text-sm text-[var(--text-secondary)]">{stallNote(stall)}</p>}
         {stall?.detail && <p className="mt-0.5 break-words font-mono text-xs text-[var(--text-secondary)]">{stall.detail}</p>}
         {build.commitMessage && (
           <p className="mt-0.5 line-clamp-1 break-words text-sm text-[var(--text-secondary)]">{build.commitMessage}</p>
