@@ -100,7 +100,7 @@ describe("deriveAddonStatus", () => {
         { type: "ReleaseFailed", status: "True", message: "boom" },
       ]),
     );
-    expect([s.kind, s.label, s.detail]).toEqual(["build_failed", "Failing", "Release failed: boom"]);
+    expect([s.kind, s.label, s.detail]).toEqual(["crashing", "Failing", "boom"]);
   });
 
   it("deployed is live, otherwise provisioning", () => {
@@ -109,6 +109,47 @@ describe("deriveAddonStatus", () => {
     expect(deriveAddonStatus(addon([{ type: "ReleaseFailed", status: "False" }, { type: "Deployed", status: "True" }])).kind).toBe(
       "live",
     );
+  });
+});
+
+describe("deriveAddonStatus with the server rollup", () => {
+  const withState = (status: Record<string, unknown>): KusoAddon => ({
+    metadata: { name: "p-db" },
+    spec: { project: "p", kind: "postgres" },
+    status: { conditions: [{ type: "Deployed", status: "True" }], ...status },
+  });
+
+  it("a Deployed release whose pod can't schedule is stuck, not live", () => {
+    const s = deriveAddonStatus(
+      withState({
+        state: "stuck",
+        stateDetail: "The node is low on disk, so the pod can't be scheduled",
+        pods: { ready: 0, total: 1 },
+      }),
+    );
+    expect([s.kind, s.label, s.tone, s.detail]).toEqual([
+      "stuck",
+      "Stuck",
+      "error",
+      "The node is low on disk, so the pod can't be scheduled",
+    ]);
+  });
+
+  it("server state beats the helm conditions", () => {
+    expect(deriveAddonStatus(withState({ state: "degraded", stateDetail: "1/2 pods ready" })).kind).toBe("degraded");
+    expect(deriveAddonStatus(withState({ state: "live" })).kind).toBe("live");
+  });
+});
+
+describe("deriveServiceStatus stuck", () => {
+  it("maps the server's stuck state with its reason", () => {
+    const env = {
+      metadata: { name: "p-api-production" },
+      spec: { service: "p-api" },
+      status: { state: "stuck", stateDetail: "The image tag doesn't exist in the registry" },
+    } as unknown as KusoEnvironment;
+    const s = deriveServiceStatus({ env });
+    expect([s.kind, s.label, s.tone, s.detail]).toEqual(["stuck", "Stuck", "error", "The image tag doesn't exist in the registry"]);
   });
 });
 

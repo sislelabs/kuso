@@ -84,8 +84,10 @@ function VerdictHeader({
   reconcile?: ReconcileCounts;
 }) {
   const s = rollup.services;
+  // Production services, the same scope and buckets as the project cards.
   const facts = [
     `${s.running} running`,
+    s.attention > 0 && `${s.attention} need${s.attention === 1 ? "s" : ""} attention`,
     s.inFlight > 0 && `${s.inFlight} deploying`,
     s.sleeping > 0 && `${s.sleeping} asleep`,
     s.stopped > 0 && `${s.stopped} stopped`,
@@ -119,7 +121,7 @@ function VerdictHeader({
         )}
         {!v && <Skeleton aria-hidden className="h-5 w-56" />}
         <p className="mt-0.5 text-sm text-[var(--text-secondary)]">
-          {s.total === 0 ? "Nothing deployed yet." : `${facts.join(" · ")} across all projects`}
+          {s.total === 0 ? "Nothing deployed yet." : `Production: ${facts.join(" · ")} across all projects`}
         </p>
       </div>
     </header>
@@ -246,14 +248,20 @@ function unavailableNote(projects: string[], what: string): string | undefined {
 }
 
 function ServicesRow({ rollup }: { rollup: AppRollup }) {
-  const { problems, running } = rollup.services;
+  const { problems, running, attention } = rollup.services;
+  const elsewhere = problems.filter((p) => p.group !== "production").length;
+  const summary = attention
+    ? `${attention} need${attention === 1 ? "s" : ""} attention${elsewhere > 0 ? ` · ${elsewhere} in other environments` : ""}`
+    : elsewhere > 0
+      ? `${running} running · ${elsewhere} in other environments`
+      : `${running} running`;
   return (
     <RollupRow
       icon={Boxes}
       label="Services"
-      hint="Crash-looping, failed deploys or not all replicas ready"
+      hint="Crash-looping, stuck (can't start), failed deploys or not all replicas ready"
       tone={problems.some((p) => p.status.tone === "danger") ? "danger" : problems.length ? "warning" : "neutral"}
-      summary={problems.length ? `${problems.length} need${problems.length === 1 ? "s" : ""} attention` : `${running} running`}
+      summary={summary}
     >
       <ItemList
         items={problems}
@@ -350,7 +358,7 @@ function AddonsRow({ rollup, pending }: { rollup: AppRollup; pending: boolean })
     <RollupRow
       icon={Database}
       label="Addons"
-      hint="Databases, caches and queues whose release isn't deployed"
+      hint="Databases, caches and queues that aren't serving"
       pending={pending}
       tone={failing > 0 ? "danger" : a.problems.length ? "progress" : "neutral"}
       summary={

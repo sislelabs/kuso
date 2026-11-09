@@ -14,4 +14,9 @@ describe("errorTitle", () => {
     expect(errorTitle("TypeError: x is undefined")).toBe("TypeError: x is undefined");
     expect(errorTitle("Errors happen")).toBe("Errors happen");
   });
+  it("names a traceback after its exception line, never the bare header", () => {
+    const sample = 'Traceback (most recent call last):\n  File "w.py", line 9, in run\nKeyError: \'cart\'';
+    expect(errorTitle("Traceback (most recent call last):", sample)).toBe("KeyError: 'cart'");
+    expect(errorTitle("Traceback (most recent call last):")).toBe("Python traceback");
+  });
 });
