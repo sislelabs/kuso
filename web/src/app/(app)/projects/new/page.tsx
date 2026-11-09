@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Archive,
@@ -39,6 +39,8 @@ import { HostClashHint } from "@/components/shared/HostClashHint";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { useCan, Perms } from "@/features/auth";
 import { defaultServiceHost, useInstanceDomain } from "@/lib/default-host";
+import { defaultServiceName } from "@/lib/default-service-name";
+import { getDefaultDomain } from "@/features/cluster-config/api";
 import { restoreFormDraft } from "@/lib/query-client";
 import { ImportArchiveCard } from "./ImportArchiveCard";
 import { DeployImageForm, type DeployImageInput } from "./DeployImageForm";
@@ -64,15 +66,6 @@ const RUNTIMES = [
 const inputClass = "h-9 text-[13px]";
 const monoInputClass = "h-9 font-mono text-[13px]";
 
-// defaultServiceName keeps the first service named after the project
-// (so it gets the project's bare host) unless that name doesn't fit the
-// 53-char Helm release budget, in which case "web".
-function defaultServiceName(project: string, repoName: string): string {
-  const candidate = project || slugifyServiceName(repoName);
-  if (candidate && !serviceSlugError(project || "x", slugifyServiceName(candidate))) return candidate;
-  return "web";
-}
-
 // NewProjectPage leads with importing a Git repo (project + first
 // service + first build in one step). Templates, compose and archive
 // imports and an empty project sit below as secondary options.
@@ -86,6 +79,9 @@ export default function NewProjectPage() {
   const repoSources = useRepoSources();
   const installations = useInstallations({ enabled: isAdmin });
   const instanceDomain = useInstanceDomain() || "kuso.example.com";
+  // The server's own default domain, for promises that must be exact.
+  // Undefined while loading or on a server too old to say.
+  const serverDomain = useQuery({ queryKey: ["config", "domain"], queryFn: getDefaultDomain, staleTime: Infinity, retry: false }).data;
 
   const taken = useMemo(() => new Set((projects.data ?? []).map((p) => p.metadata.name)), [projects.data]);
 
@@ -446,7 +442,7 @@ export default function NewProjectPage() {
           {primary === "image" ? (
             <DeployImageForm
               taken={taken}
-              instanceDomain={instanceDomain}
+              instanceDomain={serverDomain || undefined}
               baseDomain={baseDomain}
               formError={formError}
               submitting={submitting}

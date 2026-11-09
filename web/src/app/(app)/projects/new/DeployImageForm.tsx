@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { parseImageRef, type ImageRef } from "@/features/services/imageRef";
 import { projectNameError, projectSlugFromRepo } from "@/features/projects/names";
-import { defaultServiceHost } from "@/lib/default-host";
+import { firstServiceHost } from "@/lib/default-service-name";
+import { createPortProblem } from "@/features/services/createServiceBody";
 import { FormField } from "../[project]/services/new/FormField";
 import { EnvPastePanel, useDotenv } from "../[project]/services/new/EnvPastePanel";
 
@@ -32,7 +33,8 @@ export function DeployImageForm({
   onSubmit,
 }: {
   taken: ReadonlySet<string>;
-  instanceDomain: string;
+  // The server's default app domain; undefined when it isn't known.
+  instanceDomain: string | undefined;
   baseDomain: string;
   // The page's shared Advanced fields (base domain, namespace, previews).
   advanced: (projectName: string) => ReactNode;
@@ -46,16 +48,18 @@ export function DeployImageForm({
   const [port, setPort] = useState("");
   const [envText, setEnvText] = useState("");
   const env = useDotenv(envText);
-  const [errors, setErrors] = useState<{ image?: string; project?: string; env?: string }>({});
+  const [errors, setErrors] = useState<{ image?: string; project?: string; port?: string; env?: string }>({});
   const imageRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const portRef = useRef<HTMLInputElement>(null);
 
   const parsed = useMemo(() => parseImageRef(imageText), [imageText]);
   const derivedName = parsed ? projectSlugFromRepo(parsed.name, taken) : "";
   const name = nameTouched ? projectName : derivedName;
   const nameProblem = (n: string) =>
     projectNameError(n) ?? (taken.has(n) ? `A project named "${n}" already exists.` : null);
-  const host = defaultServiceHost(name.trim() || "my-app", name.trim() || "my-app", baseDomain, instanceDomain);
+  // The same derivation the created service gets (see onDeployImage).
+  const host = firstServiceHost(name.trim() || "my-app", parsed?.name ?? "", baseDomain, instanceDomain);
 
   const submit = () => {
     const errs = {
@@ -67,11 +71,13 @@ export function DeployImageForm({
             ? `Add a tag or digest, e.g. ${parsed.repository}:1.4.2. Write :latest only if you mean it.`
             : undefined,
       project: nameProblem(name.trim()) ?? undefined,
+      port: createPortProblem(port),
       env: env.errors.length > 0 ? "Fix or remove the .env lines that can't be read." : undefined,
     };
     setErrors(errs);
     if (errs.image) return imageRef.current?.focus();
     if (errs.project) return nameRef.current?.focus();
+    if (errs.port) return portRef.current?.focus();
     if (errs.env || !parsed) return;
     onSubmit({ projectName: name.trim(), image: parsed, port, envVars: env.vars });
   };
@@ -115,9 +121,13 @@ export function DeployImageForm({
         <FormField
           label="Project name"
           hint={
-            <>
-              Your app will be at <span className="font-mono text-[var(--text-primary)]">https://{host}</span>
-            </>
+            host ? (
+              <>
+                Your app will be at <span className="font-mono text-[var(--text-primary)]">https://{host}</span>
+              </>
+            ) : (
+              "Its URL is assigned after create."
+            )
           }
           error={errors.project ?? (nameTouched && name ? nameProblem(name.trim()) : null)}
           htmlFor="image-project-name"
@@ -137,14 +147,20 @@ export function DeployImageForm({
             className={monoInputClass}
           />
         </FormField>
-        <FormField label="Port" hint="Defaults to 8080." htmlFor="image-port">
+        <FormField label="Port" hint="Defaults to 8080." error={errors.port} htmlFor="image-port">
           <Input
             id="image-port"
-            type="number"
+            ref={portRef}
             inputMode="numeric"
             value={port}
-            onChange={(e) => setPort(e.target.value)}
+            onChange={(e) => {
+              setPort(e.target.value);
+              setErrors((x) => ({ ...x, port: undefined }));
+            }}
             placeholder="e.g. 3000"
+            aria-invalid={errors.port ? true : undefined}
+            spellCheck={false}
+            autoComplete="off"
             className={monoInputClass}
           />
         </FormField>

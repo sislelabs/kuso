@@ -37,6 +37,7 @@ type ConfigHandler struct {
 func (h *ConfigHandler) Mount(r chi.Router) {
 	r.Get("/api/config", h.GetSettings)
 	r.Get("/api/config/banner", h.Banner)
+	r.Get("/api/config/domain", h.Domain)
 	r.Get("/api/config/registry", h.Registry)
 	r.Get("/api/config/clusterissuer", h.ClusterIssuer)
 	r.Get("/api/config/runpacks", h.ListRunpacks)
@@ -118,6 +119,13 @@ func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // Banner returns the banner config from the CR spec.
+// Domain returns the instance's default app domain (KUSO_DOMAIN), the
+// base of every auto-assigned service host in a project without its own
+// base domain. The UI uses it to show the URL a new service will get.
+func (h *ConfigHandler) Domain(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"domain": config.DefaultBaseDomain()})
+}
+
 func (h *ConfigHandler) Banner(w http.ResponseWriter, r *http.Request) {
 	defaultBanner := map[string]any{
 		"show": false, "text": "", "bgcolor": "white", "fontcolor": "white",

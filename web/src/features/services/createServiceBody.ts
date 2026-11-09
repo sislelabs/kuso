@@ -69,6 +69,15 @@ export function followsProjectRepo(
   return normRepo(projectRepo.url) === normRepo(url) && (projectRepo.defaultBranch || "main") === branch;
 }
 
+// createPortProblem validates the create forms' optional port: blank
+// means the 8080 default, anything typed must be a real port.
+export function createPortProblem(p: string): string | undefined {
+  const t = p.trim();
+  if (!t) return undefined;
+  const n = /^\d+$/.test(t) ? Number(t) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : "Use a port from 1 to 65535, or leave it blank for 8080.";
+}
+
 function parsePort(p: string | undefined): number | undefined {
   const n = p?.trim() ? Number(p) : NaN;
   return Number.isInteger(n) && n > 0 && n <= 65535 ? n : undefined;

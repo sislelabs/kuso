@@ -45,3 +45,10 @@ export async function getDefaultPodSize(): Promise<string> {
 export async function setDefaultPodSize(name: string): Promise<void> {
   await api("/api/config/default-podsize", { method: "PUT", body: { name } });
 }
+
+// getDefaultDomain is the instance's app domain (KUSO_DOMAIN): the base of
+// a new service's auto-assigned host when its project has no base domain.
+export async function getDefaultDomain(): Promise<string> {
+  const res = await api<{ domain?: string }>("/api/config/domain");
+  return res.domain ?? "";
+}

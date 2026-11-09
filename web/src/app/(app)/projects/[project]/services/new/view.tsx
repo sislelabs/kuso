@@ -18,7 +18,7 @@ import { SERVICE_DISPLAY_NAME_RE, friendlyApiError, serviceSlugError } from "@/f
 import { useRegistryCredentials } from "@/features/registry-credentials";
 import { addonLabel } from "@/components/addon/AddonIcon";
 import { SIZE_NONE, sizingBody, type SizingInput } from "@/features/services/createSizing";
-import { buildCreateServiceBody } from "@/features/services/createServiceBody";
+import { buildCreateServiceBody, createPortProblem } from "@/features/services/createServiceBody";
 import { createServiceWithEnv } from "@/features/services/createServiceFlow";
 import { listPodSizes } from "@/features/cluster-config/api";
 import { ApiError } from "@/lib/api-client";
@@ -133,6 +133,7 @@ export function AddServiceView() {
     fromService?: string;
     sizing?: string;
     env?: string;
+    port?: string;
   }>({});
   const [sizing, setSizing] = useState<SizingInput>({ size: "", replicas: "", maxReplicas: "" });
   // Same cache key as the service settings Scale section.
@@ -143,6 +144,7 @@ export function AddServiceView() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const tagInputRef = useRef<HTMLInputElement>(null);
+  const portInputRef = useRef<HTMLInputElement>(null);
   // A full reference typed or pasted into the repository field moves its
   // tag/digest into the Tag field.
   const splitImageInput = (raw: string): boolean => {
@@ -270,6 +272,7 @@ export function AddServiceView() {
       errs.image = imageRepositoryProblem(imageRepo) ?? undefined;
       errs.tag = imageTagProblem(imageTag) ?? undefined;
     }
+    if (source === "image" || kind === "web") errs.port = createPortProblem(port);
     if (source === "repo" && kind === "worker" && !fromService) errs.fromService = "Pick the service whose image this worker runs.";
     if (source === "repo" && picked && kind === "web" && !runtime) errs.runtime = "Pick a runtime.";
     const sized = sizingBody(sizing, podSizes.data ?? []);
@@ -286,6 +289,7 @@ export function AddServiceView() {
         else if (errs.name) nameInputRef.current?.focus();
         else if (errs.image) imageInputRef.current?.focus();
         else if (errs.tag) tagInputRef.current?.focus();
+        else if (errs.port) portInputRef.current?.focus();
         else if (errs.env) envRef.current?.querySelector("textarea")?.focus();
       });
       return;
@@ -658,15 +662,22 @@ export function AddServiceView() {
                     <FormField
                       label="Port"
                       hint={source === "image" ? "Defaults to 8080." : "Detected, or 8080."}
+                      error={fieldErrors.port}
                       htmlFor="svc-port"
                     >
                       <Input
                         id="svc-port"
-                        type="number"
+                        ref={portInputRef}
                         inputMode="numeric"
                         value={port}
-                        onChange={(e) => setPort(e.target.value)}
+                        onChange={(e) => {
+                          setPort(e.target.value);
+                          clearFieldError("port");
+                        }}
                         placeholder="e.g. 3000"
+                        aria-invalid={fieldErrors.port ? true : undefined}
+                        spellCheck={false}
+                        autoComplete="off"
                         className={monoInputClass}
                       />
                     </FormField>
