@@ -6,19 +6,20 @@ import { errorCountLabel, useProjectErrorCounts } from "@/features/errors";
 import { useLiveProjectDomain } from "@/features/projects/liveDomain";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCpu, relativeTime } from "@/lib/format";
+import type { StatusTone } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { ProjectCardMenu, type ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectStatusBadge } from "./ProjectStatusBadge";
 import { formatBytes, type ProjectCardModel } from "./projectCardModel";
 
-const STATUS_RAIL: Record<ProjectCardModel["status"], string> = {
-  live: "before:bg-[var(--success)]",
-  failing: "before:bg-[var(--error)]",
-  building: "before:bg-[var(--building)]",
-  sleeping: "before:bg-[var(--info)]",
-  stopped: "before:bg-transparent",
-  pending: "before:bg-transparent",
-  empty: "before:bg-transparent",
+// Left rail in the card's worst service tone; settled-neutral cards get none.
+const TONE_RAIL: Record<StatusTone, string> = {
+  success: "before:bg-[var(--success)]",
+  progress: "before:bg-[var(--building)]",
+  warning: "before:bg-[var(--warning)]",
+  danger: "before:bg-[var(--danger)]",
+  info: "before:bg-transparent",
+  neutral: "before:bg-transparent",
 };
 
 function ExternalRow({ icon: Icon, text, href, label }: {
@@ -95,7 +96,7 @@ export function ProjectCard({
           "group relative flex h-full flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors",
           "hover:border-[var(--border-strong)] has-[a[data-card-link]:focus-visible]:border-[var(--ring)] has-[a[data-card-link]:focus-visible]:ring-2 has-[a[data-card-link]:focus-visible]:ring-[var(--ring)]/40",
           "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
-          STATUS_RAIL[model.status],
+          TONE_RAIL[model.tone],
         )}
       >
         <Link

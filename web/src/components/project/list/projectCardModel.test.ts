@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem } from "@/features/projects";
-import { buildCardModel, matchesQuery, rollupStatus } from "./projectCardModel";
+import { buildCardModel, matchesQuery, projectStatusSummary, rollupStatus } from "./projectCardModel";
 
 const project: KusoProject = {
   metadata: { name: "shop", creationTimestamp: "2026-01-01T00:00:00Z" },
@@ -98,5 +98,30 @@ describe("matchesQuery", () => {
     expect(matchesQuery(m, "worker")).toBe(true);
     expect(matchesQuery(m, "acme worker")).toBe(true);
     expect(matchesQuery(m, "acme billing")).toBe(false);
+  });
+});
+
+describe("projectStatusSummary", () => {
+  it("counts live of total and names the rest in the shared vocabulary", () => {
+    const m = buildCardModel(
+      project,
+      summary([svc("web"), svc("api"), svc("worker", { stopped: true })], [env("web", "running"), env("api", "crashlooping")]),
+    );
+    expect(projectStatusSummary(m.counts, m.serviceCount)).toBe("1 of 3 live · 1 failing · 1 stopped");
+    expect(m.tone).toBe("danger");
+  });
+
+  it("reads plainly when everything shares one state", () => {
+    expect(projectStatusSummary({ live: 3 }, 3)).toBe("All 3 live");
+    expect(projectStatusSummary({ live: 1 }, 1)).toBe("Live");
+    expect(projectStatusSummary({ stopped: 2 }, 2)).toBe("Stopped · 2 services");
+    expect(projectStatusSummary({}, 0)).toBe("No services");
+  });
+
+  it("calls a release-hook failure degraded, as the canvas does", () => {
+    const m = buildCardModel(project, summary([svc("web"), svc("api")], [env("web", "running"), env("api", "release_failed")]));
+    expect(m.status).toBe("failing");
+    expect(projectStatusSummary(m.counts, m.serviceCount)).toBe("1 of 2 live · 1 degraded");
+    expect(m.tone).toBe("warning");
   });
 });

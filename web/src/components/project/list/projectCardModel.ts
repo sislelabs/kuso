@@ -3,6 +3,7 @@ import { ENV_GROUP_LABEL, isProductionGroup } from "@/lib/env-group";
 import { projectLastDeployedAt, projectPrimaryDomain, type ProjectDomain } from "@/features/projects/facts";
 import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
+import { SERVICE_STATUS, serviceStatusFromServerState, type ServiceStatus, type StatusTone } from "@/lib/status";
 
 // One health answer per project card. "pending" = services exist but none
 // has ever produced a running image; "empty" = no services yet.
@@ -31,6 +32,11 @@ export interface ProjectCardModel {
   stoppedCount: number;
   readyOf: number;
   failingCount: number;
+  // Per-service status in the shared vocabulary (lib/status), so the card
+  // names a service exactly what the canvas node calls it.
+  counts: Partial<Record<ServiceStatus, number>>;
+  // Worst tone across the services: the card's dot and rail colour.
+  tone: StatusTone;
   // stateDetail of the first failing/building service, for the tooltip.
   detail?: string;
   // Latest promotion (build → live) across production envs. Undefined
@@ -53,34 +59,102 @@ export interface ProjectCardModel {
   hasSummary: boolean;
 }
 
-// classifyEnv folds the server's unified per-env state into the card's
-// vocabulary. A missing state (older servers) falls back to the replica
-// count / ready flag the cards used before state existed.
-export function classifyEnv(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
+// envServiceStatus is the shared per-service status (the canvas node's).
+// A missing state (older servers) falls back to the replica count /
+// ready flag the cards used before state existed.
+export function envServiceStatus(svc: KusoService, env: KusoEnvironment | undefined): ServiceStatus {
   if (svc.spec.stopped === true) return "stopped";
-  if (!env) return "pending";
+  if (!env) return "not_deployed";
   const st = env.status;
-  switch (st?.state) {
-    case "running":
+  const fromServer = serviceStatusFromServerState(st?.state);
+  if (fromServer) return fromServer;
+  const replicas = st?.replicas as { ready?: number } | undefined;
+  if ((replicas?.ready ?? 0) > 0 || st?.ready === true) return "live";
+  return "not_deployed";
+}
+
+// cardHealth buckets a service status for the project rollup and the
+// status filter. Anything warning/danger toned (degraded, failing, stuck)
+// needs attention, so it lands in "failing".
+export function cardHealth(status: ServiceStatus): ServiceHealth {
+  switch (status) {
+    case "live":
       return "live";
-    case "degraded":
-    case "crashlooping":
-    case "build_failed":
-    case "release_failed":
-      return "failing";
-    case "building":
-    case "deploying":
-      return "building";
     case "sleeping":
       return "sleeping";
     case "stopped":
       return "stopped";
-    case "no_image":
+    case "not_deployed":
+    case "unknown":
       return "pending";
   }
-  const replicas = st?.replicas as { ready?: number } | undefined;
-  if ((replicas?.ready ?? 0) > 0 || st?.ready === true) return "live";
+  const tone = SERVICE_STATUS[status]?.tone;
+  if (tone === "danger" || tone === "warning") return "failing";
+  if (tone === "progress") return "building";
   return "pending";
+}
+
+export function classifyEnv(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
+  return cardHealth(envServiceStatus(svc, env));
+}
+
+const TONE_RANK: Record<StatusTone, number> = { danger: 5, warning: 4, progress: 3, success: 2, info: 1, neutral: 0 };
+
+export function worstTone(statuses: ReadonlyArray<ServiceStatus>): StatusTone {
+  let best: StatusTone = "neutral";
+  for (const s of statuses) {
+    const t = SERVICE_STATUS[s]?.tone ?? "neutral";
+    if (TONE_RANK[t] > TONE_RANK[best]) best = t;
+  }
+  return best;
+}
+
+// Order the non-live parts are listed in, most urgent first.
+const SUMMARY_ORDER: ReadonlyArray<ServiceStatus> = [
+  "failing",
+  "degraded",
+  "deploying",
+  "building",
+  "sleeping",
+  "stopped",
+  "not_deployed",
+  "unknown",
+];
+
+export interface StatusPart {
+  text: string;
+  // The status this part counts; undefined for the "x of n live" lead.
+  status?: ServiceStatus;
+}
+
+// projectStatusParts is the card's one status line, e.g.
+// "1 of 3 live · 1 failing · 1 stopped". Counts are of production services.
+export function projectStatusParts(counts: Partial<Record<ServiceStatus, number>>, total: number): StatusPart[] {
+  if (total === 0) return [{ text: "No services" }];
+  const live = counts.live ?? 0;
+  if (live === total) return [{ text: total === 1 ? "Live" : `All ${total} live`, status: "live" }];
+  const others = (Object.keys(counts) as ServiceStatus[]).filter((k) => k !== "live" && (counts[k] ?? 0) > 0);
+  // A project where every service shares one non-live state reads as that state.
+  if (live === 0 && others.length === 1) {
+    const label = SERVICE_STATUS[others[0]]?.label ?? others[0];
+    return total === 1
+      ? [{ text: label, status: others[0] }]
+      : [{ text: label, status: others[0] }, { text: `${total} services` }];
+  }
+  const ordered = [
+    ...SUMMARY_ORDER.filter((s) => others.includes(s)),
+    ...others.filter((s) => !SUMMARY_ORDER.includes(s)),
+  ];
+  return [
+    { text: `${live} of ${total} live` },
+    ...ordered.map((s) => ({ text: `${counts[s]} ${(SERVICE_STATUS[s]?.label ?? s).toLowerCase()}`, status: s })),
+  ];
+}
+
+export function projectStatusSummary(counts: Partial<Record<ServiceStatus, number>>, total: number): string {
+  return projectStatusParts(counts, total)
+    .map((p) => p.text)
+    .join(" · ");
 }
 
 export function rollupStatus(health: ReadonlyArray<ServiceHealth>): ProjectStatus {
@@ -145,9 +219,12 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
 
   const perService = services.map((s) => {
     const env = prodEnvFor(s, envs);
-    return { svc: s, env, health: classifyEnv(s, env) };
+    const st = envServiceStatus(s, env);
+    return { svc: s, env, st, health: cardHealth(st) };
   });
   const health = perService.map((p) => p.health);
+  const counts: Partial<Record<ServiceStatus, number>> = {};
+  for (const p of perService) counts[p.st] = (counts[p.st] ?? 0) + 1;
   const status = summary ? rollupStatus(health) : "pending";
   const count = (h: ServiceHealth) => health.filter((x) => x === h).length;
   const stoppedCount = count("stopped");
@@ -177,6 +254,8 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     stoppedCount,
     readyOf: services.length - stoppedCount,
     failingCount: count("failing"),
+    counts,
+    tone: summary ? worstTone(perService.map((p) => p.st)) : "neutral",
     detail: typeof detailText === "string" && detailText ? detailText : undefined,
     lastDeployAt,
     domain,
