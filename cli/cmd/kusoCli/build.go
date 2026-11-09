@@ -228,6 +228,12 @@ type buildRow struct {
 	CancelReason      string   `json:"cancelReason,omitempty"`
 	ReleaseJob        string   `json:"releaseJob,omitempty"`
 	ReleaseLogTail    string   `json:"releaseLogTail,omitempty"`
+	// Stalled explains an in-flight build whose pod hasn't started a
+	// minute in (unschedulable, builder image pull failure, ...).
+	Stalled *struct {
+		Kind    string `json:"kind"`
+		Summary string `json:"summary"`
+	} `json:"stalled,omitempty"`
 }
 
 // rowReason is the one-line "why" for a build row, or "".
@@ -236,6 +242,9 @@ func rowReason(b buildRow) string {
 		if r != "" {
 			return r
 		}
+	}
+	if b.Stalled != nil && b.Stalled.Summary != "" {
+		return "stalled: " + b.Stalled.Summary
 	}
 	if b.WaitingFor != "" {
 		return "waiting for " + b.WaitingFor
