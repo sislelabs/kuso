@@ -11,7 +11,7 @@ const TONE: Record<string, string> = {
 };
 
 export function uptimeTitle(s: UptimeServiceStatus): string {
-  const parts = [`Health check: ${uptimeView(s).label}`];
+  const parts = [`Uptime: ${uptimeView(s).label}`];
   if (s.url) parts.push(s.url);
   if (s.lastCheckedAt) parts.push(`checked ${relativeTime(s.lastCheckedAt)}`);
   if (s.statusCode) parts.push(`HTTP ${s.statusCode}`);
@@ -34,7 +34,7 @@ export function UptimeBadge({ status }: { status: UptimeServiceStatus }) {
       )}
     >
       <span aria-hidden className={cn("h-1.5 w-1.5 rounded-full", v.state === "up" ? "bg-[var(--success)]" : v.state === "down" ? "bg-[var(--error)]" : v.state === "failing" ? "bg-[var(--warning)]" : "bg-[var(--text-tertiary)]")} />
-      Health check {v.label}
+      Uptime {v.label}
       {v.stale && <span className="font-normal text-[var(--text-tertiary)]">· last known</span>}
     </span>
   );

@@ -35,7 +35,7 @@ interface Cell {
 }
 
 // ServiceHealthStrip is the at-a-glance row under the overlay title:
-// status, uptime check, restarts, errors and last deploy. Every cell reads
+// status, uptime ping, restarts, errors and last deploy. Every cell reads
 // the same query the tab it links to reads, so the numbers match.
 export function ServiceHealthStrip({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
@@ -195,15 +195,15 @@ function uptimeCell(
   error: unknown,
   httpService: boolean,
 ): Cell {
-  const base = { id: "uptime", label: "Health check", tab: "settings", anchor: "uptime" } as const;
+  const base = { id: "uptime", label: "Uptime", tab: "settings", anchor: "uptime" } as const;
   if (!httpService) {
-    return { ...base, value: "—", tone: "plain", title: "No HTTP port, so there's nothing for the health check to probe" };
+    return { ...base, value: "—", tone: "plain", title: "No public HTTP endpoint, so there's nothing for the uptime check to ping" };
   }
   if (error instanceof ApiError && error.status === 404) {
-    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report health checks" };
+    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report uptime checks" };
   }
   if (enabled === false) {
-    return { ...base, value: "Checker off", tone: "neutral", title: "Health checks are switched off for this kuso instance" };
+    return { ...base, value: "Checker off", tone: "neutral", title: "Uptime checks are switched off for this kuso instance" };
   }
   const v = uptimeView(s);
   // "(last known)" is a qualifier, not part of the value.
@@ -212,7 +212,7 @@ function uptimeCell(
   const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
   switch (v.state) {
     case "not_set_up":
-      return { ...base, value: v.label, tone: "neutral", title: "No health check for this environment. Set one up in Settings → Uptime." };
+      return { ...base, value: v.label, tone: "neutral", title: "No uptime check for this environment. Set one up in Settings → Uptime." };
     case "up":
       return {
         ...base,
@@ -240,7 +240,7 @@ function uptimeCell(
         ...base,
         value: v.label,
         tone: "neutral",
-        title: s?.state === "disabled" ? "The health check for this service is disabled" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
+        title: s?.state === "disabled" ? "The uptime check for this service is off" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
       };
     default:
       return { ...base, value: v.label, tone: "neutral", title: s?.url ?? "" };

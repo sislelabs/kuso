@@ -54,7 +54,7 @@ export function summarizeUptime(services: UptimeServiceStatus[]): UptimeSummary 
 
 export type UptimeViewState = "up" | "failing" | "down" | "paused" | "not_set_up" | "unknown";
 
-// One reading of a service's health check, shared by the overlay strip,
+// One reading of a service's uptime ping (not the pod health-check probe), shared by the overlay strip,
 // the Deployments badge and the canvas summary.
 export interface UptimeView {
   state: UptimeViewState;
