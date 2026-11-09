@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { addonPageHref, projectCanvasHref, servicePageHref } from "./hrefs";
 import { railResources, type RailAddon, type RailService } from "./railResources";
+import { StagedChangesBar } from "@/components/staged";
 
 export type ActiveResource = { kind: "service" | "addon"; name: string };
 
@@ -80,6 +81,7 @@ export function ResourcePageShell({
         </div>
         <div className="min-h-0 flex-1">{children}</div>
       </div>
+      <StagedChangesBar project={project} />
     </div>
   );
 }

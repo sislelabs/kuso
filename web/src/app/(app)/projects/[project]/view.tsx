@@ -28,6 +28,7 @@ import {
 } from "@/components/project/projectViewPref";
 import { Package } from "lucide-react";
 import { addonPageHref, servicePageHref } from "@/components/service/workspace/hrefs";
+import { StagedChangesBar } from "@/components/staged";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
 // blew up the static export build. ssr:false skips the prerender pass
@@ -460,6 +461,7 @@ export function ProjectDetailView() {
         onSelectService={selectService}
         onSelectAddon={selectAddon}
       />
+      <StagedChangesBar project={projectName} />
       <div ref={surfaceRef} className="relative hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
         {!onProduction && (
           // Sticky banner above the canvas. Reminds the user that the

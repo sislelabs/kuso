@@ -117,7 +117,7 @@ function SharedScopeBanner({
     <div className="mb-4 rounded-md border border-[var(--info)]/30 bg-[var(--info-subtle)] px-3 py-2.5 text-[13px] text-[var(--text-primary)]">
       <p>
         <span className="font-medium">Shared by {listJoin(shown)}.</span>{" "}
-        <span className="text-[var(--text-secondary)]">Saving here changes every environment.</span>
+        <span className="text-[var(--text-secondary)]">Changes here are staged and apply to every environment when you deploy them.</span>
       </p>
       <p className="mt-1 text-xs text-[var(--text-secondary)]">
         {env === "production" ? (

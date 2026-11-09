@@ -24,6 +24,7 @@ import { NodeHandles } from "./NodeHandles";
 import { nodeFocusClass, type CanvasNodeA11y } from "./nodeA11y";
 import { serviceNodeWidth } from "./geometry";
 import { nodeActionButtonClass, nodeBorderClass, nodeCardClass, nodeNameClass, nodeRailClass } from "./nodeStyle";
+import { StagedDot } from "@/components/staged";
 
 export interface ServiceNodeData extends CanvasNodeA11y {
   project: string;
@@ -117,6 +118,7 @@ export function ServiceNode({ id, data }: { id: string; data: ServiceNodeData })
         <span className={nodeNameClass} title={displayName}>
           {displayName}
         </span>
+        <StagedDot project={data.project} service={shortName} className="shrink-0" />
       </div>
       {hasBadges && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
