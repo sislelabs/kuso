@@ -85,7 +85,9 @@ type envStateInput struct {
 	BuildPhase string
 }
 
-// deriveEnvState maps the input to (state, stateDetail).
+// deriveEnvState maps the input to (state, stateDetail). The detail never
+// restates the state ("build_failed" + "nothing is running"): clients
+// render it after the state's own label.
 //
 // Precedence, first match wins — pinned by TestDeriveEnvState:
 //
@@ -137,9 +139,9 @@ func deriveEnvState(in envStateInput) (string, string) {
 	if !in.HasImage {
 		switch in.BuildPhase {
 		case "failed":
-			return stateBuildFailed, "latest build failed and no image has ever deployed"
+			return stateBuildFailed, "no image has ever deployed"
 		case "release-failed":
-			return stateReleaseFailed, "release hook failed and no image has ever deployed"
+			return stateReleaseFailed, "no image has ever deployed"
 		}
 		return stateNoImage, "no image built yet — waiting for the first build"
 	}
@@ -160,9 +162,9 @@ func deriveEnvState(in envStateInput) (string, string) {
 	}
 	if in.BuildPhase == "release-failed" {
 		if in.Ready > 0 {
-			return stateReleaseFailed, "release hook failed; last green build still serving"
+			return stateReleaseFailed, "last green build still serving"
 		}
-		return stateReleaseFailed, "release hook failed and no replicas are ready"
+		return stateReleaseFailed, "no replicas are ready"
 	}
 	// lastBuildFailed note: when the latest build failed but last-green
 	// replicas are still serving, the state stays runtime-derived and
@@ -182,7 +184,7 @@ func deriveEnvState(in envStateInput) (string, string) {
 	}
 	if in.Ready == 0 {
 		if failedNote != "" {
-			return stateBuildFailed, "latest build failed and nothing is running"
+			return stateBuildFailed, "nothing is running"
 		}
 		return stateDeploying, fmt.Sprintf("0/%d replicas ready — rollout in progress", in.Desired)
 	}
