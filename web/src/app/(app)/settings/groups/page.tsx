@@ -79,7 +79,7 @@ export default function GroupsSettingsPage() {
       title="Groups"
       description="Each group carries an instance role; project access is granted on each project. A user's effective permissions are the union across every group they're in."
     >
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[240px_1fr]">
+      <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[240px_1fr]">
         {/* Left: group list */}
         <aside className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
           <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
