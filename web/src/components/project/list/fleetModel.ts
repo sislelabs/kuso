@@ -1,24 +1,6 @@
-import { lastDeployedAt } from "@/features/projects/facts";
 import type { ProjectErrorSummary } from "@/features/services/api";
-import { envGroupName } from "@/lib/env-group";
 import { SERVICE_STATUS, type ServiceStatus, type StatusTone } from "@/lib/status";
-import type { ProjectSummaryItem } from "@/features/projects";
 import type { ProjectCardModel } from "./projectCardModel";
-
-// Every service in the fleet in one flat list, in board order, so the
-// pulse strip can draw one cell per service.
-export interface FleetCell {
-  project: string;
-  service: string;
-  status: ServiceStatus;
-  tone: StatusTone;
-}
-
-export function fleetCells(models: ReadonlyArray<ProjectCardModel>): FleetCell[] {
-  return models.flatMap((m) =>
-    m.services.map((s) => ({ project: m.name, service: s.name, status: s.status, tone: SERVICE_STATUS[s.status].tone })),
-  );
-}
 
 export function projectErrorTotal(summary: ProjectErrorSummary | undefined): number | undefined {
   if (!summary) return undefined;
@@ -54,69 +36,36 @@ export function attentionItems(models: ReadonlyArray<ProjectCardModel>): Attenti
   );
 }
 
-export interface RecentDeploy {
-  project: string;
-  service: string;
-  env: string;
-  at: string;
-}
 
-// The newest deploys across every project and env-group (staging too:
-// "what changed lately" includes it), from the summary already loaded.
-export function recentDeploys(items: ReadonlyArray<ProjectSummaryItem>, limit: number): RecentDeploy[] {
-  const out: RecentDeploy[] = [];
-  for (const item of items) {
-    for (const env of item.environments) {
-      const at = lastDeployedAt(env);
-      if (!at) continue;
-      const svc = item.services.find((s) => s.metadata.name === env.spec.service);
-      const short = svc?.metadata.labels?.["kuso.sislelabs.com/service"] ?? env.spec.service ?? env.metadata.name;
-      out.push({ project: item.project.metadata.name, service: short, env: envGroupName(env), at });
-    }
-  }
-  return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, limit);
-}
-
-export interface FootprintSlice {
-  project: string;
-  memBytes: number;
-  share: number;
-}
-
-// The biggest memory consumers, each with its share of the fleet total;
-// the long tail folds into one "other" slice so the bar stays readable.
-export function memoryFootprint(
-  models: ReadonlyArray<ProjectCardModel>,
-  top: number,
-): { total: number; cpuMillicores: number; slices: FootprintSlice[]; other: number } {
-  const withMem = models.filter((m) => (m.metrics?.memBytes ?? 0) > 0);
-  const total = withMem.reduce((n, m) => n + (m.metrics?.memBytes ?? 0), 0);
-  const cpuMillicores = models.reduce((n, m) => n + (m.metrics?.cpuMillicores ?? 0), 0);
-  if (total === 0) return { total: 0, cpuMillicores, slices: [], other: 0 };
-  const sorted = [...withMem].sort((a, b) => (b.metrics?.memBytes ?? 0) - (a.metrics?.memBytes ?? 0));
-  const slices = sorted.slice(0, top).map((m) => {
-    const memBytes = m.metrics?.memBytes ?? 0;
-    return { project: m.name, memBytes, share: memBytes / total };
-  });
-  const shown = slices.reduce((n, s) => n + s.memBytes, 0);
-  return { total, cpuMillicores, slices, other: (total - shown) / total };
-}
-
-// headline is the one sentence under the page title: the state of the
-// whole fleet, problems first.
-export function headline(input: {
-  projects: number;
-  services: number;
+// wallTitle is the home page's one-line verdict on the whole fleet:
+// problems win, then work in progress, then the all-clear.
+export function wallTitle(input: {
   attention: ReadonlyArray<AttentionItem>;
-  errors: number | undefined;
+  running: number;
 }): string {
-  const { projects, services, attention, errors } = input;
-  const broken = attention.filter((a) => a.tone === "danger" || a.tone === "warning").length;
-  const moving = attention.filter((a) => a.tone === "progress").length;
-  const parts = [`${projects} project${projects === 1 ? "" : "s"}`, `${services} service${services === 1 ? "" : "s"}`];
-  if (broken > 0) parts.push(`${broken} need${broken === 1 ? "s" : ""} attention`);
-  else parts.push("nothing failing");
-  if (moving > 0) parts.push(`${moving} deploying`);
-  if (errors !== undefined && errors > 0) parts.push(`${errors.toLocaleString()} error${errors === 1 ? "" : "s"} in 24h`);
-  return parts.join(" · ");
+  const broken = input.attention.filter((a) => a.tone === "danger" || a.tone === "warning").length;
+  if (broken > 0) return `${broken} ${broken === 1 ? "service needs" : "services need"} you`;
+  const moving = input.attention.filter((a) => a.tone === "progress").length;
+  if (input.running === 0) return "Nothing is running";
+  if (moving > 0) return `Everything is up, ${moving} ${moving === 1 ? "deploy" : "deploys"} in progress`;
+  return "Everything is up";
+}
+
+// lastDeployedProject is the production deploy the wall mentions: one
+// project, not a feed of every env that rolled with it.
+export function lastDeployedProject(
+  models: ReadonlyArray<Pick<ProjectCardModel, "name" | "lastDeployAt">>,
+): { name: string; at: string } | undefined {
+  let best: { name: string; at: string } | undefined;
+  for (const m of models) {
+    if (!m.lastDeployAt) continue;
+    if (!best || Date.parse(m.lastDeployAt) > Date.parse(best.at)) best = { name: m.name, at: m.lastDeployAt };
+  }
+  return best;
+}
+
+// tileSpan: projects with more services get a wider tile, so the wall's
+// shape shows how big each app is.
+export function tileSpan(serviceCount: number): 1 | 2 {
+  return serviceCount >= 4 ? 2 : 1;
 }

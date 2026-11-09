@@ -1752,10 +1752,12 @@ function styleEdge(e: Edge, hot: Set<string>, ports: Map<string, EdgePorts>): Bu
     targetHandle: p?.targetHandle,
     animated: false,
     style: {
-      stroke: lit ? "var(--edge-lit)" : EDGE_COLOR[d.kind],
-      strokeWidth: lit ? 2.25 : 1.5,
+      // An edge keeps its kind's colour when lit (addon yellow, reference
+      // blue), so the legend holds; weight and contrast carry the highlight.
+      stroke: EDGE_COLOR[d.kind],
+      strokeWidth: lit ? 2.5 : 1.5,
       strokeLinecap: "round",
-      opacity: lit ? 1 : dimmed ? 0.05 : d.implicit ? 0.3 : 0.85,
+      opacity: lit ? 1 : dimmed ? 0.05 : d.implicit ? 0.3 : 0.7,
       strokeDasharray: d.pending ? "5 5" : undefined,
     },
   };

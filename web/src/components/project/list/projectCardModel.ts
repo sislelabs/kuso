@@ -258,7 +258,8 @@ export function buildCardModel(project: KusoProject, summary: ProjectSummaryItem
     repoHref: repoWebURL(repoRaw) ?? undefined,
     publicURL,
     serviceNames: services.map(serviceShortName),
-    services: perService.map((p) => {
+    // Name order: the summary's order shifts between polls.
+    services: [...perService].sort((a, b) => serviceShortName(a.svc).localeCompare(serviceShortName(b.svc))).map((p) => {
       const d = p.st === "live" ? undefined : p.env?.status?.stateDetail;
       return { name: serviceShortName(p.svc), status: p.st, detail: typeof d === "string" && d ? d : undefined };
     }),

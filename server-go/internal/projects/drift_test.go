@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/scaledown"
 )
 
 // helm-operator lists Initialized before Deployed; a first-match read
@@ -94,6 +96,62 @@ func TestGetDrift_PortlessWorkerIsNotPending(t *testing.T) {
 		if f == "port" {
 			t.Fatalf("SpecPending = %v, port must not drift for a portless worker", d.SpecPending)
 		}
+	}
+}
+
+// A slept env sits at replicaCount 0 with its pre-sleep count stashed;
+// that is the sleep feature working, not a scale edit waiting to apply.
+// A real scale change made while asleep must still show.
+func TestGetDrift_SleepingEnvIsNotScalePending(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		min      int
+		preSleep string
+		want     bool
+	}{
+		{"asleep at its normal scale", 1, "1", false},
+		{"scale raised while asleep", 3, "1", true},
+		{"zero replicas without the sleep marker", 1, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			min := tc.min
+			ann := map[string]string{}
+			if tc.preSleep != "" {
+				ann[scaledown.PreSleepReplicasAnnotation] = tc.preSleep
+			}
+			spec := kube.KusoEnvironmentSpec{
+				Project: "alpha", Service: serviceCRName("alpha", "web"), Kind: "production",
+				Branch: "main", Port: 8080, Runtime: "worker", SharedEnvKeys: []string{},
+				Sleep: envSleepFrom(&kube.KusoServiceSleep{Enabled: true, AfterMinutes: 30}),
+			}
+			spec.SetReplicaCount(0)
+			env := typedSeed(kube.GVREnvironments, "KusoEnvironment", "alpha-web-production",
+				&kube.KusoEnvironment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "alpha-web-production", Namespace: "kuso", Annotations: ann,
+						Labels: map[string]string{labelProject: "alpha", labelService: "web", labelEnv: "production"},
+					},
+					Spec: spec,
+				})
+			s := fakeService(t,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{
+					Project: "alpha", Runtime: "worker", Port: 8080, SharedEnvKeys: []string{},
+					Scale: &kube.KusoScaleSpec{Min: &min, Max: tc.min},
+					Sleep: &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 30},
+				}),
+				env,
+			)
+			d, err := s.GetDrift(context.Background(), "alpha", "web")
+			if err != nil {
+				t.Fatalf("GetDrift: %v", err)
+			}
+			if got := slices.Contains(d.SpecPending, "scale"); got != tc.want {
+				t.Fatalf("scale pending = %v, want %v (SpecPending=%v)", got, tc.want, d.SpecPending)
+			}
+		})
 	}
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attentionItems, headline, memoryFootprint } from "./fleetModel";
+import { attentionItems, lastDeployedProject, wallTitle } from "./fleetModel";
 import type { ProjectCardModel } from "./projectCardModel";
 
 function model(name: string, services: ProjectCardModel["services"], memBytes = 0): ProjectCardModel {
@@ -23,23 +23,35 @@ describe("attentionItems", () => {
   });
 });
 
-describe("headline", () => {
-  it("leads with problems when there are any", () => {
-    const attention = attentionItems([model("a", [{ name: "db", status: "failing" }])]);
-    expect(headline({ projects: 2, services: 5, attention, errors: 1200 })).toBe(
-      "2 projects · 5 services · 1 needs attention · 1,200 errors in 24h",
-    );
+
+
+describe("wallTitle", () => {
+  it("names how many services need attention before anything else", () => {
+    const attention = attentionItems([
+      model("a", [
+        { name: "db", status: "failing" },
+        { name: "web", status: "deploying" },
+      ]),
+    ]);
+    expect(wallTitle({ attention, running: 3 })).toBe("1 service needs you");
   });
-  it("says nothing is failing on a quiet fleet", () => {
-    expect(headline({ projects: 1, services: 1, attention: [], errors: 0 })).toBe("1 project · 1 service · nothing failing");
+  it("mentions deploys in progress on an otherwise healthy fleet", () => {
+    const attention = attentionItems([model("a", [{ name: "web", status: "deploying" }])]);
+    expect(wallTitle({ attention, running: 2 })).toBe("Everything is up, 1 deploy in progress");
+  });
+  it("says so when nothing runs", () => {
+    expect(wallTitle({ attention: [], running: 0 })).toBe("Nothing is running");
   });
 });
 
-describe("memoryFootprint", () => {
-  it("folds everything past the top N into other", () => {
-    const fp = memoryFootprint([model("a", [], 600), model("b", [], 300), model("c", [], 100)], 2);
-    expect(fp.total).toBe(1000);
-    expect(fp.slices.map((s) => s.project)).toEqual(["a", "b"]);
-    expect(fp.other).toBeCloseTo(0.1);
+describe("lastDeployedProject", () => {
+  it("picks the single most recent production deploy", () => {
+    expect(
+      lastDeployedProject([
+        { name: "a", lastDeployAt: "2026-11-09T10:00:00Z" },
+        { name: "b", lastDeployAt: "2026-11-09T12:00:00Z" },
+        { name: "c" },
+      ]),
+    ).toEqual({ name: "b", at: "2026-11-09T12:00:00Z" });
   });
 });

@@ -82,7 +82,7 @@ export function ServersPopover() {
       <PopoverTrigger
         aria-label={`Cluster nodes: ${ready} of ${total} ready${pressured ? `, ${pressured} under resource pressure` : ""}`}
         title="Cluster nodes"
-        className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+        className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
       >
         <span className="relative">
           <Server className="size-4" aria-hidden />
