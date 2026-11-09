@@ -22,3 +22,19 @@ function pythonException(sample: string | undefined): string | undefined {
   }
   return undefined;
 }
+
+// A group's message is one occurrence's text, so the ids in it
+// ("order_id=1006") belong to that occurrence, not to the group the
+// other 150 share. groupTitle masks them for the heading.
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const ID_FIELD = /\b([\w.-]*?(?:_id|Id|ID|-id|\bid))(=|:\s?)("?)[\w.-]+\3/g;
+const HEX = /\b(?:0x[0-9a-f]{4,}|(?=[0-9a-f]*\d)[0-9a-f]{12,})\b/gi;
+const HASH_NUM = /#\d{2,}\b/g;
+
+export function groupTitle(message: string, sample?: string): string {
+  return errorTitle(message, sample)
+    .replace(UUID, "…")
+    .replace(ID_FIELD, "$1$2$3…$3")
+    .replace(HEX, "…")
+    .replace(HASH_NUM, "#…");
+}
