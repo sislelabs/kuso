@@ -22,7 +22,15 @@ var (
 	bindRE   = regexp.MustCompile(`(?i)\bbind\b|\blisten\b`)
 	lowPort  = regexp.MustCompile(`:(\d{1,5})\b`)
 	buildkit = regexp.MustCompile(`^#\d+ `)
+	nginxRE  = regexp.MustCompile(`(?i)\bnginx\b`)
 )
+
+// unprivilegedNginx is the drop-in that needs no capabilities: it runs as
+// a non-root user and listens on 8080, so the fix is the image, not the
+// security settings.
+const unprivilegedNginx = " The stock nginx image is the usual case: nginxinc/nginx-unprivileged runs " +
+	"without any added capabilities and listens on 8080, so switching to it (and the service port " +
+	"to 8080) avoids widening the container's privileges."
 
 // capsForLine returns the capabilities a single log line shows missing,
 // in a stable order, or nil when the line isn't a capability failure.
@@ -80,6 +88,13 @@ func classifyMissingCapability(lines []string) (Classification, bool) {
 	if hint < 0 {
 		return Classification{}, false
 	}
+	detail := "kuso drops every Linux capability from app containers. This image starts as root and " +
+		"then chowns files, switches user, or binds a port below 1024, and that call was denied. " +
+		"Add back only the capabilities shown. --cap-add replaces the service's list, so include any " +
+		"it already has. If the next start fails on a different operation, add that one too."
+	if nginxRE.MatchString(lines[hint]) {
+		detail += unprivilegedNginx
+	}
 	flags := make([]string, len(caps))
 	for i, c := range caps {
 		flags[i] = "--cap-add " + c
@@ -91,13 +106,10 @@ func classifyMissingCapability(lines []string) (Classification, bool) {
 		LineHint: truncateLine(lines[hint]),
 		LineNum:  hint + 1,
 		Remediation: &Remediation{
-			Title: "Add back " + strings.Join(caps, ", ") + " for this service",
-			Detail: "kuso drops every Linux capability from app containers. This image starts as root and " +
-				"then chowns files, switches user, or binds a port below 1024, and that call was denied. " +
-				"Add back only the capabilities shown. --cap-add replaces the service's list, so include any " +
-				"it already has. If the next start fails on a different operation, add that one too.",
-			Fix:        "kuso project service set <project> <service> " + strings.Join(flags, " "),
-			FixLang:    "bash",
+			Title:   "Add back " + strings.Join(caps, ", ") + " for this service",
+			Detail:  detail,
+			Fix:     "kuso project service set <project> <service> " + strings.Join(flags, " "),
+			FixLang: "bash",
 		},
 	}, true
 }

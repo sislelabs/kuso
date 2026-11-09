@@ -353,6 +353,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// a target pod for kubectl exec, and by future shell tab in the
 	// web UI. Slim summary — name, ready, container list.
 	r.Get("/api/projects/{project}/services/{service}/pods", h.ListPods)
+	// The env's latest container crash: exit reason, the dead run's log
+	// tail and its classification (?env=, default production).
+	r.Get("/api/projects/{project}/services/{service}/crash", h.CrashReport)
 	// Recent kube events for the env's pods + Deployment (?env=, default
 	// production). Viewer-gated; explains a stuck rollout inline.
 	r.Get("/api/projects/{project}/services/{service}/events", h.ListPodEvents)
@@ -1674,6 +1677,24 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 // kubectl. We audit-log calls with ?reason=shell so an admin can
 // reconstruct who exec'd into which pod even though the actual
 // kubectl exec session never touches kuso-server.
+// CrashReport is GET /api/projects/{project}/services/{service}/crash.
+// {"crash": null} when no container of the env has died.
+func (h *ProjectsHandler) CrashReport(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	podSvc, podEnv := envGroupTarget(ctx, h.Kube, h.Namespace, project, chi.URLParam(r, "service"), r.URL.Query().Get("env"))
+	out, err := h.Svc.CrashReport(ctx, project, podSvc, podEnv)
+	if err != nil {
+		h.fail(w, "crash report", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"crash": out})
+}
+
 func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()

@@ -477,6 +477,17 @@ func TestClassify_MissingCapability(t *testing.T) {
 	}
 }
 
+func TestClassify_MissingCapability_NginxSuggestsUnprivilegedImage(t *testing.T) {
+	nginx := Classify([]string{`nginx: [emerg] chown("/var/cache/nginx/client_temp", 101) failed (1: Operation not permitted)`}, Signal{Runtime: true})
+	if nginx.Remediation == nil || !containsAny(nginx.Remediation.Detail, "nginxinc/nginx-unprivileged") {
+		t.Fatalf("nginx detail should suggest the unprivileged image: %+v", nginx.Remediation)
+	}
+	other := Classify([]string{"chown: changing ownership of '/data': Operation not permitted"}, Signal{Runtime: true})
+	if other.Remediation == nil || containsAny(other.Remediation.Detail, "nginx") {
+		t.Fatalf("non-nginx detail must not mention nginx: %+v", other.Remediation)
+	}
+}
+
 func TestClassify_MissingCapability_NotOverbroad(t *testing.T) {
 	cases := [][]string{
 		// Plain file permission errors are not capability problems.
