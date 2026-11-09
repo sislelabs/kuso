@@ -181,16 +181,22 @@ var getServicesCmd = &cobra.Command{
 			// accept on subsequent invocations (kuso build, kuso env,
 			// kuso shell, …) — JSON consumers should pass --output
 			// json and parse `metadata.name`.
-			t.SetHeader([]string{"SERVICE", "RUNTIME", "PORT", "PATH"})
+			// STATUS/REASON are the production env's rollup, as on the
+			// dashboard canvas. Best-effort: blank when envs can't be read.
+			prod := productionEnvsByService(args[0])
+			t.SetHeader([]string{"SERVICE", "RUNTIME", "PORT", "PATH", "STATUS", "REASON"})
 			for _, s := range items {
 				spec := mapAt(s, "spec")
 				repo := mapAt(spec, "repo")
 				short := stripPrefix(resourceName(s), args[0]+"-")
+				status := mapAt(prod[resourceName(s)], "status")
 				t.Append([]string{
 					short,
 					asString(spec["runtime"]),
 					asString(spec["port"]),
 					asString(repo["path"]),
+					serviceStatusLabel(asString(status["state"])),
+					envStatusShortReason(status),
 				})
 			}
 			t.Render()
@@ -228,13 +234,12 @@ var getEnvsCmd = &cobra.Command{
 			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			// STATE is the server's unified per-env rollup (status.state:
-			// running/crashlooping/build_failed/...) — empty cell against
-			// pre-rollup servers.
+			// STATUS is the server's per-env rollup (status.state) in the
+			// web's vocabulary (Live, Rollout failing, Stuck, ...); REASON
+			// is the plain-language why. Raw state stays in -o json.
 			// GROUP, not spec.kind: an env-group clone's env is
 			// kind=production, so KIND said "production" for staging.
-			// spec.kind stays in -o json.
-			t.SetHeader([]string{"NAME", "SERVICE", "GROUP", "BRANCH", "HOST", "STATE"})
+			t.SetHeader([]string{"NAME", "SERVICE", "GROUP", "BRANCH", "HOST", "STATUS", "REASON"})
 			for _, e := range items {
 				spec := mapAt(e, "spec")
 				status := mapAt(e, "status")
@@ -244,7 +249,8 @@ var getEnvsCmd = &cobra.Command{
 					envGroupOf(e),
 					asString(spec["branch"]),
 					asString(spec["host"]),
-					asString(status["state"]),
+					serviceStatusLabel(asString(status["state"])),
+					envStatusShortReason(status),
 				})
 			}
 			t.Render()
@@ -396,4 +402,24 @@ func init() {
 	getCmd.AddCommand(getCronsCmd)
 
 	getCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+}
+
+// productionEnvsByService maps FQ service name → its production-group env
+// (nil map on any error; callers render blanks).
+func productionEnvsByService(project string) map[string]map[string]any {
+	resp, err := api.GetEnvironments(project)
+	if err != nil || resp.StatusCode() >= 300 {
+		return nil
+	}
+	var envs []map[string]any
+	if json.Unmarshal(resp.Body(), &envs) != nil {
+		return nil
+	}
+	out := map[string]map[string]any{}
+	for _, e := range envs {
+		if envGroupOf(e) == "production" {
+			out[asString(mapAt(e, "spec")["service"])] = e
+		}
+	}
+	return out
 }

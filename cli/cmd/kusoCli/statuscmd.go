@@ -163,14 +163,17 @@ var statusCmd = &cobra.Command{
 				state, _ := e.Status["state"].(string)
 				stateCol := ""
 				if state != "" {
-					stateCol = "  state=" + state
+					stateCol = fmt.Sprintf("  state=%s (%s)", state, serviceStatusLabel(state))
 				}
 				fmt.Printf("  %s  %-10s replicas=%s%s\n", e.Spec.Kind, phase, replicaInfo, stateCol)
-				// Surface the human reason for any not-plain-running state
-				// (crashloop detail, "release hook failed; last green still
-				// serving", ...). Quiet when healthy to keep the screen calm.
-				if detail, _ := e.Status["stateDetail"].(string); detail != "" && state != "" && state != "running" {
-					fmt.Printf("    %s\n", detail)
+				// The plain-language reason for any state that isn't Live,
+				// plus the failing-rollout / stuck facts behind it. Quiet
+				// when healthy to keep the screen calm.
+				if reason := envStatusReason(e.Status); reason != "" {
+					fmt.Printf("    %s\n", reason)
+				}
+				for _, line := range envStatusFacts(e.Status, time.Now()) {
+					fmt.Printf("    %s\n", line)
 				}
 				if url != "" {
 					fmt.Printf("    %s\n", url)
@@ -196,6 +199,9 @@ var statusCmd = &cobra.Command{
 					}
 				}
 			}
+		}
+		if er, err := api.RawGet("/api/projects/" + escPath(project) + "/errors/summary"); err == nil && er.StatusCode() < 300 {
+			fmt.Print(errorSummaryLine(project, er.Body()))
 		}
 		if ar, err := api.GetAddonsForProject(project); err == nil && ar.StatusCode() < 300 {
 			var addons []map[string]any
@@ -267,4 +273,33 @@ func short(full, project string) string {
 		return full[len(prefix):]
 	}
 	return full
+}
+
+// errorSummaryLine renders GET /errors/summary (open error groups per
+// service in the last 24h; resolved groups that haven't recurred don't
+// count) as one line. "" when the body can't be read.
+func errorSummaryLine(project string, body []byte) string {
+	var sum struct {
+		Services map[string]struct {
+			Occurrences int64 `json:"occurrences"`
+			Groups      int64 `json:"groups"`
+		} `json:"services"`
+	}
+	if json.Unmarshal(body, &sum) != nil {
+		return ""
+	}
+	if len(sum.Services) == 0 {
+		return "\nerrors (24h): none\n"
+	}
+	names := make([]string, 0, len(sum.Services))
+	for n := range sum.Services {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		s := sum.Services[n]
+		parts = append(parts, fmt.Sprintf("%s %d in %d group(s)", n, s.Occurrences, s.Groups))
+	}
+	return "\nerrors (24h): " + strings.Join(parts, ", ") + "  (kuso service errors " + project + " <service>)\n"
 }
