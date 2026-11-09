@@ -154,7 +154,7 @@ function BackupsTile() {
   });
   return (
     <Tile
-      href="/settings/backups"
+      href="/settings/backups#addon-backups"
       icon={<HardDrive />}
       title="Backups"
       query={health}
@@ -170,16 +170,22 @@ function BackupsTile() {
             detail: !cpOK ? h?.backup.detail : undefined,
           };
         }
+        // Addons with no schedule aren't backed up at all: that exposure is
+        // the headline, ahead of the (green) state of the scheduled jobs.
+        if (uncovered > 0) {
+          return {
+            status: meta("warning", "Not covered"),
+            value: `${plural(uncovered, "addon")} ${uncovered === 1 ? "lacks" : "lack"} a scheduled backup`,
+            detail:
+              c.covered > 0
+                ? `${addonBackupCoverageText(c)}. The ${plural(c.covered, "scheduled backup")} ${c.covered === 1 ? "is" : "are"} passing.`
+                : `${addonBackupCoverageText(c)}.`,
+          };
+        }
         return {
-          // The headline says nothing is failing, so its dot is green; the
-          // coverage gap is the amber caveat underneath.
           status: meta("success", "Healthy"),
-          detailTone: uncovered > 0 ? "warning" : undefined,
-          value: uncovered > 0 ? "No failing backups" : "Backups healthy",
-          detail:
-            uncovered > 0
-              ? `${addonBackupCoverageText(c)}.`
-              : "Control plane and every addon back up on schedule.",
+          value: "Backups healthy",
+          detail: "Control plane and every addon back up on schedule.",
         };
       }}
     />

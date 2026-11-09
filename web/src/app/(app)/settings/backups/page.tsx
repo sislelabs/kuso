@@ -112,6 +112,7 @@ function AddonBackupList({
   );
   return (
     <SettingsSection
+      id="addon-backups"
       title="Addon backups"
       description={
         <>

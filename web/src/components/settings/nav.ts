@@ -42,6 +42,9 @@ export interface SettingsNavItem {
   // Lower-case words a user might search for that aren't in the title
   // or description ("webhook" should surface Notifications).
   keywords?: string;
+  // The everyday pages of a long group. The nav lists only these until
+  // the group is expanded (search and the active page still reach all).
+  primary?: boolean;
 }
 
 export const SETTINGS_GROUPS: { id: SettingsGroupId; label: string; hint: string }[] = [
@@ -53,16 +56,16 @@ export const SETTINGS_GROUPS: { id: SettingsGroupId; label: string; hint: string
 
 export const SETTINGS_NAV: SettingsNavItem[] = [
   // Cluster
-  { href: "/settings/config", title: "Cluster config", description: "Instance info, default pod size, presets, runpacks and the raw Kuso spec.", icon: SettingsIcon, perm: Perms.SettingsRead, group: "cluster", keywords: "cert-manager letsencrypt domain dns base hostname clusterissuer pod size runpack preset raw spec" },
-  { href: "/settings/nodes", title: "Nodes", description: "Label nodes for placement, cordon, drain and join new ones.", icon: Server, perm: Perms.SettingsAdmin, group: "cluster", keywords: "node labels placement cordon drain join bootstrap server" },
+  { href: "/settings/config", title: "Cluster config", description: "Instance info, default pod size, presets, runpacks and the raw Kuso spec.", icon: SettingsIcon, perm: Perms.SettingsRead, group: "cluster", keywords: "cert-manager letsencrypt domain dns base hostname clusterissuer pod size runpack preset raw spec", primary: true },
+  { href: "/settings/nodes", title: "Nodes", description: "Label nodes for placement, cordon, drain and join new ones.", icon: Server, perm: Perms.SettingsAdmin, group: "cluster", keywords: "node labels placement cordon drain join bootstrap server", primary: true },
   { href: "/settings/database", title: "Database", description: "Managed or external Postgres for per-project databases.", icon: Database, perm: Perms.SettingsAdmin, group: "cluster", keywords: "postgres pg database shared cluster instance addons external neon rds supabase dsn" },
   { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars mounted into every service in every project.", icon: Globe, perm: Perms.SettingsAdmin, group: "cluster", keywords: "env environment variable global secret shared" },
   { href: "/settings/builds", title: "Builds", description: "Concurrency cap and per-build memory/CPU limits.", icon: Cpu, perm: Perms.SettingsAdmin, group: "cluster", keywords: "buildkit buildpacks memory cpu limit concurrent parallel" },
   { href: "/settings/sessions", title: "Sessions", description: "How long a login stays valid before re-auth.", icon: Clock, perm: Perms.SettingsAdmin, group: "cluster", keywords: "session login logout jwt token expiry timeout remember sign-out auth" },
-  { href: "/settings/backups", title: "Backups", description: "S3 credentials for addon backups and control-plane backup health.", icon: HardDrive, perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot bucket registry gc" },
-  { href: "/settings/updates", title: "Updates", description: "Self-update the kuso server, operator and CRDs.", icon: Package, perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update changelog" },
+  { href: "/settings/backups", title: "Backups", description: "S3 credentials for addon backups and control-plane backup health.", icon: HardDrive, perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot bucket registry gc", primary: true },
+  { href: "/settings/updates", title: "Updates", description: "Self-update the kuso server, operator and CRDs.", icon: Package, perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update changelog", primary: true },
   { href: "/settings/usage", title: "Usage & cost", description: "Per-node CPU and memory rollup with a monthly cost projection.", icon: DollarSign, perm: Perms.SettingsRead, group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },
-  { href: "/settings/health", title: "Health", description: "Failed helm releases, stuck addons and orphaned envs, with fixes.", icon: HeartPulse, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook" },
+  { href: "/settings/health", title: "Health", description: "Failed helm releases, stuck addons and orphaned envs, with fixes.", icon: HeartPulse, perm: Perms.SettingsRead, group: "cluster", keywords: "reconcile health helm operator stuck failed orphan drift remediate fix runbook", primary: true },
   { href: "/settings/vulnerabilities", title: "Vulnerabilities", description: "Trivy CVE scanning: deploy gate, nightly sweep, platform images.", icon: ShieldAlert, perm: Perms.SettingsAdmin, group: "cluster", keywords: "cve vulnerability security trivy scan image gate block enforce report" },
 
   // Team
