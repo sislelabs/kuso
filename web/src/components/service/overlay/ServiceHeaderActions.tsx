@@ -2,9 +2,9 @@
 
 import { hasPublicIngress, stopConsequence } from "./stopCopy";
 import { firstRunState } from "./firstRun";
-import { cloneElement, useId, useState } from "react";
+import { cloneElement, useEffect, useId, useState } from "react";
 import Link from "next/link";
-import { BellPlus, Loader2, MoreHorizontal, Package, Play, Rocket, RotateCw, Square, Undo2, Wrench } from "lucide-react";
+import { AlertTriangle, BellPlus, Check, Loader2, MoreHorizontal, Package, Play, Rocket, RotateCw, Square, Undo2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { snapshotRollout, trackRollout } from "@/features/projects/rolloutToast";
@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import type { KusoEnvironment } from "@/types/projects";
 import type { FixFirst } from "../workspace/fixFirst";
 import { useRolloutRevert } from "./rolloutRevert";
+import { useImageCheck } from "@/features/builds";
 
 const NO_ACCESS = "Requires editor access on this project";
 
@@ -450,6 +451,16 @@ function DeployImageControl({
   const parsed = parseTarget(value, repository);
   const error = touched || value ? parsed.error : undefined;
   const unchanged = !parsed.error && parsed.repository === repository && parsed.tag === currentTag;
+  // Ask the registry once typing settles: a typo'd tag is otherwise only
+  // found when the rollout can't pull it.
+  const [settled, setSettled] = useState({ repository: "", tag: "" });
+  useEffect(() => {
+    const t = setTimeout(() => setSettled({ repository: parsed.repository, tag: parsed.tag }), 400);
+    return () => clearTimeout(t);
+  }, [parsed.repository, parsed.tag]);
+  const typing = settled.repository !== parsed.repository || settled.tag !== parsed.tag;
+  const check = useImageCheck(project, service, settled.repository, settled.tag, open && !parsed.error && !unchanged && !typing);
+  const missing = !typing && !parsed.error && !unchanged && check.data?.status === "not_found";
 
   const submit = async () => {
     setTouched(true);
@@ -535,12 +546,35 @@ function DeployImageControl({
             {error ??
               `Rolls out to ${groups.length > 1 ? `all ${groups.length} environments (${groups.join(", ")})` : (groups[0] ?? "production")}. The current version serves until the new pods are ready.`}
           </p>
+          {!error && !unchanged && (
+            <p role="status" aria-live="polite" className="flex min-h-4 items-start gap-1.5 text-xs">
+              {typing || check.isFetching ? (
+                <span className="text-[var(--text-tertiary)]">Checking the registry…</span>
+              ) : missing ? (
+                <span className="flex items-start gap-1.5 text-[var(--warning)]" title={check.data?.detail}>
+                  <AlertTriangle aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+                  <span>Tag not found in the registry. Deploying it would fail to pull.</span>
+                </span>
+              ) : check.data?.status === "found" ? (
+                <span className="flex items-center gap-1.5 text-[var(--text-secondary)]">
+                  <Check aria-hidden className="h-3.5 w-3.5 text-[var(--success)]" />
+                  Found in the registry
+                </span>
+              ) : null}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button type="button" size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" size="sm" className="h-7 px-2.5 text-xs" disabled={!!parsed.error || unchanged || patch.isPending}>
-              {patch.isPending ? "Deploying…" : "Deploy"}
+            <Button
+              type="submit"
+              size="sm"
+              variant={missing ? "secondary" : undefined}
+              className="h-7 px-2.5 text-xs"
+              disabled={!!parsed.error || unchanged || patch.isPending}
+            >
+              {patch.isPending ? "Deploying…" : missing ? "Deploy anyway" : "Deploy"}
             </Button>
           </div>
         </form>

@@ -25,3 +25,5 @@ export { buildTitle, buildTrigger, commitSubject } from "./title";
 export type { BuildTrigger, BuildTriggerKind } from "./title";
 export { getCrashReport, useCrashReport, exitMeaning } from "./crash";
 export type { CrashReport } from "./crash";
+export { checkImage, useImageCheck } from "./imageCheck";
+export type { ImageCheck } from "./imageCheck";
