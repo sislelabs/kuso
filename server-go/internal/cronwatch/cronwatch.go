@@ -707,22 +707,19 @@ func (w *Watcher) signBody(ctx context.Context, ns string, ref *kube.KusoSecretK
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// cronURL is the in-app path for a failed cron. The web is a static
-// export with only /projects/[project] routes; the service overlay is
-// opened by ?service=<short>&tab=<tab>. Service-kind crons land on the
-// overlay's Crons tab; project-scoped crons (no service) have no deep
-// link target beyond the project canvas. cron.Spec.Service is the FQN
-// (<project>-<svc>), so strip it to the short slug the web keys on.
+// cronURL is the in-app path for a failed cron: the service's full page
+// on its Crons tab. Project-scoped crons (no service) land on the project
+// canvas. cron.Spec.Service is the FQN (<project>-<svc>), so strip it to
+// the short slug the web keys on.
 func cronURL(project, service string) string {
 	if project == "" {
 		return ""
 	}
-	p := url.PathEscape(project)
 	short := strings.TrimPrefix(service, project+"-")
 	if short == "" {
-		return "/projects/" + p
+		return "/projects/" + url.PathEscape(project)
 	}
-	return "/projects/" + p + "?service=" + url.QueryEscape(short) + "&tab=crons"
+	return notify.ServiceLink(project, short, "crons", "")
 }
 
 // logsURL is the absolute deep link for the onFailure webhook payload,

@@ -268,8 +268,8 @@ func TestTick_StaleUnnotifiedFailureStampedSilently(t *testing.T) {
 // the service as an FQN, which must be stripped to the short slug.
 func TestCronURL(t *testing.T) {
 	cases := []struct{ project, service, want string }{
-		{"alpha", "alpha-web", "/projects/alpha?service=web&tab=crons"},
-		{"alpha", "web", "/projects/alpha?service=web&tab=crons"},
+		{"alpha", "alpha-web", "/projects/alpha/services/web?tab=crons"},
+		{"alpha", "web", "/projects/alpha/services/web?tab=crons"},
 		{"alpha", "", "/projects/alpha"},
 		{"", "alpha-web", ""},
 	}
@@ -279,7 +279,7 @@ func TestCronURL(t *testing.T) {
 		}
 	}
 	w := &Watcher{BaseURL: "https://kuso.example.com/"}
-	if got, want := w.logsURL("alpha", "alpha-web"), "https://kuso.example.com/projects/alpha?service=web&tab=crons"; got != want {
+	if got, want := w.logsURL("alpha", "alpha-web"), "https://kuso.example.com/projects/alpha/services/web?tab=crons"; got != want {
 		t.Errorf("logsURL = %q, want %q", got, want)
 	}
 }
@@ -325,7 +325,7 @@ func TestCronFailedEvent(t *testing.T) {
 	for _, l := range ev.Links {
 		links[l.Label] = l.URL
 	}
-	if links["Crons"] != "/projects/alpha?service=web&tab=crons" || links["Logs"] != notify.ServiceLink("alpha", "web", "logs", "") {
+	if links["Crons"] != "/projects/alpha/services/web?tab=crons" || links["Logs"] != notify.ServiceLink("alpha", "web", "logs", "") {
 		t.Errorf("Links = %+v", ev.Links)
 	}
 	if ev.LogTail != "boom" || ev.Service != "web" || ev.Body != "Job nightly-29001 failed (exit code 2)" {
