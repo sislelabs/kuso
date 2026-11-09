@@ -50,7 +50,7 @@ import {
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BuildLogViewer } from "./BuildLogViewer";
-import { actorLabel, CommitRef, CompareLink, Dot, LiveDuration, TriggerChip } from "./deployParts";
+import { actorLabel, CommitRef, CompareLink, Dot, LiveDuration } from "./deployParts";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Button } from "@/components/ui/button";
 
@@ -182,7 +182,7 @@ export function BuildRow({
               <span className="line-clamp-2 break-words">{buildTitle(b)}</span>
               <span className="sr-only">{`, ${m.label}. ${isOpen ? "Hide" : "Show"} build log`}</span>
             </button>
-            <TriggerChip trigger={trigger} className="mt-0.5" />
+            <TriggerNote trigger={trigger} className="mt-0.5" />
             <StatusBadge s={s} queuePos={b.queuePosition} />
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--text-secondary)]">
@@ -296,6 +296,7 @@ export function BuildRow({
             newerThanLive={newerThanLive}
             liveBuild={liveBuild}
             repoUrl={repoUrl}
+            fatalLine={peek.errorLine}
             onNavigate={onNavigate}
           />
           <RowMenu build={b} repoUrl={repoUrl} previous={previous} compareHref={compareHref} sha={sha} onToggleLog={onToggle} isOpen={isOpen} />
@@ -344,6 +345,7 @@ function PrimaryAction({
   newerThanLive,
   liveBuild,
   repoUrl,
+  fatalLine,
   onNavigate,
 }: {
   project: string;
@@ -356,6 +358,8 @@ function PrimaryAction({
   newerThanLive?: boolean;
   liveBuild?: DeployBuild;
   repoUrl?: string;
+  // The first error line pulled from the stored log, when it was read.
+  fatalLine?: string;
   onNavigate?: (tab: string, anchor?: string) => void;
 }) {
   if (!canDeploy) return null;
@@ -391,8 +395,8 @@ function PrimaryAction({
   if (s === "release-failed") return <RetryReleaseButton project={project} service={service} buildId={b.id} sha={sha} />;
   if (s === "running" || s === "pending" || s === "queued") return <CancelButton project={project} service={service} buildId={b.id} />;
   if (s === "failed" || s === "cancelled") {
-    const stuck = s === "failed" ? unretryableReason(b) : undefined;
-    const missingBranch = stuck && isMissingBranch(b);
+    const stuck = s === "failed" ? unretryableReason(b, fatalLine) : undefined;
+    const missingBranch = stuck && isMissingBranch(b, fatalLine);
     return (
       <>
         {missingBranch && onNavigate && (
@@ -567,16 +571,19 @@ function CancelButton({ project, service, buildId }: { project: string; service:
 
 // Failures a retry of the same ref can't clear: the branch is gone, or
 // the commit itself is broken. Matched on the classifier kind, and on the
-// raw git message for builds classified before clone_ref_missing existed.
-function isMissingBranch(b: DeployBuild): boolean {
+// raw git fatal (error message, class hint, or the line extracted from the
+// stored log) for builds classified before clone_ref_missing existed.
+function isMissingBranch(b: DeployBuild, fatalLine?: string): boolean {
   return (
     b.failureClass?.kind === "clone_ref_missing" ||
-    /Remote branch \S+ not found|couldn't find remote ref/i.test(`${b.errorMessage ?? ""} ${b.failureClass?.lineHint ?? ""}`)
+    /Remote branch \S+ not found|couldn't find remote ref/i.test(
+      `${b.errorMessage ?? ""} ${b.failureClass?.lineHint ?? ""} ${fatalLine ?? ""}`,
+    )
   );
 }
 
-export function unretryableReason(b: DeployBuild): string | undefined {
-  if (isMissingBranch(b)) {
+export function unretryableReason(b: DeployBuild, fatalLine?: string): string | undefined {
+  if (isMissingBranch(b, fatalLine)) {
     return `${b.branch ? `Branch ${b.branch}` : "This branch"} doesn't exist in the repository any more, so a retry fails the same way. Change the branch or push it again.`;
   }
   switch (b.failureClass?.kind) {
@@ -902,4 +909,15 @@ function useLogPeek(
 function firstReleaseError(b: DeployBuild): string | undefined {
   const lines = (b.releaseLogTail ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   return lines.find(isErrorLine) ?? (isGenericFailure(b.errorMessage) ? undefined : b.errorMessage);
+}
+
+// TriggerNote says how a build started ("via push", "manual", "rollback")
+// as plain muted text: it must never look like the action buttons beside it.
+export function TriggerNote({ trigger, className }: { trigger?: BuildTrigger; className?: string }) {
+  if (!trigger) return null;
+  return (
+    <span title={trigger.hint} className={cn("shrink-0 text-xs font-normal leading-5 text-[var(--text-tertiary)]", className)}>
+      {trigger.label}
+    </span>
+  );
 }
