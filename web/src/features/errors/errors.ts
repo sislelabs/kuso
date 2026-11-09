@@ -30,6 +30,14 @@ export interface ServiceErrorCount {
   groups: number;
 }
 
+export const ERRORS_UNAVAILABLE = "Errors unavailable on this server";
+
+// errorsUnavailable: the summary endpoint is missing (old server) and no
+// per-service fallback produced a number.
+export function errorsUnavailable(summaryMissing: boolean, services: number, failedLists: number): boolean {
+  return summaryMissing && (services === 0 || failedLists === services);
+}
+
 // summaryUnsupported: servers before the summary endpoint 404 (or 405) it.
 export function summaryUnsupported(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 404 || e.status === 405);
@@ -104,7 +112,14 @@ export function useProjectErrorCounts(
   services: readonly string[],
   since: string = ERRORS_WINDOW,
   env = "",
-): { counts: Record<string, ServiceErrorCount | undefined>; total: number | undefined } {
+): {
+  counts: Record<string, ServiceErrorCount | undefined>;
+  total: number | undefined;
+  // The server has no errors summary and there's nothing to fall back on
+  // (no services passed, or every per-service read failed): say
+  // ERRORS_UNAVAILABLE instead of rendering a clean zero.
+  unavailable: boolean;
+} {
   const summary = useQuery(summaryQuery(project, since, env, true));
   const fallback = summaryUnsupported(summary.error);
   const lists = useQueries({
@@ -119,6 +134,7 @@ export function useProjectErrorCounts(
   return useMemo(() => {
     const counts: Record<string, ServiceErrorCount | undefined> = {};
     let total: number | undefined;
+    const unavailable = errorsUnavailable(fallback, services.length, lists.filter((q) => q.isError).length);
     if (fallback) {
       services.forEach((service, i) => {
         const groups = lists[i]?.data;
@@ -127,16 +143,16 @@ export function useProjectErrorCounts(
         counts[service] = { occurrences, groups: groups.length };
         total = (total ?? 0) + occurrences;
       });
-      return { counts, total };
+      return { counts, total, unavailable };
     }
     const data = summary.data;
-    if (!data) return { counts, total };
+    if (!data) return { counts, total, unavailable };
     for (const service of services) {
       const s = data.services[service];
       counts[service] = { occurrences: s?.occurrences ?? 0, groups: s?.groups ?? 0 };
     }
     total = Object.values(data.services).reduce((n, s) => n + (s.occurrences || 0), 0);
-    return { counts, total };
+    return { counts, total, unavailable };
     // lists is a fresh array each render; key off the data stamps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fallback, services, listStamp, summary.data]);

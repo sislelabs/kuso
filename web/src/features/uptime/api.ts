@@ -64,6 +64,22 @@ export interface UptimeView {
   stale: boolean;
 }
 
+// The server pauses the ping when there's nothing meant to answer it; a
+// service that never deployed isn't "paused", it's not deployed.
+function pausedLabel(reason: string | undefined): string {
+  switch (reason) {
+    case "no-image":
+    case "no-deployment":
+      return "Not deployed";
+    case "stopped":
+      return "Stopped";
+    case "asleep":
+      return "Asleep";
+    default:
+      return "Paused";
+  }
+}
+
 export function uptimeView(s: UptimeServiceStatus | undefined): UptimeView {
   if (!s) return { state: "not_set_up", label: "Not set up", stale: false };
   const stale = !!s.stale;
@@ -81,7 +97,7 @@ export function uptimeView(s: UptimeServiceStatus | undefined): UptimeView {
     case "down":
       return { state: "down", label: `Down${suffix}`, stale };
     case "paused":
-      return { state: "paused", label: "Paused", stale };
+      return { state: "paused", label: pausedLabel(s.reason), stale };
     case "disabled":
       return { state: "paused", label: "Off", stale };
     case "pending":
