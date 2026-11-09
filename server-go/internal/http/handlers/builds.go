@@ -51,6 +51,7 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 	// service name.
 	r.Get("/api/projects/{project}/builds/latest", h.LatestPerService)
 	r.Get("/api/projects/{project}/services/{service}/env-example", h.EnvExample)
+	r.Get("/api/projects/{project}/services/{service}/branches", h.Branches)
 }
 
 // LatestPerService returns {<serviceShortName>: buildSummary} for the
