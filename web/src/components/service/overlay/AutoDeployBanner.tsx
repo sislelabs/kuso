@@ -1,6 +1,8 @@
 "use client";
 
-import { GitBranch, Info, PauseCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { GitBranch, Info, PauseCircle, X } from "lucide-react";
+import { useRouteParams } from "@/lib/dynamic-params";
 import type { KusoServiceSpec } from "@/types/projects";
 import { githubRepoSlug } from "@/features/builds";
 import { Button } from "@/components/ui/button";
@@ -8,7 +10,16 @@ import { Button } from "@/components/ui/button";
 export type PushDeploy =
   | { on: true; repo: string; branch: string; watchPaths: string[] }
   | { on: false; paused: true; repo: string; branch: string }
-  | { on: false; paused?: false; reason: string; hint: string; action?: { label: string; tab: string; anchor?: string } };
+  | {
+      on: false;
+      paused?: false;
+      reason: string;
+      hint: string;
+      action?: { label: string; tab: string; anchor?: string };
+      // The cause is instance-wide (no GitHub App), the same for every
+      // service: the notice shows once per project and can be dismissed.
+      instanceWide?: boolean;
+    };
 
 // pushDeployState answers "will a git push deploy this env?" from what the
 // server's push dispatcher checks: a GitHub repo on the service (or the
@@ -67,6 +78,7 @@ export function pushDeployState({
       on: false,
       reason: "The GitHub App isn't set up on this instance, so pushes don't reach kuso.",
       hint: "An admin can connect it under Settings → GitHub.",
+      instanceWide: true,
     };
   }
   return { on: true, repo: slug, branch, watchPaths: spec.watchPaths ?? [] };
@@ -123,6 +135,7 @@ export function AutoDeployBanner({
       </div>
     );
   }
+  if (state.instanceWide) return <InstanceWideNotice reason={state.reason} hint={state.hint} />;
   const action = state.action;
   return (
     <div
@@ -148,6 +161,74 @@ export function AutoDeployBanner({
           )}
         </p>
       </div>
+    </div>
+  );
+}
+
+const NOTICE_KEY = (project: string) => `kuso:instance-notice:github-app:${project}`;
+
+// InstanceWideNotice is the "no GitHub App" notice. Every service in the
+// project has the same cause, so the full box shows on the first service
+// it's seen on; elsewhere it's one quiet line, and once dismissed it's gone
+// for the whole project.
+function InstanceWideNotice({ reason, hint }: { reason: string; hint: string }) {
+  const { project = "", service: routeService = "" } = useRouteParams<{ project: string; service: string }>([
+    "project",
+    "service",
+  ]);
+  const [seen, setSeen] = useState<string | null | undefined>(undefined);
+  const [service, setService] = useState(routeService);
+  useEffect(() => {
+    if (!project) return;
+    // The canvas peek carries the service in ?service=, not the path.
+    const service = routeService || new URLSearchParams(window.location.search).get("service") || "";
+    setService(service);
+    try {
+      const v = window.localStorage.getItem(NOTICE_KEY(project));
+      if (!v && service) window.localStorage.setItem(NOTICE_KEY(project), service);
+      setSeen(v || service || null);
+    } catch {
+      setSeen(null);
+    }
+  }, [project, routeService]);
+  if (seen === undefined || seen === "dismissed") return null;
+  if (seen && service && seen !== service) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+        <Info aria-hidden className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+        Auto-deploy is off: the GitHub App isn&apos;t set up on this instance.
+      </p>
+    );
+  }
+  const dismiss = () => {
+    setSeen("dismissed");
+    try {
+      window.localStorage.setItem(NOTICE_KEY(project), "dismissed");
+    } catch {
+      // Storage blocked: it shows again on the next visit.
+    }
+  };
+  return (
+    <div
+      role="note"
+      className="flex items-start gap-2.5 rounded-lg border border-[var(--info)]/35 bg-[var(--info-subtle)] px-3 py-2.5 text-sm"
+    >
+      <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-[var(--text-primary)]">Auto-deploy is off</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-[var(--text-secondary)]">
+          {reason} {hint} This applies to every service in the project.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={dismiss}
+        aria-label="Dismiss for this project"
+        title="Dismiss for this project"
+        className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <X className="h-4 w-4" />
+      </button>
     </div>
   );
 }
