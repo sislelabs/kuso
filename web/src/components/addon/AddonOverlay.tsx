@@ -24,7 +24,6 @@ import type { KusoAddon } from "@/types/projects";
 import { serviceShortName } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
-import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 import { OverviewTab } from "./overlay/OverviewTab";
@@ -34,6 +33,7 @@ import { SettingsTab } from "./overlay/SettingsTab";
 import { VulnerabilitiesTab } from "./overlay/VulnerabilitiesTab";
 import { OverlayTabs, type OverlayTabItem } from "@/components/service/overlay/OverlayTabs";
 import { useOverlayKeyboard } from "@/components/service/overlay/useOverlayKeyboard";
+import { useLeaveGuard, dirtyPanelKeys, type DirtyPanel } from "@/components/service/overlay/leaveGuard";
 
 // AddonOverlayDirtyContext mirrors the per-panel dirty registry on
 // ServiceOverlay. Each form section inside a tab (Configuration,
@@ -43,13 +43,7 @@ import { useOverlayKeyboard } from "@/components/service/overlay/useOverlayKeybo
 // discards an unsaved edit. Without this the user could switch
 // from Configuration → Backups → back and the typed values were
 // gone with no warning.
-type PanelEntry = {
-  dirty: boolean;
-  onSave?: () => unknown;
-  onDiscard?: () => void;
-  saving?: boolean;
-  saveError?: string;
-};
+type PanelEntry = DirtyPanel;
 type AddonOverlayDirtyAPI = {
   setPanel: (key: string, entry: PanelEntry) => void;
   clearPanel: (key: string) => void;
@@ -113,6 +107,8 @@ interface Props {
   // Called when the user switches tabs (and once on open when no tab was
   // requested) so the page can mirror the tab into the URL.
   onTabChange?: (tab: string) => void;
+  // Puts the addon back in the URL after "Keep editing" on a switch.
+  onRestore?: (addon: string) => void;
   onClose: () => void;
 }
 
@@ -124,17 +120,16 @@ interface Props {
 //
 // Per-tab implementations live under ./overlay/. This file is the
 // shell: open/close, tab gating, the slide-in chrome.
-export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose }: Props) {
-  const open = !!addon;
+export function AddonOverlay({ project, addon: addonProp, defaultTab, onTabChange, onRestore, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Per-panel dirty + save registry. The active tab's onSave wires
-  // into the floating SaveBar below; on tab-switch (or close) we
-  // run each panel's onDiscard so transient form state doesn't
-  // silently survive.
+  // into the floating SaveBar below; every exit (tab, close, Escape,
+  // switching addon) goes through the shared leave guard.
   const [panels, setPanels] = useState<Record<string, PanelEntry>>({});
-  useUnsavedEdits("addon-overlay", Object.values(panels).some((p) => p.dirty));
+  const anyDirty = dirtyPanelKeys(panels).length > 0;
+  useUnsavedEdits("addon-overlay", anyDirty);
   const dirtyAPI = useMemo<AddonOverlayDirtyAPI>(
     () => ({
       setPanel: (key, entry) => {
@@ -150,31 +145,47 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
     }),
     []
   );
+  const clearPanels = useCallback(() => setPanels({}), []);
+  const { guard, dialog: leaveDialog } = useLeaveGuard(panels, clearPanels);
 
-  // Tab-switch / close discards local form state cleanly. Without
-  // this the SettingsTab forms held edited values across a
-  // Configuration → Backups → Configuration round-trip and the
-  // user couldn't tell whether their edits had been saved. We don't
-  // prompt: the floating SaveBar's persistent "unsaved changes"
-  // indicator already telegraphs the state and corrections are
-  // cheap. ServiceOverlay made the same call.
+  // Same hold as ServiceOverlay: a new addon prop while a form is dirty
+  // keeps the current addon on screen until the user decides.
+  const [shown, setShown] = useState(addonProp);
+  const [declined, setDeclined] = useState<string | null | undefined>(undefined);
+  if (addonProp !== shown && (!anyDirty || !shown)) setShown(addonProp);
+  const holding = addonProp !== shown && anyDirty && !!shown;
+  useEffect(() => {
+    if (!holding) {
+      setDeclined(undefined);
+      return;
+    }
+    if (declined === addonProp) return;
+    const held = shown;
+    guard(
+      addonProp ? "switching to another addon" : "closing",
+      () => setShown(addonProp),
+      () => {
+        setDeclined(addonProp);
+        if (held) onRestore?.(held);
+      },
+    );
+  }, [holding, declined, addonProp, shown, guard, onRestore]);
+  const addon = shown;
+  const open = !!addon;
+
   const guardedSetTab = (next: Tab) => {
     if (next === tab) return;
-    for (const e of Object.values(panels)) {
-      e.onDiscard?.();
-    }
-    setTab(next);
-    onTabChange?.(next);
+    guard("switching tabs", () => {
+      setTab(next);
+      onTabChange?.(next);
+    });
   };
   const guardedClose = useCallback(() => {
-    for (const e of Object.values(panels)) {
-      e.onDiscard?.();
-    }
-    setPanels({});
-    onClose();
-  }, [panels, onClose]);
-  // Escape with unsaved edits asks first; backdrop / X still discard.
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+    guard("closing", () => {
+      setPanels({});
+      onClose();
+    });
+  }, [guard, onClose]);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // The URL is the source of truth for the tab: defaultTab changes on
@@ -201,10 +212,6 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
       // A dialog/menu opened from inside the overlay (restore confirm,
       // etc.) handles its own Escape; don't also close the overlay under it.
       if (escapeHandledAbove(e, rootRef.current)) return;
-      if (Object.values(panels).some((p) => p.dirty)) {
-        setConfirmDiscard(true);
-        return;
-      }
       guardedClose();
     };
     window.addEventListener("keydown", onKey);
@@ -214,7 +221,7 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, panels, guardedClose]);
+  }, [open, guardedClose]);
 
   const addons = useAddons(project);
   const data = (addons.data ?? []).find((a) => a.metadata.name === addon);
@@ -382,17 +389,7 @@ export function AddonOverlay({ project, addon, defaultTab, onTabChange, onClose 
               </AddonOverlayDirtyContext.Provider>
             </div>
           </motion.div>
-          <ConfirmDialog
-            open={confirmDiscard}
-            title="Discard unsaved changes?"
-            body="This addon has edits that haven't been saved. Closing drops them."
-            confirmLabel="Discard"
-            onCancel={() => setConfirmDiscard(false)}
-            onConfirm={() => {
-              setConfirmDiscard(false);
-              guardedClose();
-            }}
-          />
+          {leaveDialog}
         </div>
       )}
     </AnimatePresence>
@@ -512,12 +509,13 @@ function BackupNowButton({
   const reasonId = `backup-now-reason-${addon}`;
   // The two blockers you can fix from here get the fix inline.
   const fixable = !state.enabled && canWrite && cr?.spec.kind === "postgres" && !cr.spec.external && !cr.spec.useInstanceAddon;
+  // S3 comes first: a schedule without it still backs up nothing.
   const fix = !fixable
     ? null
-    : !cr?.spec.backup?.schedule?.trim()
-      ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
-      : listState.kind === "no-s3"
-        ? { text: "S3 isn't set up", action: "Configure", href: "/settings/backups" }
+    : listState.kind === "no-s3"
+      ? { text: "S3 isn't set up", action: "Set up S3", href: "/settings/backups#s3-storage" }
+      : !cr?.spec.backup?.schedule?.trim()
+        ? { text: "No backup schedule", action: "Set one up", onClick: onOpenBackups }
         : null;
   return (
     <>
@@ -545,6 +543,10 @@ function BackupNowButton({
           {state.reason}
         </TooltipContent>
       </Tooltip>
+      {/* A blocked button says why in plain sight, not only on hover. */}
+      {!fix && !state.enabled && !!cr && listState.kind !== "loading" && (
+        <span className="text-xs text-[var(--text-tertiary)]">{state.reason}</span>
+      )}
       {fix && (
         <span className="inline-flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
           {fix.text}

@@ -33,6 +33,8 @@ interface Props {
   // Switches the overlay to the Logs tab. The query + time window are
   // handed over through the logs view store before the switch.
   onViewLogs?: () => void;
+  // Env group the overlay is showing; the panel starts filtered to it.
+  defaultEnv?: string;
 }
 
 // Log retention is 7 days, so a longer window would only look empty.
@@ -42,16 +44,19 @@ const RANGES = ["1h", "24h", "7d"] as const;
 // fingerprint (GET …/errors), and per group a count histogram, the
 // stack trace around the latest occurrence and the newest occurrences
 // (GET …/errors/{fingerprint}).
-export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
+export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = "" }: Props) {
   const [since, setSince] = useState<(typeof RANGES)[number]>("24h");
-  // "" = every environment. Not pre-set from the overlay's env: error
-  // events only carry an env for pods labelled kuso.sislelabs.com/env.
-  const [env, setEnv] = useState("");
+  // Starts on the overlay's env; "" = every environment. Events from pods
+  // without the kuso.sislelabs.com/env label only show under "All".
+  const [pickedEnv, setEnv] = useState(defaultEnv);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const errors = useErrors(project, service, since, env);
   const envs = useEnvironments(project);
   const fqn = service ? project + "-" + service : "";
   const envOptions = useMemo(() => serviceEnvOptions(envs.data ?? [], fqn), [envs.data, fqn]);
+  // With one environment there's nothing to narrow to, and filtering
+  // would hide events from unlabelled pods.
+  const env = envOptions.length < 2 ? "" : pickedEnv;
+  const errors = useErrors(project, service, since, env);
   const groups = errors.data ?? [];
   // The headline total comes from the same summary as the canvas badge and
   // the tab badge, so the three agree even when the list is cut at 50.
@@ -107,7 +112,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs }: Props) {
               disabled={envOptions.length < 2}
               title={envOptions.length < 2 ? `${service} only runs in ${envOptions[0]?.label ?? "one environment"}` : undefined}
             >
-              <option value="">All envs</option>
+              <option value="">All environments</option>
               {envOptions.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}

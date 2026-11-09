@@ -131,12 +131,40 @@ export function OverlayTabs<T extends string>({
 
   const overflowBadge = overflow.some((t) => !!t.badge && t.badgeTone === "error");
 
+  const all = [...visible, ...overflow, ...(pinned ? [pinned] : [])];
   return (
+    <>
+    {/* Phones: every section in one labelled picker instead of a strip
+        that clips. */}
+    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 sm:hidden">
+      <label htmlFor={`${idPrefix}-section`} className="text-xs font-medium text-[var(--text-secondary)]">
+        Section
+      </label>
+      <div className="relative min-w-0 flex-1">
+        <select
+          id={`${idPrefix}-section`}
+          value={active}
+          onChange={(e) => {
+            const next = all.find((t) => t.id === e.target.value);
+            if (next) onChange(next.id);
+          }}
+          className="h-11 w-full appearance-none rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] pr-8 pl-3 text-sm font-medium text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+        >
+          {all.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+              {t.badge ? ` (${t.badge > 99 ? "99+" : t.badge})` : ""}
+            </option>
+          ))}
+        </select>
+        <ChevronDown aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
+      </div>
+    </div>
     <div
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className="relative flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3"
+      className="relative hidden shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:flex sm:px-3"
     >
       <div className="relative flex min-w-0 flex-1">
         <div
@@ -157,7 +185,18 @@ export function OverlayTabs<T extends string>({
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger
                 data-more-trigger=""
-                tabIndex={-1}
+                // While a secondary tab is active the trigger stands in for
+                // it: same id (the panel's aria-labelledby resolves) and the
+                // tablist's one tab stop.
+                {...(activeInMore
+                  ? {
+                      role: "tab",
+                      id: `${idPrefix}-tab-${activeInMore.id}`,
+                      "aria-selected": true,
+                      "aria-controls": `${idPrefix}-panel`,
+                    }
+                  : {})}
+                tabIndex={activeInMore ? 0 : -1}
                 aria-label={`More tabs: ${overflow.map((t) => t.label).join(", ")}${activeInMore ? ` (showing ${activeInMore.label})` : ""}`}
                 className={cn(
                   "relative inline-flex h-10 shrink-0 items-center gap-1 whitespace-nowrap px-3 text-sm font-medium outline-none hover:text-[var(--text-primary)] focus-visible:text-[var(--text-primary)] focus-visible:underline",
@@ -200,5 +239,6 @@ export function OverlayTabs<T extends string>({
       )}
       {pinned && tabButton(pinned, true)}
     </div>
+    </>
   );
 }

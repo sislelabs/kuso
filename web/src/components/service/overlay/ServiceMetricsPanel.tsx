@@ -1,5 +1,7 @@
 "use client";
 
+import { NeverStartedState, useFirstRun } from "./firstRunContext";
+import { hasPublicIngress } from "./stopCopy";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { AlertTriangle, Info } from "lucide-react";
@@ -66,6 +68,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
   const historyMissing = history.isSuccess && history.data === null;
   const svc = useService(project, service);
   const builds = useBuilds(project, service);
+  const { firstRun } = useFirstRun();
 
   // Re-render the clock-based domain every 30s so the window slides.
   const [now, setNow] = useState(() => Date.now());
@@ -160,6 +163,15 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
     : undefined;
   const pickTraffic = pick ? (t: number) => pick(t, stepMs) : undefined;
   const pickHint = pick ? "Click to open logs from this moment" : undefined;
+  const ingress = hasPublicIngress(env, !!svc.data?.spec?.internal, svc.data?.spec?.runtime);
+
+  if (firstRun.kind === "never") {
+    return (
+      <div className="rounded-lg border border-dashed border-[var(--border-subtle)]">
+        <NeverStartedState title="No metrics yet: this service has never started." />
+      </div>
+    );
+  }
 
   if (!envName) {
     return (
@@ -185,6 +197,12 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
         </div>
       </div>
 
+      {!ingress ? (
+        <p className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+          {svc.data?.spec?.runtime === "worker" ? "Background worker" : "Internal service"} · no public endpoint, so
+          there&apos;s no HTTP traffic to chart. CPU and memory are below.
+        </p>
+      ) : (
       <section aria-labelledby="m-traffic" className="space-y-3">
         <SectionHeading
           id="m-traffic"
@@ -285,6 +303,7 @@ export function ServiceMetricsPanel({ project, service, env, memoryLimit, onView
           </div>
         )}
       </section>
+      )}
 
       <section aria-labelledby="m-res" className="space-y-3">
         <SectionHeading id="m-res" title="Resources" note={resNote} />

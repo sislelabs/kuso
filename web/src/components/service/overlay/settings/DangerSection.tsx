@@ -98,6 +98,7 @@ export function DangerSection({
   return (
     <Section
       id="danger"
+      scope="none"
       title="Danger zone"
       icon={Trash2}
       tone="danger"

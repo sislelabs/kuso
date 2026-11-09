@@ -75,6 +75,9 @@ import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { escapeHandledAbove } from "@/lib/escape-layer";
 import { useUnsavedEdits } from "@/lib/unsaved-edits";
+import { firstRunState } from "./overlay/firstRun";
+import { FirstRunProvider } from "./overlay/firstRunContext";
+import { useLeaveGuard, dirtyPanelKeys, type DirtyPanel } from "./overlay/leaveGuard";
 import { invalidateProjectDescribe } from "@/features/projects/hooks";
 import { hostScheme } from "@/lib/host-scheme";
 
@@ -83,18 +86,7 @@ import { hostScheme } from "@/lib/host-scheme";
 // discard handlers the shell's unified SaveBar fires. Panels that
 // need their own inline button still can — useOverlayDirty without
 // onSave keeps the existing dirty-tracking-only behaviour.
-type PanelEntry = {
-  dirty: boolean;
-  onSave?: () => void | Promise<void>;
-  onDiscard?: () => void;
-  saving?: boolean;
-  // Last save error message for this panel. When set, the unified
-  // SaveBar surfaces it inline next to the Save button so users see
-  // *why* a save failed without having to chase a toast that may
-  // have already disappeared. Cleared by the panel on next save
-  // attempt (or once the panel goes clean).
-  saveError?: string;
-};
+type PanelEntry = DirtyPanel;
 type OverlayDirtyAPI = {
   setPanel: (key: string, entry: PanelEntry) => void;
   clearPanel: (key: string) => void;
@@ -301,6 +293,9 @@ interface Props {
   // once on open when no tab was requested, so the page can keep ?tab= in
   // the URL. The URL then flows back in as defaultTab.
   onTabChange?: (tab: string) => void;
+  // Puts a service back in the URL after the user chose "Keep editing"
+  // on a resource switch, so the address bar matches what's shown.
+  onRestore?: (service: string, env?: string) => void;
   onClose: () => void;
 }
 
@@ -312,61 +307,81 @@ interface Props {
 // panel without bubbling into canvas pan/drag.
 export function ServiceOverlay({
   project,
-  service,
-  env: envParam = "production",
+  service: serviceProp,
+  env: envParamProp = "production",
   defaultTab,
   failureKind,
   onTabChange,
+  onRestore,
   onClose,
 }: Props) {
-  const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useExpandedPanel();
 
   // Per-panel dirty + save registry. Children call useOverlayDirty
   // and (optionally) supply onSave/onDiscard so the shell can render
   // one SaveBar at the bottom for the active tab, instead of every
   // panel rolling its own button placement.
-  const dirtyMap = useRef<Record<string, boolean>>({});
   const [panels, setPanels] = useState<Record<string, PanelEntry>>({});
-  useUnsavedEdits("service-overlay", Object.values(panels).some((p) => p.dirty));
+  const anyDirty = dirtyPanelKeys(panels).length > 0;
+  useUnsavedEdits("service-overlay", anyDirty);
   const dirtyAPI = useMemo<OverlayDirtyAPI>(
     () => ({
-      setPanel: (key, entry) => {
-        if (entry.dirty) dirtyMap.current[key] = true;
-        else delete dirtyMap.current[key];
-        setPanels((prev) => ({ ...prev, [key]: entry }));
-      },
-      clearPanel: (key) => {
-        delete dirtyMap.current[key];
+      setPanel: (key, entry) => setPanels((prev) => ({ ...prev, [key]: entry })),
+      clearPanel: (key) =>
         setPanels((prev) => {
           const next = { ...prev };
           delete next[key];
           return next;
-        });
-      },
+        }),
     }),
     []
   );
+  const clearPanels = useCallback(() => setPanels({}), []);
+  const leave = useLeaveGuard(panels, clearPanels);
 
-  // Clicking the backdrop / X closes and drops unsaved edits; the Save
-  // bar's dirty pip is the signal there. Switching tabs with unsaved
-  // edits asks first: the panel unmounts, so a stray tab click would
-  // otherwise lose Variables edits silently.
+  // Resource switch (⌘K to another service, Back/Forward) arrives as a new
+  // prop. While a form is dirty the overlay keeps showing the service the
+  // edits belong to and asks first; Keep editing points the URL back.
+  const requested = { service: serviceProp, env: envParamProp };
+  const [shownRes, setShownRes] = useState(requested);
+  const [declined, setDeclined] = useState<string | null>(null);
+  const reqKey = `${serviceProp ?? ""}|${envParamProp}`;
+  const shownKey = `${shownRes.service ?? ""}|${shownRes.env}`;
+  if (reqKey !== shownKey && (!anyDirty || !shownRes.service)) {
+    setShownRes(requested);
+  }
+  const holding = reqKey !== shownKey && anyDirty && !!shownRes.service;
+  const { guard } = leave;
+  useEffect(() => {
+    if (!holding || declined === reqKey) return;
+    const held = shownRes;
+    guard(
+      serviceProp ? "switching to another service" : "closing",
+      () => setShownRes({ service: serviceProp, env: envParamProp }),
+      () => {
+        setDeclined(reqKey);
+        if (held.service) onRestore?.(held.service, held.env);
+      },
+    );
+  }, [holding, declined, reqKey, shownRes, serviceProp, envParamProp, guard, onRestore]);
+  const service = shownRes.service;
+  const envParam = shownRes.env;
+  const open = !!service;
+  const [expanded, setExpanded] = useExpandedPanel(open ? tab : null);
+
   const guardedClose = useCallback(() => {
-    dirtyMap.current = {};
-    setPanels({});
-    onClose();
-  }, [onClose]);
+    guard("closing", () => {
+      setPanels({});
+      onClose();
+    });
+  }, [guard, onClose]);
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const onTabChangeRef = useRef(onTabChange);
   onTabChangeRef.current = onTabChange;
-  const [pendingTab, setPendingTab] = useState<{ tab: Tab; anchor?: string } | null>(null);
   const switchTab = useCallback((next: Tab, anchor?: string) => {
-    dirtyMap.current = {};
     setPanels({});
     setTab(next);
     onTabChangeRef.current?.(next);
@@ -383,13 +398,13 @@ export function ServiceOverlay({
   }, []);
   const guardedSetTab = useCallback(
     (next: Tab, anchor?: string) => {
-      if (next !== tabRef.current && Object.keys(dirtyMap.current).length > 0) {
-        setPendingTab({ tab: next, anchor });
+      if (next === tabRef.current) {
+        switchTab(next, anchor);
         return;
       }
-      switchTab(next, anchor);
+      guard("switching tabs", () => switchTab(next, anchor));
     },
-    [switchTab],
+    [switchTab, guard],
   );
 
   // When a service opens — or the URL's ?tab= changes under us (Back /
@@ -441,10 +456,9 @@ export function ServiceOverlay({
     }
   }, [tab]);
 
-  // Escape is easy to hit by accident (and used to leak through from
-  // nested dialogs), so with unsaved edits it asks first. Clicking the
-  // backdrop / X still discards without asking, per the comment above.
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  useEffect(() => {
+    if (!holding) setDeclined(null);
+  }, [holding]);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Close on ESC + lock body scroll while open.
@@ -453,10 +467,6 @@ export function ServiceOverlay({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (escapeHandledAbove(e, rootRef.current)) return;
-      if (Object.keys(dirtyMap.current).length > 0) {
-        setConfirmDiscard(true);
-        return;
-      }
       guardedClose();
     };
     window.addEventListener("keydown", onKey);
@@ -646,6 +656,9 @@ export function ServiceOverlay({
   const problem = healthProblem(env?.status?.state, status === "failing" ? "failed" : status);
   const restartNeeded = needsRestart(drift.data, env?.status?.state);
   const failureBannerVisible = !!failureKind && tab === failureTab;
+  const firstRun = useMemo(() => firstRunState(env, builds.data), [env, builds.data]);
+  const neverRan = firstRun.kind === "never";
+  const isWorker = svc.data?.spec?.runtime === "worker";
 
   // Jump to another tab, optionally scrolling a Settings section into
   // view once the tab's fade-in has mounted it.
@@ -657,6 +670,7 @@ export function ServiceOverlay({
     },
     [guardedSetTab],
   );
+  const firstRunCtx = useMemo(() => ({ firstRun, onNavigate: navigateTo }), [firstRun, navigateTo]);
 
   return (
     <AnimatePresence>
@@ -692,9 +706,16 @@ export function ServiceOverlay({
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
             className={cn(
               "relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] outline-none sm:border-l sm:border-[var(--border-subtle)]",
-              !expanded && "sm:max-w-3xl",
+              // Logs and Settings need the room more than the rest: 64rem
+              // from 1440px up, 48rem below. One arbitrary value because a
+              // separate min-[1440px] class sorts before sm: and loses.
+              !expanded &&
+                (tab === "logs" || tab === "settings"
+                  ? "sm:max-w-[max(48rem,min(64rem,calc((100vw_-_1439px)*10000)))]"
+                  : "sm:max-w-3xl"),
             )}
           >
+            <FirstRunProvider value={firstRunCtx}>
             {/* Sticky header. Tighter padding on small screens so the
                 overlay's title row uses the full width of a phone. */}
             <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
@@ -732,12 +753,16 @@ export function ServiceOverlay({
                   </span>
                   {liveUrl ? (
                     <UrlPill url={liveUrl} />
+                  ) : isWorker ? (
+                    <span className="text-[var(--text-tertiary)]">Background worker · no public endpoint</span>
+                  ) : svcInternal ? (
+                    <span className="text-[var(--text-tertiary)]">Internal only · no public endpoint</span>
                   ) : (
                     <span className="text-[var(--text-tertiary)]">No public URL yet</span>
                   )}
                 </div>
                 {service ? (
-                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} onNavigate={navigateTo} />
+                  <ServiceHealthStrip project={project} service={service} env={env} envGroup={envGroup} status={SERVICE_STATUS[status]} firstRun={firstRun} onNavigate={navigateTo} />
                 ) : null}
                 <div className="mt-2.5 flex flex-wrap items-center gap-1.5 empty:hidden">
                   {/* Diagnostic chip. The "rolling out" state lives
@@ -806,7 +831,7 @@ export function ServiceOverlay({
                       );
                     }
                     // Nothing has ever run, so there's nothing for a change to be pending against.
-                    if (specOff && env?.status?.state !== "no_image") {
+                    if (specOff && !neverRan) {
                       return (
                         <span
                           className="inline-flex items-center gap-1 rounded-md border border-[var(--info)]/40 bg-[var(--info-subtle)] px-2 py-0.5 text-xs text-[var(--info)]"
@@ -816,7 +841,7 @@ export function ServiceOverlay({
                         </span>
                       );
                     }
-                    if (stale && restartNeeded && service) {
+                    if (stale && restartNeeded && service && !neverRan) {
                       return (
                         <RestartControl
                           project={project}
@@ -842,6 +867,8 @@ export function ServiceOverlay({
                       env={env}
                       stopped={stopped}
                       showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                      hideDeploy={neverRan}
+                      neverRan={neverRan}
                     />
                   ) : null}
                 </div>
@@ -850,11 +877,11 @@ export function ServiceOverlay({
                 type="button"
                 onClick={() => setExpanded(!expanded)}
                 aria-pressed={expanded}
-                aria-label={expanded ? "Narrow the panel" : "Expand the panel to full width"}
-                title={expanded ? "Narrow the panel" : "Expand to full width"}
-                className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
+                title={expanded ? "Back to the side panel (remembered for this tab)" : "Use the full width for this tab (remembered)"}
+                className="hidden h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:inline-flex"
               >
-                {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                {expanded ? <Minimize2 aria-hidden className="h-3.5 w-3.5" /> : <Maximize2 aria-hidden className="h-3.5 w-3.5" />}
+                {expanded ? "Collapse" : "Expand"}
               </button>
               <button
                 type="button"
@@ -866,7 +893,7 @@ export function ServiceOverlay({
               </button>
             </header>
 
-            {service && problem && !failureBannerVisible ? (
+            {service && problem && !failureBannerVisible && !neverRan ? (
               <HealthBanner
                 project={project}
                 service={service}
@@ -943,7 +970,7 @@ export function ServiceOverlay({
                         re-opens after dismissal stay quiet. */}
                     {tab === "deployments" && (
                       <div className="p-5">
-                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={url} onNavigate={navigateTo} />
+                        <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} url={liveUrl} onNavigate={navigateTo} />
                       </div>
                     )}
                     {tab === "variables" && (
@@ -996,9 +1023,11 @@ export function ServiceOverlay({
                     {tab === "errors" && (
                       <div className="p-5">
                         <ServiceErrorsPanel
+                          key={envGroup}
                           project={project}
                           service={service ?? ""}
                           onViewLogs={() => guardedSetTab("logs")}
+                          defaultEnv={envGroup}
                         />
                       </div>
                     )}
@@ -1140,38 +1169,14 @@ export function ServiceOverlay({
                   env={env}
                   stopped={stopped}
                   showRestart={!!env && !restartNeeded && status !== "sleeping" && problem !== "runtime"}
+                  hideDeploy={neverRan}
+                      neverRan={neverRan}
                 />
               </div>
             ) : null}
+            </FirstRunProvider>
           </motion.div>
-          <ConfirmDialog
-            open={confirmDiscard}
-            title="Discard unsaved changes?"
-            body="This panel has edits that haven't been saved. Closing drops them."
-            confirmLabel="Discard"
-            onCancel={() => setConfirmDiscard(false)}
-            onConfirm={() => {
-              setConfirmDiscard(false);
-              guardedClose();
-            }}
-          />
-          <ConfirmDialog
-            open={!!pendingTab}
-            title="Discard unsaved changes?"
-            body={`Your edits in ${
-              Object.keys(panels)
-                .filter((k) => panels[k]?.dirty)
-                .map((k) => k.charAt(0).toUpperCase() + k.slice(1))
-                .join(", ") || "this tab"
-            } haven't been saved. Switching tabs drops them.`}
-            confirmLabel="Discard and switch"
-            onCancel={() => setPendingTab(null)}
-            onConfirm={() => {
-              const p = pendingTab;
-              setPendingTab(null);
-              if (p) switchTab(p.tab, p.anchor);
-            }}
-          />
+          {leave.dialog}
         </div>
       )}
     </AnimatePresence>
@@ -1527,24 +1532,32 @@ function useRolloutSlow(rolling: boolean, specWrittenAt?: string): boolean {
 
 const EXPANDED_KEY = "kuso:service-panel-expanded";
 
-// The full-width choice is a per-viewer convenience, so it lives in
-// localStorage (which may be unavailable: then it just isn't remembered).
-function useExpandedPanel(): [boolean, (v: boolean) => void] {
-  const [expanded, setExpandedState] = useState(false);
+// Full width is remembered per tab type (wide Logs, narrow Deployments).
+// A per-viewer convenience, so localStorage; when it's unavailable the
+// choice just isn't remembered.
+function useExpandedPanel(tab: string | null): [boolean, (v: boolean) => void] {
+  const [byTab, setByTab] = useState<Record<string, boolean>>({});
   useEffect(() => {
+    if (!tab || tab in byTab) return;
+    let v = false;
     try {
-      setExpandedState(window.localStorage.getItem(EXPANDED_KEY) === "1");
+      v = window.localStorage.getItem(`${EXPANDED_KEY}:${tab}`) === "1";
     } catch {
       // storage blocked
     }
-  }, []);
-  const setExpanded = useCallback((v: boolean) => {
-    setExpandedState(v);
-    try {
-      window.localStorage.setItem(EXPANDED_KEY, v ? "1" : "0");
-    } catch {
-      // storage blocked
-    }
-  }, []);
-  return [expanded, setExpanded];
+    setByTab((prev) => ({ ...prev, [tab]: v }));
+  }, [tab, byTab]);
+  const setExpanded = useCallback(
+    (v: boolean) => {
+      if (!tab) return;
+      setByTab((prev) => ({ ...prev, [tab]: v }));
+      try {
+        window.localStorage.setItem(`${EXPANDED_KEY}:${tab}`, v ? "1" : "0");
+      } catch {
+        // storage blocked
+      }
+    },
+    [tab],
+  );
+  return [!!(tab && byTab[tab]), setExpanded];
 }

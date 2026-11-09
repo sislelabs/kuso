@@ -314,9 +314,13 @@ export function Section({
   footerNote,
   children,
   tone = "default",
+  scope = "all",
 }: {
   id: string;
   title: string;
+  // Which environments a save touches: "all" for service-spec fields,
+  // an env name for per-environment cards, "none" to say nothing.
+  scope?: "all" | "none" | { env: string };
   icon: React.ComponentType<{ className?: string }>;
   description?: React.ReactNode;
   // Short summary pill in the header ("autoscales 1 → 3").
@@ -354,6 +358,11 @@ export function Section({
             >
               {title}
             </h3>
+            {scope !== "none" && (
+              <span className="text-xs text-[var(--text-tertiary)]">
+                {scope === "all" ? "Applies to all environments" : `Only the ${scope.env} environment`}
+              </span>
+            )}
             {status && (
               <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
                 {status}

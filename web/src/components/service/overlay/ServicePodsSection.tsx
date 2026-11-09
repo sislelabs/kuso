@@ -4,6 +4,7 @@ import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isCurrentPod, useServicePods } from "@/features/pods";
 import { cn } from "@/lib/utils";
+import { NeverStartedState, useFirstRun } from "./firstRunContext";
 
 // ServicePodsSection lists the pods backing one env of a service — the
 // web counterpart of `kuso service pods`.
@@ -18,6 +19,7 @@ export function ServicePodsSection({
   envName?: string;
 }) {
   const pods = useServicePods(project, service, envName);
+  const { firstRun } = useFirstRun();
   // Old-ReplicaSet and release-hook pods are listed but don't count.
   const current = (pods.data?.pods ?? []).filter(isCurrentPod);
   const currentReady = current.filter((p) => p.ready).length;
@@ -37,7 +39,9 @@ export function ServicePodsSection({
           <span className="font-mono text-xs text-[var(--text-tertiary)]">{pods.data.namespace}</span>
         )}
       </header>
-      {!envName ? (
+      {firstRun.kind === "never" ? (
+        <NeverStartedState title="Nothing has run yet." compact />
+      ) : !envName ? (
         <p className="px-3 py-3 text-xs text-[var(--text-tertiary)]">
           No environment deployed yet.
         </p>

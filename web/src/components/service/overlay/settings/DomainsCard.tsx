@@ -117,6 +117,7 @@ export function DomainsCard({
   return (
     <Section
       id="domains"
+      scope={{ env: envName }}
       title="Domains"
       icon={Globe}
       status={customCount > 0 ? `${customCount} custom` : undefined}

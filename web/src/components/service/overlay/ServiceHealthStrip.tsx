@@ -10,6 +10,13 @@ import { isCurrentPod, useServicePods } from "@/features/pods";
 import { lastDeployedAt } from "@/features/projects/facts";
 import { useProjectUptime, uptimeView, type UptimeServiceStatus } from "@/features/uptime";
 import type { KusoEnvironment } from "@/types/projects";
+import { Rocket } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useCanOnProject, Perms } from "@/features/auth";
+import type { FirstRun } from "./firstRun";
+import { buildLogAnchor, neverStartedCause } from "./firstRunContext";
+import { useRedeploy } from "./ServiceHeaderActions";
+import { unretryableReason } from "./BuildRow";
 
 export interface ServiceHealthStripProps {
   project: string;
@@ -19,6 +26,8 @@ export interface ServiceHealthStripProps {
   envGroup: string;
   // The same status the header pill shows, so the two never disagree.
   status: StatusMeta;
+  // Never-run services collapse the strip into one banner.
+  firstRun?: FirstRun;
   onNavigate: (tab: string, anchor?: string) => void;
 }
 
@@ -35,9 +44,76 @@ interface Cell {
 }
 
 // ServiceHealthStrip is the at-a-glance row under the overlay title:
-// status, uptime check, restarts, errors and last deploy. Every cell reads
+// status, uptime ping, restarts, errors and last deploy. Every cell reads
 // the same query the tab it links to reads, so the numbers match.
-export function ServiceHealthStrip({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
+export function ServiceHealthStrip(props: ServiceHealthStripProps) {
+  if (props.firstRun?.kind === "never") {
+    return <NeverRanBanner {...props} firstRun={props.firstRun} />;
+  }
+  return <HealthCells {...props} />;
+}
+
+function NeverRanBanner({
+  project,
+  service,
+  env,
+  firstRun,
+  onNavigate,
+}: ServiceHealthStripProps & { firstRun: Extract<FirstRun, { kind: "never" }> }) {
+  const redeploy = useRedeploy(project, service, env);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
+  const anchor = buildLogAnchor(firstRun);
+  const lb = firstRun.lastBuild;
+  // The extracted fatal line beats the classifier's generic summary.
+  const reason = firstRun.failed ? lb?.failureClass?.lineHint || lb?.errorMessage || lb?.failureClass?.summary : undefined;
+  // A build that can't succeed as-is (missing branch) isn't retried.
+  const blocked = firstRun.failed && lb ? unretryableReason(lb) : undefined;
+  const tone = firstRun.failed ? "danger" : firstRun.building ? "progress" : "info";
+  return (
+    <div
+      role={firstRun.failed ? "alert" : "status"}
+      className={cn(
+        "mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5",
+        tone === "danger"
+          ? "border-[var(--error)]/35 bg-[var(--error)]/5"
+          : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-[var(--text-primary)]">
+          Never deployed here · <span className={firstRun.failed ? "text-[var(--error)]" : undefined}>{neverStartedCause(firstRun).replace(/\.$/, "")}</span>
+        </p>
+        {reason && (
+          <p className="mt-0.5 line-clamp-2 break-words text-xs text-[var(--text-secondary)]" title={reason}>
+            {reason}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {firstRun.lastBuild && (
+          <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={() => onNavigate("deployments", anchor)}>
+            {firstRun.building ? "Follow the build" : "View build log"}
+          </Button>
+        )}
+        {!redeploy.isImage && !firstRun.building && (
+          <Button
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={redeploy.request}
+            disabled={!canWrite || redeploy.pending || !!blocked}
+            disabledReason={!canWrite ? "Requires editor access on this project" : blocked}
+          >
+            <Rocket className="h-3 w-3" aria-hidden />
+            {redeploy.pending ? "Starting…" : firstRun.failed && !blocked ? "Retry deploy" : "Deploy"}
+          </Button>
+        )}
+      </div>
+      {redeploy.dialog}
+    </div>
+  );
+}
+
+function HealthCells({ project, service, env, envGroup, status: headerStatus, onNavigate }: ServiceHealthStripProps) {
   const pods = useServicePods(project, service, env?.metadata?.name);
   const uptime = useProjectUptime(project);
   const errors = useServiceErrorCount(project, service, ERRORS_WINDOW, errorsEnvScope(envGroup));
@@ -109,33 +185,38 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
   const deploy = cells.find((c) => c.id === "deploy");
   return (
     <>
-    {/* Phones: one status line instead of the five-cell grid. */}
-    <button
-      type="button"
-      onClick={() => onNavigate("deployments")}
-      className="mt-2 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-[var(--text-secondary)] sm:hidden"
-    >
-      <StatusDot status={status} />
-      <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
-      {total > 0 && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="whitespace-nowrap">{ready}/{total} ready</span>
-        </>
-      )}
+    {/* Phones: one compact row, each fact its own tap target that opens
+        the tab it came from. */}
+    <ul aria-label="Service health" className="mt-2 flex flex-wrap items-center gap-1.5 sm:hidden">
+      <li>
+        <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
+          <StatusDot status={status} />
+          <span className={cn("font-medium", TONE_CLASSES[status.tone].text)}>{status.label}</span>
+          {total > 0 && <span className="whitespace-nowrap">· {ready}/{total} ready</span>}
+        </button>
+      </li>
       {errorsN !== undefined && errorsN > 0 && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="whitespace-nowrap text-[var(--danger)]">{errorsN.toLocaleString()} errors</span>
-        </>
+        <li>
+          <button type="button" onClick={() => onNavigate("errors")} className={cn(phoneChip, "text-[var(--danger)]")}>
+            {errorsN.toLocaleString()} {errorsN === 1 ? "error" : "errors"} · {ERRORS_WINDOW}
+          </button>
+        </li>
+      )}
+      {restarts > 0 && (
+        <li>
+          <button type="button" onClick={() => onNavigate("logs")} className={cn(phoneChip, crashing ? "text-[var(--danger)]" : "text-[var(--warning)]")}>
+            {restarts.toLocaleString()} {restarts === 1 ? "restart" : "restarts"}
+          </button>
+        </li>
       )}
       {deploy && deploy.value !== "Never" && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate">deployed {deploy.value}</span>
-        </>
+        <li className="min-w-0">
+          <button type="button" onClick={() => onNavigate("deployments")} className={phoneChip}>
+            <span className="truncate">deployed {deploy.value}</span>
+          </button>
+        </li>
       )}
-    </button>
+    </ul>
     <ul
       aria-label="Service health"
       className="mt-3 hidden grid-cols-6 gap-px sm:grid overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)] lg:grid-cols-5"
@@ -180,6 +261,9 @@ export function ServiceHealthStrip({ project, service, env, envGroup, status: he
   );
 }
 
+const phoneChip =
+  "inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2.5 text-xs text-[var(--text-secondary)] active:bg-[var(--bg-secondary)]";
+
 // The checker reports one row per checked env, keyed by env CR name; it
 // only checks production today, which is also what older servers meant
 // when they sent no env.
@@ -195,15 +279,15 @@ function uptimeCell(
   error: unknown,
   httpService: boolean,
 ): Cell {
-  const base = { id: "uptime", label: "Health check", tab: "settings", anchor: "uptime" } as const;
+  const base = { id: "uptime", label: "Uptime", tab: "settings", anchor: "uptime" } as const;
   if (!httpService) {
-    return { ...base, value: "—", tone: "plain", title: "No HTTP port, so there's nothing for the health check to probe" };
+    return { ...base, value: "—", tone: "plain", title: "No public HTTP endpoint, so there's nothing for the uptime check to ping" };
   }
   if (error instanceof ApiError && error.status === 404) {
-    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report health checks" };
+    return { ...base, value: "Unavailable", tone: "plain", title: "This server doesn't report uptime checks" };
   }
   if (enabled === false) {
-    return { ...base, value: "Checker off", tone: "neutral", title: "Health checks are switched off for this kuso instance" };
+    return { ...base, value: "Checker off", tone: "neutral", title: "Uptime checks are switched off for this kuso instance" };
   }
   const v = uptimeView(s);
   // "(last known)" is a qualifier, not part of the value.
@@ -212,7 +296,7 @@ function uptimeCell(
   const checked = s?.lastCheckedAt ? `checked ${relativeTime(s.lastCheckedAt)}` : "not checked yet";
   switch (v.state) {
     case "not_set_up":
-      return { ...base, value: v.label, tone: "neutral", title: "No health check for this environment. Set one up in Settings → Uptime." };
+      return { ...base, value: v.label, tone: "neutral", title: "No uptime check for this environment. Set one up in Settings → Uptime." };
     case "up":
       return {
         ...base,
@@ -240,7 +324,7 @@ function uptimeCell(
         ...base,
         value: v.label,
         tone: "neutral",
-        title: s?.state === "disabled" ? "The health check for this service is disabled" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
+        title: s?.state === "disabled" ? "The uptime check for this service is off" : "Checks pause while the service sleeps, is stopped or has nothing deployed",
       };
     default:
       return { ...base, value: v.label, tone: "neutral", title: s?.url ?? "" };

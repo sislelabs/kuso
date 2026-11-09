@@ -2,6 +2,7 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { CopyButton } from "@/components/ui/copy-button";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
 import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { restartImpactFromEnvs } from "@/components/service/envvars/restartImpact";
@@ -53,6 +54,15 @@ function VariablesPanelBody({ project, service, env, highlight }: PanelProps & {
     const prod = mine.find((e) => isProductionGroup(e));
     return selected?.spec.host || prod?.spec.host || "";
   }, [envs.data, project, service, env]);
+  // Every env-group this service runs in reads the same variable list;
+  // only the "<env> only" rows differ.
+  const groups = useMemo(() => {
+    const names = new Set<string>();
+    for (const e of envs.data ?? []) {
+      if (e.spec.service === service || e.spec.service === `${project}-${service}`) names.add(envGroupName(e));
+    }
+    return Array.from(names).sort((a, b) => (a === "production" ? -1 : b === "production" ? 1 : a.localeCompare(b)));
+  }, [envs.data, project, service]);
   const restartImpact = useMemo(
     () => (envs.data ? restartImpactFromEnvs(envs.data, project, service, envGroupName) : undefined),
     [envs.data, project, service],
@@ -62,6 +72,7 @@ function VariablesPanelBody({ project, service, env, highlight }: PanelProps & {
 
   return (
     <>
+      {groups.length > 1 && <SharedScopeBanner groups={groups} env={env} project={project} service={service} />}
       <EnvVarsEditor
         project={project}
         service={service}
@@ -78,5 +89,47 @@ function VariablesPanelBody({ project, service, env, highlight }: PanelProps & {
         serviceHost={host}
       />
     </>
+  );
+}
+
+function listJoin(items: string[]): string {
+  if (items.length <= 2) return items.join(" and ");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+// SharedScopeBanner says out loud that a save here lands in every
+// environment, and how to pin a value to just one (the editor marks
+// existing pins "<env> only"; writing one is a CLI action today).
+function SharedScopeBanner({
+  groups,
+  env,
+  project,
+  service,
+}: {
+  groups: string[];
+  env: string;
+  project: string;
+  service: string;
+}) {
+  const shown = groups.length > 4 ? [...groups.slice(0, 3), `${groups.length - 3} more`] : groups;
+  const cmd = `kuso env set ${project} ${service} KEY=value --env ${env}`;
+  return (
+    <div className="mb-4 rounded-md border border-[var(--info)]/30 bg-[var(--info-subtle)] px-3 py-2.5 text-[13px] text-[var(--text-primary)]">
+      <p>
+        <span className="font-medium">Shared by {listJoin(shown)}.</span>{" "}
+        <span className="text-[var(--text-secondary)]">Saving here changes every environment.</span>
+      </p>
+      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+        {env === "production" ? (
+          <>Values pinned to one environment show an &ldquo;only&rdquo; badge when you switch to that environment.</>
+        ) : (
+          <>
+            Values pinned to {env} show a &ldquo;{env} only&rdquo; badge. To pin one:{" "}
+            <code className="rounded bg-[var(--bg-tertiary)] px-1 font-mono text-[var(--text-primary)]">{cmd}</code>
+            <CopyButton value={cmd} label="Copy command" size="xs" />
+          </>
+        )}
+      </p>
+    </div>
   );
 }
