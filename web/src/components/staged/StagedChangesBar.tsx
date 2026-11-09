@@ -8,23 +8,51 @@ import { countServiceChanges, discardProject, useStagedProject } from "@/feature
 import { cn } from "@/lib/utils";
 import { StagedReviewDialog } from "./StagedReviewDialog";
 
-// Page shells mount a fixed bar; the sticky fallback inside the settings
-// and variables panels hides while one is mounted, so there's never two.
-let fixedBars = 0;
+// Page shells mount a fixed bar; the settings and variables panels mount
+// a sticky one at the end of their content. The sticky one wins while
+// it's mounted: it sits in the panel's own scroll flow (so it never
+// covers the last rows) and stays visible above the overlay, which would
+// otherwise hide a viewport-fixed bar. There's never two.
+let stickyBars = 0;
 const barListeners = new Set<() => void>();
-function setFixedBars(delta: number) {
-  fixedBars += delta;
+function setStickyBars(delta: number) {
+  stickyBars += delta;
   for (const l of barListeners) l();
 }
-function useFixedBarMounted(): boolean {
+function useStickyBarMounted(): boolean {
   return useSyncExternalStore(
     (fn) => {
       barListeners.add(fn);
       return () => barListeners.delete(fn);
     },
-    () => fixedBars > 0,
+    () => stickyBars > 0,
     () => false,
   );
+}
+
+// --staged-bar-space is the room the fixed bar takes at the bottom of the
+// viewport (0 while it's hidden). Scroll containers it can overlap pad
+// their end by it: pb-[var(--staged-bar-space,0px)].
+const SPACE_VAR = "--staged-bar-space";
+function useReserveSpace(el: HTMLElement | null) {
+  useEffect(() => {
+    if (!el) return;
+    const root = document.documentElement;
+    const apply = () => {
+      const r = el.getBoundingClientRect();
+      // Height plus its offset from the viewport bottom plus a gap.
+      root.style.setProperty(SPACE_VAR, `${Math.ceil(window.innerHeight - r.top + 12)}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", apply);
+      root.style.removeProperty(SPACE_VAR);
+    };
+  }, [el]);
 }
 
 // StagedChangesBar is the one place staged edits get deployed: "3 changes
@@ -47,13 +75,14 @@ export function StagedChangesBar({
   const staged = useStagedProject(project);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const shellHasBar = useFixedBarMounted();
-  const hidden = placement === "sticky" && shellHasBar;
+  const panelHasBar = useStickyBarMounted();
+  const hidden = placement === "fixed" && panelHasBar;
   useEffect(() => {
-    if (placement !== "fixed") return;
-    setFixedBars(1);
-    return () => setFixedBars(-1);
+    if (placement !== "sticky") return;
+    setStickyBars(1);
+    return () => setStickyBars(-1);
   }, [placement]);
+  const [fixedEl, setFixedEl] = useState<HTMLDivElement | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const services = Object.keys(staged ?? {});
   const changes = services.reduce((n, s) => n + countServiceChanges(staged?.[s]), 0);
@@ -72,14 +101,21 @@ export function StagedChangesBar({
     return () => window.removeEventListener("keydown", onKey);
   }, [changes, canWrite, hidden]);
 
+  useReserveSpace(placement === "fixed" && !hidden && changes > 0 ? fixedEl : null);
+
   if (hidden || (changes === 0 && !reviewOpen)) return null;
   return (
     <>
       {changes > 0 && (
         <div
+          ref={placement === "fixed" ? setFixedEl : undefined}
           className={cn(
             "pointer-events-none z-30 flex justify-center px-3",
-            placement === "fixed" ? "fixed inset-x-0 bottom-4" : "sticky bottom-3",
+            // On phones the fixed bar clears the bottom nav and the service
+            // page's action bar above it instead of covering their buttons.
+            placement === "fixed"
+              ? "fixed inset-x-0 bottom-[calc(7rem+env(safe-area-inset-bottom))] sm:bottom-4"
+              : "sticky bottom-3",
             className,
           )}
         >
