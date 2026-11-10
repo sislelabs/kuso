@@ -332,7 +332,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// this path could preserve a clone but never restore one; preview
 				// envs lost theirs on every propagation after the parent addon
 				// changed, and mounted the production source instead.
-				prunedFrom = s.ensureEnvClones(ctx, ns, project, envScope, prunedFrom, svc.Spec.SubscribedAddons)
+				prunedFrom = s.ensureEnvClones(ctx, ns, project, envScope, prunedFrom, svc.Spec.SubscribedAddons, addons.IsPreviewEnv(env))
 				if svc.Spec.SubscribedAddons != nil {
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
@@ -737,11 +737,16 @@ var serviceRefHostRE = regexp.MustCompile(`([a-z0-9][a-z0-9-]*)\.[a-z0-9-]+\.svc
 // mirroring addons.refreshEnvSecrets so the two writers agree (D1/ISO-6).
 // Clones are the addon CRs labelled env=envScope, paired with their source
 // by the provenance recorded on the CR, never by name. With a subscription
-// (non-nil subs) a clone is mounted only when its source is subscribed, and
-// an unsubscribed one is removed; a clone with no recorded source is never
-// added, only kept if already mounted. The clone replaces its source.
-// No-op for production and on a list error.
-func (s *Service) ensureEnvClones(ctx context.Context, ns, project, envScope string, list, subs []string) []string {
+// (non-nil subs) a clone is added only when its source is subscribed; a
+// clone with no recorded source is never added, only kept if already
+// mounted. The clone replaces its source.
+//
+// An unsubscribed clone a named env already mounts is kept and logged, not
+// removed: a running staging app may read its DATABASE_URL from it, and an
+// unrelated save must not crash it. The user subscribes or detaches it
+// explicitly. Previews (strict) drop it; their next sync rebuilds them from
+// staging anyway. No-op for production and on a list error.
+func (s *Service) ensureEnvClones(ctx context.Context, ns, project, envScope string, list, subs []string, preview bool) []string {
 	if envScope == "" || envScope == "production" {
 		return list
 	}
@@ -764,7 +769,13 @@ func (s *Service) ensureEnvClones(ctx context.Context, ns, project, envScope str
 			continue
 		}
 		if subs != nil && !allow[src] {
-			out = slices.DeleteFunc(out, func(n string) bool { return n == conn })
+			switch {
+			case preview:
+				out = slices.DeleteFunc(out, func(n string) bool { return n == conn })
+			case mounted:
+				slog.WarnContext(ctx, "propagate: env mounts an addon clone whose source it does not subscribe to; kept, subscribe or detach it explicitly",
+					"project", project, "env", envScope, "clone", conn, "source", src)
+			}
 			continue
 		}
 		if !mounted {
