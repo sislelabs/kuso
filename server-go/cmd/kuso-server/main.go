@@ -1051,12 +1051,16 @@ func main() {
 			// max-history flag exists), so prune old revision Secrets
 			// here (SCL-16). Keeps the newest KUSO_HELM_HISTORY_MAX
 			// (default 10) per release plus any deployed/pending one.
-			if os.Getenv("KUSO_HELM_HISTORY_PRUNE_DISABLED") != "true" && kc.Config != nil {
+			// KUSO_HELM_HISTORY_PRUNE=off|dryrun|on, default dryrun:
+			// it only logs what it would delete until an operator has
+			// reviewed a cycle and set it to on.
+			if pruneMode := helmhistory.ParseMode(os.Getenv("KUSO_HELM_HISTORY_PRUNE")); pruneMode != helmhistory.ModeOff && kc.Config != nil {
 				if md, err := metadata.NewForConfig(kc.Config); err != nil {
 					logger.Warn("helm history prune: metadata client", "err", err)
 				} else {
 					pruner := &helmhistory.Pruner{
 						Meta: md,
+						Mode: pruneMode,
 						Keep: envInt("KUSO_HELM_HISTORY_MAX", helmhistory.DefaultKeep),
 						Namespaces: func(c context.Context) []string {
 							if buildSvc == nil {
