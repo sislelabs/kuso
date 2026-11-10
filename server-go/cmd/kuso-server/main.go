@@ -236,6 +236,26 @@ func main() {
 
 	auditSvc := audit.New(ctx, database)
 
+	// A forgeable JWT secret refuses a fresh install but only warns on an
+	// existing one: crash-looping an upgraded instance would take its
+	// dashboard down, and rotating the secret logs everyone out, so that
+	// stays the operator's call.
+	userCount, err := database.CountUsers(ctx)
+	if err != nil {
+		logger.Error("db: count users", "err", err)
+		os.Exit(2)
+	}
+	jwtProblem, refuseJWT := auth.JWTBootDecision(jwtSecret, userCount == 0, os.Getenv("KUSO_ALLOW_INSECURE_JWT") == "1")
+	if refuseJWT {
+		logger.Error("auth: refusing to start a fresh install with an insecure JWT secret; set JWT_SECRET to 32+ random bytes (or KUSO_ALLOW_INSECURE_JWT=1 for a throwaway dev box)", "problem", jwtProblem)
+		os.Exit(2)
+	}
+	if jwtProblem != "" {
+		serverstate.SetInsecureJWT(jwtProblem)
+		logger.Error("SECURITY: insecure JWT secret; tokens can be forged. Rotate it: set a new 32+ char random JWT_SECRET in Secret kuso/kuso-server-secrets and restart kuso-server (everyone is logged out), or re-run hack/install.sh",
+			"problem", jwtProblem)
+	}
+
 	// First-boot bootstrap: seed admin role + user from the configured
 	// password source when the DB is virgin.
 	//
@@ -373,6 +393,15 @@ func main() {
 	// at boot since version is a build-time constant.
 	notify.SetVersion(version.Version())
 	goSafe(logger, "notify", func() { notifyDisp.Run(ctx) })
+	if jwtProblem != "" {
+		notifyDisp.Emit(notify.Event{
+			Type:        notify.EventAlertFired,
+			Title:       "⚠ Insecure JWT secret",
+			Description: jwtProblem + ".\nAnyone who knows it can sign in as any user. Set a new 32+ character random JWT_SECRET in Secret kuso/kuso-server-secrets and restart kuso-server (this logs everyone out), or re-run hack/install.sh.",
+			Body:        jwtProblem,
+			Severity:    "error",
+		})
+	}
 
 	// Vulnerability promotion gate (docs/VULN_SCANNING.md). It only
 	// reads and enqueues; the cluster-singletons leader runs the scans.
@@ -1173,6 +1202,7 @@ func main() {
 				// and applies it before builds run (config-as-code).
 				// nil when kube is unavailable — the step is skipped.
 				disp.Reconciler = specRecon
+				disp.Audit = auditSvc
 				// Wire secrets so PR-close cleanup wipes per-env
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.
@@ -1696,6 +1726,16 @@ func main() {
 				rhScanner, rhRemediator, *namespace, 5*time.Minute,
 				autoRemediateEnabled, logger.With("component", "auto-remediate"))
 			goSafe(logger, "remediate", func() { remediateLoop.Run(workCtx) })
+			goSafe(logger, "wildcard-host-audit", func() {
+				envs, err := kubeClient.ListKusoEnvironments(workCtx, "")
+				if err != nil {
+					logger.Warn("wildcard host audit: list envs", "err", err)
+					return
+				}
+				for _, p := range projects.WildcardHostProblems(envs) {
+					logger.Warn("SECURITY: existing wildcard domain would be refused today; it keeps serving, review it", "problem", p)
+				}
+			})
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
 			startKubeSingletons(ctx)

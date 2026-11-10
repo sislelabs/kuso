@@ -128,6 +128,11 @@ type KusoConfigAsCode struct {
 	// No omitempty: the CRD defaults enabled to true, so a dropped false
 	// re-enabled config-as-code on the next typed project write.
 	Enabled bool `json:"enabled"`
+	// AllowPrune lets a push honour kuso.yaml `prune: true` (deleting
+	// services, addons and crons absent from the file). Off by default:
+	// anyone who can push to the default branch could otherwise delete
+	// production resources.
+	AllowPrune bool `json:"allowPrune,omitempty"`
 }
 
 // KusoPlacement pins workloads to a subset of cluster nodes. Either

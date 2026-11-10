@@ -2,9 +2,13 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/spec"
 )
@@ -62,6 +66,80 @@ func splitFullName(fullName string) (owner, repo string) {
 		return "", ""
 	}
 	return parts[0], parts[1]
+}
+
+// configBoundRepos is the set of GitHub repos ("owner/name", lower-cased)
+// a push-applied kuso.yaml may point services at: the project's default
+// repo, every repo its services already build from, and the pushed repo
+// itself. The App token is instance-wide, so anything else would let a
+// pusher of one repo get another, possibly private, repo cloned into a
+// build they control.
+func configBoundRepos(proj *kube.KusoProject, svcs []unstructured.Unstructured, pushedFullName string) map[string]bool {
+	bound := map[string]bool{}
+	add := func(u string) {
+		if owner, name := ParseGithubRepoURL(u); owner != "" {
+			bound[strings.ToLower(owner+"/"+name)] = true
+		}
+	}
+	if proj != nil && proj.Spec.DefaultRepo != nil {
+		add(proj.Spec.DefaultRepo.URL)
+	}
+	for i := range svcs {
+		if u, _, _ := unstructured.NestedString(svcs[i].Object, "spec", "repo", "url"); u != "" {
+			add(u)
+		}
+	}
+	if pushedFullName != "" {
+		bound[strings.ToLower(pushedFullName)] = true
+	}
+	return bound
+}
+
+// checkConfigRepoBinding refuses a kuso.yaml whose services name a
+// GitHub repo outside bound. Non-GitHub repos pass: no App token is
+// ever minted for them.
+func checkConfigRepoBinding(f *spec.File, bound map[string]bool) error {
+	for _, s := range f.Services {
+		owner, name := ParseGithubRepoURL(s.Repo)
+		if owner == "" {
+			continue
+		}
+		if r := strings.ToLower(owner + "/" + name); !bound[r] {
+			return fmt.Errorf("%w: kuso.yaml service %q points at github.com/%s, which project %q doesn't use yet; add it from the dashboard or `kuso apply` as an instance admin or editor first",
+				ErrConfigRepoNotBound, s.Name, r, f.Project)
+		}
+	}
+	return nil
+}
+
+// ErrConfigRepoNotBound marks a push-applied kuso.yaml refused by the
+// repo-binding gate.
+var ErrConfigRepoNotBound = errors.New("config-as-code: repo not bound to project")
+
+// auditConfigApply writes one audit row per push-driven kuso.yaml apply.
+// The pusher has no kuso account, so the row is attributed to the system
+// user and names the GitHub pusher and commit in the message.
+func (d *Dispatcher) auditConfigApply(ctx context.Context, project, pusher, sha, msg, severity string) {
+	if d.Audit == nil {
+		return
+	}
+	if pusher == "" {
+		pusher = "unknown"
+	}
+	d.Audit.Log(ctx, audit.Entry{
+		Severity: severity,
+		Action:   "project.configAsCode.push",
+		Pipeline: project,
+		Resource: "kusoproject",
+		Message:  fmt.Sprintf("kuso.yaml from push by GitHub user %s at %s: %s", pusher, sha, msg),
+	})
+}
+
+// configPruneAllowed reports whether a push may honour `prune: true`.
+// Deleting services, addons and crons from a git push is opt-in per
+// project (spec.configAsCode.allowPrune); `kuso apply` is unaffected.
+func configPruneAllowed(proj *kube.KusoProject) bool {
+	return proj != nil && proj.Spec.ConfigAsCode != nil && proj.Spec.ConfigAsCode.AllowPrune
 }
 
 // configAsCodeEnabled reports whether the project opts into the

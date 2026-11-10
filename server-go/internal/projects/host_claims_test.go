@@ -161,3 +161,58 @@ func TestUpdate_BaseDomainMovesEveryGeneratedHost(t *testing.T) {
 		}
 	}
 }
+
+// SEC-1: a wildcard overlaps every host under it, so it must not cover
+// the dashboard, a public suffix, or another project's hosts; an exact
+// host under another project's wildcard is refused the same way.
+func TestHostClaims_WildcardCoverage(t *testing.T) {
+	t.Setenv("KUSO_DOMAIN", "kuso.example.com")
+	wild := typedSeed(kube.GVREnvironments, "KusoEnvironment", "gamma-web-production", &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gamma-web-production",
+			Namespace: "kuso",
+			Labels:    map[string]string{labelProject: "gamma", labelService: "web", labelEnv: "production"},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project:         "gamma",
+			Service:         serviceCRName("gamma", "web"),
+			Kind:            "production",
+			Host:            "web.gamma.kuso.example.com",
+			WildcardDomains: []kube.KusoWildcardDomain{{Host: "*.tenants.io", TLSSecret: "t"}},
+		},
+	})
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedHostedEnv("alpha", "web", "production", "alpha-web-production", "web.alpha.kuso.example.com", "app.customer.com"),
+		seedProject("beta", kube.KusoProjectSpec{}),
+		seedService("beta", "web", kube.KusoServiceSpec{Project: "beta"}),
+		seedHostedEnv("beta", "web", "production", "beta-web-production", "web.beta.kuso.example.com"),
+		seedProject("gamma", kube.KusoProjectSpec{}),
+		seedService("gamma", "web", kube.KusoServiceSpec{Project: "gamma"}),
+		wild,
+	)
+	ctx := context.Background()
+	refused := []struct{ host, why string }{
+		{"*.example.com", "covers the dashboard host"},
+		{"*.com", "single-label suffix"},
+		{"*.co.uk", "public suffix"},
+		{"*.customer.com", "covers another project's exact host"},
+		{"*.kuso.example.com", "instance domain root"},
+		{"*.alpha.kuso.example.com", "another project's subtree"},
+	}
+	for _, c := range refused {
+		if _, err := s.AddEnvDomain(ctx, "beta", "web", "production", c.host, "tls"); err == nil {
+			t.Errorf("AddEnvDomain(%q) accepted, want refusal (%s)", c.host, c.why)
+		}
+	}
+	if _, err := s.AddEnvDomain(ctx, "beta", "web", "production", "shop.tenants.io", ""); !errors.Is(err, ErrConflict) {
+		t.Errorf("exact host under another project's wildcard: err = %v, want ErrConflict", err)
+	}
+	if _, err := s.AddEnvDomain(ctx, "beta", "web", "production", "*.beta.kuso.example.com", "tls"); err != nil {
+		t.Errorf("own-project wildcard refused: %v", err)
+	}
+	if _, err := s.AddEnvDomain(ctx, "gamma", "web", "production", "shop.tenants.io", ""); err != nil {
+		t.Errorf("exact host under own wildcard refused: %v", err)
+	}
+}

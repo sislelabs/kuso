@@ -28,6 +28,7 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/db"
+	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 )
 
@@ -102,7 +103,7 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	case "postgres":
 		h.downloadPostgres(ctx, w, project, addon, ns, cr, stamp)
 	case "s3", "minio":
-		h.downloadS3(ctx, w, project, addon, ns, releaseName, stamp)
+		h.downloadS3(ctx, w, project, addon, ns, releaseName, stamp, cr.Spec.External != nil)
 	default:
 		writeErr(w,
 
@@ -237,8 +238,8 @@ func (b *boundedBuffer) String() string {
 // single gzipped tar. The addon's storage endpoint is in-cluster
 // (http://<release>-storage:9000); addonS3Client qualifies it with the
 // addon's namespace so kuso-server can reach it.
-func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
-	cli, bucket, err := h.addonS3Client(ctx, ns, releaseName)
+func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string, external bool) {
+	cli, bucket, err := h.addonS3Client(ctx, ns, releaseName, external)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: "+err.Error())
 		return
@@ -410,7 +411,7 @@ func dumpTimeout(v string) time.Duration {
 // Secret (S3_ENDPOINT/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY). Distinct
 // from s3Client (backups.go), which reads the cluster-wide kuso-backup-s3
 // Secret — this one targets the addon's storage itself.
-func (h *BackupsHandler) addonS3Client(ctx context.Context, ns, releaseName string) (*s3.Client, string, error) {
+func (h *BackupsHandler) addonS3Client(ctx context.Context, ns, releaseName string, external bool) (*s3.Client, string, error) {
 	connSecret := addons.ConnSecretName(releaseName)
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -430,10 +431,17 @@ func (h *BackupsHandler) addonS3Client(ctx context.Context, ns, releaseName stri
 	if region == "" {
 		region = "us-east-1"
 	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(akid, skey, "")),
-	)
+	}
+	// An external addon's S3_ENDPOINT is user input: without the
+	// SSRF-safe client it sent signed requests to any in-cluster host.
+	// Managed addons are in-cluster by definition and keep the default.
+	if external {
+		opts = append(opts, awsconfig.WithHTTPClient(httpx.SSRFSafeClient(0)))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, "", err
 	}

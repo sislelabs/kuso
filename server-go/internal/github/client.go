@@ -212,6 +212,30 @@ func (c *Client) ResolveBranchSHA(ctx context.Context, installationID int64, own
 	return *br.Commit.SHA, nil
 }
 
+// CommitOnBranch reports whether sha is branch's head or one of its
+// ancestors. A commit that only exists through a fork's PR ref (GitHub
+// serves those from the base repo too) compares as "diverged" or
+// "behind", so it is refused.
+func (c *Client) CommitOnBranch(ctx context.Context, installationID int64, owner, repo, branch, sha string) (bool, error) {
+	cli, err := c.Installation(installationID)
+	if err != nil {
+		return false, err
+	}
+	cmp, _, err := cli.Repositories.CompareCommits(ctx, owner, repo, sha, branch, &gogithub.ListOptions{PerPage: 1})
+	if err != nil {
+		var ge *gogithub.ErrorResponse
+		if errors.As(err, &ge) && ge.Response != nil && ge.Response.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("github: compare commits: %w", err)
+	}
+	switch cmp.GetStatus() {
+	case "ahead", "identical":
+		return true, nil
+	}
+	return false, nil
+}
+
 // GetFile fetches a single file from a repo at a ref via the GitHub
 // Contents API. Returns ok=false on a 404 (the file does not exist —
 // the common, non-error case). The base64 content is decoded for the

@@ -202,6 +202,9 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 	if in.Uptime != nil {
 		out.Uptime = &projects.UpdateUptimeSpec{Disabled: in.Uptime.Disabled, Path: in.Uptime.Path}
 	}
+	if in.ConfigAsCode != nil {
+		out.ConfigAsCode = &projects.UpdateConfigAsCodeSpec{Enabled: in.ConfigAsCode.Enabled, AllowPrune: in.ConfigAsCode.AllowPrune}
+	}
 	if in.RequestLimits != nil {
 		out.RequestLimits = &projects.PatchRequestLimits{
 			MaxConcurrent: in.RequestLimits.MaxConcurrent,
@@ -827,6 +830,11 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upd := apiv1UpdateToDomain(wire)
+	// configAsCode decides whether anyone with push access can rewrite
+	// (or, with allowPrune, delete) project resources.
+	if upd.ConfigAsCode != nil && !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleAdmin) {
+		return
+	}
 	var updURLs []string
 	var updInsts []int64
 	if upd.DefaultRepo != nil {

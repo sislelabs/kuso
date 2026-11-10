@@ -189,6 +189,13 @@ FROM "Audit"`
 // whether older rows exist beyond the returned page (exact —
 // determined by over-fetching one row).
 func (s *Service) GetForProject(ctx context.Context, project string, after int64, limit int) (entries []Entry, total int, more bool, err error) {
+	return s.GetForProjectSince(ctx, project, time.Time{}, after, limit)
+}
+
+// GetForProjectSince is GetForProject skipping rows older than since
+// (zero = all). Rows are keyed by project name, so a project re-created
+// under a deleted one's name must not inherit its trail.
+func (s *Service) GetForProjectSince(ctx context.Context, project string, since time.Time, after int64, limit int) (entries []Entry, total int, more bool, err error) {
 	if s == nil || !s.Enabled {
 		return nil, 0, false, nil
 	}
@@ -200,8 +207,8 @@ func (s *Service) GetForProject(ctx context.Context, project string, after int64
 	// LIMIT placeholder, so we can't hard-code the indices).
 	q := `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" WHERE pipeline = $1`
-	args := []any{project}
+FROM "Audit" WHERE pipeline = $1 AND timestamp >= $2`
+	args := []any{project, since.UTC()}
 	if after > 0 {
 		args = append(args, after)
 		q += fmt.Sprintf(" AND id < $%d", len(args))
@@ -230,8 +237,8 @@ FROM "Audit" WHERE pipeline = $1`
 		out = out[:limit]
 	}
 	_ = s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1`,
-		project).Scan(&total)
+		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1 AND timestamp >= $2`,
+		project, since.UTC()).Scan(&total)
 	return out, total, more, nil
 }
 

@@ -24,6 +24,7 @@ type hookBuilds interface {
 	VerifyDeployHook(ctx context.Context, project, service, presented string) bool
 	DeployedBranches(ctx context.Context, project, service string) ([]string, error)
 	CreateWithOutcome(ctx context.Context, project, service string, req builds.CreateBuildRequest) (builds.CreateOutcome, error)
+	VerifyHookRef(ctx context.Context, project, service string, branches []string, sha string) error
 }
 
 // DeployHookHandler serves per-service deploy hooks: a secret URL that
@@ -192,6 +193,24 @@ func (h *DeployHookHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, fmt.Sprintf("no environment of %s/%s deploys branch %q", project, service, req.Branch))
 				return
 			}
+		}
+	}
+
+	// The token is the hook's only credential, so a named commit must be
+	// on a branch the service deploys, not any SHA GitHub serves for the
+	// repo (fork PR refs included).
+	if req.Ref != "" {
+		branches := []string{req.Branch}
+		if req.Branch == "" {
+			var err error
+			if branches, err = h.Hooks.DeployedBranches(ctx, project, service); err != nil {
+				h.fail(w, "deploy hook branches", err)
+				return
+			}
+		}
+		if err := h.Hooks.VerifyHookRef(ctx, project, service, branches, strings.ToLower(req.Ref)); err != nil {
+			h.fail(w, "deploy hook ref", err)
+			return
 		}
 	}
 

@@ -25,8 +25,9 @@ type CRDStaleInfo struct {
 }
 
 var (
-	mu       sync.RWMutex
-	crdStale *CRDStaleInfo
+	mu          sync.RWMutex
+	crdStale    *CRDStaleInfo
+	insecureJWT string
 
 	// leading is true while THIS pod holds the leader lease (and thus
 	// runs the singleton workers — build poller, etc.). readyz only
@@ -305,6 +306,21 @@ func SetCRDStale(info *CRDStaleInfo) {
 	mu.Lock()
 	crdStale = info
 	mu.Unlock()
+}
+
+// SetInsecureJWT records why the running JWT secret is unsafe ("" =
+// fine). Set once at boot; surfaced on /readyz without failing it.
+func SetInsecureJWT(problem string) {
+	mu.Lock()
+	insecureJWT = problem
+	mu.Unlock()
+}
+
+// InsecureJWT returns the boot-time JWT secret problem, or "".
+func InsecureJWT() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return insecureJWT
 }
 
 // CRDStale returns the current preflight state. The returned

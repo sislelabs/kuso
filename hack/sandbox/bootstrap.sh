@@ -102,6 +102,7 @@ log "secrets (well-known dev values, same as KUSO_INSECURE_SECRETS=1)"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="dev-session-key-do-not-use-in-prod-3232" \
   --from-literal=JWT_SECRET="dev-jwt-secret-do-not-use-in-prod-32-chars" \
+  --from-literal=KUSO_ALLOW_INSECURE_JWT="1" \
   --from-literal=KUSO_DOMAIN="$DOMAIN" \
   --from-literal=KUSO_REQUIRE_SIGNATURES="true" \
   --from-literal=KUSO_METRICS_SCRAPE_TOKEN="dev-metrics-scrape-token-do-not-use" \

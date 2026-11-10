@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -137,4 +138,62 @@ func (s *Service) DeployedBranches(ctx context.Context, project, service string)
 		}
 	}
 	return out, nil
+}
+
+// CommitOnBranchChecker reports whether sha is a branch's head or one of
+// its ancestors. The github.Client wired as RepoAccess implements it.
+type CommitOnBranchChecker interface {
+	CommitOnBranch(ctx context.Context, installationID int64, owner, repo, branch, sha string) (bool, error)
+}
+
+// VerifyHookRef refuses a deploy-hook commit that isn't on one of
+// branches in the service's GitHub repo. The hook token is the only
+// credential, so without this a leaked URL could deploy any commit
+// GitHub serves for the repo, including ones that only exist on a fork's
+// PR. Older commits on a tracked branch stay deployable (CI that deploys
+// $GITHUB_SHA after a newer push landed). Repos the GitHub App can't see
+// (non-GitHub hosts, uncovered public repos) can't be checked and pass.
+func (s *Service) VerifyHookRef(ctx context.Context, project, service string, branches []string, sha string) error {
+	checker, ok := s.RepoAccess.(CommitOnBranchChecker)
+	if !ok || sha == "" || len(branches) == 0 {
+		return nil
+	}
+	svcCR, err := s.Kube.GetOwnedService(ctx, s.nsFor(ctx, project), project, project+"-"+service)
+	if err != nil {
+		return nil // create() reports a missing service with the right status
+	}
+	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
+		return nil
+	}
+	repoURL := ""
+	if svcCR.Spec.Repo != nil {
+		repoURL = svcCR.Spec.Repo.URL
+	}
+	if repoURL == "" && proj.Spec.DefaultRepo != nil {
+		repoURL = proj.Spec.DefaultRepo.URL
+	}
+	owner, repo := splitGithubURL(NormalizeRepoURL(repoURL))
+	if owner == "" {
+		return nil
+	}
+	installationID := githubInstallationID(proj, svcCR)
+	if installationID == 0 && s.InstallResolver != nil {
+		if id, err := s.InstallResolver.ResolveInstallationForRepo(ctx, owner, repo); err == nil {
+			installationID = id
+		}
+	}
+	if installationID == 0 {
+		return nil
+	}
+	for _, b := range branches {
+		on, err := checker.CommitOnBranch(ctx, installationID, owner, repo, b, sha)
+		if err != nil {
+			return fmt.Errorf("verify deploy-hook ref: %w", err)
+		}
+		if on {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: commit %s is not on %s of %s/%s", ErrInvalid, sha, strings.Join(branches, " or "), owner, repo)
 }

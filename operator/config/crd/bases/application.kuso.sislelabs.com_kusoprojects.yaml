@@ -139,6 +139,13 @@ spec:
                     enabled:
                       type: boolean
                       default: true
+                    allowPrune:
+                      type: boolean
+                      description: >-
+                        Lets a push honour kuso.yaml prune:true and
+                        delete services, addons and crons missing from
+                        the file. Off by default; kuso apply is not
+                        affected.
                 alwaysOn:
                   type: boolean
                   description: |

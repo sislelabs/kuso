@@ -12,6 +12,16 @@ Source of truth: `server-go/internal/spec/spec.go` (schema and parser) and `appl
 - **Deletes are opt-in.** Services, addons and project crons that exist live but are missing from the file are deleted only when `prune: true`. Without it they are listed as "not pruned". With prune on, the CLI shows what it will delete and asks first. `--yes` skips the question, and you need it when not running on a TTY.
 - `kuso apply --dry-run` prints the plan and writes nothing. Run it first.
 
+## Applying on push
+
+A push to the project's default branch also applies the file. This stays on for every project, including ones that never set it, so existing setups keep working. A project admin turns it off with `kuso api PATCH projects/<project> --data '{"configAsCode":{"enabled":false}}'`.
+
+A push is held to tighter rules than `kuso apply`, because whoever can push to the repo may have no kuso account:
+
+- **Repos must already be bound.** A service's `repo` has to be the project's default repo, a repo one of its services already builds from, or the pushed repo. Otherwise the whole file is refused and builds still run. Add the repo from the dashboard or with `kuso apply` first.
+- **`prune` is ignored** unless a project admin sets `{"configAsCode":{"allowPrune":true}}`. The rest of the file still applies.
+- **Every apply is audited** as `project.configAsCode.push`, naming the GitHub pusher and the commit.
+
 ## Top level
 
 | Field | Type | Notes |

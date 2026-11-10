@@ -65,6 +65,13 @@ type UpdateProjectRequest struct {
 	RequestLimits *PatchRequestLimits `json:"requestLimits,omitempty"`
 	// ClearDefaultRepo removes spec.defaultRepo. Wins over DefaultRepo.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
+	// ConfigAsCode toggles kuso.yaml-on-push and whether a push may prune.
+	ConfigAsCode *UpdateConfigAsCodeSpec `json:"configAsCode,omitempty"`
+}
+
+type UpdateConfigAsCodeSpec struct {
+	Enabled    *bool `json:"enabled,omitempty"`
+	AllowPrune *bool `json:"allowPrune,omitempty"`
 }
 
 type UpdateProjectPreviewsSpec struct {

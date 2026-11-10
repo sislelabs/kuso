@@ -13,6 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"golang.org/x/net/publicsuffix"
+
 	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 )
@@ -461,23 +463,29 @@ func (s *Service) checkDomainsFree(ctx context.Context, project, service string,
 	if len(added) == 0 {
 		return nil
 	}
-	return s.checkHostsFree(ctx, envCRNameFor(project, service, "production"), added...)
+	return s.checkHostsFree(ctx, project, envCRNameFor(project, service, "production"), added...)
 }
 
-// checkHostsFree refuses hosts that skipEnv is about to newly claim when
-// they are the control-plane host or already served by any env in the
-// cluster. Projects share Traefik, and neither kube nor Traefik rejects
-// two Ingresses with the same host, so a project-scoped check let one
-// project take over another's live host. Callers pass only hosts new to
-// the env, so a host an env already holds is never re-litigated.
-func (s *Service) checkHostsFree(ctx context.Context, skipEnv string, hosts ...string) error {
+// checkHostsFree refuses hosts that project's env skipEnv is about to
+// newly claim when they are reserved for the control plane, are an
+// over-broad wildcard, or overlap a host another env in the cluster
+// serves. Projects share Traefik, and neither kube nor Traefik rejects
+// two Ingresses with overlapping hosts, so a project-scoped check let
+// one project take over another's live host. A wildcard overlaps every
+// host it covers and an exact host overlaps a wildcard covering it;
+// that is only a conflict across projects (an exact host under the
+// project's own wildcard is the normal "apex app + tenant subdomains"
+// shape, and the exact route wins via router priority). Callers pass
+// only hosts new to the env, so a host an env already holds is never
+// re-litigated.
+func (s *Service) checkHostsFree(ctx context.Context, project, skipEnv string, hosts ...string) error {
 	var check []string
 	for _, h := range hosts {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {
 			continue
 		}
-		if err := reservedHost(h); err != nil {
+		if err := reservedHost(h, project); err != nil {
 			return err
 		}
 		check = append(check, h)
@@ -490,44 +498,109 @@ func (s *Service) checkHostsFree(ctx context.Context, skipEnv string, hosts ...s
 		return fmt.Errorf("list envs for conflict check: %w", err)
 	}
 	for _, h := range check {
-		if err := hostConflict(envs, h, skipEnv); err != nil {
+		if err := hostConflict(envs, h, project, skipEnv); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// reservedHost refuses the instance's own dashboard/API host (KUSO_DOMAIN):
-// a second Ingress on it would race the kuso-server Ingress for the
-// control plane.
-func reservedHost(host string) error {
-	if strings.EqualFold(host, config.DefaultBaseDomain()) {
+// reservedHost refuses the instance's own dashboard/API host (KUSO_DOMAIN)
+// and any wildcard covering it: a second Ingress matching it races the
+// kuso-server Ingress for the control plane, and with it the session
+// cookie. Wildcards must also sit below a registrable domain (no
+// "*.com", "*.co.uk", "*.github.io"), and under the instance domain a
+// project may only wildcard its own "<project>.<KUSO_DOMAIN>" subtree,
+// since every project's default hosts live there.
+func reservedHost(host, project string) error {
+	control := strings.ToLower(config.DefaultBaseDomain())
+	if host == control {
 		return fmt.Errorf("%w: %q is the kuso control-plane host and can't be assigned to a service", ErrConflict, host)
+	}
+	suffix, ok := strings.CutPrefix(host, "*.")
+	if !ok {
+		return nil
+	}
+	if wildcardCovers(host, control) {
+		return fmt.Errorf("%w: %q covers the kuso control-plane host %q", ErrConflict, host, control)
+	}
+	if ps, _ := publicsuffix.PublicSuffix(suffix); ps == suffix || !strings.Contains(suffix, ".") {
+		return fmt.Errorf("%w: %q is too broad: a wildcard must sit under a domain you own, not a public suffix", ErrInvalid, host)
+	}
+	if suffix == control || strings.HasSuffix(suffix, "."+control) {
+		if project == "" || suffix != project+"."+control {
+			return fmt.Errorf("%w: %q is under the kuso instance domain; a project may only use *.<project>.%s", ErrConflict, host, control)
+		}
 	}
 	return nil
 }
 
-// hostConflict reports which env other than skipEnv already serves host.
-func hostConflict(envs []kube.KusoEnvironment, host, skipEnv string) error {
+// wildcardCovers reports whether pattern ("*.example.com") matches host.
+// Ingress wildcards match exactly one DNS label, which is also how
+// Traefik's kubernetes provider renders them.
+func wildcardCovers(pattern, host string) bool {
+	suffix, ok := strings.CutPrefix(pattern, "*.")
+	if !ok {
+		return false
+	}
+	label, rest, ok := strings.Cut(host, ".")
+	return ok && label != "" && label != "*" && strings.EqualFold(rest, suffix)
+}
+
+// hostConflict reports which env other than skipEnv serves a host that
+// overlaps host. Exact duplicates conflict cluster-wide; wildcard
+// coverage only across projects.
+func hostConflict(envs []kube.KusoEnvironment, host, project, skipEnv string) error {
 	for i := range envs {
-		if envs[i].Name == skipEnv {
+		e := &envs[i]
+		if e.Name == skipEnv {
 			continue
 		}
-		if strings.EqualFold(envs[i].Spec.Host, host) {
-			return fmt.Errorf("%w: %q is the primary host of env %q", ErrConflict, host, envs[i].Name)
-		}
-		for _, x := range envs[i].Spec.AdditionalHosts {
+		sameProject := project != "" && e.Spec.Project == project
+		for _, x := range servedHosts(e) {
 			if strings.EqualFold(x, host) {
-				return fmt.Errorf("%w: %q already on env %q", ErrConflict, host, envs[i].Name)
+				return fmt.Errorf("%w: %q already on env %q", ErrConflict, host, e.Name)
 			}
-		}
-		for _, w := range envs[i].Spec.WildcardDomains {
-			if strings.EqualFold(w.Host, host) {
-				return fmt.Errorf("%w: %q already on env %q", ErrConflict, host, envs[i].Name)
+			if !sameProject && (wildcardCovers(x, host) || wildcardCovers(host, x)) {
+				return fmt.Errorf("%w: %q overlaps %q on env %q in another project", ErrConflict, host, x, e.Name)
 			}
 		}
 	}
 	return nil
+}
+
+func servedHosts(e *kube.KusoEnvironment) []string {
+	out := make([]string, 0, 1+len(e.Spec.AdditionalHosts)+len(e.Spec.WildcardDomains))
+	if e.Spec.Host != "" {
+		out = append(out, e.Spec.Host)
+	}
+	out = append(out, e.Spec.AdditionalHosts...)
+	for _, w := range e.Spec.WildcardDomains {
+		out = append(out, w.Host)
+	}
+	return out
+}
+
+// WildcardHostProblems lists wildcard domains already on envs that the
+// create/update checks would now refuse (control-plane coverage, too
+// broad, or covering another project's host). They predate the check
+// and keep serving; this only surfaces them so an operator can act.
+func WildcardHostProblems(envs []kube.KusoEnvironment) []string {
+	var out []string
+	for i := range envs {
+		e := &envs[i]
+		for _, w := range e.Spec.WildcardDomains {
+			h := strings.ToLower(w.Host)
+			if err := reservedHost(h, e.Spec.Project); err != nil {
+				out = append(out, fmt.Sprintf("env %s: %v", e.Name, err))
+				continue
+			}
+			if err := hostConflict(envs, h, e.Spec.Project, e.Name); err != nil {
+				out = append(out, fmt.Sprintf("env %s: %v", e.Name, err))
+			}
+		}
+	}
+	return out
 }
 
 // validateResources checks a ResourceRequirements-shaped map

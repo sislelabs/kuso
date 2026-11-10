@@ -41,6 +41,16 @@ type UpdateProjectRequest struct {
 	// ClearDefaultRepo=true removes the project's default repository.
 	// An omitted or empty defaultRepo leaves it unchanged.
 	ClearDefaultRepo bool `json:"clearDefaultRepo,omitempty"`
+	// ConfigAsCode toggles kuso.yaml-on-push and whether a push may
+	// prune. Changing it needs project admin. Omitted = leave unchanged.
+	ConfigAsCode *ConfigAsCodePatch `json:"configAsCode,omitempty"`
+}
+
+// ConfigAsCodePatch is the `configAsCode` block of a project PATCH. Nil
+// fields are left alone.
+type ConfigAsCodePatch struct {
+	Enabled    *bool `json:"enabled,omitempty"`
+	AllowPrune *bool `json:"allowPrune,omitempty"`
 }
 
 // UptimePatch is the `uptime` block of a PATCH. Nil fields are left

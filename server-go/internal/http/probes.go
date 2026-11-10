@@ -199,6 +199,11 @@ func readyz(d Deps) http.HandlerFunc {
 			checks["crd"] = "stale: " + strings.Join(info.Mismatches, "; ")
 			ready = false
 		}
+		// Reported, never gating: draining every replica over a weak
+		// secret would take the dashboard down.
+		if p := serverstate.InsecureJWT(); p != "" {
+			checks["jwtSecret"] = "insecure: " + p
+		}
 
 		// Build-poller readiness — only meaningful on the leader (only the
 		// leader runs the poller). A dead/panicked poller goroutine stops

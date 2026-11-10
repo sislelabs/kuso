@@ -243,10 +243,16 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}-wildcard
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- if $redirectWild }}
+  {{- /* Traefik's default priority is rule length, and a wildcard's
+         HostRegexp rule is usually longer than an exact Host() rule, so
+         without this a wildcard could win over an exact host it covers
+         (another env's, or the dashboard's). Priority 1 sorts below any
+         default-priority router, so exact hosts always win. */}}
   annotations:
+    traefik.ingress.kubernetes.io/router.priority: "1"
+    {{- if $redirectWild }}
     traefik.ingress.kubernetes.io/router.middlewares: {{ $redirectRef | quote }}
-  {{- end }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}
   {{- if .Values.tlsEnabled }}

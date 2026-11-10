@@ -70,7 +70,7 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 
 	// Pre-flight: the host can't be on another env anywhere in the
 	// cluster (neither kube nor Traefik rejects duplicate Ingress hosts).
-	if err := s.checkHostsFree(ctx, envCRName, host); err != nil {
+	if err := s.checkHostsFree(ctx, project, envCRName, host); err != nil {
 		return nil, err
 	}
 
@@ -217,7 +217,7 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 			added = append(added, h)
 		}
 	}
-	if err := s.checkHostsFree(ctx, envCRName, added...); err != nil {
+	if err := s.checkHostsFree(ctx, project, envCRName, added...); err != nil {
 		return nil, err
 	}
 

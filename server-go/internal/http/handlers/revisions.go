@@ -340,6 +340,24 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	// A service snapshot can carry a repo or installation that was bound
+	// when it was taken but isn't any more; replaying it is the same
+	// write as a PATCH and takes the same repo-binding gate.
+	if rev.Kind == "service" {
+		var snap struct {
+			Patch struct {
+				Repo *struct {
+					URL            string `json:"url"`
+					InstallationID int64  `json:"installationId"`
+				} `json:"repo"`
+			} `json:"patch"`
+		}
+		if json.Unmarshal(rev.Snapshot, &snap) == nil && snap.Patch.Repo != nil {
+			if !h.requireRepoBound(ctx, w, rev.Project, []string{snap.Patch.Repo.URL}, []int64{snap.Patch.Repo.InstallationID}) {
+				return
+			}
+		}
+	}
 	var kind string
 	if env := strings.TrimSpace(r.URL.Query().Get("env")); env != "" {
 		// Scoped rollback: only that environment moves to the revision's

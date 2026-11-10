@@ -26,6 +26,26 @@ func TestEffectiveMode(t *testing.T) {
 	}
 }
 
+func TestWeakerThanInstance(t *testing.T) {
+	cases := []struct {
+		instance, policy string
+		want             bool
+	}{
+		{"enforce", "off", true},
+		{"enforce", "report", true},
+		{"enforce", "inherit", false},
+		{"enforce", "enforce", false},
+		{"report", "off", true},
+		{"report", "enforce", false},
+		{"off", "off", false},
+	}
+	for _, c := range cases {
+		if got := WeakerThanInstance(c.instance, c.policy); got != c.want {
+			t.Errorf("WeakerThanInstance(%q,%q) = %v, want %v", c.instance, c.policy, got, c.want)
+		}
+	}
+}
+
 var verdictFindings = []db.VulnFinding{
 	{VulnID: "CVE-B", PkgName: "openssl", Severity: "CRITICAL", FixedVersion: "3.1"},
 	{VulnID: "CVE-B", PkgName: "libssl", Severity: "CRITICAL", FixedVersion: "3.1"}, // same id, other pkg

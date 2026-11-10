@@ -391,6 +391,17 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 		if req.IncidentMonitoring != nil {
 			cur.Spec.IncidentMonitoring = *req.IncidentMonitoring
 		}
+		if c := req.ConfigAsCode; c != nil && (c.Enabled != nil || c.AllowPrune != nil) {
+			if cur.Spec.ConfigAsCode == nil {
+				cur.Spec.ConfigAsCode = &kube.KusoConfigAsCode{Enabled: true}
+			}
+			if c.Enabled != nil {
+				cur.Spec.ConfigAsCode.Enabled = *c.Enabled
+			}
+			if c.AllowPrune != nil {
+				cur.Spec.ConfigAsCode.AllowPrune = *c.AllowPrune
+			}
+		}
 		if req.Uptime != nil && req.Uptime.Disabled != nil {
 			if *req.Uptime.Disabled {
 				cur.Spec.Uptime = &kube.KusoProjectUptime{Disabled: true}

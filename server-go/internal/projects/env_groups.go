@@ -429,7 +429,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			return nil, err
 		}
 		if services[i].Spec.Runtime != "worker" {
-			if err := s.checkHostsFree(ctx, "", buildEnvHost(proj.Spec.BaseDomain, project, short, req.Name)); err != nil {
+			if err := s.checkHostsFree(ctx, project, "", buildEnvHost(proj.Spec.BaseDomain, project, short, req.Name)); err != nil {
 				return nil, err
 			}
 		}

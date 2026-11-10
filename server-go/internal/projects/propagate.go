@@ -534,7 +534,7 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 		if newHost == env.Spec.Host {
 			continue
 		}
-		if err := s.checkHostsFree(ctx, env.Name, newHost); err != nil {
+		if err := s.checkHostsFree(ctx, project, env.Name, newHost); err != nil {
 			errs = append(errs, fmt.Errorf("env %s keeps %s: %w", env.Name, env.Spec.Host, err))
 			continue
 		}

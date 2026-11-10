@@ -457,7 +457,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		return nil, err
 	}
 	if req.Runtime != "worker" {
-		if err := s.checkHostsFree(ctx, "", defaultHost(req.Name, project, proj.Spec.BaseDomain)); err != nil {
+		if err := s.checkHostsFree(ctx, project, "", defaultHost(req.Name, project, proj.Spec.BaseDomain)); err != nil {
 			return nil, err
 		}
 	}
@@ -1173,7 +1173,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		host = customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
 	}
 	if svc.Spec.Runtime != "worker" {
-		if err := s.checkHostsFree(ctx, "", host); err != nil {
+		if err := s.checkHostsFree(ctx, project, "", host); err != nil {
 			return nil, err
 		}
 	}

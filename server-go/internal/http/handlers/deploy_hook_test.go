@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,15 @@ type fakeHookBuilds struct {
 	token    string
 	branches []string
 	created  []builds.CreateBuildRequest
+	// offBranch lists SHAs VerifyHookRef refuses.
+	offBranch []string
+}
+
+func (f *fakeHookBuilds) VerifyHookRef(_ context.Context, _, _ string, _ []string, sha string) error {
+	if containsString(f.offBranch, sha) {
+		return fmt.Errorf("%w: commit %s is not on a deployed branch", builds.ErrInvalid, sha)
+	}
+	return nil
 }
 
 func (f *fakeHookBuilds) VerifyDeployHook(_ context.Context, _, _, presented string) bool {
@@ -136,5 +146,23 @@ func TestDeployHook_QueryBranchMustBeDeployed(t *testing.T) {
 	}
 	if len(f.created) != 0 {
 		t.Errorf("an undeployed ?branch= started %d build(s)", len(f.created))
+	}
+}
+
+// SEC-9: a leaked hook URL must not deploy a commit off the tracked
+// branches, whether named by ?ref= or by a forged push payload.
+func TestDeployHook_RefMustBeOnADeployedBranch(t *testing.T) {
+	f := &fakeHookBuilds{token: "tok", branches: []string{"main"}, offBranch: []string{hookSHA}}
+	rec := postHook(hookServer(f), "/api/hooks/deploy/shop/api/tok?ref="+hookSHA, "", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("?ref= off-branch: status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	rec = postHook(hookServer(f), "/api/hooks/deploy/shop/api/tok", "push",
+		`{"ref":"refs/heads/main","after":"`+hookSHA+`"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("push off-branch: status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if len(f.created) != 0 {
+		t.Errorf("off-branch commits started %d build(s)", len(f.created))
 	}
 }

@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/httpx"
 )
 
 // chConnInfo is the HTTP connection detail for a ClickHouse addon, read from
@@ -39,6 +40,36 @@ type chConnInfo struct {
 	user     string
 	password string
 	database string
+	// external: the host came from a user-supplied conn value
+	// (spec.external), so it may point anywhere in the cluster.
+	external bool
+}
+
+// chHTTPClient picks the client for info. External addons go through the
+// SSRF-safe client: their CLICKHOUSE_HOST is user input, and with the
+// in-cluster default client it reached prometheus, the registry or any
+// other in-cluster HTTP service. Managed addons live in-cluster by
+// definition, so they keep the plain client.
+func chHTTPClient(info chConnInfo, timeout time.Duration) *http.Client {
+	if info.external {
+		return httpx.SSRFSafeNoRedirectClient(timeout)
+	}
+	return http.DefaultClient
+}
+
+// chErrorText returns a non-200 ClickHouse response body only when it
+// looks like a ClickHouse error ("Code: N. DB::Exception: …" or the
+// X-ClickHouse-Exception-Code header). Anything else is some other HTTP
+// server's body, which must not be echoed back to the caller.
+func chErrorText(resp *http.Response, body []byte) string {
+	msg := strings.TrimSpace(string(body))
+	if resp.Header.Get("X-ClickHouse-Exception-Code") != "" || strings.HasPrefix(msg, "Code: ") {
+		if len(msg) > 4096 {
+			msg = msg[:4096]
+		}
+		return msg
+	}
+	return fmt.Sprintf("clickhouse: unexpected HTTP %d from the server (not a ClickHouse response)", resp.StatusCode)
 }
 
 // clickhouseConnInfo returns (info, true) if the addon's conn secret looks like
@@ -70,6 +101,7 @@ func (h *BackupsHandler) clickhouseConnInfo(ctx context.Context, project, addon 
 		user:     valueOr(string(sec.Data["CLICKHOUSE_USER"]), "default"),
 		password: string(sec.Data["CLICKHOUSE_PASSWORD"]),
 		database: string(sec.Data["CLICKHOUSE_DATABASE"]),
+		external: cr.Spec.External != nil,
 	}
 	return info, true, nil
 }
@@ -214,7 +246,7 @@ func (h *BackupsHandler) runClickHouseQuery(ctx context.Context, info chConnInfo
 		req.Header.Set("X-ClickHouse-Key", info.password)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := chHTTPClient(info, 0).Do(req)
 	if err != nil {
 		return SQLQueryResponse{}, http.StatusBadGateway, err
 	}
@@ -223,7 +255,7 @@ func (h *BackupsHandler) runClickHouseQuery(ctx context.Context, info chConnInfo
 	if resp.StatusCode != http.StatusOK {
 		// ClickHouse returns a plaintext error body; surface it as a 422 so the
 		// client shows the DB message (bad SQL, readonly violation, etc.).
-		return SQLQueryResponse{}, http.StatusUnprocessableEntity, fmt.Errorf("%s", strings.TrimSpace(string(body)))
+		return SQLQueryResponse{}, http.StatusUnprocessableEntity, fmt.Errorf("%s", chErrorText(resp, body))
 	}
 
 	out, err := parseClickHouseJSONCompact(body, limit)
@@ -322,14 +354,14 @@ func (h *BackupsHandler) chSelect(ctx context.Context, info chConnInfo, sqlText 
 	if info.password != "" {
 		req.Header.Set("X-ClickHouse-Key", info.password)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := chHTTPClient(info, 0).Do(req)
 	if err != nil {
 		return SQLQueryResponse{}, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode != http.StatusOK {
-		return SQLQueryResponse{}, fmt.Errorf("%s", strings.TrimSpace(string(body)))
+		return SQLQueryResponse{}, fmt.Errorf("%s", chErrorText(resp, body))
 	}
 	return parseClickHouseJSONCompact(body, 1<<30)
 }
