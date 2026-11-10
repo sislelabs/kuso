@@ -1173,6 +1173,7 @@ func main() {
 				// and applies it before builds run (config-as-code).
 				// nil when kube is unavailable — the step is skipped.
 				disp.Reconciler = specRecon
+				disp.Audit = auditSvc
 				// Wire secrets so PR-close cleanup wipes per-env
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.

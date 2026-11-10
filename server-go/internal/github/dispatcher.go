@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
@@ -63,6 +64,8 @@ type Dispatcher struct {
 	// applies it before builds run. nil on kube-less installs — the
 	// config-apply step is skipped entirely.
 	Reconciler *spec.Reconciler
+	// Audit records every push-driven kuso.yaml apply. nil = not audited.
+	Audit *audit.Service
 	// DB is the kuso server's postgres handle. Used to create
 	// PreviewReview rows on PR open (v0.17.0 Phase 2). nil = reviewer
 	// page integration is disabled; previews still spawn, just without
@@ -409,6 +412,16 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 					return d.Client.GetFile(ctx, installationID, o, r, rf, path)
 				}
 				apply := func(ctx context.Context, parsed *spec.File) error {
+					if err := checkConfigRepoBinding(parsed, configBoundRepos(&proj, svcItems, repoFullName)); err != nil {
+						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warning")
+						return err
+					}
+					note := ""
+					if parsed.Prune && !configPruneAllowed(&proj) {
+						parsed.Prune = false
+						note = "; prune ignored (set spec.configAsCode.allowPrune to let pushes delete)"
+						d.Logger.Warn("config-as-code: prune:true ignored on push; project hasn't opted in", "project", proj.Name)
+					}
 					plan, err := spec.PlanFor(ctx, d.Kube, d.nsFor(ctx, proj.Name), parsed)
 					if err != nil {
 						return err
@@ -416,7 +429,15 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 					// GitHub-driven applies never rotate generated
 					// secrets (generate-once) — a push to main must not
 					// silently roll PAYLOAD_SECRET and log everyone out.
-					_, err = d.Reconciler.Apply(ctx, plan, parsed, spec.ApplyOpts{})
+					res, err := d.Reconciler.Apply(ctx, plan, parsed, spec.ApplyOpts{})
+					msg := "applied " + plan.Summary() + note
+					switch {
+					case err != nil:
+						msg = "apply failed: " + err.Error()
+					case res != nil && len(res.Errors) > 0:
+						msg += fmt.Sprintf("; %d step errors", len(res.Errors))
+					}
+					d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, msg, "info")
 					return err
 				}
 				if err := applyConfigFromRepo(ctx, fetch, apply, owner, repoName, headSHA, proj.Name); err != nil {
