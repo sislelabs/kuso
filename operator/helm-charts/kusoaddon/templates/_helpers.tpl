@@ -342,7 +342,13 @@ far beyond any dump seen here; it caps the whole Job, retries included.
 resources: requests only. A memory limit could OOM-kill a dump that works
 today (mongodump / large aws multipart uploads), so none is set.
 scratch: the dump is staged under /tmp; an emptyDir keeps it out of the
-container's writable layer and is freed with the pod.
+container's writable layer and is freed with the pod. It sits on the
+node's root disk, so it is capped (BLOB-7): a runaway dump gets its pod
+evicted (a visible backup failure) instead of putting the node, and every
+pod on it, under DiskPressure. The cap is backup.scratchSizeLimit, else
+3x the addon's storage size (dump + its encrypted copy, or an RDB plus
+its gzip, never reach that). External addons have no local size to go
+by, so they stay uncapped unless backup.scratchSizeLimit is set.
 */ -}}
 {{- define "kusoaddon.backupStartingDeadline" -}}
 startingDeadlineSeconds: 3600
@@ -353,9 +359,97 @@ activeDeadlineSeconds: 21600
 {{- end -}}
 
 {{- define "kusoaddon.backupScratchVolume" -}}
+{{- $limit := "" -}}
+{{- $override := toString ((.Values.backup).scratchSizeLimit | default "") -}}
+{{- if regexMatch "^[0-9]+(\\.[0-9]+)?(E|P|T|G|M|K|Ei|Pi|Ti|Gi|Mi|Ki)?$" $override -}}
+{{- $limit = $override -}}
+{{- else if not .Values.external -}}
+{{- $q := include "kusoaddon.storageSize" . -}}
+{{- $n := regexFind "^[0-9]+(\\.[0-9]+)?" $q | float64 -}}
+{{- $limit = printf "%d%s" (mulf $n 3 | ceil | int) (regexReplaceAll "^[0-9]+(\\.[0-9]+)?" $q "") -}}
+{{- end -}}
 volumes:
   - name: scratch
+    {{- if $limit }}
+    emptyDir:
+      sizeLimit: {{ $limit }}
+    {{- else }}
     emptyDir: {}
+    {{- end }}
+{{- end -}}
+
+{{- /*
+kusoaddon.backupSealFn — shell function every backup script calls on a
+staged artifact before upload. seal FILE sets SHA (digest of the
+plaintext: the restore verifies what it applies), BYTES (stored size)
+and ENC_JSON (the manifest's encryption entry, "" when unencrypted).
+
+Encrypts in place (BLOB-8) when the addon's key Secret is mounted AND
+the image has openssl; an older backup image without openssl uploads
+plaintext with a warning rather than failing the backup. The format is
+read by server-go/internal/backup/crypt.go and the restore Job's s3_fetch.
+Explicit `|| return 1`: callers use `if ! seal`, which disables set -e
+inside the function.
+*/ -}}
+{{- define "kusoaddon.backupSealFn" -}}
+seal() {
+  SHA=$(sha256sum "$1" | awk '{print $1}') || return 1
+  ENC_JSON=""
+  if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -salt -pass env:BACKUP_ENCRYPTION_KEY -in "$1" -out "$1.enc" || return 1
+      mv "$1.enc" "$1" || return 1
+      KEYID=$(printf 'kuso-backup-key:%s' "${BACKUP_ENCRYPTION_KEY}" | sha256sum | cut -c1-16)
+      ENC_JSON=$(printf ',"encryption":{"alg":"openssl-aes-256-cbc-pbkdf2-sha256","keyId":"%s"}' "${KEYID}")
+    else
+      echo "WARNING: backup image has no openssl; uploading $1 unencrypted" >&2
+    fi
+  fi
+  BYTES=$(wc -c < "$1" | tr -d ' ') || return 1
+}
+{{- end -}}
+
+{{- /*
+kusoaddon.backupKeySecretName — per-addon Secret with the backup
+encryption key. Mirrored by backup.KeySecretName in server-go.
+*/ -}}
+{{- define "kusoaddon.s3RootSecretName" -}}
+{{- printf "%s-root" (include "kusoaddon.fullname" .) -}}
+{{- end -}}
+
+{{- define "kusoaddon.s3ReadOnlySecretName" -}}
+{{- printf "%s-readonly" (include "kusoaddon.fullname" .) -}}
+{{- end -}}
+
+{{- define "kusoaddon.backupKeySecretName" -}}
+{{- printf "%s-backup-key" .Release.Name -}}
+{{- end -}}
+
+{{- /*
+kusoaddon.backupExtraEnv — env shared by every backup CronJob:
+  BACKUP_ENCRYPTION_KEY  optional: no Secret → plaintext, as before.
+  OWNER_SINCE/OWNER_UID  this addon CR's creation stamp (minus 2 minutes of
+                         clock skew) and UID, read with lookup. The prune
+                         uses them to leave a deleted same-name
+                         predecessor's dumps alone (BLOB-4). Empty when
+                         lookup returns nothing (helm template), which
+                         keeps the old prune behaviour.
+*/ -}}
+{{- define "kusoaddon.backupExtraEnv" -}}
+{{- $cr := lookup "application.kuso.sislelabs.com/v1alpha1" "KusoAddon" .Release.Namespace .Release.Name -}}
+{{- $since := "" -}}
+{{- $uid := "" -}}
+{{- if and $cr $cr.metadata -}}
+{{- with $cr.metadata.creationTimestamp -}}
+{{- $since = dateInZone "20060102150405" (toDate "2006-01-02T15:04:05Z07:00" . | dateModify "-2m") "UTC" -}}
+{{- end -}}
+{{- $uid = $cr.metadata.uid | default "" -}}
+{{- end -}}
+- { name: OWNER_SINCE, value: {{ $since | quote }} }
+- { name: OWNER_UID,   value: {{ $uid | quote }} }
+{{- if ne .Values.kind "s3" }}
+- { name: BACKUP_ENCRYPTION_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupKeySecretName" . | quote }}, key: key, optional: true } } }
+{{- end }}
 {{- end -}}
 
 {{- define "kusoaddon.backupContainerExtras" -}}

@@ -33,6 +33,55 @@
 {{- end -}}
 {{- $accessKey := $existingAK | default (randAlphaNum 20) -}}
 {{- $secretKey := .Values.password | default $existingSK | default (randAlphaNum 40) -}}
+{{- /*
+  Credentials (BLOB-2). The conn Secret every subscribed service and
+  preview mounts used to carry the MinIO ROOT key. Now:
+    <name>-root      MinIO root. Only MinIO itself, the init Job and the
+                     backup CronJob read it.
+    <name>-conn      an app user whose policy covers S3_BUCKET only.
+    <name>-readonly  a read-only user on S3_BUCKET, same key names as
+                     -conn, for consumers that must not write (previews).
+  All three are minted once and read back with lookup, never rotated by a
+  reconcile, and kept (helm keep) like the data PVC.
+
+  Upgrade: an addon whose conn Secret predates this has root credentials
+  in it. Its root Secret is seeded from those, so "legacy" (conn key ==
+  root key) holds, MinIO keeps reading root from the conn Secret (pod
+  template unchanged, no restart) and nothing an app uses changes. It
+  moves to a scoped app user only on an explicit
+  `kuso addon s3 rotate-credentials`.
+*/ -}}
+{{- $rootName := include "kusoaddon.s3RootSecretName" . -}}
+{{- $existingRoot := lookup "v1" "Secret" .Release.Namespace $rootName -}}
+{{- $rootUser := "" -}}
+{{- $rootPass := "" -}}
+{{- if and $existingRoot $existingRoot.data (index $existingRoot.data "MINIO_ROOT_USER") -}}
+  {{- $rootUser = index $existingRoot.data "MINIO_ROOT_USER" | b64dec -}}
+  {{- $rootPass = index $existingRoot.data "MINIO_ROOT_PASSWORD" | default "" | b64dec -}}
+{{- else if $existingAK -}}
+  {{- $rootUser = $existingAK -}}
+{{- else -}}
+  {{- $rootUser = randAlphaNum 20 -}}
+{{- end -}}
+{{- $legacy := and (ne $existingAK "") (eq $accessKey $rootUser) -}}
+{{- if $legacy -}}
+  {{- $rootPass = $secretKey -}}
+{{- else if not $rootPass -}}
+  {{- $rootPass = randAlphaNum 40 -}}
+{{- end -}}
+{{- $rootSource := ternary $secretName $rootName $legacy -}}
+{{- $rootUserKey := ternary "S3_ACCESS_KEY_ID" "MINIO_ROOT_USER" $legacy -}}
+{{- $rootPassKey := ternary "S3_SECRET_ACCESS_KEY" "MINIO_ROOT_PASSWORD" $legacy -}}
+{{- $roName := include "kusoaddon.s3ReadOnlySecretName" . -}}
+{{- $existingRO := lookup "v1" "Secret" .Release.Namespace $roName -}}
+{{- $roAK := "" -}}
+{{- $roSK := "" -}}
+{{- if and $existingRO $existingRO.data (index $existingRO.data "S3_ACCESS_KEY_ID") -}}
+  {{- $roAK = index $existingRO.data "S3_ACCESS_KEY_ID" | b64dec -}}
+  {{- $roSK = index $existingRO.data "S3_SECRET_ACCESS_KEY" | default "" | b64dec -}}
+{{- end -}}
+{{- $roAK = $roAK | default (printf "ro%s" (randAlphaNum 18)) -}}
+{{- $roSK = $roSK | default (randAlphaNum 40) -}}
 
 apiVersion: apps/v1
 kind: StatefulSet
@@ -67,13 +116,13 @@ spec:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ $secretName }}
-                  key: S3_ACCESS_KEY_ID
+                  name: {{ $rootSource }}
+                  key: {{ $rootUserKey }}
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $secretName }}
-                  key: S3_SECRET_ACCESS_KEY
+                  name: {{ $rootSource }}
+                  key: {{ $rootPassKey }}
           volumeMounts:
             - name: data
               mountPath: /data
@@ -157,10 +206,47 @@ data:
   AWS_DEFAULT_REGION: {{ "us-east-1" | b64enc | quote }}
   AWS_REGION: {{ "us-east-1" | b64enc | quote }}
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $rootName }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: s3-root
+type: Opaque
+data:
+  MINIO_ROOT_USER: {{ $rootUser | b64enc | quote }}
+  MINIO_ROOT_PASSWORD: {{ $rootPass | b64enc | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $roName }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: s3-readonly
+type: Opaque
+data:
+  S3_ENDPOINT: {{ printf "http://%s:9000" $name | b64enc | quote }}
+  S3_REGION: {{ "us-east-1" | b64enc | quote }}
+  S3_BUCKET: {{ $bucket | b64enc | quote }}
+  S3_ACCESS_KEY_ID: {{ $roAK | b64enc | quote }}
+  S3_SECRET_ACCESS_KEY: {{ $roSK | b64enc | quote }}
+  AWS_ACCESS_KEY_ID: {{ $roAK | b64enc | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ $roSK | b64enc | quote }}
+  AWS_DEFAULT_REGION: {{ "us-east-1" | b64enc | quote }}
+  AWS_REGION: {{ "us-east-1" | b64enc | quote }}
+---
 {{/*
-  One-shot init Job: creates the bucket on first boot. Idempotent
-  via `mb --ignore-existing`. The Job stays around (TTL 0) as a
-  marker; subsequent reconciles see it complete and skip recreating.
+  Init Job (post-install/upgrade hook): creates the bucket, the bucket-
+  scoped read-write and read-only policies, and the app + read-only
+  users. Every step is idempotent (mb --ignore-existing, policy create
+  overwrites, user add re-sets the same secret), and it never writes a
+  Secret, so a re-run on an existing addon changes nothing.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -206,24 +292,73 @@ spec:
               # MinIO process to accept connections. Bounded retry so
               # the Job fails loudly if MinIO never starts.
               for i in 1 2 3 4 5 6 7 8 9 10; do
-                if mc alias set local "http://{{ $name }}:9000" "${ACCESS_KEY}" "${SECRET_KEY}" 2>&1; then
+                if mc alias set local "http://{{ $name }}:9000" "${ROOT_USER}" "${ROOT_PASSWORD}" 2>&1; then
                   break
                 fi
                 echo "==> waiting for MinIO ($i/10)..."
                 sleep 3
               done
-              mc mb --ignore-existing local/{{ $bucket }}
-              echo "==> bucket {{ $bucket }} ready"
+              # BUCKET comes from env, never interpolated into the script
+              # (K8S-10).
+              mc mb --ignore-existing "local/${BUCKET}"
+              echo "==> bucket ${BUCKET} ready"
+
+              RW_POLICY="kuso-rw-${BUCKET}"
+              RO_POLICY="kuso-ro-${BUCKET}"
+              printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket","s3:ListBucketMultipartUploads","s3:ListBucketVersions"],"Resource":["arn:aws:s3:::%s"]},{"Effect":"Allow","Action":["s3:GetObject","s3:GetObjectVersion","s3:GetObjectTagging","s3:PutObject","s3:PutObjectTagging","s3:DeleteObject","s3:DeleteObjectVersion","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::%s/*"]}]}\n' "${BUCKET}" "${BUCKET}" > /tmp/rw.json
+              printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::%s"]},{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/*"]}]}\n' "${BUCKET}" "${BUCKET}" > /tmp/ro.json
+              # ensure_user AK SK POLICY: create/refresh the user and make
+              # sure the policy is attached. attach errors when it already
+              # is, so success is judged by user info afterwards.
+              ensure_user() {
+                mc admin policy create local "$3" "/tmp/$4.json" >/dev/null || return 1
+                mc admin user add local "$1" "$2" >/dev/null || return 1
+                mc admin policy attach local "$3" --user "$1" >/dev/null 2>&1 || true
+                mc admin user info local "$1" | grep -qF "$3" || return 1
+              }
+              if [ "${APP_KEY}" = "${ROOT_USER}" ]; then
+                # Pre-scoping addon: apps still hold root. Nothing they use
+                # changes until an explicit rotate-credentials. The read-only
+                # user is best-effort here so an older MinIO without the
+                # policy-attach API can't fail the upgrade hook.
+                echo "==> conn Secret still carries root credentials (rotate with: kuso addon s3 rotate-credentials)"
+                ensure_user "${RO_KEY}" "${RO_SECRET}" "${RO_POLICY}" ro || echo "WARNING: could not set up the read-only user" >&2
+              else
+                ensure_user "${APP_KEY}" "${APP_SECRET}" "${RW_POLICY}" rw
+                ensure_user "${RO_KEY}" "${RO_SECRET}" "${RO_POLICY}" ro
+                echo "==> bucket-scoped app and read-only users ready"
+              fi
           env:
-            - name: ACCESS_KEY
+            - { name: BUCKET, value: {{ $bucket | quote }} }
+            - name: ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $rootSource }}
+                  key: {{ $rootUserKey }}
+            - name: ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $rootSource }}
+                  key: {{ $rootPassKey }}
+            - name: APP_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: S3_ACCESS_KEY_ID
-            - name: SECRET_KEY
+            - name: APP_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
+                  key: S3_SECRET_ACCESS_KEY
+            - name: RO_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $roName }}
+                  key: S3_ACCESS_KEY_ID
+            - name: RO_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $roName }}
                   key: S3_SECRET_ACCESS_KEY
             # mc writes its config under $HOME/.mc. Running as a
             # non-root UID (per podSecurityContext) means $HOME

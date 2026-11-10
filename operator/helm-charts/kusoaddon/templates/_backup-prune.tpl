@@ -36,6 +36,14 @@ if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
       {{- else }}
       NAMES=$(printf '%s\n' "${LISTING}" | awk '$1 != "PRE" {print $4}')
       {{- end }}
+      # A same-name predecessor's dumps share this prefix. Unless the owner
+      # marker claims them for this addon, only stamps from this addon's
+      # lifetime are prune candidates (and count toward KEEP_MIN).
+      if [ -n "${OWNER_SINCE:-}" ] && ! aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}.kuso-owner.json" - 2>/dev/null \
+          | grep -qF "\"addonUID\":\"${OWNER_UID}\""; then
+        NAMES=$(printf '%s\n' "${NAMES}" | awk -v since="${OWNER_SINCE}" \
+          'match($0, /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z/) { s = substr($0, 1, 8) substr($0, 10, 6); if (s >= since) print }')
+      fi
       # Oldest stamp among the newest KEEP_MIN; nothing at or after it goes.
       KEEP_FROM=$(printf '%s\n' "${NAMES}" \
         | sed -n 's/^\([0-9]\{8\}\)T\([0-9]\{6\}\)Z.*/\1\2/p' \

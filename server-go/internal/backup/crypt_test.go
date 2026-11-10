@@ -95,6 +95,14 @@ func TestMaybeDecryptRefusesWithoutOrWithWrongKey(t *testing.T) {
 	}
 }
 
+// The backup CronJob computes the keyId with
+// printf 'kuso-backup-key:%s' "$KEY" | sha256sum | cut -c1-16.
+func TestKeyIDMatchesChartShell(t *testing.T) {
+	if got := KeyID("k3y"); got != "39b4f4e1f06d2c13" {
+		t.Errorf("KeyID = %s", got)
+	}
+}
+
 // The CronJob encrypts with the openssl CLI; the server must read that
 // and openssl must read ours. Skipped when no OpenSSL 3 binary is present.
 func TestOpenSSLCompatibility(t *testing.T) {
