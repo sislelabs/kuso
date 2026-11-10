@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/db"
 	"kuso/server/internal/drains"
+	"kuso/server/internal/envisolation"
 	"kuso/server/internal/github"
 	"kuso/server/internal/gitremote"
 	httphandlers "kuso/server/internal/http/handlers"
@@ -46,6 +47,7 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/reconcilehealth"
+	"kuso/server/internal/registryauth"
 	"kuso/server/internal/registrycreds"
 	"kuso/server/internal/remediate"
 	"kuso/server/internal/runs"
@@ -104,8 +106,11 @@ type Deps struct {
 	// Kube + Namespace also surface to the apply handler so it can
 	// run the diff. Already implicit in the projects.Service so
 	// duplicating them here is a small price for a clean wire.
-	Kube      *kube.Client
-	Namespace string
+	Kube *kube.Client
+	// RegistryAuth is the kuso-registry credential store; nil when kube
+	// is unavailable.
+	RegistryAuth *registryauth.Store
+	Namespace    string
 	// UsageHistory backs the per-service CPU/memory history endpoint.
 	// Optional: nil → the route isn't mounted.
 	UsageHistory *podusage.Store
@@ -352,7 +357,7 @@ func NewRouter(d Deps) http.Handler {
 	// live on the bearer-protected router.
 	var bootstrapH *httphandlers.NodeBootstrapHandler
 	if d.DB != nil {
-		bootstrapH = &httphandlers.NodeBootstrapHandler{DB: d.DB, Audit: d.Audit, Kube: d.Kube, Namespace: d.Namespace, Logger: d.Logger}
+		bootstrapH = &httphandlers.NodeBootstrapHandler{DB: d.DB, Audit: d.Audit, Kube: d.Kube, Namespace: d.Namespace, Logger: d.Logger, RegistryAuth: d.RegistryAuth}
 		bootstrapH.MountPublic(r)
 	}
 
@@ -569,6 +574,12 @@ func mountAuthenticatedRoutes(
 			invitesH.Mount(r)
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
+				if d.RegistryAuth != nil {
+					(&httphandlers.RegistryAuthHandler{Store: d.RegistryAuth, Logger: d.Logger}).Mount(r)
+				}
+				(&httphandlers.EnvIsolationHandler{DB: d.DB, Logger: d.Logger, Svc: &envisolation.Service{
+					Kube: d.Kube, HomeNS: d.Namespace, NS: kube.NewProjectNamespaceResolver(d.Kube, d.Namespace),
+				}}).Mount(r)
 			}
 			if d.Kube != nil && d.Projects != nil && d.Addons != nil {
 				sweeper := &vulnscan.Sweeper{DB: d.DB, Cluster: vulnscan.KubeCluster{Kube: d.Kube}, Logger: d.Logger}

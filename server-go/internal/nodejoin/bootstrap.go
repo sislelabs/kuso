@@ -186,6 +186,13 @@ type RegisterResponse struct {
 	// containerd resolves RegistryHost from the host netns (NOT cluster
 	// DNS), so the bootstrap pins host→IP in /etc/hosts. Empty = skip.
 	RegistryIP string `json:"registryIP,omitempty"`
+	// Registry credential for the kuso-registry, sent once the server
+	// has minted one (registryauth). Hex-only password so the script's
+	// sed-based JSON parsing needs no unescaping. The marker identifies
+	// the credential in registries.yaml for the readiness probe.
+	RegistryUsername   string `json:"registryUsername,omitempty"`
+	RegistryPassword   string `json:"registryPassword,omitempty"`
+	RegistryAuthMarker string `json:"registryAuthMarker,omitempty"`
 }
 
 // MergeFactLabels takes the operator-supplied label set and the
@@ -386,6 +393,9 @@ extract() {
 NODE_NAME_VAL=$(extract nodeName)
 REGISTRY_HOST=$(extract registryHost)
 REGISTRY_IP=$(extract registryIP)
+REGISTRY_USER=$(extract registryUsername)
+REGISTRY_PASS=$(extract registryPassword)
+REGISTRY_MARKER=$(extract registryAuthMarker)
 INSTALL_CMD=$(printf '%s' "$RESPONSE" | sed -n 's/.*"installCommand"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*[},].*/\1/p' | head -n1)
 # JSON un-escape \" and \\ in the install command so it's a runnable shell line.
 INSTALL_CMD=$(printf '%s' "$INSTALL_CMD" | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')
@@ -427,6 +437,19 @@ configs:
     tls:
       insecure_skip_verify: true
 REG_EOF
+  # kuso-registry credential (staged auth rollout): written whenever the
+  # server has minted one, so this node can still pull once the registry
+  # requires auth. The marker line is what the server's per-node probe
+  # greps for; it identifies the credential without revealing it.
+  if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASS" ] && [ -n "$REGISTRY_MARKER" ]; then
+    cat >> /etc/rancher/k3s/registries.yaml <<REG_EOF
+    auth:
+      username: "$REGISTRY_USER"
+      password: "$REGISTRY_PASS"
+# kuso-registry-auth: $REGISTRY_MARKER
+REG_EOF
+  fi
+  chmod 600 /etc/rancher/k3s/registries.yaml
 else
   log "no registry advertised by control plane — skipping registry wiring"
 fi

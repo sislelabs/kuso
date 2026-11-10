@@ -82,6 +82,17 @@ networkPolicy:
   #     - longhorn-system    # CSI probes
   #     - grafana            # external monitoring
   extraIngressNamespaces: []
+  # Env isolation (ISO-3). When true, pods labelled
+  # kuso.sislelabs.com/env=<non-production> and build pods can no longer
+  # reach production env pods, and addon pods admit only subscribers,
+  # production pods and unlabelled pods (see kusoaddon networkpolicy.yaml;
+  # redpanda/mailpit admit subscribers only). Off by default; flip it
+  # with PUT /api/projects/<p>/env-isolation, which refuses while any env
+  # pod still lacks the env label.
+  envIsolation: false
+  # Legacy egress from every project pod to the shared instance Postgres.
+  # false leaves only the per-instance-addon, subscriber-scoped rule.
+  instanceDBEgress: true
   # Where the cluster's Traefik runs, for the allow-ingress-hairpin rule
   # (public-egress pods calling a domain this cluster serves). ports are
   # the Traefik POD ports (the web/websecure entrypoints), not 80/443:

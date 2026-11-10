@@ -240,7 +240,7 @@ func (r RegistryDigests) ResolveDigest(ctx context.Context, imageRef string) (st
 	}
 	c := r.HTTP
 	if c == nil {
-		c = &http.Client{Timeout: 10 * time.Second}
+		c = builds.RegistryHTTPClient(10 * time.Second)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "http://"+builds.RegistryHost+"/v2/"+repo+"/manifests/"+ref, nil)
 	if err != nil {

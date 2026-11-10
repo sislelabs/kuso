@@ -198,3 +198,34 @@ write; this covers CRs written around it. Returns JSON (fromJsonArray).
 {{- end -}}
 {{- join "," $refs -}}
 {{- end -}}
+
+{{- /* Label key a pod carries when it mounts an addon's conn Secret, keyed
+       by a hash because a conn Secret name can exceed the 63-char label
+       name limit. MUST stay byte-identical to kusoaddon.subscriberKey: the
+       addon's NetworkPolicy admits pods carrying this key. */ -}}
+{{- define "kusoenvironment.subscriberKey" -}}
+{{- printf "conn.kuso.sislelabs.com/%s" (sha256sum . | trunc 20) -}}
+{{- end -}}
+
+{{- /* Env identity + addon-subscription labels for the pod template.
+       Rendered only once kuso-server has stamped spec.envScope, so an
+       upgrade alone changes no pod template (no fleet-wide restart);
+       the labels land with the env's next write. */ -}}
+{{- define "kusoenvironment.isolationLabels" -}}
+{{- if .Values.envScope -}}
+kuso.sislelabs.com/env: {{ .Values.envScope | quote }}
+{{- $conns := dict }}
+{{- range (.Values.envFromSecrets | default list) }}
+{{- if hasSuffix "-conn" (toString .) }}{{ $_ := set $conns (toString .) true }}{{ end }}
+{{- end }}
+{{- range (include "kusoenvironment.envVars" . | fromJsonArray) }}
+{{- if and (kindIs "map" .) (kindIs "map" .valueFrom) (kindIs "map" .valueFrom.secretKeyRef) }}
+{{- $n := toString .valueFrom.secretKeyRef.name }}
+{{- if hasSuffix "-conn" $n }}{{ $_ := set $conns $n true }}{{ end }}
+{{- end }}
+{{- end }}
+{{- range $n := keys $conns | sortAlpha }}
+{{ include "kusoenvironment.subscriberKey" $n }}: "true"
+{{- end }}
+{{- end }}
+{{- end -}}

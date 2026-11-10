@@ -77,7 +77,9 @@ func reuseKey(b *kube.KusoBuild) (string, bool) {
 		!strings.HasPrefix(b.Spec.Image.Repository, RegistryHost+"/") {
 		return "", false
 	}
-	if b.Spec.Auth != nil && b.Spec.Auth.SecretName != "" {
+	// The kuso-registry push credential (Registry == RegistryHost) keeps
+	// reuse on: the copy goes through the same, now authenticated, client.
+	if b.Spec.Auth != nil && b.Spec.Auth.SecretName != "" && b.Spec.Auth.Registry != RegistryHost {
 		return "", false
 	}
 	repo := normalizePromoRepoURL(b.Spec.Repo.URL)

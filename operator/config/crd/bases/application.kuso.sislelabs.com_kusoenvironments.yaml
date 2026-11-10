@@ -66,6 +66,17 @@ spec:
                   #             list them separately.
                   enum: [production, preview, custom]
                   default: production
+                envScope:
+                  type: string
+                  maxLength: 63
+                  description: >-
+                    Mirror of the CR's kuso.sislelabs.com/env label (production,
+                    preview-pr-N, an env-group or named env), stamped by
+                    kuso-server on every write. The chart reads only spec, so
+                    this is how pods get the env label that the project's
+                    env-isolation NetworkPolicies key on. Empty on CRs not yet
+                    rewritten since the upgrade: their pods stay unlabelled and
+                    keep project-wide reachability.
                 branch:
                   type: string
                   default: main

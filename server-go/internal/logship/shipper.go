@@ -467,7 +467,12 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	service := pod.Labels["kuso.sislelabs.com/service"]
 	env := pod.Labels["kuso.sislelabs.com/env"]
 	envName := env
-	if envName == "" {
+	// Env pods stamped with spec.envScope carry the env-group label too;
+	// envName must stay the env CR name (log drains tag lines with it).
+	if pod.Labels["app.kubernetes.io/name"] == "kusoenvironment" && pod.Labels["app.kubernetes.io/instance"] != "" {
+		envName = pod.Labels["app.kubernetes.io/instance"]
+	}
+	if env == "" {
 		envName = pod.Labels["app.kubernetes.io/instance"]
 		// Env pods don't carry the env-group label (adding it to the
 		// pod template would roll every tenant pod), so read it off

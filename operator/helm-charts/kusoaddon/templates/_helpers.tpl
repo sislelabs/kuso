@@ -37,7 +37,18 @@ matching `nobody` user).
 {{- end -}}
 {{- end -}}
 
+{{- /* Pod-level hardening. The SA-token drop is gated on spec.podHardening,
+       which kuso-server sets only when it CREATES an addon: flipping it
+       on an existing addon changes the pod template and restarts the DB,
+       so existing addons render byte-identical until someone opts them
+       in (kubectl patch spec.podHardening=true). It lives in this helper
+       so every template that includes it (s3.yaml too) picks it up. No
+       addon image talks to the kube API. runAsUser/fsGroup are unchanged
+       from what live StatefulSets already run with. */ -}}
 {{- define "kusoaddon.podSecurityContext" -}}
+{{- if .Values.podHardening -}}
+automountServiceAccountToken: false
+{{ end -}}
 securityContext:
   runAsNonRoot: true
   runAsUser: {{ include "kusoaddon.uidForKind" . }}
@@ -52,6 +63,19 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]
+{{- end -}}
+
+{{- /* Alias of containerSecurityContext under the name other templates
+       are told to use. */ -}}
+{{- define "kusoaddon.securityContext" -}}
+{{- include "kusoaddon.containerSecurityContext" . -}}
+{{- end -}}
+
+{{- /* MUST stay byte-identical to kusoenvironment.subscriberKey: env pods
+       that mount <conn> carry this label key, and the addon's
+       subscribers NetworkPolicy admits them by it. */ -}}
+{{- define "kusoaddon.subscriberKey" -}}
+{{- printf "conn.kuso.sislelabs.com/%s" (sha256sum . | trunc 20) -}}
 {{- end -}}
 
 {{/*

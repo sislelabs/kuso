@@ -36,6 +36,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/nodejoin"
+	"kuso/server/internal/registryauth"
 )
 
 // splitHostPort is net.SplitHostPort by another name — keeps the
@@ -56,6 +57,9 @@ type NodeBootstrapHandler struct {
 	Kube      *kube.Client
 	Namespace string
 	Logger    *slog.Logger
+	// RegistryAuth supplies the kuso-registry credential the joining
+	// node writes into registries.yaml. nil or unminted = omitted.
+	RegistryAuth *registryauth.Store
 }
 
 // MountAdmin registers the admin-only token-management endpoints. Wire
@@ -418,14 +422,21 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 	// up neither). Failures here don't block the join — older flows
 	// joined without it; the operator can fix a node by hand if needed.
 	registryHost, registryIP := h.registryEndpoint(r.Context())
-
-	writeJSON(w, http.StatusOK, nodejoin.RegisterResponse{
+	resp := nodejoin.RegisterResponse{
 		NodeName:       tok.NodeName,
 		Labels:         mergedLabels,
 		InstallCommand: installCmd,
 		RegistryHost:   registryHost,
 		RegistryIP:     registryIP,
-	})
+	}
+	if registryHost != "" {
+		if c, err := h.RegistryAuth.Get(r.Context()); err != nil {
+			h.Logger.Warn("node register: registry credential unreadable; node joins without it", "err", err)
+		} else if c != nil {
+			resp.RegistryUsername, resp.RegistryPassword, resp.RegistryAuthMarker = c.Username, c.Password, c.Marker()
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // registryEndpoint returns the in-cluster registry host:port and its

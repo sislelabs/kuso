@@ -45,6 +45,7 @@ import (
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/metrics"
+	"kuso/server/internal/registryauth"
 	"kuso/server/internal/releaserun"
 	"kuso/server/internal/serverstate"
 )
@@ -234,6 +235,9 @@ type Service struct {
 	// Images lets Rollback check the target image still exists in the
 	// in-cluster registry. Optional; nil skips the check.
 	Images ImageDeleter
+	// RegistryAuth, when it holds a minted kuso-registry credential,
+	// gives in-cluster builds a push Secret. nil = anonymous pushes.
+	RegistryAuth *registryauth.Store
 	// Tokens mints fresh github installation tokens for the build's
 	// clone init container. Optional — nil means we still create the
 	// expected secret (empty value) so pods start, but private repos
@@ -1315,6 +1319,16 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		spec.Auth = &kube.KusoBuildAuth{
 			SecretName: settings.RegistryAuthSecret,
 			Registry:   settings.RegistryHost,
+		}
+	} else if s.RegistryAuth != nil {
+		// Mirror the kuso-registry credential into the build's namespace
+		// so the push still works once the registry requires auth. A
+		// failure here leaves the build anonymous, which is still correct
+		// while auth is off.
+		if name, aerr := s.RegistryAuth.EnsurePushSecret(ctx, ns); aerr != nil {
+			slog.Default().Warn("build: registry push secret unavailable; pushing anonymously", "ns", ns, "err", aerr)
+		} else if name != "" {
+			spec.Auth = &kube.KusoBuildAuth{SecretName: name, Registry: RegistryHost}
 		}
 	}
 	if settings.MemoryLimit != "" || settings.MemoryRequest != "" ||

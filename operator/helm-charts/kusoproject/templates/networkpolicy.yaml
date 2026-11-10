@@ -91,6 +91,7 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
+  {{- if not (.Values.networkPolicy).envIsolation }}
   podSelector:
     {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Ingress, Egress]
@@ -102,7 +103,107 @@ spec:
     - to:
         - podSelector:
             {{- toYaml $projectSelector | nindent 12 }}
+  {{- else }}
+  {{- /* envIsolation (ISO-3): this rule keeps project-wide ingress only for
+         pods that are neither labelled production nor addon pods. Pods
+         without the env label (anything not yet rolled since the upgrade,
+         Jobs) match NotIn, so they keep exactly the old reachability. */}}
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+    matchExpressions:
+      - { key: kuso.sislelabs.com/env, operator: NotIn, values: ["production"] }
+      - { key: kuso.sislelabs.com/addon, operator: DoesNotExist }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            {{- toYaml $projectSelector | nindent 12 }}
+  {{- end }}
 ---
+{{- if (.Values.networkPolicy).envIsolation }}
+# Egress half of allow-intra-project, unchanged: every project pod may dial
+# every sibling. Isolation is enforced on the receiving side, where the pod
+# identity (env label, subscription label) is known.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{ .Release.Name }}-allow-intra-project-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            {{- toYaml $projectSelector | nindent 12 }}
+---
+# Production env pods accept project traffic only from other production
+# pods and from pods that carry no env label at all (legacy pods, release /
+# seed / restore Jobs, crons, runs). Pods labelled as a preview, env group
+# or named env, and build pods (which run PR code for buildpacks builds),
+# are refused. Addon pods are gated by their own <addon>-subscribers policy
+# rendered by the kusoaddon chart.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{ .Release.Name }}-allow-intra-env-production
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+      kuso.sislelabs.com/env: production
+    matchExpressions:
+      - { key: kuso.sislelabs.com/addon, operator: DoesNotExist }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+              kuso.sislelabs.com/env: production
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+            matchExpressions:
+              - { key: kuso.sislelabs.com/env, operator: DoesNotExist }
+              - { key: app.kubernetes.io/component, operator: NotIn, values: ["kusobuild"] }
+---
+# Addon pods with envIsolation on: until the addon's own subscribers policy
+# exists (it is rendered by the addon release, which may reconcile after
+# this one), keep the legacy reachability for unlabelled pods so nothing
+# that worked before loses its database. Labelled env pods and build pods
+# get in only through the addon's subscribers policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+  name: {{ .Release.Name }}-allow-addon-legacy
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+    matchExpressions:
+      - { key: kuso.sislelabs.com/addon, operator: Exists }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ .Release.Name | quote }}
+            matchExpressions:
+              - { key: kuso.sislelabs.com/env, operator: DoesNotExist }
+              - { key: app.kubernetes.io/component, operator: NotIn, values: ["kusobuild"] }
+---
+{{- end }}
 # Ingress from the kuso platform namespace — kuso-server streams logs,
 # performs exec, scrapes metrics, and traefik forwards user HTTP
 # traffic. Without this rule the dashboard's "Logs" tab returns 0 lines
@@ -410,6 +511,9 @@ spec:
 # instance-DB pods. Always rendered — harmless for projects that don't
 # use the cluster DB (nothing to connect to), and avoids a chicken-egg
 # where the policy is missing until the project opts in.
+# ISO-5: instanceDBEgress=false drops this project-wide rule; the
+# kusoaddon chart renders a subscriber-scoped one per instance addon.
+{{- if ne (toString (.Values.networkPolicy).instanceDBEgress) "false" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -446,6 +550,7 @@ spec:
         - port: 6432
           protocol: TCP
 ---
+{{- end }}
 # CloudNativePG (HA Postgres addons). The CNPG Cluster + Pooler pods
 # carry this project's label (so the default-deny above covers them),
 # but CNPG needs three paths the generic allows don't give:

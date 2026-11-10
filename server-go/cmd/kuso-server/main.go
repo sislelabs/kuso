@@ -63,6 +63,7 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/reconcilehealth"
+	"kuso/server/internal/registryauth"
 	"kuso/server/internal/releaserun"
 	"kuso/server/internal/remediate"
 	"kuso/server/internal/runs"
@@ -367,6 +368,7 @@ func main() {
 	var projSvc *projects.Service
 	var secSvc *secrets.Service
 	var buildSvc *builds.Service
+	var registryAuth *registryauth.Store
 	// Commit statuses + wait-for-CI gate; bound to the GitHub client below.
 	ghBridge := &githubBuildBridge{}
 	var logsSvc *logs.Service
@@ -656,11 +658,20 @@ func main() {
 				return podsizes.ResourcesFor(ctx, database, name)
 			}
 		}
+		registryAuth = &registryauth.Store{Kube: kc, Namespace: *namespace, Host: builds.RegistryHost}
+		builds.SetRegistryAuth(func(ctx context.Context) (string, bool) {
+			c, err := registryAuth.Get(ctx)
+			if err != nil || c == nil {
+				return "", false
+			}
+			return c.BasicAuth(), true
+		})
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
 		// Branch heads for repos no GitHub App installation covers.
 		buildSvc.Remote = &gitremote.Inspector{}
 		buildSvc.Images = builds.NewInClusterImageDeleter(builds.RegistryHost)
+		buildSvc.RegistryAuth = registryAuth
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
 		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)
 		// already saturate the node. Operators with bigger machines
@@ -1378,6 +1389,7 @@ func main() {
 	}
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:                    database,
+		RegistryAuth:          registryAuth,
 		Incidents:             incidentMgr,
 		IncidentCfgInvalidate: incidentCfgProvider.Invalidate,
 		VulnGateInvalidate:    vulnGateInvalidate,

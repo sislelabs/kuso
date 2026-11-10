@@ -70,3 +70,23 @@ func readRepoFile(t *testing.T, parts ...string) string {
 	}
 	return string(b)
 }
+
+// The buildkitd egress policy must stay opt-in: release.sh bundles every
+// NetworkPolicy in deploy/*.yaml into upgrade-manifests, which `kuso
+// upgrade` applies cluster-wide. It must also keep the registry reachable
+// (push) while denying private ranges and the metadata endpoint.
+func TestBuildkitdEgressPolicyIsOptInAndKeepsRegistry(t *testing.T) {
+	if strings.Contains(readRepoFile(t, "deploy", "buildkitd.yaml"), "name: kuso-buildkitd-egress") {
+		t.Fatal("kuso-buildkitd-egress must not live in deploy/buildkitd.yaml (auto-applied by the updater)")
+	}
+	raw := readRepoFile(t, "deploy", "netpol", "buildkitd-egress.yaml")
+	for _, want := range []string{
+		"app.kubernetes.io/name: kuso-registry", "port: 5000", "port: 53",
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
+		"policyTypes: [Egress]",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("buildkitd egress policy missing %q", want)
+		}
+	}
+}

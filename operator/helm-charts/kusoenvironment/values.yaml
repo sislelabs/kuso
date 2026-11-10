@@ -12,6 +12,12 @@ service: ""
 # custom:     user-created long-lived (staging, qa, demo)
 kind: production
 
+# envScope: the env CR's kuso.sislelabs.com/env label (production,
+# preview-pr-N, env-group or named env), stamped by kuso-server. When set,
+# pods carry that label plus one conn.kuso.sislelabs.com/<hash> label per
+# mounted addon conn Secret; the project/addon NetworkPolicies key on them.
+envScope: ""
+
 # branch: git ref this env tracks. For production envs this is the project
 # defaultBranch; for previews it's the PR head ref.
 branch: main
