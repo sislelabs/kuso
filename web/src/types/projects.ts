@@ -23,7 +23,13 @@ export interface KusoProjectSpec {
   defaultRepo?: KusoRepoRef;
   github?: { installationId?: number };
   // previews.baseDomain: host suffix for preview envs (<svc>-pr-N.<domain>).
-  previews?: { enabled?: boolean; ttlDays?: number; baseDomain?: string };
+  previews?: {
+    enabled?: boolean;
+    ttlDays?: number;
+    baseDomain?: string;
+    // PR target branch → the env a preview copies (never production).
+    triggers?: { branch: string; baseEnv: string }[];
+  };
   // alwaysOn=true overrides every per-service sleep config so all
   // services in this project run with scale-to-zero disabled.
   alwaysOn?: boolean;
