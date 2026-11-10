@@ -84,7 +84,7 @@ func TestEnsurePRAddons_ClonesRedis(t *testing.T) {
 	c, _ := newTestCloner(t, "alpha", addonCR("alpha", "cache", "redis"))
 	c.Namespace = "kuso"
 
-	_, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9)
+	_, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9, "staging")
 	if err != nil {
 		t.Fatalf("EnsurePRAddons: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestEnsurePRAddons_NoCloneableAddons(t *testing.T) {
 	c, _ := newTestCloner(t, "alpha", addonCR("alpha", "files", "s3"))
 	c.Namespace = "kuso"
 
-	conns, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9)
+	conns, pairs, err := c.EnsurePRAddons(context.Background(), "alpha", 9, "staging")
 	if err != nil {
 		t.Fatalf("EnsurePRAddons: %v", err)
 	}

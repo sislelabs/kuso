@@ -93,20 +93,23 @@ func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespac
 // list of clone connection-secret names, which callers swap into
 // envFromSecrets.
 //
+// A postgres clone is seeded from seedFrom's clone of the same source (the
+// preview's staging env). Production is never a seed source (ISO-4): with
+// seedFrom empty or "production", or when seedFrom has no clone of the
+// source, the clone starts empty and only gets its migrations.
+//
 // Redis clones start empty. Sharing production redis let PR code read and
 // write production sessions, caches and queues; an empty cache is the
-// normal state for a fresh preview. s3 stays shared: preview DBs are seeded
-// from production and reference its objects, which an empty bucket lacks.
+// normal state for a fresh preview.
 //
 // Idempotent: re-running for the same PR (every push) reuses the existing
 // clones without re-seeding them; the new image's release hook is run
 // against the clone once it is promoted (migrateOnNewImage).
-func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error) {
-	// Postgres clones seed from the project's source addon; everything
-	// below is the env-scope-keyed core (EnsureEnvAddonsMapped).
+func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int, seedFrom string) ([]string, map[string]string, error) {
 	return c.EnsureEnvAddonsMapped(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
-		Kinds:   []string{"postgres", "redis"},
-		SeedAll: true,
+		Kinds:         []string{"postgres", "redis"},
+		SeedAll:       true,
+		SeedFromScope: seedFrom,
 		// Keep the historical clone name "<base>-pr-N" (DeletePRAddons + the
 		// canvas's -pr-N regex depend on it), even though the env-label scope
 		// is "preview-pr-N".
@@ -302,9 +305,17 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 			if src == "" {
 				c.Logger.Warn("env addon seed: no clone of source in seed-from env; leaving clone empty",
 					"source", shortSrc, "seedFrom", opts.SeedFromScope, "clone", cloneShort)
+				if opts.PreviewPR != "" {
+					c.startMigrateOnNewImage(ns, project, envScope, cloneFQN)
+				}
 				continue
 			}
 			seedSrcFQN = src
+		} else if opts.PreviewPR != "" {
+			// A preview never gets a dump of production (ISO-4); without a
+			// seed-from env it starts empty and only runs its migrations.
+			c.startMigrateOnNewImage(ns, project, envScope, cloneFQN)
+			continue
 		}
 		// Dedupe: EnsureEnvAddons runs once per service, so several services
 		// sharing this DB addon would each spawn a seed+migrate for the same

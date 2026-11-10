@@ -315,6 +315,13 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if envScope != "production" {
 					merged = rescopeAddonConnRefsByOrigin(merged, s.envCloneConnByOrigin(ctx, ns, project, envScope))
 				}
+				if addons.IsPreviewEnv(env) {
+					var optIn []kube.KusoEnvVar
+					if svc.Spec.Previews != nil {
+						optIn = svc.Spec.Previews.PreviewEnvVars
+					}
+					merged = addons.DropPreviewSharedRefs(merged, project, optIn)
+				}
 				env.Spec.EnvVars = merged
 				// Filter the propagated envFromSecrets by the addon
 				// subscription. nil SubscribedAddons = legacy auto-
@@ -343,6 +350,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					if len(withheld) > 0 {
 						slog.WarnContext(ctx, "propagate: production addon conns withheld from an isolated env (no clone for it)",
 							"project", project, "env", envName, "withheld", withheld)
+					}
+					if preview {
+						prunedFrom = addons.ScrubPreviewSharedMounts(prunedFrom, project)
 					}
 				}
 				// Env-scoped clones last — the env's own database must win the

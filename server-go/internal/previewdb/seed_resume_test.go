@@ -32,16 +32,17 @@ func cancelledCtx() context.Context {
 // half-seeded clone with no durable evidence that a seed was ever owed —
 // exactly the gap ResumePendingSeeds exists to close.
 func TestEnsureEnvAddons_StampsSeedPendingBeforeAsyncSeed(t *testing.T) {
-	c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"))
+	c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"), stagingPGClone())
 	c.Namespace = "kuso" // newTestCloner builds the struct directly, skipping New()'s default
 	c.Kube.Clientset = kubefake.NewSimpleClientset()
 	c.BaseCtx = cancelledCtx() // seed goroutine exits immediately, never clears
 
 	if _, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-7", EnvAddonOpts{
-		Kinds:      []string{"postgres"},
-		SeedAll:    true,
-		NameSuffix: "-pr-7",
-		PreviewPR:  "7",
+		Kinds:         []string{"postgres"},
+		SeedAll:       true,
+		SeedFromScope: "staging",
+		NameSuffix:    "-pr-7",
+		PreviewPR:     "7",
 	}); err != nil {
 		t.Fatalf("EnsureEnvAddons: %v", err)
 	}
@@ -50,9 +51,9 @@ func TestEnsureEnvAddons_StampsSeedPendingBeforeAsyncSeed(t *testing.T) {
 	if clone == nil {
 		t.Fatal("clone alpha-pg-pr-7 not created")
 	}
-	if got := clone.Annotations[seedPendingAnnotation]; got != "alpha-pg" {
+	if got := clone.Annotations[seedPendingAnnotation]; got != "alpha-pg-staging" {
 		t.Fatalf("clone %s annotation = %q, want source FQN %q (marker must be durable before the async seed starts)",
-			seedPendingAnnotation, got, "alpha-pg")
+			seedPendingAnnotation, got, "alpha-pg-staging")
 	}
 }
 

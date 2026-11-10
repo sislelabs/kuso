@@ -66,7 +66,7 @@ func TestDispatch_PRReopenWaitsForTerminatingEnv(t *testing.T) {
 
 type countingPreviewDB struct{ ensured int }
 
-func (r *countingPreviewDB) EnsurePRAddons(context.Context, string, int) ([]string, map[string]string, error) {
+func (r *countingPreviewDB) EnsurePRAddons(context.Context, string, int, string) ([]string, map[string]string, error) {
 	r.ensured++
 	return nil, map[string]string{}, nil
 }
