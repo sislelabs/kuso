@@ -335,6 +335,7 @@ func NewRouter(d Deps) http.Handler {
 		(&httphandlers.GithubConfigureHandler{
 			Kube:      d.Logs.Kube,
 			Namespace: d.Logs.Namespace,
+			Audit:     d.Audit,
 			Logger:    d.Logger,
 		}).MountPublic(r)
 	}
@@ -536,7 +537,7 @@ func mountAuthenticatedRoutes(
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
-			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Logger: d.Logger}
+			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			if d.Builds != nil {
 				settingsH.OnBuildSettingsChange = d.Builds.InvalidateSettingsCache
 			}
@@ -549,6 +550,7 @@ func mountAuthenticatedRoutes(
 					Kube:           d.Kube,
 					Namespace:      d.Namespace,
 					OnConfigChange: d.IncidentCfgInvalidate,
+					Audit:          d.Audit,
 					Logger:         d.Logger,
 				}
 				incSettingsH.Mount(r)
@@ -556,7 +558,7 @@ func mountAuthenticatedRoutes(
 			backupH := httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger)
 			backupH.Audit = d.Audit
 			backupH.Mount(r)
-			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
+			usersH := &httphandlers.UsersHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			rolesH.Mount(r)
@@ -610,9 +612,9 @@ func mountAuthenticatedRoutes(
 				}
 			}
 			notifH.Mount(r)
-			drainsH := &httphandlers.DrainsHandler{Store: &drains.SettingStore{DB: d.DB}, Tester: drains.NewSender(), Logger: d.Logger, ProjectExists: notifH.ProjectExists}
+			drainsH := &httphandlers.DrainsHandler{Store: &drains.SettingStore{DB: d.DB}, Tester: drains.NewSender(), Audit: d.Audit, Logger: d.Logger, ProjectExists: notifH.ProjectExists}
 			drainsH.Mount(r)
-			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Audit: d.Audit, Logger: d.Logger}
 			tokAdminH.Mount(r)
 		}
 		if d.Config != nil {
@@ -691,7 +693,7 @@ func mountAuthenticatedRoutes(
 				runsH.Mount(r)
 			}
 			if d.ProjectSecrets != nil {
-				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, DB: d.DB, Logger: d.Logger}
+				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 				psH.Mount(r)
 			}
 			if d.Kube != nil {
@@ -712,7 +714,7 @@ func mountAuthenticatedRoutes(
 			sshH.Mount(r)
 			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, LogDB: d.LogDB, Logger: d.Logger}
 			logSearchH.Mount(r)
-			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
+			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger, Notify: d.Notify}
 			alertsH.Mount(r)
 			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			errH.Mount(r)
@@ -782,6 +784,7 @@ func mountAuthenticatedRoutes(
 			(&httphandlers.GithubConfigureHandler{
 				Kube:      d.Logs.Kube,
 				Namespace: d.Logs.Namespace,
+				Audit:     d.Audit,
 				Logger:    d.Logger,
 			}).Mount(r)
 		}

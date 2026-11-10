@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -28,6 +30,7 @@ type IncidentAgentSettingsHandler struct {
 	// OnConfigChange invalidates the Manager's config cache so a PUT applies
 	// within seconds (wired to incidents.DBConfigProvider.Invalidate).
 	OnConfigChange func()
+	Audit          *audit.Service
 	Logger         *slog.Logger
 }
 
@@ -165,6 +168,14 @@ func (h *IncidentAgentSettingsHandler) Put(w http.ResponseWriter, r *http.Reques
 	if h.OnConfigChange != nil {
 		h.OnConfigChange()
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "incidentagent.config",
+		Resource: "setting/incident-agent",
+		Message: fmt.Sprintf("enabled=%v triggers(pod=%v alert=%v node=%v) maxConcurrent=%d cooldownHours=%d agentImage=%q",
+			in.Enabled, in.TriggerPod, in.TriggerAlert, in.TriggerNode, in.MaxConcurrent, in.CooldownHours, in.AgentImage),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -199,6 +210,13 @@ func (h *IncidentAgentSettingsHandler) PutCCCredentials(w http.ResponseWriter, r
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "incidentagent.cc_credentials",
+		Resource: "secret/" + ccSecretName,
+		Message:  "replaced Claude Code credentials (value redacted)",
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -252,6 +270,23 @@ func (h *IncidentAgentSettingsHandler) PutDiscord(w http.ResponseWriter, r *http
 	}
 	// Bounce the bot so it reconnects with the new token/channel.
 	h.restartBot(ctx)
+	var changed []string
+	if body.BotToken != "" {
+		changed = append(changed, "botToken")
+	}
+	if body.KusoBotToken != "" {
+		changed = append(changed, "kusoBotToken")
+	}
+	if body.ChannelID != nil {
+		changed = append(changed, "channelId="+*body.ChannelID)
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "incidentagent.discord",
+		Resource: "secret/" + botSecretName,
+		Message:  "updated incident bot " + strings.Join(changed, ", ") + " (token values redacted)",
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

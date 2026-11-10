@@ -22,30 +22,64 @@ import (
 // with New; safe for concurrent use. New starts one trim goroutine
 // per Service — call sites that re-construct (tests) should pass a
 // derivable ctx so the loop unwinds with the caller's lifetime.
+//
+// Retention is by age, not count: a pure row cap let anyone able to
+// write cheap rows (sql:read runs one audited query per call) evict
+// earlier evidence within one trim tick. Security-relevant rows
+// (warn/critical/error) are only ever pruned by SecurityMaxAge; the
+// MaxBackups count cap is a disk-safety valve over routine rows only.
 type Service struct {
-	DB           *db.DB
-	Enabled      bool
-	MaxBackups   int
+	DB      *db.DB
+	Enabled bool
+	// MaxBackups caps the number of ROUTINE (info/normal) rows kept.
+	MaxBackups int
+	// MaxAge prunes routine rows older than this. 0 = no age prune.
+	MaxAge time.Duration
+	// SecurityMaxAge prunes warn/critical/error rows older than this.
+	// 0 = keep forever.
+	SecurityMaxAge time.Duration
 
 	mu sync.Mutex // guards the periodic trim() call
 }
 
+const (
+	defaultMaxRoutineRows   = 200000
+	defaultRetentionDays    = 90
+	defaultSecRetentionDays = 365
+	day                     = 24 * time.Hour
+)
+
+// securitySeverities never fall to the count cap. Kept as a SQL literal
+// list because it is a fixed constant, never user input.
+const securitySeverities = `('warn','critical','error')`
+
+// IsSecuritySeverity reports whether a row of this severity is exempt
+// from the routine-row count cap.
+func IsSecuritySeverity(sev string) bool {
+	switch sev {
+	case "warn", "critical", "error":
+		return true
+	}
+	return false
+}
+
 // New constructs a Service. Enabled by default; KUSO_AUDIT=false opts
-// out. KUSO_AUDIT_LIMIT sets the row cap (default 10000 — destructive
-// ops on a busy install burn through 1000 rows in days, which made the
-// trail useless exactly when an incident needed it), and
-// KUSO_AUDIT_TRIM_TIMEOUT overrides the per-tick context bound
-// (default 60s — long enough for Postgres trim during an autovacuum
-// pause on a 1M-row table). Unparseable or non-positive KUSO_AUDIT_LIMIT
-// falls back to the default rather than disabling the cap (fail safe,
-// not open — mirrors logship's resolveRateCap).
+// out. Retention knobs:
+//   - KUSO_AUDIT_RETENTION_DAYS (default 90): routine-row age limit.
+//   - KUSO_AUDIT_SECURITY_RETENTION_DAYS (default 365, 0 = forever):
+//     warn/critical/error age limit.
+//   - KUSO_AUDIT_LIMIT (default 200000): count cap on routine rows only.
+//
+// Unparseable or negative values fall back to the default (fail safe,
+// never uncap by typo). KUSO_AUDIT_TRIM_TIMEOUT overrides the per-tick
+// context bound (default 60s).
 //
 // When enabled, New also starts the singleton trim ticker bound to
 // ctx. Pass context.Background() in tests where you don't need
 // shutdown semantics.
 func New(ctx context.Context, d *db.DB) *Service {
 	enabled := os.Getenv("KUSO_AUDIT") != "false"
-	limit := 10000
+	limit := defaultMaxRoutineRows
 	if v := os.Getenv("KUSO_AUDIT_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
@@ -57,11 +91,31 @@ func New(ctx context.Context, d *db.DB) *Service {
 			trimTimeout = d
 		}
 	}
-	s := &Service{DB: d, Enabled: enabled, MaxBackups: limit}
+	s := &Service{
+		DB:             d,
+		Enabled:        enabled,
+		MaxBackups:     limit,
+		MaxAge:         envDays("KUSO_AUDIT_RETENTION_DAYS", defaultRetentionDays, false),
+		SecurityMaxAge: envDays("KUSO_AUDIT_SECURITY_RETENTION_DAYS", defaultSecRetentionDays, true),
+	}
 	if enabled && d != nil {
 		go s.runTrimLoop(ctx, trimTimeout)
 	}
 	return s
+}
+
+// envDays reads a whole-day count (time.ParseDuration has no day unit).
+// allowZero lets 0 mean "keep forever".
+func envDays(key string, def int, allowZero bool) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return time.Duration(def) * day
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || (n == 0 && !allowZero) {
+		return time.Duration(def) * day
+	}
+	return time.Duration(n) * day
 }
 
 // runTrimLoop fires every 5 minutes until ctx is done. Errors log
@@ -129,6 +183,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		// the failure and move on.
 		slog.Error("audit: log failed", "err", err)
 		return
+	}
+	// Mirror security-relevant rows to the server log too: pod stdout is
+	// collected by whatever ships cluster logs off-box, so these survive a
+	// control-plane DB restore or a compromised Postgres.
+	if IsSecuritySeverity(e.Severity) {
+		slog.Info("audit", "severity", e.Severity, "action", e.Action, "user", e.User,
+			"project", e.Pipeline, "app", e.App, "resource", e.Resource, "message", e.Message)
 	}
 	// Trim runs on the singleton ticker started by New.
 }
@@ -276,34 +337,45 @@ ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit+1, since.UTC()) // +1 ro
 	return out, total, more, nil
 }
 
-// trim caps the table at MaxBackups rows. Returns nil when another
-// trim is already in flight (TryLock miss). Errors propagate so the
-// caller can log — silent failure was how the SQLite-only LIMIT
-// syntax let the table grow unbounded.
-//
-// Uses keyset OFFSET form so Postgres can stop the inner scan after
-// MaxBackups rows of the descending PK b-tree, instead of materialising
-// the full "keep set" for NOT IN. On a 1M-row Audit, this is the
-// difference between a 5s table-locking trim and a sub-second one.
+// trim applies the retention policy: routine rows past MaxAge, security
+// rows past SecurityMaxAge, then routine rows beyond the MaxBackups
+// newest. Returns nil when another trim is already in flight (TryLock
+// miss). Errors propagate so the caller can log — silent failure was how
+// the SQLite-only LIMIT syntax let the table grow unbounded.
 func (s *Service) trim(ctx context.Context) error {
 	if !s.mu.TryLock() {
 		return nil
 	}
 	defer s.mu.Unlock()
-	// The OFFSET row is the (MaxBackups+1)-th newest; deleting it and
-	// everything older (<=) keeps exactly MaxBackups rows. `<` kept
-	// MaxBackups+1 (off-by-one). No row at that offset → NULL → the
-	// comparison is false for every row → nothing deleted, which is
-	// the correct no-op when the table is under the cap.
-	_, err := s.DB.ExecContext(ctx, `
+	now := time.Now().UTC()
+	if s.MaxAge > 0 {
+		if _, err := s.DB.ExecContext(ctx,
+			`DELETE FROM "Audit" WHERE "timestamp" < $1 AND severity NOT IN `+securitySeverities,
+			now.Add(-s.MaxAge)); err != nil {
+			return fmt.Errorf("audit: trim routine by age: %w", err)
+		}
+	}
+	if s.SecurityMaxAge > 0 {
+		if _, err := s.DB.ExecContext(ctx,
+			`DELETE FROM "Audit" WHERE "timestamp" < $1 AND severity IN `+securitySeverities,
+			now.Add(-s.SecurityMaxAge)); err != nil {
+			return fmt.Errorf("audit: trim security by age: %w", err)
+		}
+	}
+	if s.MaxBackups > 0 {
+		// The OFFSET row is the (MaxBackups+1)-th newest routine row;
+		// deleting it and every older routine row keeps exactly
+		// MaxBackups. No row at that offset → NULL → nothing deleted.
+		if _, err := s.DB.ExecContext(ctx, `
 DELETE FROM "Audit"
-WHERE id <= (
+WHERE severity NOT IN `+securitySeverities+` AND id <= (
   SELECT id FROM "Audit"
+  WHERE severity NOT IN `+securitySeverities+`
   ORDER BY id DESC
   LIMIT 1 OFFSET $1
-)`, s.MaxBackups)
-	if err != nil {
-		return fmt.Errorf("audit: trim: %w", err)
+)`, s.MaxBackups); err != nil {
+			return fmt.Errorf("audit: trim routine by count: %w", err)
+		}
 	}
 	// Piggyback Revision retention onto the same ticker — a separate
 	// leader-elected loop for one DELETE per 5min isn't worth it.

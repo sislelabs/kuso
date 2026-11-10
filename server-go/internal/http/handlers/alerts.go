@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/notify"
@@ -25,6 +26,7 @@ import (
 
 type AlertsHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 	// Notify sends a rule's test notification. nil = test unavailable.
 	Notify *notify.Dispatcher
@@ -172,6 +174,8 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "create alert", err)
 		return
 	}
+	h.auditRule(ctx, "info", "alert.create", rule.Project, rule.ID,
+		fmt.Sprintf("created alert rule %q kind=%s severity=%s", rule.Name, rule.Kind, rule.Severity))
 	writeJSON(w, http.StatusCreated, rule)
 }
 
@@ -229,6 +233,8 @@ func (h *AlertsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "get alert", err)
 		return
 	}
+	h.auditRule(ctx, "warn", "alert.update", rule.Project, id,
+		fmt.Sprintf("updated alert rule %q kind=%s severity=%s", rule.Name, rule.Kind, rule.Severity))
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -400,13 +406,17 @@ func (h *AlertsHandler) authorizeRuleWrite(ctx context.Context, w http.ResponseW
 func (h *AlertsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
-	if !h.authorizeRuleWrite(ctx, w, chi.URLParam(r, "id")) {
+	id := chi.URLParam(r, "id")
+	if !h.authorizeRuleWrite(ctx, w, id) {
 		return
 	}
-	if err := h.DB.DeleteAlertRule(ctx, chi.URLParam(r, "id")); err != nil {
+	// Scope read before the delete so the row can be filtered by project.
+	project, _, _ := h.DB.GetAlertRuleScope(ctx, id)
+	if err := h.DB.DeleteAlertRule(ctx, id); err != nil {
 		h.fail(w, "delete alert", err)
 		return
 	}
+	h.auditRule(ctx, "warn", "alert.delete", project, id, "deleted alert rule "+id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -424,11 +434,29 @@ func (h *AlertsHandler) toggle(w http.ResponseWriter, r *http.Request, on bool) 
 	if !h.authorizeRuleWrite(ctx, w, chi.URLParam(r, "id")) {
 		return
 	}
-	if err := h.DB.SetAlertEnabled(ctx, chi.URLParam(r, "id"), on); err != nil {
+	id := chi.URLParam(r, "id")
+	if err := h.DB.SetAlertEnabled(ctx, id, on); err != nil {
 		h.fail(w, "toggle alert", err)
 		return
 	}
+	project, _, _ := h.DB.GetAlertRuleScope(ctx, id)
+	if on {
+		h.auditRule(ctx, "info", "alert.enable", project, id, "enabled alert rule "+id)
+	} else {
+		h.auditRule(ctx, "warn", "alert.disable", project, id, "disabled alert rule "+id)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AlertsHandler) auditRule(ctx context.Context, sev, action, project, id, msg string) {
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: sev,
+		Action:   action,
+		Pipeline: project,
+		Resource: "alertrule/" + id,
+		Message:  msg,
+	})
 }
 
 func (h *AlertsHandler) fail(w http.ResponseWriter, op string, err error) {

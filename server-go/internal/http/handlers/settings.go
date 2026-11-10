@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
@@ -19,6 +21,7 @@ import (
 // concurrency cap. Future toggles land here without a new package.
 type SettingsHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 
 	// OnBuildSettingsChange, when non-nil, is invoked after a
@@ -99,6 +102,13 @@ func (h *SettingsHandler) PutSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "settings.session",
+		Resource: "setting/session",
+		Message:  fmt.Sprintf("session ttlSeconds=%d neverExpire=%v", in.TTLSeconds, in.NeverExpire),
+	})
 	writeJSON(w, http.StatusOK, in)
 }
 
@@ -213,5 +223,14 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 	if h.OnBuildSettingsChange != nil {
 		h.OnBuildSettingsChange()
 	}
+	// Every field is non-secret (registryAuthSecret is a Secret NAME).
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "info",
+		Action:   "settings.build",
+		Resource: "setting/build",
+		Message: fmt.Sprintf("build maxConcurrent=%d memory=%s/%s cpu=%s/%s registryHost=%q registryAuthSecret=%q",
+			in.MaxConcurrent, in.MemoryRequest, in.MemoryLimit, in.CPURequest, in.CPULimit, in.RegistryHost, in.RegistryAuthSecret),
+	})
 	writeJSON(w, http.StatusOK, in)
 }

@@ -15,12 +15,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
@@ -29,6 +31,7 @@ import (
 type ProjectSecretsHandler struct {
 	Svc    *projectsecrets.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -90,6 +93,14 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	// signal that anything happened downstream of the Secret update —
 	// leading to the "set the value but pods don't see it" trap that
 	// motivated this fix.
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "sharedsecret.set",
+		Pipeline: chi.URLParam(r, "project"),
+		Resource: "sharedsecret",
+		Message:  fmt.Sprintf("set shared key=%q force=%v (value redacted)", body.Key, body.Force),
+	})
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -104,6 +115,14 @@ func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "unset shared secret", err)
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "sharedsecret.unset",
+		Pipeline: chi.URLParam(r, "project"),
+		Resource: "sharedsecret",
+		Message:  fmt.Sprintf("unset shared key=%q", chi.URLParam(r, "key")),
+	})
 	writeJSON(w, http.StatusOK, res)
 }
 

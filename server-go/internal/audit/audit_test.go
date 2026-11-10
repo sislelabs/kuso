@@ -139,18 +139,42 @@ func TestAuditLogAndReadbacks(t *testing.T) {
 	}
 }
 
-// Audit must default ON with a retention cap sized for a platform doing
-// destructive ops. No DB needed — New skips the trim goroutine on nil.
+// Audit must default ON with age-based retention and a large routine-row
+// safety cap. No DB needed — New skips the trim goroutine on nil.
 func TestAuditDefaults(t *testing.T) {
 	t.Setenv("KUSO_AUDIT", "")
 	t.Setenv("KUSO_AUDIT_LIMIT", "")
+	t.Setenv("KUSO_AUDIT_RETENTION_DAYS", "")
+	t.Setenv("KUSO_AUDIT_SECURITY_RETENTION_DAYS", "")
 
 	s := New(context.Background(), nil)
 	if !s.Enabled {
 		t.Error("audit must be enabled by default (opt-out via KUSO_AUDIT=false)")
 	}
-	if s.MaxBackups != 10000 {
-		t.Errorf("default retention cap = %d, want 10000", s.MaxBackups)
+	if s.MaxBackups != 200000 {
+		t.Errorf("default routine-row cap = %d, want 200000", s.MaxBackups)
+	}
+	if s.MaxAge != 90*24*time.Hour || s.SecurityMaxAge != 365*24*time.Hour {
+		t.Errorf("default ages = %v / %v, want 90d / 365d", s.MaxAge, s.SecurityMaxAge)
+	}
+}
+
+func TestAuditRetentionEnv(t *testing.T) {
+	t.Setenv("KUSO_AUDIT_RETENTION_DAYS", "30")
+	t.Setenv("KUSO_AUDIT_SECURITY_RETENTION_DAYS", "0")
+	s := New(context.Background(), nil)
+	if s.MaxAge != 30*24*time.Hour {
+		t.Errorf("MaxAge = %v, want 30d", s.MaxAge)
+	}
+	if s.SecurityMaxAge != 0 {
+		t.Errorf("SECURITY_RETENTION_DAYS=0 must mean keep forever, got %v", s.SecurityMaxAge)
+	}
+	// 0 routine days is not "forever" — it falls back to the default.
+	for _, bad := range []string{"0", "-1", "7d"} {
+		t.Setenv("KUSO_AUDIT_RETENTION_DAYS", bad)
+		if s := New(context.Background(), nil); s.MaxAge != 90*24*time.Hour {
+			t.Errorf("RETENTION_DAYS=%q → %v, want default 90d", bad, s.MaxAge)
+		}
 	}
 }
 
@@ -176,8 +200,8 @@ func TestAuditLimitEnv(t *testing.T) {
 	// safe: never uncap the table).
 	for _, bad := range []string{"0", "-5", "nope"} {
 		t.Setenv("KUSO_AUDIT_LIMIT", bad)
-		if s := New(context.Background(), nil); s.MaxBackups != 10000 {
-			t.Errorf("KUSO_AUDIT_LIMIT=%q → MaxBackups=%d, want default 10000", bad, s.MaxBackups)
+		if s := New(context.Background(), nil); s.MaxBackups != 200000 {
+			t.Errorf("KUSO_AUDIT_LIMIT=%q → MaxBackups=%d, want default 200000", bad, s.MaxBackups)
 		}
 	}
 }
@@ -199,5 +223,55 @@ func TestAuditTrim(t *testing.T) {
 	}
 	if total != 3 {
 		t.Errorf("after trim total=%d, want 3 (MaxBackups)", total)
+	}
+}
+
+// OPS-N8: a flood of cheap routine rows must not evict security rows, and
+// age (not count) is what retires old routine rows.
+func TestAuditTrimKeepsSecurityRowsAndPrunesByAge(t *testing.T) {
+	d := openAuditTestDB(t)
+	ctx := context.Background()
+	s := &Service{DB: d, Enabled: true, MaxBackups: 5, MaxAge: 90 * 24 * time.Hour, SecurityMaxAge: 365 * 24 * time.Hour}
+
+	s.Log(ctx, Entry{Severity: "warn", Action: "sharedsecret.set", Message: "early-warn"})
+	s.Log(ctx, Entry{Severity: "critical", Action: "github.configure", Message: "early-critical"})
+	for i := 0; i < 20; i++ {
+		s.Log(ctx, Entry{Severity: "info", Action: "addon.sql_query", Message: "flood"})
+	}
+	// Backdate: one routine row past MaxAge, one warn row past MaxAge
+	// but inside SecurityMaxAge, one critical row past SecurityMaxAge.
+	s.Log(ctx, Entry{Severity: "info", Action: "old", Message: "old-info"})
+	s.Log(ctx, Entry{Severity: "warn", Action: "old", Message: "old-warn"})
+	s.Log(ctx, Entry{Severity: "critical", Action: "old", Message: "ancient-critical"})
+	if _, err := d.DB.Exec(`UPDATE "Audit" SET "timestamp" = NOW() - INTERVAL '100 days' WHERE message IN ('old-info','old-warn')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DB.Exec(`UPDATE "Audit" SET "timestamp" = NOW() - INTERVAL '400 days' WHERE message = 'ancient-critical'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.trim(ctx); err != nil {
+		t.Fatalf("trim: %v", err)
+	}
+	rows, _, _, err := s.Get(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := map[string]int{}
+	for _, r := range rows {
+		count[r.Message]++
+	}
+	for _, keep := range []string{"early-warn", "early-critical", "old-warn"} {
+		if count[keep] != 1 {
+			t.Errorf("%s evicted (rows=%v)", keep, count)
+		}
+	}
+	for _, gone := range []string{"old-info", "ancient-critical"} {
+		if count[gone] != 0 {
+			t.Errorf("%s survived its retention age", gone)
+		}
+	}
+	if count["flood"] != 5 {
+		t.Errorf("routine flood rows = %d, want 5 (count cap)", count["flood"])
 	}
 }

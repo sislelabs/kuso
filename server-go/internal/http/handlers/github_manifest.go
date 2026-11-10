@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kuso/server/internal/audit"
 )
 
 // manifestStore is a short-lived nonce set: the CSRF guard for the
@@ -239,6 +241,14 @@ func (h *GithubConfigureHandler) ManifestCallback(w http.ResponseWriter, r *http
 	}
 
 	h.Logger.Info("github app created via manifest", "slug", conv.Slug, "app_id", conv.ID, "owner", conv.Owner.Login)
+	// Public route (GitHub redirects here without a bearer), so there is no
+	// user claim; the single-use CSRF state tied it to an admin's request.
+	h.Audit.Log(ctx, audit.Entry{
+		Severity: "critical",
+		Action:   "github.manifest_created",
+		Resource: "secret/kuso-github-app",
+		Message:  fmt.Sprintf("created GitHub App via manifest slug=%q appId=%v owner=%q (credentials redacted)", conv.Slug, conv.ID, conv.Owner.Login),
+	})
 	// The App now exists + kuso is restarting to load it. Bounce the user
 	// to the settings page in a "just created, now install it" state — the
 	// page polls setup-status + shows the install button once kuso is back.

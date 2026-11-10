@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
@@ -22,7 +24,18 @@ import (
 // live here so the file's blast radius stays small.
 type UsersHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
+}
+
+func (h *UsersHandler) auditUser(ctx context.Context, sev, action, target, msg string) {
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: sev,
+		Action:   action,
+		Resource: "user/" + target,
+		Message:  msg,
+	})
 }
 
 // Mount registers the user mutation routes onto the bearer-protected
@@ -94,6 +107,8 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "create user", err)
 		return
 	}
+	h.auditUser(ctx, "warn", "user.create", id,
+		fmt.Sprintf("created user %q email=%q roleId=%q active=%v", req.Username, req.Email, req.RoleID, active))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "username": req.Username, "email": req.Email,
 		"firstName": req.FirstName, "lastName": req.LastName, "isActive": active, "roleId": req.RoleID,
@@ -188,6 +203,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 			h.Logger.Warn("update user: invalidate tokens", "user", userID, "err", err)
 		}
 	}
+	h.auditUser(ctx, "warn", "user.update", userID, "updated user "+userID+describeUserUpdate(req))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -212,6 +228,7 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "delete user", err)
 		return
 	}
+	h.auditUser(ctx, "warn", "user.delete", userID, "deleted user "+userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -249,6 +266,7 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.InvalidateUserTokens(r.Context(), userID, "user.password.change", time.Now()); err != nil {
 		h.Logger.Warn("update password: invalidate tokens", "user", userID, "err", err)
 	}
+	h.auditUser(ctx, "warn", "user.password_reset", userID, "admin reset password for user "+userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -277,6 +295,7 @@ func (h *UsersHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "update profile", err)
 		return
 	}
+	h.auditUser(ctx, "info", "user.profile", claims.UserID, "updated own profile"+describeUserUpdate(req))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -328,6 +347,7 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 	if err := h.DB.InvalidateUserTokens(r.Context(), claims.UserID, "user.password.change.self", time.Now()); err != nil {
 		h.Logger.Warn("update my password: invalidate tokens", "user", claims.UserID, "err", err)
 	}
+	h.auditUser(ctx, "info", "user.password_change", claims.UserID, "changed own password")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -415,4 +435,26 @@ func (h *UsersHandler) fail(w http.ResponseWriter, op string, err error) {
 		h.Logger.Error("users handler", "op", op, "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal")
 	}
+}
+
+// describeUserUpdate names the changed fields; email/role/active carry
+// their new value because those are the account-takeover levers.
+func describeUserUpdate(req updateUserRequest) string {
+	var parts []string
+	if req.FirstName != nil || req.LastName != nil {
+		parts = append(parts, "name")
+	}
+	if req.Email != nil {
+		parts = append(parts, fmt.Sprintf("email=%q", *req.Email))
+	}
+	if req.RoleID != nil {
+		parts = append(parts, fmt.Sprintf("roleId=%q", *req.RoleID))
+	}
+	if req.IsActive != nil {
+		parts = append(parts, fmt.Sprintf("active=%v", *req.IsActive))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(parts, " ")
 }

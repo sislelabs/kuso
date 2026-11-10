@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
@@ -24,6 +26,7 @@ import (
 type TokensAdminHandler struct {
 	DB     *db.DB
 	Issuer *auth.Issuer
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -163,6 +166,14 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "token.issue",
+		Resource: "token/" + id,
+		Message: fmt.Sprintf("issued API token %q for user %q (%s) expires=%s",
+			req.Name, user.Username, user.ID, expiresAt.UTC().Format(time.RFC3339)),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name": req.Name, "token": jwt, "expiresAt": expiresAt.UTC().Format(time.RFC3339),
 	})
@@ -184,5 +195,12 @@ func (h *TokensAdminHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "token.revoke",
+		Resource: "token/" + chi.URLParam(r, "id"),
+		Message:  "revoked API token " + chi.URLParam(r, "id"),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
