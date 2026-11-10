@@ -1339,7 +1339,7 @@ echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 # Preview builds run PR code; they read the shared cache but never write it,
 # or a PR could plant layers the next production build imports.
 if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
-  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE,ignore-error=true
+  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,compression=zstd,registry.insecure=$INSECURE,ignore-error=true
 elif [ "${CACHE_EXPORT:-1}" != "1" ]; then
   echo "==> buildkit: preview build, cache is read-only"
 fi
