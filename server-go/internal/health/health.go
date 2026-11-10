@@ -103,6 +103,12 @@ type Watcher struct {
 	// in memory only.
 	Store StateStore
 
+	// Platform workload state (platform.go), guarded by mu.
+	platformSeen      map[string]*platformEpisode
+	platformRestarts  map[string]int32
+	platformOOMs      map[string][]time.Time
+	platformForbidden map[string]bool
+
 	restored  bool
 	lastSaved string
 
@@ -135,6 +141,9 @@ type persistedEpisode struct {
 type persistedState struct {
 	Crash map[string]persistedEpisode `json:"crash"`
 	Fired []string                    `json:"fired"`
+	// Platform maps an alerted platform workload key to when its
+	// episode began. Absent in state written by older servers.
+	Platform map[string]time.Time `json:"platform,omitempty"`
 }
 
 // New returns a Watcher with sensible defaults.
@@ -148,6 +157,9 @@ func New(k *kube.Client, ns string, n *notify.Dispatcher, logger *slog.Logger) *
 		DiskWarnPct: 85,
 		fired:       map[string]bool{},
 		crashSeen:   map[string]*crashEpisode{},
+
+		platformSeen: map[string]*platformEpisode{},
+		platformOOMs: map[string][]time.Time{},
 	}
 }
 
@@ -188,6 +200,7 @@ func (w *Watcher) Run(ctx context.Context) {
 func (w *Watcher) tick(ctx context.Context) {
 	w.restoreState(ctx)
 	w.checkPods(ctx)
+	w.checkPlatform(ctx)
 	w.checkNodes(ctx)
 	w.persistState(ctx)
 }
@@ -232,6 +245,14 @@ func (w *Watcher) restoreState(ctx context.Context) {
 	for _, k := range st.Fired {
 		w.fired[k] = true
 	}
+	if w.platformSeen == nil {
+		w.platformSeen = map[string]*platformEpisode{}
+	}
+	for k, since := range st.Platform {
+		if _, ok := w.platformSeen[k]; !ok {
+			w.platformSeen[k] = &platformEpisode{badSince: since, alerted: true}
+		}
+	}
 }
 
 // persistState writes the alert state when it changed since the last
@@ -251,6 +272,9 @@ func (w *Watcher) persistState(ctx context.Context) {
 	}
 	for k := range w.fired {
 		st.Fired = append(st.Fired, k)
+	}
+	if p := w.platformPersisted(); len(p) > 0 {
+		st.Platform = p
 	}
 	w.mu.Unlock()
 	sort.Strings(st.Fired)
