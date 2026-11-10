@@ -1084,6 +1084,11 @@ type KusoAddonPooler struct {
 	// below an external provider's usable cap, or the pooler itself exhausts
 	// the backend under load.
 	PoolSize int32 `json:"poolSize,omitempty"`
+	// MaxUserConnections / MaxDbConnections are PgBouncer's global backend
+	// caps per user / per database across all pools. 0 = no cap. Changing
+	// either restarts the pooler.
+	MaxUserConnections int32 `json:"maxUserConnections,omitempty"`
+	MaxDbConnections   int32 `json:"maxDbConnections,omitempty"`
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.

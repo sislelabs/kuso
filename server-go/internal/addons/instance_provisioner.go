@@ -83,7 +83,10 @@ func (s *Service) instanceHasPooler(ctx context.Context, perProjectDSN string) b
 // created the database; a rollback may only drop it when true, because
 // a pre-existing one is a kept DB with data. keepPassword, when set, is
 // re-asserted on the role instead of minting a new one.
-func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort, keepPassword string) (perProjectDSN, password string, createdDB bool, err error) {
+//
+// connLimit > 0 pins the role's CONNECTION LIMIT; 0 leaves an admin-tuned
+// limit alone and only fills in the derived default where none is set.
+func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, project, addonShort, keepPassword string, connLimit int) (perProjectDSN, password string, createdDB bool, err error) {
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
@@ -152,6 +155,9 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	}
 	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON ROLE %s IS %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(owner))); err != nil {
 		return "", "", false, fmt.Errorf("mark role owner: %w", err)
+	}
+	if err := applyInstanceRoleConnLimit(ctx, db, userName, connLimit); err != nil {
+		return "", "", false, err
 	}
 
 	// Cross-project isolation on the SHARED instance-pg server (M8).
@@ -559,7 +565,7 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 		return err
 	}
 	before := s.connSecretData(ctx, ns, connSecretName(fqn))
-	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short, string(before["POSTGRES_PASSWORD"]))
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, short, string(before["POSTGRES_PASSWORD"]), instanceConnLimitOverride(addon))
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}

@@ -50,9 +50,9 @@ export function addonHealthFrom(
 ): AddonHealth {
   const external = !!cr?.spec.external && !cr?.spec.pooler?.enabled;
   if (external) return { status: ADDON_STATUS.external, detail: "Managed outside kuso", pending: false };
-  // The server skips its rollup for these (no pods to read), so the pod
-  // fallback below would call every one of them failing. Its Helm
-  // conditions are the answer, the same one the canvas node gives.
+  // No pods of their own, so the pod fallback below would call every one
+  // of them failing. The server's rollup folds in the shared server
+  // (reachable, database present); without one, the Helm conditions.
   if (cr?.spec.useInstanceAddon) {
     const server = addonStatusFromServer(cr);
     return {

@@ -39,6 +39,41 @@ s3_fetch() { # src dst
     echo "==> download failed, retrying (${_i})"; sleep 2
   done
 }
+` + verifyManifestShell
+
+// verifyManifestShell defines verify_manifest, which checks the downloaded
+// artifact against the sha256 in the manifest stored beside it. A missing
+// manifest (or one without a sha256) refuses the restore: a truncated
+// object would otherwise only be caught if the restore tool happened to
+// choke on it. Backups taken before manifests existed have none, so the
+// caller can set ALLOW_UNVERIFIED=1 (API allowUnverified, CLI
+// --allow-unverified) to restore one anyway.
+const verifyManifestShell = `
+unverified() { # reason
+  if [ "${ALLOW_UNVERIFIED:-}" = "1" ]; then
+    echo "==> $1: integrity NOT verified, proceeding (allowUnverified set)"
+    return 0
+  fi
+  echo "==> $1: refusing to restore an unverified backup. If it predates manifests and you trust it, retry with allowUnverified (kuso CLI: --allow-unverified)." >&2
+  exit 1
+}
+verify_manifest() { # artifact
+  echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
+  if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
+    WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4 || true)
+    GOT=$(sha256sum "$1" | awk '{print $1}')
+    if [ -z "${WANT}" ]; then
+      unverified "manifest has no sha256"
+    elif [ "${WANT}" != "${GOT}" ]; then
+      echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database" >&2
+      exit 1
+    else
+      echo "==> checksum OK (${GOT})"
+    fi
+  else
+    unverified "no manifest for this backup"
+  fi
+}
 `
 
 // --- postgres ---------------------------------------------------------
@@ -53,21 +88,7 @@ func (postgresProducer) RestoreScript() string {
 set -eo pipefail
 ` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
 s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
-echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
-if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
-  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
-  GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
-  if [ -z "${WANT}" ]; then
-    echo "==> manifest present but no sha256 — skipping verification"
-  elif [ "${WANT}" != "${GOT}" ]; then
-    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
-    exit 1
-  else
-    echo "==> checksum OK (${GOT})"
-  fi
-else
-  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
-fi
+verify_manifest /tmp/dump.sql.gz
 echo "==> piping into psql"
 # ON_ERROR_STOP=1 aborts psql at the first SQL error instead of pressing on
 # and printing a success exit code over a partial apply; --single-transaction
@@ -144,17 +165,7 @@ func (redisProducer) RestoreScript() string {
 set -eo pipefail
 ` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
 s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.rdb.gz
-if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
-  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
-  GOT=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
-  if [ -n "${WANT}" ] && [ "${WANT}" != "${GOT}" ]; then
-    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting"
-    exit 1
-  fi
-  echo "==> checksum OK"
-else
-  echo "==> no manifest — integrity NOT verified, proceeding"
-fi
+verify_manifest /tmp/dump.rdb.gz
 echo "==> restoring rdb is manual (redis restore not yet automated)" >&2
 exit 1
 `
@@ -172,20 +183,7 @@ func (mongoProducer) RestoreScript() string {
 set -eo pipefail
 ` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
 s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.archive.gz
-if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
-  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
-  GOT=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
-  if [ -z "${WANT}" ]; then
-    echo "==> manifest present but no sha256 — skipping verification"
-  elif [ "${WANT}" != "${GOT}" ]; then
-    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
-    exit 1
-  else
-    echo "==> checksum OK (${GOT})"
-  fi
-else
-  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
-fi
+verify_manifest /tmp/dump.archive.gz
 # The download proved egress works, not that the DB's ingress policy has
 # admitted this pod yet. Wait for the server before restoring, bounded to 60s.
 # The image has mongodb-tools but no mongosh, so probe the first host in the URI.
@@ -216,20 +214,7 @@ func (mysqlProducer) RestoreScript() string {
 set -eo pipefail
 ` + s3FetchShell + `echo "==> downloading s3://${BUCKET}/${KEY}"
 s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
-if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
-  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
-  GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
-  if [ -z "${WANT}" ]; then
-    echo "==> manifest present but no sha256 — skipping verification"
-  elif [ "${WANT}" != "${GOT}" ]; then
-    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
-    exit 1
-  else
-    echo "==> checksum OK (${GOT})"
-  fi
-else
-  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
-fi
+verify_manifest /tmp/dump.sql.gz
 # Same bounded wait as postgres/mongo: the download proved egress, not that
 # the DB's ingress policy has admitted this pod yet.
 _i=0

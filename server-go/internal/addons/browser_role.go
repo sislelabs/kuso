@@ -2,6 +2,8 @@ package addons
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,7 +21,9 @@ const BrowserRole = "kuso_browser"
 
 // browserRoleProvisioned memoizes which addon releases already have the
 // browser role so we don't re-run the DDL on every browser request.
-// Keyed by "<ns>/<release>". A miss just re-runs the idempotent DDL.
+// Keyed by browserRoleKey: the database (grants are per database) and a
+// hash of the password (a re-added or repaired addon has a new one the role
+// must pick up). A miss just re-runs the idempotent DDL.
 var (
 	browserRoleProvisioned   = map[string]struct{}{}
 	browserRoleProvisionedMu sync.Mutex
@@ -38,7 +42,7 @@ func (s *Service) EnsureBrowserRole(ctx context.Context, ns, releaseName, adminU
 	if adminUser == "" || dbName == "" {
 		return fmt.Errorf("browser role: missing admin user or db name")
 	}
-	key := ns + "/" + releaseName
+	key := browserRoleKey(ns, releaseName, dbName, pass)
 	browserRoleProvisionedMu.Lock()
 	_, done := browserRoleProvisioned[key]
 	browserRoleProvisionedMu.Unlock()
@@ -111,11 +115,29 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %[4]s IN SCHEMA public GRANT SELECT, USAGE ON 
 	if err != nil {
 		_, stderr2, err2 := s.execInPod(ctx, ns, podName, "postgres", argv(false))
 		if err2 != nil {
-			return fmt.Errorf("provision browser role: %v: %s (fallback: %v: %s)", err, stderr, err2, stderr2)
+			// psql echoes the failing statement ("LINE 1: …"), which
+			// carries the password literal.
+			return fmt.Errorf("provision browser role: %v: %s (fallback: %v: %s)",
+				err, redactSecret(stderr, pass, escPass), err2, redactSecret(stderr2, pass, escPass))
 		}
 	}
 	browserRoleProvisionedMu.Lock()
 	browserRoleProvisioned[key] = struct{}{}
 	browserRoleProvisionedMu.Unlock()
 	return nil
+}
+
+func browserRoleKey(ns, release, dbName, pass string) string {
+	sum := sha256.Sum256([]byte(pass))
+	return ns + "/" + release + "/" + dbName + "/" + hex.EncodeToString(sum[:8])
+}
+
+// redactSecret blanks every occurrence of the given secrets in s.
+func redactSecret(s string, secrets ...string) string {
+	for _, sec := range secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "[redacted]")
+		}
+	}
+	return s
 }

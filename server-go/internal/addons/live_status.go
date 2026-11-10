@@ -78,8 +78,8 @@ func deriveAddonState(in addonStateInput) (string, string) {
 // WithLiveStatus stamps the rollup onto copies of the addons' status maps
 // from the shared pod informer (no apiserver calls). A cold cache leaves
 // the addons untouched and clients fall back to the helm conditions.
-// Addons on a shared instance server have no pods of their own and are
-// left alone too.
+// Addons on a shared instance server have no pods of their own; their
+// rollup is the shared server's (instanceTenantState).
 func (s *Service) WithLiveStatus(list []kube.KusoAddon) []kube.KusoAddon {
 	if s.Kube == nil || s.Kube.Cache == nil {
 		return list
@@ -89,6 +89,15 @@ func (s *Service) WithLiveStatus(list []kube.KusoAddon) []kube.KusoAddon {
 		a := &list[i]
 		external := a.Spec.External != nil && (a.Spec.Pooler == nil || !a.Spec.Pooler.Enabled)
 		if a.Spec.UseInstanceAddon != "" && !external {
+			if state, detail, ok := s.instanceTenantState(a); ok {
+				st := make(map[string]any, len(a.Status)+2)
+				for k, v := range a.Status {
+					st[k] = v
+				}
+				st["state"] = state
+				st["stateDetail"] = detail
+				a.Status = st
+			}
 			continue
 		}
 		in := addonStateInput{External: external}

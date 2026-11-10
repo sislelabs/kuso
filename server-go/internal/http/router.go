@@ -1008,6 +1008,11 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 				if r.URL.Path == "/api/projects/import" {
 					limit = httphandlers.MaxImportRequestBytes
 				}
+				// Control-plane restore takes a whole pg_dump (admin-only;
+				// the handler spools it to disk, never into memory).
+				if r.URL.Path == "/api/admin/restore" {
+					limit = httphandlers.MaxControlPlaneRestoreBytes
+				}
 				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 			next.ServeHTTP(w, r)

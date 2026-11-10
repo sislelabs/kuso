@@ -18,6 +18,8 @@ type RestoreBackupRequest struct {
 	// Confirm must echo the destination addon name (the addon itself, or
 	// Into); the server rejects the restore otherwise.
 	Confirm string `json:"confirm,omitempty"`
+	// AllowUnverified restores a backup with no checksum manifest.
+	AllowUnverified bool `json:"allowUnverified,omitempty"`
 }
 
 func (k *KusoClient) ListAddonBackups(project, addon string) (*resty.Response, error) {

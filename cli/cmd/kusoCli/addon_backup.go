@@ -67,6 +67,7 @@ var addonBackupListCmd = &cobra.Command{
 
 var addonBackupRestoreInto string
 var addonBackupRestoreConfirm string
+var addonBackupRestoreAllowUnverified bool
 
 // resolveRestoreConfirm computes the `confirm` value to send and
 // rejects an unconfirmed restore. The dumps are --clean, so the
@@ -106,7 +107,7 @@ The target addon must already exist + be the same engine as the source.`,
 		if err != nil {
 			return err
 		}
-		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm}
+		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm, AllowUnverified: addonBackupRestoreAllowUnverified}
 		resp, err := api.RestoreAddonBackup(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
@@ -437,6 +438,7 @@ func init() {
 	addonBackupCmd.AddCommand(addonBackupRestoreCmd)
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the destination addon name (the addon, or --into) to acknowledge the overwrite")
+	addonBackupRestoreCmd.Flags().BoolVar(&addonBackupRestoreAllowUnverified, "allow-unverified", false, "restore a backup that has no checksum manifest (taken before manifests existed)")
 	addonBackupCmd.AddCommand(addonBackupDownloadCmd)
 	// Long-only --file for the destination; -o/--output is retired here
 	// (it used to mean the FILE while meaning the FORMAT everywhere
