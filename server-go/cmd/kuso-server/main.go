@@ -1696,6 +1696,16 @@ func main() {
 				rhScanner, rhRemediator, *namespace, 5*time.Minute,
 				autoRemediateEnabled, logger.With("component", "auto-remediate"))
 			goSafe(logger, "remediate", func() { remediateLoop.Run(workCtx) })
+			goSafe(logger, "wildcard-host-audit", func() {
+				envs, err := kubeClient.ListKusoEnvironments(workCtx, "")
+				if err != nil {
+					logger.Warn("wildcard host audit: list envs", "err", err)
+					return
+				}
+				for _, p := range projects.WildcardHostProblems(envs) {
+					logger.Warn("SECURITY: existing wildcard domain would be refused today; it keeps serving, review it", "problem", p)
+				}
+			})
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
 			startKubeSingletons(ctx)
