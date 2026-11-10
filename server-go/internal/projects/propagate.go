@@ -325,7 +325,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// this path could preserve a clone but never restore one; preview
 				// envs lost theirs on every propagation after the parent addon
 				// changed, and mounted the production source instead.
-				prunedFrom = s.ensureEnvClones(ctx, project, envScope, prunedFrom)
+				prunedFrom = s.ensureEnvClones(ctx, ns, project, envScope, prunedFrom, svc.Spec.SubscribedAddons)
 				if svc.Spec.SubscribedAddons != nil {
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
@@ -723,33 +723,62 @@ func (s *Service) warnMissingServiceRefTargets(ctx context.Context, ns, project,
 
 var serviceRefHostRE = regexp.MustCompile(`([a-z0-9][a-z0-9-]*)\.[a-z0-9-]+\.svc\.cluster\.local`)
 
-// ensureEnvClones adds the conn secret of every addon clone minted for
-// envScope and drops the project-level source each clone replaces. The clone
-// list comes from ReferenceableConnSecrets (the only lister that includes
-// env-scoped addons); names are matched with kube.IsEnvScopedConn. No-op for
-// production and when the lister isn't wired.
-func (s *Service) ensureEnvClones(ctx context.Context, project, envScope string, list []string) []string {
-	if envScope == "" || envScope == "production" || s.ReferenceableConnSecrets == nil {
+// ensureEnvClones re-asserts the env's own addon clones on its envFrom list,
+// mirroring addons.refreshEnvSecrets so the two writers agree (D1/ISO-6).
+// Clones are the addon CRs labelled env=envScope, paired with their source
+// by the provenance recorded on the CR, never by name. With a subscription
+// (non-nil subs) a clone is mounted only when its source is subscribed, and
+// an unsubscribed one is removed; a clone with no recorded source is never
+// added, only kept if already mounted. The clone replaces its source.
+// No-op for production and on a list error.
+func (s *Service) ensureEnvClones(ctx context.Context, ns, project, envScope string, list, subs []string) []string {
+	if envScope == "" || envScope == "production" {
 		return list
 	}
-	all, err := s.ReferenceableConnSecrets(ctx, project)
+	clones, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project, labelEnv: envScope})
 	if err != nil {
+		slog.WarnContext(ctx, "propagate: list env addon clones", "project", project, "env", envScope, "err", err)
 		return list
 	}
+	slices.SortFunc(clones, func(a, b kube.KusoAddon) int { return strings.Compare(a.Name, b.Name) })
+	allow := subscribedConnSet(subs, project)
 	out := slices.Clone(list)
-	for _, conn := range all {
-		if !kube.IsEnvScopedConn(conn, envScope) {
+	for i := range clones {
+		conn := clones[i].Name + "-conn"
+		src := recordedCloneSource(&clones[i], project)
+		mounted := slices.Contains(out, conn)
+		if src == "" {
+			if subs == nil && !mounted {
+				out = append(out, conn)
+			}
 			continue
 		}
-		if !slices.Contains(out, conn) {
+		if subs != nil && !allow[src] {
+			out = slices.DeleteFunc(out, func(n string) bool { return n == conn })
+			continue
+		}
+		if !mounted {
 			out = append(out, conn)
 		}
-		// "<project>-db-staging-conn" replaces "<project>-db-conn".
-		if src := cloneSourceConnName(conn, envScope); src != "" {
-			out = slices.DeleteFunc(out, func(n string) bool { return n == src })
-		}
+		out = slices.DeleteFunc(out, func(n string) bool { return n == src })
 	}
 	return out
+}
+
+// recordedCloneSource is the project-level conn a clone addon was minted
+// from, read from its preview-source label or env-group-source-addon
+// annotation; "" when neither was recorded.
+func recordedCloneSource(a *kube.KusoAddon, project string) string {
+	if short := a.Labels["kuso.sislelabs.com/preview-source"]; short != "" {
+		if !strings.HasPrefix(short, project+"-") {
+			short = project + "-" + short
+		}
+		return short + "-conn"
+	}
+	if fqn := a.Annotations["kuso.sislelabs.com/env-group-source-addon"]; fqn != "" {
+		return fqn + "-conn"
+	}
+	return ""
 }
 
 // cloneSourceConnName returns the project-level conn a clone shadows, for
@@ -785,17 +814,8 @@ func (s *Service) envCloneConnByOrigin(ctx context.Context, ns, project, envScop
 	for i := range list {
 		a := &list[i]
 		cloneConn := a.Name + "-conn"
-		var src string
-		switch {
-		case a.Labels["kuso.sislelabs.com/preview-source"] != "":
-			short := a.Labels["kuso.sislelabs.com/preview-source"]
-			if !strings.HasPrefix(short, project+"-") {
-				short = project + "-" + short
-			}
-			src = short + "-conn"
-		case a.Annotations["kuso.sislelabs.com/env-group-source-addon"] != "":
-			src = a.Annotations["kuso.sislelabs.com/env-group-source-addon"] + "-conn"
-		default:
+		src := recordedCloneSource(a, project)
+		if src == "" {
 			src = cloneSourceConnName(cloneConn, envScope)
 		}
 		if src != "" && src != cloneConn {
