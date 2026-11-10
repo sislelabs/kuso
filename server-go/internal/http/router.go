@@ -588,6 +588,7 @@ func mountAuthenticatedRoutes(
 						Namespace: d.Namespace,
 					},
 					OnSettingsChange: d.VulnGateInvalidate,
+					Audit:            d.Audit,
 					Logger:           d.Logger,
 				}).Mount(r)
 			}

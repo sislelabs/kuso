@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -53,7 +54,9 @@ type VulnsHandler struct {
 	Updater *vulnscan.AddonUpdater
 	// OnSettingsChange drops the gate's cached settings.
 	OnSettingsChange func()
-	Logger           *slog.Logger
+	// Audit records policy and ignore writes. nil = not audited.
+	Audit  *audit.Service
+	Logger *slog.Logger
 	Now              func() time.Time
 }
 
@@ -352,11 +355,46 @@ func (h *VulnsHandler) PutPolicy(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "set policy", fmt.Errorf("%w: mode must be inherit, enforce, report or off", vulnscan.ErrInvalid))
 		return
 	}
+	st, err := h.settings(r.Context())
+	if err != nil {
+		h.fail(w, "set policy", err)
+		return
+	}
+	// An editor may tighten a service's gate but not loosen it below
+	// what the instance admin set; that takes a project admin.
+	if vulnscan.WeakerThanInstance(st.Mode, body.Mode) &&
+		!requireProjectAccess(r.Context(), w, h.DB, project, db.ProjectRoleAdmin) {
+		return
+	}
+	prev, _ := h.DB.GetVulnPolicy(r.Context(), project, service)
 	if err := h.DB.SetVulnPolicy(r.Context(), project, service, body.Mode); err != nil {
 		h.fail(w, "set policy", err)
 		return
 	}
+	h.audit(r.Context(), "vulns.policy.set", project, service,
+		fmt.Sprintf("vuln policy %s → %s (instance mode %s)", orInherit(prev), body.Mode, st.Mode))
 	h.writePolicy(w, r, project, service)
+}
+
+func orInherit(p string) string {
+	if p == "" {
+		return vulnscan.ModeInherit
+	}
+	return p
+}
+
+func (h *VulnsHandler) audit(ctx context.Context, action, project, app, msg string) {
+	if h.Audit == nil {
+		return
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Action:   action,
+		Pipeline: project,
+		App:      app,
+		Resource: "vulns",
+		Message:  msg,
+	})
 }
 
 func (h *VulnsHandler) listIgnores(w http.ResponseWriter, r *http.Request, scope, project, name string) {
@@ -410,6 +448,8 @@ func (h *VulnsHandler) addIgnore(w http.ResponseWriter, r *http.Request, scope, 
 		h.fail(w, "add ignore", err)
 		return
 	}
+	h.audit(r.Context(), "vulns.ignore.add", project, name,
+		fmt.Sprintf("ignore %s on %s %s: %s", body.VulnID, scope, name, body.Reason))
 	writeJSON(w, http.StatusCreated, vulnscan.IgnoreToJSON(created, h.now()))
 }
 
@@ -423,6 +463,7 @@ func (h *VulnsHandler) deleteIgnore(w http.ResponseWriter, r *http.Request, scop
 		h.fail(w, "delete ignore", err)
 		return
 	}
+	h.audit(r.Context(), "vulns.ignore.delete", project, name, fmt.Sprintf("removed ignore #%d on %s %s", id, scope, name))
 	w.WriteHeader(http.StatusNoContent)
 }
 

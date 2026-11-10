@@ -43,6 +43,17 @@ func EffectiveMode(instance, policy string) string {
 	return instance
 }
 
+// WeakerThanInstance reports whether setting a service's policy to
+// policy would make its effective mode looser than the instance mode
+// (enforce > report > off).
+func WeakerThanInstance(instance, policy string) bool {
+	rank := map[string]int{ModeOff: 0, ModeReport: 1, ModeEnforce: 2}
+	if !ValidMode(instance) {
+		instance = db.DefaultVulnScanSettings().Mode
+	}
+	return rank[EffectiveMode(instance, policy)] < rank[instance]
+}
+
 // ValidateSettings checks a full instance settings object.
 func ValidateSettings(s db.VulnScanSettings) error {
 	if !ValidMode(s.Mode) {
