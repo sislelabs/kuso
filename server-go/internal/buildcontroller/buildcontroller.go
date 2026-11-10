@@ -60,6 +60,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
@@ -106,6 +107,11 @@ const (
 	retryBaseDelay   = 5 * time.Second
 	retryMaxDelay    = 5 * time.Minute
 	retryMaxAttempts = 8
+
+	// queueWorkers bounds concurrent reconciles. Each holds up to a 30s
+	// budget; 4 keeps a burst of builds moving without stampeding the
+	// apiserver.
+	queueWorkers = 4
 )
 
 // Service is the controller entry point. Held on the server-go Deps
@@ -155,6 +161,14 @@ type Service struct {
 	retryBase time.Duration
 	retryMax  int
 
+	// queue decouples reconcile from the informer callback: handlers
+	// only enqueue the CR key, and queueWorkers goroutines reconcile the
+	// latest cached object. Reconciling inline serialised every build's
+	// apiserver round trips through the one listener goroutine, so Job
+	// creation latency grew linearly with queued builds. The queue also
+	// collapses an update flood on one CR into a single reconcile.
+	queue workqueue.TypedInterface[string]
+
 	// startOnce makes Start idempotent. The whole struct is intended
 	// to live for the process lifetime; accidental double-Start (e.g.
 	// from a future refactor that wires it inside the leader block
@@ -184,9 +198,17 @@ func (s *Service) installHandler(ctx context.Context) {
 		}
 		return
 	}
+	s.queue = workqueue.NewTyped[string]()
+	go func() {
+		<-ctx.Done()
+		s.queue.ShutDown()
+	}()
+	for range queueWorkers {
+		go s.runWorker(ctx)
+	}
 	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { s.maybeReconcile(ctx, obj, "add") },
-		UpdateFunc: func(_, newObj any) { s.maybeReconcile(ctx, newObj, "update") },
+		AddFunc:    s.enqueue,
+		UpdateFunc: func(_, newObj any) { s.enqueue(newObj) },
 		DeleteFunc: s.handleDelete,
 	})
 	if err != nil && s.Logger != nil {
@@ -225,6 +247,44 @@ func (s *Service) handleDelete(obj any) {
 	// A deleted CR has nothing left to retry — stop any pending
 	// backoff timer so it doesn't fire against a ghost.
 	s.clearRetry(key)
+}
+
+// enqueue queues a CR key for the workers. Non-leaders drop the event:
+// ResyncActive covers anything that arrives during a lease handover.
+func (s *Service) enqueue(obj any) {
+	if s.LeaderActive != nil && !s.LeaderActive.Load() {
+		return
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return
+	}
+	s.queue.Add(u.GetNamespace() + "/" + u.GetName())
+}
+
+func (s *Service) runWorker(ctx context.Context) {
+	for {
+		key, shutdown := s.queue.Get()
+		if shutdown {
+			return
+		}
+		s.processKey(ctx, key)
+		s.queue.Done(key)
+	}
+}
+
+// processKey reconciles the latest cached copy of key. A CR that has
+// left the cache was deleted; handleDelete already cleaned up.
+func (s *Service) processKey(ctx context.Context, key string) {
+	ns, name, ok := strings.Cut(key, "/")
+	if !ok {
+		return
+	}
+	u, found, synced := s.Cache.GetCR(kube.GVRBuilds, ns, name)
+	if !synced || !found {
+		return
+	}
+	s.maybeReconcile(ctx, u, "event")
 }
 
 // maybeReconcile is the leader-gated dispatch step. Non-leaders see
@@ -441,6 +501,9 @@ func (s *Service) tryReuse(ctx context.Context, u *unstructured.Unstructured, b 
 	ns, name := u.GetNamespace(), u.GetName()
 	// A build that already has a Job (leader resync, a later informer
 	// event) keeps it; only a not-yet-rendered build may reuse.
+	if _, found := s.Cache.GetJob(ns, name); found {
+		return false
+	}
 	if _, err := s.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		return false
 	}
@@ -667,6 +730,12 @@ func (s *Service) ensureJob(ctx context.Context, u *unstructured.Unstructured, b
 		// KusoBuild CR while the Job still exists. We want the CR to
 		// outlive the Job so the build history survives — so leave
 		// this false.
+	}
+	// The Job already exists (leader resync, a later event): the SA was
+	// created before it, so both Creates would only come back
+	// AlreadyExists. Skip the two round trips.
+	if _, found := s.Cache.GetJob(ns, name); found {
+		return nil
 	}
 	sa := renderServiceAccount(name, ns, ownerRef)
 	if _, err := s.Kube.Clientset.CoreV1().ServiceAccounts(ns).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
