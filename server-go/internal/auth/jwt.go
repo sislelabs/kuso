@@ -42,6 +42,44 @@ type Issuer struct {
 	seen         SeenRecorder       // optional; set via SetSeenRecorder
 }
 
+// DevJWTSecret is the secret hack/install.sh writes under
+// KUSO_INSECURE_SECRETS=1. It is public, so anyone can forge tokens on
+// an instance that runs with it.
+const DevJWTSecret = "dev-jwt-secret-do-not-use-in-prod-32-chars"
+
+// MinJWTSecretLen is the shortest HS256 secret accepted without the
+// insecure-dev opt-in.
+const MinJWTSecretLen = 32
+
+// JWTSecretWeakness returns why secret is unsafe to sign with, or ""
+// when it is fine. NewIssuer doesn't enforce it: an existing instance
+// with a weak secret must keep serving after an upgrade (refusing would
+// brick the dashboard), so the caller decides between refusing and
+// warning.
+func JWTSecretWeakness(secret string) string {
+	switch {
+	case secret == DevJWTSecret:
+		return "JWT_SECRET is the public dev secret from KUSO_INSECURE_SECRETS=1; anyone can forge admin tokens"
+	case len(secret) < MinJWTSecretLen:
+		return fmt.Sprintf("JWT_SECRET is %d bytes; at least %d random bytes are required", len(secret), MinJWTSecretLen)
+	}
+	return ""
+}
+
+// JWTBootDecision is what the server does with a weak secret at boot.
+// A fresh install (no users yet) refuses to start, since nothing is lost
+// by fixing the secret first. An existing install keeps running and
+// warns: refusing there would take the dashboard down on upgrade, and
+// rotating the secret logs everyone out, so it stays a manual step.
+// allowInsecure (KUSO_ALLOW_INSECURE_JWT=1) is the explicit dev opt-in.
+func JWTBootDecision(secret string, freshInstall, allowInsecure bool) (problem string, refuse bool) {
+	problem = JWTSecretWeakness(secret)
+	if problem == "" || allowInsecure {
+		return problem, false
+	}
+	return problem, freshInstall
+}
+
 // NewIssuer constructs an Issuer with the given HMAC secret and TTL.
 //
 // Empty secret is a deliberate misconfiguration — refuse rather than fall

@@ -889,11 +889,22 @@ if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
   SESSION_KEY="dev-session-key-do-not-use-in-prod-3232"
   JWT_SECRET="dev-jwt-secret-do-not-use-in-prod-32-chars"
   METRICS_SCRAPE_TOKEN="dev-metrics-scrape-token-do-not-use"
+  # kuso-server refuses to start a fresh install on the public dev JWT
+  # secret unless this is set.
+  ALLOW_INSECURE_JWT="1"
 else
+  ALLOW_INSECURE_JWT=""
   # Precedence: explicit env-var override > existing secret > fresh random.
   ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-${EXISTING_ADMIN:-$(random_string)}}"
   SESSION_KEY="${EXISTING_SESSION:-$(random_string)}"
   JWT_SECRET="${EXISTING_JWT:-$(random_string)}"
+  # A secret left over from an earlier KUSO_INSECURE_SECRETS=1 run (or a
+  # hand-set short one) lets anyone forge admin tokens. Re-running the
+  # installer is the operator's explicit rotation step.
+  if [[ "$JWT_SECRET" == "dev-jwt-secret-do-not-use-in-prod-32-chars" || ${#JWT_SECRET} -lt 32 ]]; then
+    warn "existing JWT_SECRET is insecure (public dev value or shorter than 32 chars): rotating it. Every session and API token stops working; log in again and re-issue tokens."
+    JWT_SECRET="$(random_string)"
+  fi
   METRICS_SCRAPE_TOKEN="${EXISTING_METRICS_SCRAPE:-$(random_string)}"
   if [[ -n "$EXISTING_ADMIN" ]]; then
     log "reusing existing kuso-server-secrets (admin password unchanged)"
@@ -932,6 +943,7 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_RELEASE_PUBLIC_KEY="$KUSO_RELEASE_PUBKEY" \
   --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   --from-literal=KUSO_METRICS_SCRAPE_TOKEN="$METRICS_SCRAPE_TOKEN" \
+  ${ALLOW_INSECURE_JWT:+--from-literal=KUSO_ALLOW_INSECURE_JWT="$ALLOW_INSECURE_JWT"} \
   | kubectl apply -f - >/dev/null
 
 # Admin password lives in its OWN Secret, mounted as a file inside the

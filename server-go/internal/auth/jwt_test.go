@@ -137,3 +137,28 @@ func TestNewIssuer_RejectsEmptySecret(t *testing.T) {
 		t.Fatal("expected error for empty secret")
 	}
 }
+
+// SEC-4: the public dev secret and short secrets refuse a fresh install,
+// but only warn on an existing one so an upgrade can't brick the dashboard.
+func TestJWTBootDecision(t *testing.T) {
+	t.Parallel()
+	strong := strings.Repeat("k", MinJWTSecretLen)
+	cases := []struct {
+		name, secret            string
+		fresh, allow            bool
+		wantProblem, wantRefuse bool
+	}{
+		{"strong fresh", strong, true, false, false, false},
+		{"dev secret fresh", DevJWTSecret, true, false, true, true},
+		{"short fresh", "short", true, false, true, true},
+		{"dev secret existing", DevJWTSecret, false, false, true, false},
+		{"short existing", "short", false, false, true, false},
+		{"dev secret fresh, opted in", DevJWTSecret, true, true, true, false},
+	}
+	for _, c := range cases {
+		problem, refuse := JWTBootDecision(c.secret, c.fresh, c.allow)
+		if (problem != "") != c.wantProblem || refuse != c.wantRefuse {
+			t.Errorf("%s: problem=%q refuse=%v, want problem=%v refuse=%v", c.name, problem, refuse, c.wantProblem, c.wantRefuse)
+		}
+	}
+}
