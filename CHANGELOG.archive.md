@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.3] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(health): never flag the control-plane DB credential as an orphan ([1e68000](https://github.com/sislelabs/kuso/commit/1e680004b59f331b7dbb08808b01a26134f105e2))
+
 ## [0.26.2] — 2026-09-23
 
 ### 🐛 Bug Fixes
