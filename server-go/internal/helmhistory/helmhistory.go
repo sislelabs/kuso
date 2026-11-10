@@ -32,6 +32,14 @@ const DefaultKeep = 10
 
 var secretsGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 
+// A long-lived install can hold thousands of stale revisions for one
+// release. The first sweeps work through them gradually instead of
+// issuing every DELETE at once against kine and the client's QPS budget.
+const (
+	maxDeletesPerNamespace = 1000
+	deleteGap              = 50 * time.Millisecond
+)
+
 // Pruner deletes superseded helm release revisions.
 type Pruner struct {
 	// Meta lists Secret metadata only: release Secrets carry the whole
@@ -41,6 +49,8 @@ type Pruner struct {
 	Namespaces func(context.Context) []string
 	Interval   time.Duration
 	Logger     *slog.Logger
+
+	noPacing bool // tests
 }
 
 // Run sweeps once shortly after start, then every Interval.
@@ -80,6 +90,13 @@ func (p *Pruner) sweep(ctx context.Context) {
 	}
 }
 
+func (p *Pruner) gap() time.Duration {
+	if p.noPacing {
+		return 0
+	}
+	return deleteGap
+}
+
 func (p *Pruner) keep() int {
 	if p.Keep < 1 {
 		return DefaultKeep
@@ -97,8 +114,8 @@ type revision struct {
 // helm release in ns and returns how many it deleted.
 func (p *Pruner) PruneNamespace(ctx context.Context, ns string) (int, error) {
 	lctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
 	list, err := p.Meta.Resource(secretsGVR).Namespace(ns).List(lctx, metav1.ListOptions{LabelSelector: "owner=helm"})
+	cancel()
 	if err != nil {
 		return 0, fmt.Errorf("list helm release secrets in %s: %w", ns, err)
 	}
@@ -115,7 +132,17 @@ func (p *Pruner) PruneNamespace(ctx context.Context, ns string) (int, error) {
 	var firstErr error
 	for _, revs := range byRelease {
 		for _, r := range prunable(revs, p.keep()) {
-			if err := p.Meta.Resource(secretsGVR).Namespace(ns).Delete(lctx, r.name, metav1.DeleteOptions{}); err != nil {
+			if deleted >= maxDeletesPerNamespace || ctx.Err() != nil {
+				return deleted, firstErr
+			}
+			if deleted > 0 && p.gap() > 0 {
+				select {
+				case <-ctx.Done():
+					return deleted, firstErr
+				case <-time.After(p.gap()):
+				}
+			}
+			if err := p.Meta.Resource(secretsGVR).Namespace(ns).Delete(ctx, r.name, metav1.DeleteOptions{}); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("delete %s/%s: %w", ns, r.name, err)
 				}

@@ -46,7 +46,7 @@ func TestPruneNamespace_KeepsNewestAndDeployed(t *testing.T) {
 	scheme := metafake.NewTestScheme()
 	metav1.AddMetaToScheme(scheme)
 	meta := metafake.NewSimpleMetadataClient(scheme, objs...)
-	p := &Pruner{Meta: meta, Keep: 10, Logger: slog.Default()}
+	p := &Pruner{Meta: meta, Keep: 10, Logger: slog.Default(), noPacing: true}
 
 	n, err := p.PruneNamespace(context.Background(), "kuso")
 	if err != nil {
