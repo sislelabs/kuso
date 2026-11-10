@@ -22,7 +22,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -102,21 +101,17 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 	}
 	now := time.Now().UTC()
 
-	// 1) Pod → project map. Source = kube API (the cache doesn't index
-	// every pod; we'd miss preview pods if it did). One List with the
-	// project-label-exists selector is cheap and bounded to kuso-owned
-	// workloads, skipping ingress controllers / cert-manager / etc.
-	pods, err := s.Kube.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelProject,
-	})
+	// 1) Pod → project map, from the cluster-wide pod informer (live
+	// LIST only on a cold cache). The project-label-exists selector
+	// skips ingress controllers / cert-manager / etc.
+	pods, err := s.Kube.ListProjectPods(ctx)
 	if err != nil {
 		return fmt.Errorf("list project pods: %w", err)
 	}
 	type podKey struct{ ns, name string }
-	podProject := make(map[podKey]string, len(pods.Items))
+	podProject := make(map[podKey]string, len(pods))
 	knownProjects := make(map[string]struct{}, 16)
-	for i := range pods.Items {
-		p := &pods.Items[i]
+	for _, p := range pods {
 		project := p.Labels[kube.LabelProject]
 		if project == "" {
 			continue

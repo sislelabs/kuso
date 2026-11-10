@@ -578,15 +578,8 @@ func (s *Service) retryFire(ctx context.Context, key string) {
 		return
 	}
 	if s.Cache != nil {
-		if items, ok := s.Cache.ListFromCache(kube.GVRBuilds, obj.GetNamespace(), labels.Everything()); ok {
-			var fresh *unstructured.Unstructured
-			for _, it := range items {
-				if it.GetName() == obj.GetName() {
-					fresh = it
-					break
-				}
-			}
-			if fresh == nil {
+		if fresh, found, ok := s.Cache.GetCR(kube.GVRBuilds, obj.GetNamespace(), obj.GetName()); ok {
+			if !found {
 				// CR deleted while we waited — nothing to build.
 				s.clearRetry(key)
 				return

@@ -256,7 +256,8 @@ func (s *Service) listBuildsForAdmission(ctx context.Context, ns, project, selec
 	if err != nil {
 		return nil
 	}
-	if list, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, ns, sel); ok {
+	// Read-only callers: skip the per-object DeepCopy.
+	if list, ok := s.Kube.Cache.ListFromCacheShared(kube.GVRBuilds, ns, sel); ok {
 		return list
 	}
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})

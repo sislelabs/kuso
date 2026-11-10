@@ -110,7 +110,7 @@ func (d *Dispatcher) listProjectServices(ctx context.Context, project string) ([
 	ns := d.nsFor(ctx, project)
 	sel := map[string]string{kube.LabelProject: project}
 	if d.Kube.Cache != nil {
-		if items, ok := d.Kube.Cache.ListFromCache(kube.GVRServices, ns, labels.SelectorFromSet(sel)); ok {
+		if items, ok := d.Kube.Cache.ListFromCacheShared(kube.GVRServices, ns, labels.SelectorFromSet(sel)); ok {
 			out := make([]unstructured.Unstructured, 0, len(items))
 			for _, u := range items {
 				out = append(out, *u)

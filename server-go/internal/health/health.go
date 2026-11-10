@@ -287,9 +287,10 @@ func (w *Watcher) checkPods(ctx context.Context) {
 	// All namespaces: a project may run in its own namespace
 	// (kuso-<project>), and listing only the home namespace left every
 	// such project without crash alerts.
-	pods, err := w.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelProject,
-	})
+	//
+	// Served from the pod informer (a live cluster-wide LIST every 60s
+	// was 30–60 MB at ~3k pods); live LIST only on a cold cache.
+	pods, err := w.Kube.ListProjectPods(ctx)
 	if err != nil {
 		w.Logger.Warn("health: list pods", "err", err)
 		return
@@ -298,8 +299,7 @@ func (w *Watcher) checkPods(ctx context.Context) {
 
 	obs := map[string]*keyObservation{}
 	var order []string // first-seen order, so alerts are deterministic
-	for i := range pods.Items {
-		p := &pods.Items[i]
+	for _, p := range pods {
 		// Job pods (crons, runs, builds, seeds, release hooks) aren't
 		// long-running workloads: they fail through their own events, and
 		// reporting them here filed a cron as a crashing service env.
