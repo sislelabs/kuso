@@ -8,7 +8,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/kube"
@@ -51,13 +50,11 @@ func requireParent(ctx context.Context, w http.ResponseWriter, kc *kube.Client, 
 // run on every poll of a list endpoint), else from the API server.
 func lookupCR(ctx context.Context, kc *kube.Client, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, error) {
 	if kc.Cache != nil {
-		if items, ok := kc.Cache.ListFromCache(gvr, ns, labels.Everything()); ok {
-			for _, u := range items {
-				if u.GetName() == name {
-					return u, nil
-				}
+		if u, found, ok := kc.Cache.GetCR(gvr, ns, name); ok {
+			if !found {
+				return nil, apierrors.NewNotFound(gvr.GroupResource(), name)
 			}
-			return nil, apierrors.NewNotFound(gvr.GroupResource(), name)
+			return u, nil
 		}
 	}
 	return kc.Dynamic.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})

@@ -46,6 +46,10 @@ func TargetURL(namespace, env, userPath string) string {
 	return u.String()
 }
 
+// connectTimeout bounds the TCP connect; in-cluster connects take
+// milliseconds, so anything slower is a failure.
+const connectTimeout = 2 * time.Second
+
 type Prober struct {
 	client  *http.Client
 	timeout time.Duration
@@ -67,7 +71,10 @@ func NewProber(timeout time.Duration) *Prober {
 				DisableKeepAlives:   true,
 				Proxy:               nil,
 				TLSHandshakeTimeout: timeout,
-				DialContext:         (&net.Dialer{Timeout: timeout}).DialContext,
+				// A target whose connect hangs (partition, blackholed
+				// pod IP) fails in connectTimeout instead of holding a
+				// worker for the full response timeout.
+				DialContext: (&net.Dialer{Timeout: min(timeout, connectTimeout)}).DialContext,
 			},
 		},
 	}

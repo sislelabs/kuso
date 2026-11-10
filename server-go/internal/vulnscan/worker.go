@@ -45,6 +45,8 @@ type WorkerStore interface {
 	SetVulnScanJob(ctx context.Context, id int64, jobName string) error
 	CompleteVulnScan(ctx context.Context, id int64, res db.VulnScanResult) error
 	FailVulnScan(ctx context.Context, id int64, msg string) error
+	HasQueuedVulnScan(ctx context.Context, reason string) (bool, error)
+	RequeueVulnScan(ctx context.Context, id int64) error
 }
 
 // Worker runs queued scans one at a time as Jobs in Namespace. All of
@@ -99,6 +101,9 @@ func (w *Worker) Step(ctx context.Context) error {
 		return err
 	}
 	if len(running) > 0 {
+		if w.preemptForGate(ctx, running) {
+			return nil
+		}
 		for _, s := range running {
 			w.advance(ctx, s)
 		}
@@ -110,6 +115,36 @@ func (w *Worker) Step(ctx context.Context) error {
 	}
 	w.start(ctx, *next)
 	return nil
+}
+
+// preemptForGate frees the single scan slot for a waiting gate scan.
+// Concurrency is one (VulnScan_one_running_idx), so a deploy gated on
+// its scan used to wait behind a nightly sweep scan for up to
+// scanMaxRuntime and often hit the gate's own timeout. A nightly scan is
+// cheap to redo; it goes back in the queue and the gate scan, ordered
+// first, is claimed next tick. Manual scans are left alone.
+func (w *Worker) preemptForGate(ctx context.Context, running []db.VulnScan) bool {
+	for _, s := range running {
+		if s.Reason != db.VulnReasonNightly {
+			return false
+		}
+	}
+	waiting, err := w.Store.HasQueuedVulnScan(ctx, db.VulnReasonGate)
+	if err != nil || !waiting {
+		return false
+	}
+	for _, s := range running {
+		if s.JobName != "" {
+			w.deleteJob(ctx, s.JobName)
+		}
+		w.cleanupAuth(ctx, s.ID)
+		if err := w.Store.RequeueVulnScan(ctx, s.ID); err != nil {
+			w.log().Warn("vulnscan: requeue preempted scan", "scan", s.ID, "err", err)
+			continue
+		}
+		w.log().Info("vulnscan: nightly scan preempted by a deploy-gate scan", "scan", s.ID, "image", s.ImageRef)
+	}
+	return true
 }
 
 func (w *Worker) fail(ctx context.Context, s db.VulnScan, msg string) {
@@ -155,6 +190,11 @@ func (w *Worker) start(ctx context.Context, s db.VulnScan) {
 	job, err := w.Kube.BatchV1().Jobs(w.Namespace).Create(ctx, buildJob(spec), metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
 		job, err = w.Kube.BatchV1().Jobs(w.Namespace).Get(ctx, JobName(s.ID), metav1.GetOptions{})
+		if err == nil && job.DeletionTimestamp != nil {
+			// The Job of a preempted run is still being deleted; the scan
+			// stays running without a job name and start retries next tick.
+			return
+		}
 	}
 	if err != nil {
 		w.fail(ctx, s, "create scan job: "+err.Error())

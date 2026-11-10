@@ -248,7 +248,8 @@ func projectServiceNames(ctx context.Context, kc *kube.Client, homeNS, project s
 	var items []*unstructured.Unstructured
 	cached := false
 	if kc.Cache != nil {
-		items, cached = kc.Cache.ListFromCache(kube.GVRServices, ns, labels.Everything())
+		// Read-only (names + timestamps): skip the per-object DeepCopy.
+		items, cached = kc.Cache.ListFromCacheShared(kube.GVRServices, ns, labels.Everything())
 	}
 	if !cached {
 		list, err := kc.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{})

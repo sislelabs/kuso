@@ -41,6 +41,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -120,9 +121,54 @@ type Cache struct {
 // podByNodeIndexKey is the cache.Indexer key for Pod-by-node lookups.
 const podByNodeIndexKey = "spec.nodeName"
 
+// Index keys. A project-labelled list used to be a selector match over
+// every cached CR (then a DeepCopy + reflect decode per hit); an env pod
+// lookup scanned every pod in the cluster. These make both O(matches).
+const (
+	crByProjectIndexKey   = "kuso-project"
+	podByInstanceIndexKey = "ns-instance"
+	instanceLabel         = "app.kubernetes.io/instance"
+)
+
+// projectIndexFunc indexes a CR under "<ns>/<project>" and "/<project>"
+// (the latter serves cluster-wide lists).
+func projectIndexFunc(obj any) ([]string, error) {
+	m, err := meta.Accessor(obj)
+	if err != nil {
+		return nil, nil
+	}
+	p := m.GetLabels()[LabelProject]
+	if p == "" {
+		return nil, nil
+	}
+	return []string{m.GetNamespace() + "/" + p, "/" + p}, nil
+}
+
+func podInstanceIndexFunc(obj any) ([]string, error) {
+	p, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil, nil
+	}
+	inst := p.Labels[instanceLabel]
+	if inst == "" {
+		return nil, nil
+	}
+	return []string{p.Namespace + "/" + inst}, nil
+}
+
+// stripManagedFields is the pod informer Transform: nothing reads a
+// pod's managedFields, and at ~5k pods they were 30–50% of the heap.
+func stripManagedFields(obj any) (any, error) {
+	if m, err := meta.Accessor(obj); err == nil {
+		m.SetManagedFields(nil)
+	}
+	return obj, nil
+}
+
 type informerEntry struct {
-	lister cache.GenericLister
-	synced cache.InformerSynced
+	lister  cache.GenericLister
+	synced  cache.InformerSynced
+	indexer cache.Indexer
 }
 
 // NewCache builds a shared informer factory over every kuso CRD and
@@ -148,9 +194,12 @@ func NewCache(c *Client) *Cache {
 	informers := make(map[schema.GroupVersionResource]informerEntry, len(gvrs))
 	for _, gvr := range gvrs {
 		gi := factory.ForResource(gvr)
+		inf := gi.Informer()
+		_ = inf.AddIndexers(cache.Indexers{crByProjectIndexKey: projectIndexFunc})
 		informers[gvr] = informerEntry{
-			lister: gi.Lister(),
-			synced: gi.Informer().HasSynced,
+			lister:  gi.Lister(),
+			synced:  inf.HasSynced,
+			indexer: inf.GetIndexer(),
 		}
 	}
 
@@ -175,7 +224,9 @@ func NewCache(c *Client) *Cache {
 				}
 				return []string{p.Spec.NodeName}, nil
 			},
+			podByInstanceIndexKey: podInstanceIndexFunc,
 		})
+		_ = informer.SetTransform(stripManagedFields)
 		cc.podFactory = pf
 		cc.podInformer = informer
 		cc.podLister = pi.Lister()
@@ -392,6 +443,26 @@ func (c *Cache) ListPodsByLabel(sel labels.Selector) ([]*corev1.Pod, bool) {
 	return pods, true
 }
 
+// ListPodsByInstance returns the pods in namespace carrying
+// app.kubernetes.io/instance=instance (one env's pods), via the index.
+// (nil, false) when the cache is cold. Shared pointers: don't mutate.
+func (c *Cache) ListPodsByInstance(namespace, instance string) ([]*corev1.Pod, bool) {
+	if c == nil || c.podInformer == nil || c.podSynced == nil || !c.podSynced() {
+		return nil, false
+	}
+	objs, err := c.podInformer.GetIndexer().ByIndex(podByInstanceIndexKey, namespace+"/"+instance)
+	if err != nil {
+		return nil, false
+	}
+	out := make([]*corev1.Pod, 0, len(objs))
+	for _, o := range objs {
+		if p, ok := o.(*corev1.Pod); ok {
+			out = append(out, p)
+		}
+	}
+	return out, true
+}
+
 // WaitForSync blocks until every informer has done its initial list,
 // or ctx is canceled. Use only on boot if you really need a warm
 // cache before serving — the read path doesn't require it.
@@ -434,6 +505,26 @@ func (c *Cache) WaitForSync(ctx context.Context) bool {
 // already fully resident; this is the same model the upstream
 // SharedInformer uses for its native typed listers.
 func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string, sel labels.Selector) ([]*unstructured.Unstructured, bool) {
+	shared, ok := c.ListFromCacheShared(gvr, namespace, sel)
+	if !ok {
+		return nil, false
+	}
+	// The typed decode (FromUnstructured) shares nested values of
+	// map[string]any fields (Status, Resources, ValueFrom) with its
+	// source, so the copy is what keeps a caller's mutation out of the
+	// cache. ListFromCacheShared skips it for read-only callers.
+	out := make([]*unstructured.Unstructured, len(shared))
+	for i, u := range shared {
+		out[i] = u.DeepCopy()
+	}
+	return out, true
+}
+
+// ListFromCacheShared is ListFromCache without the per-object DeepCopy.
+// The returned objects are the informer's own: callers must treat them
+// as read-only. A selector with an exact project-label match is served
+// from the project index instead of a scan over every cached CR.
+func (c *Cache) ListFromCacheShared(gvr schema.GroupVersionResource, namespace string, sel labels.Selector) ([]*unstructured.Unstructured, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -447,6 +538,22 @@ func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string,
 	if sel == nil {
 		sel = labels.Everything()
 	}
+	var out []*unstructured.Unstructured
+	if project, ok := sel.RequiresExactMatch(LabelProject); ok && entry.indexer != nil {
+		objs, err := entry.indexer.ByIndex(crByProjectIndexKey, namespace+"/"+project)
+		if err != nil {
+			return nil, false
+		}
+		out = make([]*unstructured.Unstructured, 0, len(objs))
+		for _, o := range objs {
+			u, ok := o.(*unstructured.Unstructured)
+			if !ok || !sel.Matches(labels.Set(u.GetLabels())) {
+				continue
+			}
+			out = append(out, u)
+		}
+		return out, true
+	}
 	var (
 		objs []runtime.Object
 		err  error
@@ -459,19 +566,60 @@ func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string,
 	if err != nil {
 		return nil, false
 	}
-	out := make([]*unstructured.Unstructured, 0, len(objs))
+	out = make([]*unstructured.Unstructured, 0, len(objs))
 	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
-		if !ok {
-			continue
+		if u, ok := o.(*unstructured.Unstructured); ok {
+			out = append(out, u)
 		}
-		// The lister hands back pointers into its cache. Callers
-		// decode through fromUnstructured into typed structs, which
-		// copies — but a defensive DeepCopy here would protect any
-		// future caller that mutates. Cheap belt-and-braces.
-		out = append(out, u.DeepCopy())
 	}
 	return out, true
+}
+
+// GetCR returns a deep copy of one cached CR by name. ok is false when
+// the GVR isn't cached or its informer hasn't synced (fall back to a
+// live GET); found is false when the synced cache doesn't have it.
+func (c *Cache) GetCR(gvr schema.GroupVersionResource, namespace, name string) (u *unstructured.Unstructured, found, ok bool) {
+	if c == nil {
+		return nil, false, false
+	}
+	entry, has := c.informers[gvr]
+	if !has || !entry.synced() {
+		return nil, false, false
+	}
+	obj, err := entry.lister.ByNamespace(namespace).Get(name)
+	if err != nil {
+		return nil, false, true
+	}
+	cu, isU := obj.(*unstructured.Unstructured)
+	if !isU {
+		return nil, false, true
+	}
+	return cu.DeepCopy(), true, true
+}
+
+// GetKusoProject reads one KusoProject from the informer, decoded.
+// Returns (nil, false) when the cache is cold or the project is absent.
+func (c *Cache) GetKusoProject(namespace, name string) (*KusoProject, bool) {
+	if c == nil {
+		return nil, false
+	}
+	entry, ok := c.informers[GVRProjects]
+	if !ok || !entry.synced() {
+		return nil, false
+	}
+	obj, err := entry.lister.ByNamespace(namespace).Get(name)
+	if err != nil {
+		return nil, false
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, false
+	}
+	var out KusoProject
+	if err := fromUnstructured(u.DeepCopy(), &out); err != nil {
+		return nil, false
+	}
+	return &out, true
 }
 
 // stripSecretData is the informer Transform for Secrets. It drops the

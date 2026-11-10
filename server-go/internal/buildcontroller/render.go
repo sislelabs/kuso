@@ -2,6 +2,7 @@ package buildcontroller
 
 import (
 	"fmt"
+	"kuso/server/internal/buildkit"
 	"regexp"
 	"slices"
 	"sort"
@@ -1394,7 +1395,7 @@ exec buildctl \
 		{Name: "IMAGE_REF", Value: image},
 		{Name: "CACHE_REF", Value: cache},
 		{Name: "REGISTRY_INSECURE", Value: registryInsecure(b)},
-		{Name: "BUILDKIT_ADDR", Value: defaultBuildkitHost},
+		{Name: "BUILDKIT_ADDR", Value: buildkit.HostFor(b.Spec.Project)},
 		{Name: "DRY_RUN", Value: dryRun},
 		{Name: "CACHE_EXPORT", Value: cacheExport(b)},
 	}
