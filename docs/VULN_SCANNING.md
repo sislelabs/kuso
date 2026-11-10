@@ -62,12 +62,12 @@ Per service (or per addon), per vulnerability ID, with a mandatory reason and op
 
 Addon images are upstream tags (`postgres:16`, `redis:7-alpine`, `ghcr.io/cloudnative-pg/postgresql:16`). Nodes pull a tag once and the chart's pull policy never re-pulls it, so without this an addon runs the build it first started on forever, missing upstream's security rebuilds.
 
-The updater (`internal/vulnscan/addonupdate.go`) runs on every sweep tick when `autoUpdateAddons` is on (and `scanAddons` is on and mode isn't `off`). Per native addon:
+The updater (`internal/vulnscan/addonupdate.go`) runs on every sweep tick when `autoUpdateAddons` is on (and `scanAddons` is on and mode isn't `off`). `autoUpdateAddons` is opt-in: it defaults to off, and instances that saved the settings form earlier keep their stored value. Per native addon:
 
 1. Find the main image from the addon's own pods: the first container of its StatefulSet/Deployment/CNPG instance pods, skipping pooler and Job pods. The tag ref is that image without any digest. The running digest counts only when every such pod is Ready on one digest.
 2. Resolve the tag's current digest anonymously against its registry (HEAD, bearer-token challenge; at most once per 20h per addon, once per tag per tick).
 3. If it differs from the running digest, queue a scan of `repo@newDigest` and wait for it.
-4. **Roll** when the new image has no more fixable critical+high findings than the running one (or the running one was never scanned), and only between `nightlyHourUTC` and +4h. At most 2 addons roll per tick (10 min). Rolling stamps `spec.imagePin = {image: "<tag ref>", digest}` on the KusoAddon. The chart's `kusoaddon.image` helper renders `tag@digest` only while `imagePin.image` equals the ref it renders, so changing `spec.version` drops a stale pin by itself. Without a pin, rendering is unchanged.
+4. **Roll** when the new image has no more fixable critical+high findings than the running one (or the running one was never scanned), the tag has pointed at that digest for at least 72 hours (soak, counted from when the updater first saw it, so an upgrade or a fresh upstream push never rolls on the next night), the image comes from the upstream project's own namespace (Docker Official `library/*`, `ghcr.io/cloudnative-pg`, `clickhouse/`, `getmeili/`, `valkey/`, `docker.redpanda.com/redpandadata`; third-party repackagers such as `axllent/mailpit` or `pgsty/minio` stay `ready` and only move with "Update now"), and only between `nightlyHourUTC` and +4h. At most 2 addons roll per tick (10 min). Rolling stamps `spec.imagePin = {image: "<tag ref>", digest}` on the KusoAddon. The chart's `kusoaddon.image` helper renders `tag@digest` only while `imagePin.image` equals the ref it renders, so changing `spec.version` drops a stale pin by itself. Without a pin, rendering is unchanged.
 4a. **The restart itself** (`internal/vulnscan/addonroll.go`), run in the background so a tick or request never blocks on it:
    - Pre-pull: one Job per node the addon runs on (in the `kuso` namespace, pinned with `nodeName`) pulls `repo@digest`. A failed pull aborts before anything restarts.
    - Single-node Postgres: `CHECKPOINT`; pin; once the old pod is terminating, `PAUSE` the addon's PgBouncer (pooled queries wait instead of failing) and terminate client sessions until Postgres refuses new logins, then drop the updater's own session. A smart shutdown waits on every session, so without this it would sit out the grace period and be SIGKILLed into crash recovery. `RESUME` once the new pod is Ready, or after 25s (under the pooler's 30s `query_wait_timeout`).
@@ -104,7 +104,7 @@ Instance (Setting kv, keys `vulnscan.*`), admin only:
   "scanPlatform": true,
   "nightlyHourUTC": 3,        // 0-23
   "notifyMinSeverity": "high", // critical | high | none
-  "autoUpdateAddons": true      // roll addons onto newer builds of their tag nightly
+  "autoUpdateAddons": false     // opt-in: roll addons onto newer builds of their tag nightly
 }
 ```
 

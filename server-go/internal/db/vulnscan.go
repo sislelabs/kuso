@@ -742,12 +742,14 @@ type VulnScanSettings struct {
 	NotifyMinSeverity string `json:"notifyMinSeverity"`
 	// AutoUpdateAddons rolls addons onto their tag's newest image in the
 	// nightly window when that image scans no worse (vulnscan.AddonUpdater).
+	// Opt-in: off unless an admin saved it on. Instances that saved the
+	// settings form before this default flipped keep their stored value.
 	AutoUpdateAddons bool `json:"autoUpdateAddons"`
 }
 
 // DefaultVulnScanSettings is a fresh install's config.
 func DefaultVulnScanSettings() VulnScanSettings {
-	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high", AutoUpdateAddons: true}
+	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high", AutoUpdateAddons: false}
 }
 
 // GetVulnScanSettings reads vulnscan.* over the defaults.
