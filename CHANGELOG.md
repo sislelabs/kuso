@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.42.2] — 2026-11-10
+
+### Other
+- Check MinIO policy attachment without grep ([fbf1483](https://github.com/sislelabs/kuso/commit/fbf14839297311a6a91d789fb14808f97f6587e3))
+- Compress the build cache with zstd and mark its export optional ([18d2933](https://github.com/sislelabs/kuso/commit/18d2933ef994e05aafeeb0fcfbd4a0bca2e97dc3))
+
 ## [0.42.1] — 2026-11-10
 
 ### Other
@@ -1164,11 +1170,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(backups): stream s3 addon backups with rclone instead of staging on disk ([3162640](https://github.com/sislelabs/kuso/commit/3162640d9fdf445ecdd7931c5de2fa62dcb3ef31))
-
-## [0.26.4] — 2026-09-23
-
-### 🐛 Bug Fixes
-- Fix(addons): label the s3 init hook pod so NetworkPolicy admits it ([66d0705](https://github.com/sislelabs/kuso/commit/66d070540152afec95f30d0b600e81c221b0b6b0))
 
 
 ---
