@@ -364,6 +364,9 @@ func (c *Client) UpdateKusoServiceWithRetry(ctx context.Context, namespace, name
 // an N% chance of losing one or more env writes whenever the
 // operator is reconciling at the same time.
 func (c *Client) UpdateKusoEnvironmentWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoEnvironment) error) (*KusoEnvironment, error) {
+	if err := c.paceEnvWrite(ctx); err != nil {
+		return nil, err
+	}
 	return updateWithRetry[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, name, mutate)
 }
 

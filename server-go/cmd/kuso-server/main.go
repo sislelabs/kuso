@@ -21,6 +21,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/activator"
@@ -1148,7 +1150,7 @@ func main() {
 				Namespace: *namespace,
 				LockName:  "kuso-server-singletons",
 				Identity:  os.Getenv("HOSTNAME"),
-				Client:    kc.Clientset,
+				Client:    kc.LeaseClient(),
 				Logger:    logger,
 				Run:       startSingletons,
 			})
@@ -1704,9 +1706,13 @@ func main() {
 				Namespace: *namespace,
 				LockName:  "kuso-server-cluster-singletons",
 				Identity:  os.Getenv("HOSTNAME"),
-				Client:    kubeClient.Clientset,
+				Client:    kubeClient.LeaseClient(),
 				Logger:    logger,
 				Run:       startKubeSingletons,
+				// Spread the two singleton groups across replicas so
+				// adding a replica adds loop capacity (SCL-6).
+				PreferNotHolding: "kuso-server-singletons",
+				HasPeers:         func() bool { return kusoServerPeers(kubeClient, *namespace) > 1 },
 			})
 		}
 	}
@@ -2489,4 +2495,24 @@ func runActivator(addr string, logger *slog.Logger) {
 		logger.Error("activator: serve", "err", err)
 		os.Exit(1)
 	}
+}
+
+// kusoServerPeers counts Running kuso-server pods in ns from the pod
+// informer. Returns 0 when the cache is cold, which callers treat as
+// "no peers" (contest immediately).
+func kusoServerPeers(kc *kube.Client, ns string) int {
+	if kc == nil || kc.Cache == nil {
+		return 0
+	}
+	pods, ok := kc.Cache.ListPodsByLabel(labels.SelectorFromSet(labels.Set{"app.kubernetes.io/name": "kuso-server"}))
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, p := range pods {
+		if p.Namespace == ns && p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil {
+			n++
+		}
+	}
+	return n
 }

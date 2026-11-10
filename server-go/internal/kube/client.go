@@ -6,6 +6,7 @@
 package kube
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 )
 
 // Client bundles the kube API surfaces the server uses.
@@ -25,6 +27,19 @@ type Client struct {
 	Clientset kubernetes.Interface
 	Dynamic   dynamic.Interface
 	Config    *rest.Config
+
+	// LeaseClientset is a clientset with its own client-side rate
+	// limiter, used only for leader-election lease renewals. Sharing the
+	// main limiter let a 1,000-env propagation fan-out queue a renewal
+	// past RenewDeadline, dropping the lease and re-running every
+	// one-shot on re-acquire. Nil in tests; use LeaseClient().
+	LeaseClientset kubernetes.Interface
+
+	// envWritePacer paces env-CR read-modify-writes so a project-wide
+	// fan-out (addon add, shared-key change across ~1,000 envs) can't
+	// take the whole client QPS budget from interactive requests. Burst
+	// covers a normal project without any delay. Nil = unpaced (tests).
+	envWritePacer flowcontrol.RateLimiter
 
 	// Cache is the optional shared informer over kuso CRDs. When set,
 	// list[T] reads from the local cache instead of LIST'ing the API
@@ -71,9 +86,13 @@ func newClientFromConfig(cfg *rest.Config) (*Client, error) {
 	// silently no-ops and the env CR is never updated. 50 QPS / 100
 	// burst leaves plenty of headroom without flooding the apiserver
 	// (k3s default qps-limit is 200; we sit well under that).
+	//
+	// Raised to 100/200 alongside the env-write pacer below: fan-outs are
+	// now held to ~60% of the budget, and server-side APF protects the
+	// apiserver itself.
 	if cfg.QPS == 0 {
-		cfg.QPS = 50
-		cfg.Burst = 100
+		cfg.QPS = 100
+		cfg.Burst = 200
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -83,7 +102,45 @@ func newClientFromConfig(cfg *rest.Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kube: dynamic client: %w", err)
 	}
-	return &Client{Clientset: cs, Dynamic: dyn, Config: cfg}, nil
+	lcfg := rest.CopyConfig(cfg)
+	lcfg.RateLimiter = nil
+	lcfg.QPS = 10
+	lcfg.Burst = 20
+	lcs, err := kubernetes.NewForConfig(lcfg)
+	if err != nil {
+		return nil, fmt.Errorf("kube: lease clientset: %w", err)
+	}
+	return &Client{
+		Clientset: cs, Dynamic: dyn, Config: cfg, LeaseClientset: lcs,
+		envWritePacer: flowcontrol.NewTokenBucketRateLimiter(envWriteQPS, envWriteBurst),
+	}, nil
+}
+
+// Each paced env write is a GET + UPDATE, so 30/s is ~60 of the 100
+// QPS budget at worst, leaving the rest for UI and loops.
+const (
+	envWriteQPS   = 30
+	envWriteBurst = 60
+)
+
+// paceEnvWrite blocks until the env-write pacer admits one more write.
+func (c *Client) paceEnvWrite(ctx context.Context) error {
+	if c == nil || c.envWritePacer == nil {
+		return nil
+	}
+	if err := c.envWritePacer.Wait(ctx); err != nil {
+		return fmt.Errorf("kube: env write pacer: %w", err)
+	}
+	return nil
+}
+
+// LeaseClient returns the clientset leader election should use: the
+// private-limiter one when built, else the shared Clientset.
+func (c *Client) LeaseClient() kubernetes.Interface {
+	if c.LeaseClientset != nil {
+		return c.LeaseClientset
+	}
+	return c.Clientset
 }
 
 // EnableCache attaches a shared informer cache to the client and

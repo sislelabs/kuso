@@ -474,6 +474,31 @@ func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string,
 	return out, true
 }
 
+// GetKusoProject reads one KusoProject from the informer, decoded.
+// Returns (nil, false) when the cache is cold or the project is absent.
+func (c *Cache) GetKusoProject(namespace, name string) (*KusoProject, bool) {
+	if c == nil {
+		return nil, false
+	}
+	entry, ok := c.informers[GVRProjects]
+	if !ok || !entry.synced() {
+		return nil, false
+	}
+	obj, err := entry.lister.ByNamespace(namespace).Get(name)
+	if err != nil {
+		return nil, false
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, false
+	}
+	var out KusoProject
+	if err := fromUnstructured(u.DeepCopy(), &out); err != nil {
+		return nil, false
+	}
+	return &out, true
+}
+
 // stripSecretData is the informer Transform for Secrets. It drops the
 // payload so the shared cache holds metadata + KEY NAMES only.
 //

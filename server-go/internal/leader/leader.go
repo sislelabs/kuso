@@ -35,6 +35,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,6 +81,82 @@ type Config struct {
 	LeaseDuration time.Duration
 	RenewDeadline time.Duration
 	RetryPeriod   time.Duration
+
+	// PreferNotHolding names another lock this one should preferably
+	// land away from. While this process holds that lock it waits
+	// DeferFor before contesting, so with 2+ replicas another pod picks
+	// this lease up first and the two singleton groups spread across
+	// pods. A single replica still acquires it after the wait. The lock
+	// name and the loops it guards are unchanged, so old and new pods
+	// in a mixed rollout still contend for the same lease.
+	PreferNotHolding string
+	DeferFor         time.Duration
+	// HasPeers, when set, skips the deferral if no other replica is
+	// running, so a single-replica install doesn't start its second
+	// singleton group late on every boot.
+	HasPeers func() bool
+}
+
+var (
+	heldMu sync.Mutex
+	held   = map[string]bool{}
+)
+
+// Holds reports whether this process currently leads lockName.
+func Holds(lockName string) bool {
+	heldMu.Lock()
+	defer heldMu.Unlock()
+	return held[lockName]
+}
+
+func setHeld(lockName string, v bool) {
+	heldMu.Lock()
+	defer heldMu.Unlock()
+	if v {
+		held[lockName] = true
+	} else {
+		delete(held, lockName)
+	}
+}
+
+// settleBeforeContest is how long a lease with PreferNotHolding waits on
+// its first contest so the preferred-away lease has had a chance to be
+// decided (both electors start at the same moment on boot).
+var settleBeforeContest = 3 * time.Second
+
+// waitForPreference delays contesting while this process holds the lock
+// it prefers to avoid. Returns false when ctx ends.
+func waitForPreference(ctx context.Context, cfg Config, first bool) bool {
+	if cfg.PreferNotHolding == "" {
+		return true
+	}
+	if first {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(settleBeforeContest):
+		}
+	}
+	if !Holds(cfg.PreferNotHolding) {
+		return true
+	}
+	if cfg.HasPeers != nil && !cfg.HasPeers() {
+		return true
+	}
+	d := cfg.DeferFor
+	if d <= 0 {
+		d = 2 * cfg.LeaseDuration
+	}
+	if cfg.Logger != nil {
+		cfg.Logger.Info("leader: deferring contest so another replica can take this lease",
+			"lock", cfg.Namespace+"/"+cfg.LockName, "holding", cfg.PreferNotHolding, "for", d)
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 // RunWhenLeader blocks until ctx is canceled, repeatedly contesting
@@ -114,10 +191,15 @@ func RunWhenLeader(ctx context.Context, cfg Config) {
 		},
 	}
 
+	first := true
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		if !waitForPreference(ctx, cfg, first) {
+			return
+		}
+		first = false
 		// Each elector instance runs until the lease is lost; we then
 		// loop and contest again. RunOrDie panics on certain
 		// configuration errors, so use Run + observe the returned
@@ -130,6 +212,7 @@ func RunWhenLeader(ctx context.Context, cfg Config) {
 			RetryPeriod:     cfg.RetryPeriod,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: func(leaderCtx context.Context) {
+					setHeld(cfg.LockName, true)
 					if cfg.Logger != nil {
 						cfg.Logger.Info("leader: acquired lease",
 							"lock", cfg.Namespace+"/"+cfg.LockName,
@@ -138,6 +221,7 @@ func RunWhenLeader(ctx context.Context, cfg Config) {
 					cfg.Run(leaderCtx)
 				},
 				OnStoppedLeading: func() {
+					setHeld(cfg.LockName, false)
 					if cfg.Logger != nil {
 						cfg.Logger.Warn("leader: lost lease",
 							"lock", cfg.Namespace+"/"+cfg.LockName,
