@@ -37,7 +37,43 @@ const (
 	// rollbackAfter: pods not Ready on the pinned image this long after
 	// the pin get pinned back to the digest they ran before.
 	rollbackAfter = 30 * time.Minute
+	// minDigestAge is how long a new digest must have been the tag's
+	// target (as first seen by this updater) before it rolls on its own.
+	// A hijacked or broken upstream push is usually caught and replaced
+	// within days; an unattended nightly roll must not be the first
+	// consumer. It also means an upgrade never rolls a datastore on the
+	// first ticks: states saved before this field existed start soaking.
+	minDigestAge = 72 * time.Hour
 )
+
+// autoRollRepos are the image namespaces whose publisher is the upstream
+// project itself (Docker Official Images under library/, or the vendor's
+// own org/registry). Images from any other publisher (individual
+// maintainers, repackagers) never roll unattended; "update now" still works.
+var autoRollRepos = []string{
+	"registry-1.docker.io/library/",
+	"registry-1.docker.io/clickhouse/",
+	"registry-1.docker.io/getmeili/",
+	"registry-1.docker.io/valkey/",
+	"ghcr.io/cloudnative-pg/",
+	"docker.redpanda.com/redpandadata/",
+}
+
+// AutoRollEligible reports whether an addon image's publisher is trusted
+// enough for unattended rolls (see autoRollRepos).
+func AutoRollEligible(ref string) bool {
+	host, repo, _, err := SplitTagRef(ref)
+	if err != nil {
+		return false
+	}
+	full := host + "/" + repo
+	for _, p := range autoRollRepos {
+		if strings.HasPrefix(full, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Update statuses, shown on the addon's Vulnerabilities tab.
 const (
@@ -71,6 +107,9 @@ type AddonUpdateState struct {
 	// RolledBack is a digest that was pinned and never got Ready; it is
 	// not tried again until the tag moves on.
 	RolledBack string `json:"rolledBack,omitempty"`
+	// LatestSeenAt is when this updater first saw the tag point at Latest;
+	// the soak clock for minDigestAge.
+	LatestSeenAt *time.Time `json:"latestSeenAt,omitempty"`
 }
 
 // AddonStore reads addons and stamps image pins.
@@ -324,7 +363,14 @@ func (u *AddonUpdater) step(ctx context.Context, a kube.KusoAddon, st AddonUpdat
 			}
 			resolved[ref] = d
 		}
+		if d != st.Latest {
+			st.LatestSeenAt = nil
+		}
 		st.Latest, st.CheckedAt = d, now
+	}
+	if st.LatestSeenAt == nil {
+		t := now
+		st.LatestSeenAt = &t
 	}
 	pinned := a.Spec.ImagePin != nil && a.Spec.ImagePin.Image == ref && a.Spec.ImagePin.Digest == st.Latest
 	switch {
@@ -381,6 +427,15 @@ func (u *AddonUpdater) step(ctx context.Context, a kube.KusoAddon, st AddonUpdat
 	if st.FixableRunning >= 0 && st.FixableLatest > st.FixableRunning {
 		st.Status = UpdateRejected
 		st.Message = fmt.Sprintf("newest image has more fixable critical+high findings (%d) than the running one (%d)", st.FixableLatest, st.FixableRunning)
+		return st, false
+	}
+	if !AutoRollEligible(ref) {
+		st.Status, st.Message = UpdateReady, "third-party image: not rolled automatically; use Update now after checking the release"
+		return st, false
+	}
+	if soakUntil := st.LatestSeenAt.Add(minDigestAge); now.Before(soakUntil) {
+		st.Status = UpdateReady
+		st.Message = "new image is soaking; rolls in the first update window after " + soakUntil.UTC().Format(time.RFC3339)
 		return st, false
 	}
 	st.Status, st.Message = UpdateReady, ""

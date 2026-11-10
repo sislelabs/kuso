@@ -194,6 +194,7 @@ func TestAddonUpdaterRollsScannedImageInWindow(t *testing.T) {
 	u := &AddonUpdater{DB: d, Cluster: cluster, Addons: store, Resolver: fakeResolver{newDigest}, Notify: emit, Now: func() time.Time { return now },
 		Launch: inline, RolloutWait: -1}
 	settings := db.DefaultVulnScanSettings()
+	settings.AutoUpdateAddons = true
 	state := func() AddonUpdateState {
 		st, err := AddonUpdateStateFor(ctx, d, store.addons[0])
 		if err != nil || st == nil {
@@ -224,7 +225,16 @@ func TestAddonUpdaterRollsScannedImageInWindow(t *testing.T) {
 		t.Fatalf("outside window must not roll: %+v pins=%v", st, store.pins)
 	}
 
+	// In the window but inside the soak: the digest was first seen <72h ago.
 	now = time.Date(2026, 11, 9, 3, 10, 0, 0, time.UTC)
+	if err := u.Tick(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st.Status != UpdateReady || len(store.pins) != 0 || !strings.Contains(st.Message, "soaking") {
+		t.Fatalf("soaking digest must not roll: %+v pins=%v", st, store.pins)
+	}
+
+	now = time.Date(2026, 11, 12, 3, 10, 0, 0, time.UTC)
 	if err := u.Tick(ctx, settings); err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +283,9 @@ func TestAddonUpdaterRejectsWorseImage(t *testing.T) {
 	}
 	scanWith(t, d, oldDigest, 1)
 	scanWith(t, d, newDigest, 3)
-	if err := u.Tick(ctx, db.DefaultVulnScanSettings()); err != nil {
+	on := db.DefaultVulnScanSettings()
+	on.AutoUpdateAddons = true
+	if err := u.Tick(ctx, on); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := AddonUpdateStateFor(ctx, d, store.addons[0])
@@ -434,5 +446,59 @@ func TestWaitTerminatingSeesAReplacedPod(t *testing.T) {
 	defer cancel()
 	if (&AddonUpdater{Kube: cs, PollEvery: 4 * time.Millisecond}).waitTerminating(ctx, []corev1.Pod{old}) {
 		t.Error("untouched pod reported as terminating")
+	}
+}
+
+func TestAutoRollEligible(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"postgres:16":                                   true,
+		"docker.io/library/redis:7-alpine":              true,
+		"ghcr.io/cloudnative-pg/postgresql:16":          true,
+		"clickhouse/clickhouse-server:24":               true,
+		"docker.redpanda.com/redpandadata/redpanda:v24": true,
+		"axllent/mailpit:v1":                            false,
+		"pgsty/minio:latest":                            false,
+		"bitnami/minio:2024":                            false,
+		"edoburu/pgbouncer:v1":                          false,
+		"ghcr.io/someone/postgresql:16":                 false,
+	} {
+		if got := AutoRollEligible(ref); got != want {
+			t.Errorf("AutoRollEligible(%q) = %v, want %v", ref, got, want)
+		}
+	}
+}
+
+// A third-party image never rolls unattended, even scanned clean, soaked
+// and inside the window.
+func TestAddonUpdaterLeavesThirdPartyImagesToManualUpdate(t *testing.T) {
+	d := openDB(t)
+	ctx := context.Background()
+	a := testAddon()
+	a.Spec.Kind = "mailpit"
+	store := &fakeAddons{addons: []kube.KusoAddon{a}}
+	now := time.Date(2026, 11, 1, 3, 10, 0, 0, time.UTC)
+	u := &AddonUpdater{
+		DB: d, Addons: store, Resolver: fakeResolver{newDigest}, Now: func() time.Time { return now }, Launch: inline, RolloutWait: -1,
+		Cluster: fakeCluster{pods: []corev1.Pod{addonPod("db-0", "StatefulSet", "axllent/mailpit:v1", oldDigest, nil)}},
+	}
+	scanWith(t, d, oldDigest, 1)
+	scanWith(t, d, newDigest, 0)
+	on := db.DefaultVulnScanSettings()
+	on.AutoUpdateAddons = true
+	for _, at := range []time.Time{now, now.Add(10 * 24 * time.Hour)} {
+		now = at
+		if err := u.Tick(ctx, on); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, _ := AddonUpdateStateFor(ctx, d, a)
+	if st == nil || st.Status != UpdateReady || len(store.pins) != 0 {
+		t.Fatalf("third-party image rolled: state=%+v pins=%v", st, store.pins)
+	}
+}
+
+func TestAutoUpdateAddonsDefaultsOff(t *testing.T) {
+	if db.DefaultVulnScanSettings().AutoUpdateAddons {
+		t.Fatal("addon auto-update must be opt-in")
 	}
 }

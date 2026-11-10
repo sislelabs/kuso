@@ -638,7 +638,7 @@ for k in $KUSO_BUILDARG_KEYS; do
   esac
 done
 nixpacks build . --out . "$@"
-` + nixpacksEnvInjectScript + nixpacksOSPatchScript
+` + nixpacksEnvInjectScript + nixpacksSecretMountScript + nixpacksOSPatchScript
 
 	env := []corev1.EnvVar{
 		{Name: "REPO_PATH", Value: path},
@@ -651,7 +651,12 @@ nixpacks build . --out . "$@"
 	// buildkit secret mounts the way a user-authored Dockerfile can. A
 	// build step that needs a secret at build time isn't supported under
 	// nixpacks; runtime pods still get it via the deployment's envFrom.
-	env = append(env, buildEnvContainerVars(b)...)
+	env = append(env, buildEnvContainerVars(b, false)...)
+	// Credential-bearing literals reach the generated RUN steps as BuildKit
+	// secret mounts (nixpacksSecretMountScript); the plan only needs names.
+	if names := buildSecretLiteralKeyNames(b); names != "" {
+		env = append(env, corev1.EnvVar{Name: "KUSO_BUILD_SECRET_KEYS", Value: names})
+	}
 	// BuildArgs are the EXPLICIT non-secret build-time value channel. They
 	// bake into the generated Dockerfile as ENV lines just like literal
 	// buildEnv — safe because BuildArgs values are user-authored plain
@@ -745,6 +750,31 @@ grep -E '^FROM ' .nixpacks/Dockerfile | head -3
 grep -E '^ENV ' .nixpacks/Dockerfile | sed -E 's/^ENV[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/ENV \1/' | head -80
 `
 
+// nixpacksSecretMountScript gives every RUN of the generated Dockerfile a
+// BuildKit secret mount per KUSO_BUILD_SECRET_KEYS entry, exposed to the
+// command as an env var of the same name. Those keys were kept out of
+// nixpacks --env and the ENV injection above, so the value exists only while
+// each RUN executes and never in a layer, ENV line or build-arg history.
+// Missing secrets are fine: secret mounts default to required=false. Runs
+// before the OS-patch RUN is inserted so that line stays mount-free.
+const nixpacksSecretMountScript = `
+if [ -n "${KUSO_BUILD_SECRET_KEYS:-}" ]; then
+  KUSO_SECRET_MOUNTS=""
+  for k in $KUSO_BUILD_SECRET_KEYS; do
+    case "$k" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
+    case " $RESERVED " in *" $k "*) continue ;; esac
+    KUSO_SECRET_MOUNTS="${KUSO_SECRET_MOUNTS}--mount=type=secret,id=${k},env=${k} "
+  done
+  export KUSO_SECRET_MOUNTS
+  awk '
+    /^RUN / { sub(/^RUN /, "RUN " ENVIRON["KUSO_SECRET_MOUNTS"]) }
+    { print }
+  ' .nixpacks/Dockerfile > .nixpacks/Dockerfile.patched
+  mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
+  echo "--- build secrets mounted into RUN steps (not baked): ${KUSO_BUILD_SECRET_KEYS} ---"
+fi
+`
+
 // nixpacksOSPatchScript inserts a RUN right after the first FROM of the
 // generated .nixpacks/Dockerfile that applies the distro's pending updates.
 // nixpacks is in maintenance mode and its Ubuntu base image is frozen, so
@@ -785,7 +815,12 @@ var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // lines), so secret-sourced vars must only ever travel through
 // buildEnvSecretContainerVars. A prefix-carrying value that fails to parse
 // is dropped entirely, never demoted to a literal.
-func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
+//
+// keepBuildSecrets: credential-bearing literals (builds.IsBuildSecretLiteral,
+// e.g. a DATABASE_URL with a password) stay in the list only for the static
+// plan, whose build command runs in a throwaway pod and publishes files, not
+// ENV. Every other caller routes them through buildEnvSecretContainerVars.
+func buildEnvContainerVars(b *kube.KusoBuild, keepBuildSecrets bool) []corev1.EnvVar {
 	if b == nil || len(b.Spec.BuildEnv) == 0 {
 		return nil
 	}
@@ -801,6 +836,9 @@ func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 		// (or by hand) can still carry one. Re-check at the render boundary —
 		// this is the last point before the value becomes an image layer.
 		if builds.IsSensitiveBuildEnvKey(k) {
+			continue
+		}
+		if !keepBuildSecrets && builds.IsBuildSecretLiteral(k, v) {
 			continue
 		}
 		keys = append(keys, k)
@@ -878,14 +916,28 @@ func sortedBuildArgsKeys(b *kube.KusoBuild) []string {
 // kubelet at pod start — plaintext never touches the CR or the rendered Job)
 // plus the KUSO_BUILDENV_SECRET_KEYS list the buildkit script forwards as
 // `--secret id=<KEY>,env=KUSO_BE_<KEY>`. Malformed refs are dropped.
-func buildEnvSecretContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
+//
+// Credential-bearing literals (builds.IsBuildSecretLiteral) join the same
+// list with a plain value: the value is already on the KusoBuild CR, and the
+// point is only to keep it out of build-args and ENV layers. includeRefs
+// false (nixpacks) emits those literals alone.
+func buildEnvSecretContainerVars(b *kube.KusoBuild, includeRefs bool) []corev1.EnvVar {
 	if b == nil || len(b.Spec.BuildEnv) == 0 {
 		return nil
 	}
 	var out []corev1.EnvVar
 	var keys []string
 	for _, k := range sortedBuildEnvKeys(b) {
-		secret, key, ok := builds.ParseBuildEnvSecretRef(b.Spec.BuildEnv[k])
+		v := b.Spec.BuildEnv[k]
+		if !builds.IsBuildEnvSecretRef(v) && !builds.IsSensitiveBuildEnvKey(k) && builds.IsBuildSecretLiteral(k, v) {
+			keys = append(keys, k)
+			out = append(out, corev1.EnvVar{Name: "KUSO_BE_" + k, Value: v})
+			continue
+		}
+		if !includeRefs {
+			continue
+		}
+		secret, key, ok := builds.ParseBuildEnvSecretRef(v)
 		if !ok {
 			continue
 		}
@@ -910,6 +962,22 @@ func buildEnvSecretContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 	}
 	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDENV_SECRET_KEYS", Value: strings.Join(keys, " ")})
 	return out
+}
+
+// buildSecretLiteralKeyNames returns the space-joined, sorted names of
+// credential-bearing literal buildEnv keys (see builds.IsBuildSecretLiteral).
+func buildSecretLiteralKeyNames(b *kube.KusoBuild) string {
+	if b == nil {
+		return ""
+	}
+	var keys []string
+	for _, k := range sortedBuildEnvKeys(b) {
+		v := b.Spec.BuildEnv[k]
+		if !builds.IsBuildEnvSecretRef(v) && !builds.IsSensitiveBuildEnvKey(k) && builds.IsBuildSecretLiteral(k, v) {
+			keys = append(keys, k)
+		}
+	}
+	return strings.Join(keys, " ")
 }
 
 // buildEnvWithheldKeyNames returns the space-joined NAMES of secret-sourced
@@ -1030,7 +1098,7 @@ cat .kuso-static.Dockerfile
 	// Literal buildEnv + BuildArgs only, as for nixpacks: the build output is
 	// published as files in the image, and a bundler inlines whatever it reads
 	// (VITE_*, NEXT_PUBLIC_*), so secret-sourced vars stay out of this pod.
-	env = append(env, buildEnvContainerVars(b)...)
+	env = append(env, buildEnvContainerVars(b, true)...)
 	env = append(env, buildArgsContainerVars(b)...)
 
 	return corev1.Container{
@@ -1299,7 +1367,7 @@ exec buildctl \
 	// passing all keys is safe. Values arrive as KUSO_BE_<KEY> container
 	// env (kubelet-escaped; never shell-parsed) with the key list in
 	// KUSO_BUILDENV_KEYS — same mechanism as the nixpacks-plan container.
-	envs = append(envs, buildEnvContainerVars(b)...)
+	envs = append(envs, buildEnvContainerVars(b, false)...)
 	// BuildArgs: the explicit non-secret build-time value channel. Forwarded
 	// as KUSO_BA_<KEY> container env for ALL buildkit strategies (dockerfile,
 	// nixpacks, static). For dockerfile the script turns each into a `--opt
@@ -1323,9 +1391,15 @@ exec buildctl \
 	// kuso-generated Dockerfiles that can't opt into secret mounts, so for
 	// those strategies the secret values are withheld from the pod entirely
 	// (runtime env still arrives via the deployment's envFrom).
-	if strategy == "dockerfile" {
-		envs = append(envs, buildEnvSecretContainerVars(b)...)
-	} else if withheld := buildEnvWithheldKeyNames(b); withheld != "" {
+	switch strategy {
+	case "dockerfile":
+		envs = append(envs, buildEnvSecretContainerVars(b, true)...)
+	case "nixpacks":
+		// Only credential-bearing literals: the plan container rewrote the
+		// generated RUN lines to mount them. Secret refs stay withheld.
+		envs = append(envs, buildEnvSecretContainerVars(b, false)...)
+	}
+	if withheld := buildEnvWithheldKeyNames(b); strategy != "dockerfile" && withheld != "" {
 		// nixpacks/static withhold secret-sourced vars from the pod
 		// entirely; hand the script the key NAMES (never values or refs)
 		// so the build log carries a visible WARNING explaining why a

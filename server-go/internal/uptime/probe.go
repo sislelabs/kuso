@@ -75,17 +75,10 @@ func NewProber(timeout time.Duration) *Prober {
 
 // Probe GETs target. Any status below 500 is ok.
 func (p *Prober) Probe(ctx context.Context, target string) Result {
-	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return Result{Error: "bad url"}
-	}
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return Result{Latency: time.Since(start), Error: p.classify(err)}
-	}
-	defer resp.Body.Close()
+	return p.do(ctx, target, "")
+}
+
+func finishResult(resp *http.Response, start time.Time) Result {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodyBytes))
 	r := Result{StatusCode: resp.StatusCode, Latency: time.Since(start)}
 	if resp.StatusCode >= 500 {

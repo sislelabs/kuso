@@ -133,10 +133,12 @@ type Service struct {
 	// active-Job check covers other replicas and earlier calls.
 	startMu sync.Mutex
 
-	mu     sync.RWMutex
-	state  State
-	etag   string // for If-None-Match on the GH releases endpoint
-	client *http.Client
+	mu    sync.RWMutex
+	state State
+	etag  string // for If-None-Match on the GH releases endpoint
+	// rejectedTag is the release the last poll refused on verification.
+	rejectedTag string
+	client      *http.Client
 }
 
 // New builds a Service with sensible defaults. Repo overridable for
@@ -163,13 +165,21 @@ func New(database *db.DB, kc *kube.Client, namespace, current string, logger *sl
 func (s *Service) Run(ctx context.Context) {
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
+	// The updater Job replaces this process mid-run, so its outcome is
+	// read back from the status ConfigMap: once at boot (the new server
+	// after a roll) and every minute (a rollback leaves the old one up).
+	outcome := time.NewTicker(time.Minute)
+	defer outcome.Stop()
 	s.tick(ctx)
+	s.checkUpdateOutcome(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.tick(ctx)
+		case <-outcome.C:
+			s.checkUpdateOutcome(ctx)
 		}
 	}
 }
@@ -196,7 +206,21 @@ func (s *Service) Refresh(ctx context.Context) State {
 func (s *Service) tick(ctx context.Context) {
 	if s.pollOnce(ctx) {
 		s.maybeNotifyAvailable(ctx, s.State())
+		return
 	}
+	s.mu.RLock()
+	tag, reason := s.rejectedTag, s.state.LastCheckError
+	s.mu.RUnlock()
+	if tag != "" {
+		s.notifyRejected(ctx, tag, reason)
+	}
+}
+
+// isVerificationError reports whether a poll error means the release
+// itself was refused (signature / unsigned-manifest gate), as opposed to
+// GitHub being unreachable.
+func isVerificationError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "verify manifest signature")
 }
 
 // pollOnce refreshes state from GitHub; reports whether the poll succeeded.
@@ -206,7 +230,11 @@ func (s *Service) pollOnce(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.LastChecked = now
+	s.rejectedTag = ""
 	if err != nil {
+		if isVerificationError(err) {
+			s.rejectedTag = tag
+		}
 		s.state.LastCheckError = err.Error()
 		s.Logger.Warn("updater: poll", "err", err)
 		return false
@@ -688,6 +716,59 @@ type UpdateStatus struct {
 // asking for that exact release (they've presumably read the notes).
 // "Already on latest" is still enforced when no pin is given.
 func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string, error) {
+	return s.StartUpdateWith(ctx, targetVersion, UpdateOptions{})
+}
+
+// UpdateOptions are per-request overrides for StartUpdateWith.
+type UpdateOptions struct {
+	// AllowUnverified accepts a release whose signed release.json lacks
+	// the sha256 of an asset it applies or the digest of its updater
+	// image (releases shipped before those fields existed). Off by
+	// default; every refusal names this override.
+	AllowUnverified bool
+}
+
+// allowUnverifiedHint is appended to every refusal AllowUnverified lifts.
+const allowUnverifiedHint = "re-run with `kuso upgrade --allow-unverified` (API: {\"allowUnverified\":true}) to accept it anyway"
+
+func isDigestRef(img string) bool { return strings.Contains(img, "@sha256:") }
+
+// verifiedAssetsBlock explains why an upgrade to m can't be applied
+// fully verified, or returns "". Only assets the Job will apply count.
+func verifiedAssetsBlock(m *Manifest, skipBundles bool) string {
+	var missing []string
+	if !skipBundles {
+		if m.CRDs.URL != "" && m.CRDs.SHA256 == "" {
+			missing = append(missing, "crds.yaml sha256")
+		}
+		if m.Manifests.URL != "" && m.Manifests.SHA256 == "" {
+			missing = append(missing, "upgrade-manifests.yaml sha256")
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("release %s has no %s in its signed release.json, so what it applies can't be verified; %s",
+		m.Version, strings.Join(missing, " or "), allowUnverifiedHint)
+}
+
+// currentUpdaterImage is this server's own release updater image, by
+// digest, read from the running version's signed release.json. A
+// downgrade runs it (see StartUpdateWith); a tag would let a re-pushed
+// :<version> image run under the kuso-server ServiceAccount.
+func (s *Service) currentUpdaterImage(ctx context.Context) (string, error) {
+	m, err := s.fetchVersion(ctx, s.Current)
+	if err != nil {
+		return "", fmt.Errorf("read the running release %s: %w", s.Current, err)
+	}
+	if !isDigestRef(m.Components.Updater.Image) {
+		return "", fmt.Errorf("the running release %s does not pin its updater image by digest", s.Current)
+	}
+	return m.Components.Updater.Image, nil
+}
+
+// StartUpdateWith is StartUpdate with per-request options.
+func (s *Service) StartUpdateWith(ctx context.Context, targetVersion string, opts UpdateOptions) (string, error) {
 	if s.Kube == nil {
 		return "", errors.New("kube client unavailable")
 	}
@@ -745,6 +826,37 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 		return "", errors.New(reason)
 	}
 
+	// Downgrade: the older release's CRDs lack the newer spec fields, and
+	// the apiserver would prune them from every stored CR on its next
+	// write — unrecoverable by upgrading again. Its upgrade-manifests
+	// bundle may also predate the sha256 field, and re-applies older RBAC
+	// over newer. The installed (newer) CRDs and manifests are a superset
+	// the older server tolerates, so both stay. The older updater image
+	// applies them unconditionally, so run this server's own updater,
+	// which honours KUSO_SKIP_CRDS / KUSO_SKIP_MANIFESTS — by digest.
+	downgrade := compareTags(m.Version, s.Current) < 0
+	updaterImg := m.Components.Updater.Image
+	if updaterImg == "" {
+		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
+	}
+	if downgrade {
+		img, err := s.currentUpdaterImage(ctx)
+		switch {
+		case err == nil:
+			updaterImg = img
+		case opts.AllowUnverified:
+			updaterImg = "ghcr.io/sislelabs/kuso-updater:" + s.Current
+			s.Logger.Warn("updater: downgrade runs the updater by tag (--allow-unverified)", "image", updaterImg, "err", err)
+		default:
+			return "", fmt.Errorf("downgrade to %s: %v; %s", m.Version, err, allowUnverifiedHint)
+		}
+	} else if !isDigestRef(updaterImg) && !opts.AllowUnverified {
+		return "", fmt.Errorf("release %s does not pin its updater image by digest; %s", m.Version, allowUnverifiedHint)
+	}
+	if reason := verifiedAssetsBlock(m, downgrade); reason != "" && !opts.AllowUnverified {
+		return "", errors.New(reason)
+	}
+
 	// Reset / create the status ConfigMap so the UI doesn't see a
 	// stale "done" from the previous run.
 	if err := s.writeStatus(ctx, UpdateStatus{
@@ -766,10 +878,6 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	// upgrading past this fix get the version-tagged path; if that
 	// release predates the updater publish (e.g. someone re-runs an
 	// old upgrade), :latest is still there as a safety net.
-	updaterImg := m.Components.Updater.Image
-	if updaterImg == "" {
-		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
-	}
 	env := map[string]string{
 		"KUSO_TARGET_VERSION":   m.Version,
 		"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
@@ -781,15 +889,12 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 		"KUSO_NAMESPACE":        s.Namespace,
 		"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
 	}
-	// Downgrade: the older release's CRDs lack the newer spec fields, and
-	// the apiserver would prune them from every stored CR on its next
-	// write — unrecoverable by upgrading again. The installed (newer) CRDs
-	// are a superset the older server tolerates, so keep them. The older
-	// updater image applies CRDs unconditionally, so run this server's own
-	// updater, which honours KUSO_SKIP_CRDS.
-	if compareTags(m.Version, s.Current) < 0 {
+	if downgrade {
 		env["KUSO_SKIP_CRDS"] = "1"
-		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + s.Current
+		env["KUSO_SKIP_MANIFESTS"] = "1"
+	}
+	if opts.AllowUnverified {
+		env["KUSO_ALLOW_UNVERIFIED_ASSETS"] = "1"
 	}
 	jobName := fmt.Sprintf("kuso-update-%d", time.Now().Unix())
 	job := &batchv1Job{
@@ -1014,17 +1119,37 @@ func (s *Service) synthAllowed(tag string) error {
 //go:embed releasekey.pub
 var embeddedReleaseKey []byte
 
-// resolveReleasePubKey returns the configured Ed25519 release pubkey,
-// preferring the env var (for rotation) and falling back to the
-// embedded key. Returns "" when neither is wired.
+// resolveReleasePubKey returns the first trusted release pubkey, or ""
+// when none is wired. See releasePubKeys.
 func resolveReleasePubKey() string {
-	if env := strings.TrimSpace(getenv("KUSO_RELEASE_PUBLIC_KEY")); env != "" {
-		return env
-	}
-	if t := strings.TrimSpace(string(embeddedReleaseKey)); t != "" {
-		return t
+	if keys := releasePubKeys(); len(keys) > 0 {
+		return keys[0]
 	}
 	return ""
+}
+
+// releasePubKeys lists the Ed25519 keys a release.json signature may
+// verify under. The embedded key is authoritative and always first.
+// KUSO_RELEASE_PUBLIC_KEY lives in a Secret anyone with secret write in
+// the kuso namespace can edit, so it never replaces the embedded key: it
+// is trusted only when nothing is embedded (a dev build), or as an
+// ADDITIONAL rotation key when KUSO_RELEASE_PUBLIC_KEY_ROTATION=true says
+// so explicitly. Either way verifyManifestSignature logs loudly when a
+// release verified under it.
+func releasePubKeys() []string {
+	var keys []string
+	embedded := strings.TrimSpace(string(embeddedReleaseKey))
+	if embedded != "" {
+		keys = append(keys, embedded)
+	}
+	env := strings.TrimSpace(getenv("KUSO_RELEASE_PUBLIC_KEY"))
+	if env == "" || env == embedded {
+		return keys
+	}
+	if embedded == "" || getenv("KUSO_RELEASE_PUBLIC_KEY_ROTATION") == "true" {
+		keys = append(keys, env)
+	}
+	return keys
 }
 
 // verifyManifestSignature looks for a `release.json.sig` asset on
@@ -1045,7 +1170,11 @@ func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 }, manifestBody []byte) error {
-	pubB64 := resolveReleasePubKey()
+	keys := releasePubKeys()
+	pubB64 := ""
+	if len(keys) > 0 {
+		pubB64 = keys[0]
+	}
 	sigURL := ""
 	for _, a := range assets {
 		if a.Name == "release.json.sig" {
@@ -1068,13 +1197,6 @@ func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 	if sigURL == "" && pubB64 != "" {
 		return fmt.Errorf("public key configured but release.json.sig asset missing")
 	}
-	pub, err := base64.StdEncoding.DecodeString(pubB64)
-	if err != nil {
-		return fmt.Errorf("decode public key: %w", err)
-	}
-	if l := len(pub); l != ed25519.PublicKeySize {
-		return fmt.Errorf("public key wrong size: got %d want %d", l, ed25519.PublicKeySize)
-	}
 	sreq, _ := http.NewRequestWithContext(ctx, "GET", sigURL, nil)
 	sresp, err := s.client.Do(sreq)
 	if err != nil {
@@ -1092,8 +1214,22 @@ func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 	if err != nil {
 		return fmt.Errorf("decode signature: %w", err)
 	}
-	if !ed25519.Verify(ed25519.PublicKey(pub), manifestBody, sig) {
-		return fmt.Errorf("signature does not match")
+	embedded := strings.TrimSpace(string(embeddedReleaseKey))
+	for _, k := range keys {
+		pub, err := base64.StdEncoding.DecodeString(k)
+		if err != nil {
+			return fmt.Errorf("decode public key: %w", err)
+		}
+		if l := len(pub); l != ed25519.PublicKeySize {
+			return fmt.Errorf("public key wrong size: got %d want %d", l, ed25519.PublicKeySize)
+		}
+		if ed25519.Verify(ed25519.PublicKey(pub), manifestBody, sig) {
+			if k != embedded && s.Logger != nil {
+				s.Logger.Warn("updater: release verified under KUSO_RELEASE_PUBLIC_KEY, NOT the key built into this binary",
+					"embedded", embedded != "")
+			}
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("signature does not match")
 }

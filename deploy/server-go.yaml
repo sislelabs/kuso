@@ -340,6 +340,7 @@ rules:
       - kuso-prometheus
       - kuso-pkg-probe
       - kuso-incident-agent
+      - kuso-incident-agent-logs
   # PodDisruptionBudgets ship with the pgbouncer/prometheus manifests
   # so a drain can't take out the last replica. PriorityClasses come
   # with the same bundle (control-plane workloads preempt tenant pods

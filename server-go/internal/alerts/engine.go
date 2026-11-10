@@ -95,6 +95,12 @@ type Engine struct {
 	episodicFn func(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error)
 	// emitFn replaces e.Notify.Emit in tests; nil means e.Notify.Emit.
 	emitFn func(notify.Event)
+
+	// platform is the built-in Prometheus / traffic check state
+	// (platform.go). Only touched from Run's goroutine.
+	platform platformState
+	// promScalarFn is a test seam for promScalar; nil queries Prometheus.
+	promScalarFn func(ctx context.Context, q string) (float64, error)
 }
 
 func (e *Engine) emit(ev notify.Event) {
@@ -137,6 +143,7 @@ func (e *Engine) Run(ctx context.Context) {
 	// Run once up-front so a freshly-restarted server evaluates
 	// rules without waiting a full minute.
 	e.tick(ctx)
+	e.platformTick(ctx, time.Now().UTC())
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,6 +151,7 @@ func (e *Engine) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			e.tick(ctx)
+			e.platformTick(ctx, time.Now().UTC())
 			serverstate.LoopHeartbeat(serverstate.LoopAlerts)
 		}
 	}

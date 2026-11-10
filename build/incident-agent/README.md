@@ -15,8 +15,8 @@ Base `node:20-bookworm-slim` (Claude Code is an npm package + needs real Node):
   (logs/status/env/builds). Baked from the GitHub release artifact
   `kuso-linux-<arch>` (or a local build, see below).
 - **kubectl** — read-only fallback (the investigate SA has read-only RBAC).
-- **git + gh + curl + jq + bash** — repo clone/push (implement phase) and the
-  curl/jq the prompts use to POST findings / PR requests.
+- **git + gh + curl + jq + bash** — repo clone/push/PR (implement phase) and the
+  curl/jq the entrypoint uses to POST findings / PR results.
 
 Runs as the unprivileged `node` user (uid 1000) with `HOME=/home/node`.
 
@@ -141,28 +141,43 @@ Job-builder and the image.
 - **implement Job**: no cluster mutation needed; `kuso-incident-agent` or
   `default` both work.
 
-## Agent-facing API endpoints (what the prompts POST to)
+## Agent-facing API endpoints (posted by the entrypoint, not the agent)
 
-Authenticated with `INCIDENT_TOKEN` (single-incident bearer):
+The agent writes its output to files in `$OUT_DIR` (`/tmp/kuso-out`); the
+entrypoint posts them with `INCIDENT_TOKEN` (single-incident bearer) after
+`claude` exits. Neither `INCIDENT_TOKEN` nor `GIT_TOKEN` is in the agent's
+environment.
 
 - `POST ${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/findings` — body
-  `{"findings": "<markdown>"}`. Investigate phase; server moves the incident
-  to `awaiting_feedback` and the bot posts to Discord.
+  `{"findings": "<markdown>"}` from `findings.md`. Investigate phase; the
+  server moves the incident to `awaiting_feedback` and the bot posts to Discord.
 - `POST ${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr` — body
-  `{"branch": "...", "title": "...", "body": "..."}`. Implement phase; the
-  SERVER opens the PR via the GitHub App (the agent already pushed the branch
-  with `GIT_TOKEN`).
+  `{"prUrl": "...", "prNumber": N}` after the entrypoint pushes the fix
+  branch and opens the PR with `gh` (title/body from `pr.json`), or
+  `{"note": "..."}` when there is nothing to push (`blocked.md`, no commits,
+  no repo wired).
 
 ## Safety notes
 
-- **Investigate is physically read-only** — enforced by the
-  `kuso-incident-agent` RBAC, not by trusting the prompt.
-- **No direct push to the default branch** — the implement phase only ever
-  commits/pushes a fresh `FIX_BRANCH`; the PR is opened server-side and merged
-  by a human (or a second explicit "go").
-- **`GIT_TOKEN` is short-lived + repo-scoped** and injected via a git
-  credential helper so it never lands in args, `.git/config`, or logs.
-- **`claude -p` runs with `--dangerously-skip-permissions`** because there is
-  no interactive approver in a Job; the sandbox is the read-only SA
-  (investigate) + the per-branch clone + PR-only flow (implement), per the
-  design's guardrails — NOT CC's interactive gate.
+- **Investigate is read-only** — enforced by the `kuso-incident-agent` RBAC,
+  not by trusting the prompt. Pod logs are readable only in the incident's
+  namespace: kuso-server binds `kuso-incident-agent-logs` there at spawn time
+  and the incident reaper unbinds it once no agent needs it.
+- **Explicit tool allowlist** — `claude -p` runs with `--allowedTools`
+  (read-only kubectl verbs for investigate; file edits, local git and
+  build/test toolchains for implement), never `--dangerously-skip-permissions`.
+- **Untrusted input is fenced** — the context pack (which carries a crashing
+  pod's log tail) is capped server-side, stripped of control characters, and
+  wrapped in a per-run random tag the prompt declares as data. The implement
+  phase never sees the context pack, only the approved findings (also fenced).
+- **`GIT_TOKEN` is short-lived and scoped to the incident's one repo**
+  (`contents:write` + `pull_requests:write`), delivered through a per-Job
+  Secret owned by the Job. The entrypoint pushes from a fresh clone under a
+  clean `HOME`, so agent-written `.git/config` or hooks never run with it.
+  Build/test commands run repo code as the same user, so this bounds rather
+  than eliminates what a hijacked agent can reach.
+- **Egress is restricted** — a per-Job NetworkPolicy allows DNS, kuso-server,
+  the kube-apiserver (:6443) and HTTPS to public addresses only (no RFC1918,
+  CGNAT or link-local).
+- **No direct push to the default branch** — only a fresh `FIX_BRANCH` is
+  pushed; a human merges the PR.

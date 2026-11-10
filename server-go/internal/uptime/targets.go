@@ -35,6 +35,8 @@ type Target struct {
 	Project   string
 	Service   string // short name
 	URL       string
+	// Host is the env's public host, routed by Traefik ("" = none).
+	Host string
 	// Disabled: the project or service opted out. Not pinged, no row.
 	Disabled bool
 	// Paused: not serving on purpose ("" = serving).
@@ -131,6 +133,7 @@ func BuildTargets(
 			path = env.Spec.Healthcheck.Path
 		}
 		t.URL = TargetURL(t.Namespace, t.Env, path)
+		t.Host = env.Spec.Host
 
 		w := workload[t.Key()]
 		switch {

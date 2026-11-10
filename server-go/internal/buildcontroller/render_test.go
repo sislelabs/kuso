@@ -399,7 +399,7 @@ func TestBuildEnvContainerVars(t *testing.T) {
 			"SNEAKY": "kuso-secret-ref://not a valid ref",
 		},
 	}}
-	vars := buildEnvContainerVars(b)
+	vars := buildEnvContainerVars(b, false)
 	got := map[string]string{}
 	for _, e := range vars {
 		got[e.Name] = e.Value
@@ -442,7 +442,7 @@ func TestBuildEnvContainerVars_DropsSensitiveLiterals(t *testing.T) {
 		},
 	}}
 	got := map[string]string{}
-	for _, e := range buildEnvContainerVars(b) {
+	for _, e := range buildEnvContainerVars(b, false) {
 		got[e.Name] = e.Value
 	}
 	for _, k := range []string{"OPENAI_API_KEY", "AUTH_GITHUB_SECRET", "R2_SECRET_ACCESS_KEY"} {
@@ -469,7 +469,7 @@ func TestBuildEnvSecretContainerVars(t *testing.T) {
 			"SNEAKY":              "kuso-secret-ref://not a valid ref", // malformed → dropped
 		},
 	}}
-	vars := buildEnvSecretContainerVars(b)
+	vars := buildEnvSecretContainerVars(b, true)
 	byName := map[string]corev1.EnvVar{}
 	for _, e := range vars {
 		byName[e.Name] = e

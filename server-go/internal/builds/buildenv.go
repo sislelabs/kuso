@@ -157,6 +157,45 @@ func IsSensitiveBuildEnvKey(name string) bool {
 	return sensitiveBuildEnvRE.MatchString(name)
 }
 
+// Credentials embedded in a VALUE under an innocuous key: DATABASE_URL,
+// REDIS_URL, MONGODB_URI, AMQP_URL carry a password in URL userinfo; libpq
+// keyword DSNs and Go-MySQL DSNs carry one without a scheme; chat webhook
+// URLs are bearer secrets in their path. Unlike the name rule above these are
+// NOT withheld (apps routinely need DATABASE_URL at build time for codegen or
+// prerendering); the render path hands them to the build as BuildKit secret
+// mounts, so build steps still see them but no image layer, ENV line or
+// build-arg history records them.
+var (
+	credentialURLRE  = regexp.MustCompile(`(?i)^[a-z][a-z0-9+.-]*://[^/@\s:]*:[^/@\s]+@`)
+	keywordDSNRE     = regexp.MustCompile(`(?i)(^|[\s;])(password|pwd)\s*=\s*[^\s;]+`)
+	mysqlDSNRE       = regexp.MustCompile(`^[^\s/:@]+:[^\s/@]+@(tcp|unix)\(`)
+	webhookURLRE     = regexp.MustCompile(`(?i)^https?://(hooks\.slack\.com/|(canary\.|ptb\.)?discord(app)?\.com/api/webhooks/|[a-z0-9.-]*\.webhook\.office\.com/|outlook\.office\.com/webhook|chat\.googleapis\.com/\S*[?&](key|token)=)`)
+	buildSecretKeyRE = regexp.MustCompile(`(?i)(_PASS|_PWD)$|WEBHOOK`)
+)
+
+// IsBuildSecretLiteral reports whether a literal build-env entry carries a
+// credential that the name rule (IsSensitiveBuildEnvKey) doesn't withhold,
+// and so must reach the build only as a BuildKit secret mount, never as a
+// build-arg or ENV line. Name-sensitive keys return false: those are
+// withheld entirely, which is the stricter treatment.
+func IsBuildSecretLiteral(name, value string) bool {
+	if strings.HasPrefix(name, "NEXT_PUBLIC_") || IsSensitiveBuildEnvKey(name) {
+		return false
+	}
+	if buildSecretKeyRE.MatchString(name) {
+		return true
+	}
+	v := strings.TrimSpace(value)
+	return credentialURLRE.MatchString(v) || keywordDSNRE.MatchString(v) ||
+		mysqlDSNRE.MatchString(v) || webhookURLRE.MatchString(v)
+}
+
+// IsCredentialLiteral is the union of both rules: true when a literal env
+// value should be treated as a secret anywhere kuso displays or records it.
+func IsCredentialLiteral(name, value string) bool {
+	return IsSensitiveBuildEnvKey(name) || IsBuildSecretLiteral(name, value)
+}
+
 // secretLookup returns the literal value of a secret key, or false if absent.
 type secretLookup func(secret, key string) (string, bool)
 

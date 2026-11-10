@@ -85,7 +85,7 @@ func (c *Client) Installation(installationID int64) (*gogithub.Client, error) {
 
 // MintInstallationToken returns a fresh installation token for the given
 // id, scoped to the WHOLE installation. Used by callers that legitimately
-// need installation-wide access (e.g. the incidents push-token resolver).
+// need installation-wide access.
 //
 // SECURITY: prefer MintRepoScopedToken for the build clone path — an
 // installation-wide token mounted into a build pod grants read (and, per
@@ -119,13 +119,28 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 // NOT the cached ghinstallation transport, because ghinstallation.Token()
 // always mints installation-wide. There is no installation-wide fallback.
 func (c *Client) MintRepoScopedToken(ctx context.Context, installationID int64, owner, repo string) (string, error) {
+	return c.mintRepoToken(ctx, installationID, owner, repo, &gogithub.InstallationPermissions{Contents: gogithub.String("read")})
+}
+
+// MintRepoPushToken mints a token restricted to the single repo owner/repo
+// with contents:write + pull_requests:write and nothing else: enough to
+// push a fix branch and open a PR for it, not to touch sibling repos.
+// Used by the incident agent's implement phase.
+func (c *Client) MintRepoPushToken(ctx context.Context, installationID int64, owner, repo string) (string, error) {
+	return c.mintRepoToken(ctx, installationID, owner, repo, &gogithub.InstallationPermissions{
+		Contents:     gogithub.String("write"),
+		PullRequests: gogithub.String("write"),
+	})
+}
+
+func (c *Client) mintRepoToken(ctx context.Context, installationID int64, owner, repo string, perms *gogithub.InstallationPermissions) (string, error) {
 	if owner == "" || repo == "" {
 		return "", errors.New("github: repo-scoped token needs owner and repo")
 	}
 	app := c.App()
 	tok, _, err := app.Apps.CreateInstallationToken(ctx, installationID, &gogithub.InstallationTokenOptions{
 		Repositories: []string{repo},
-		Permissions:  &gogithub.InstallationPermissions{Contents: gogithub.String("read")},
+		Permissions:  perms,
 	})
 	if err != nil {
 		return "", fmt.Errorf("github: mint repo-scoped token for %s/%s: %w", owner, repo, err)

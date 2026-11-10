@@ -97,6 +97,21 @@ const (
 	// EventUpdateAvailable fires once per new kuso release the updater
 	// poll sees. Nothing installs until an admin presses Update.
 	EventUpdateAvailable EventType = "update.available"
+	// Update outcomes. failed: the rollout broke or was rolled back.
+	// partial: it finished but left work owed by hand (RBAC the
+	// kuso-server SA can't grant). rejected: a release failed signature
+	// or digest verification and was refused.
+	EventUpdateFailed   EventType = "update.failed"
+	EventUpdatePartial  EventType = "update.partial"
+	EventUpdateRejected EventType = "update.rejected"
+	// Platform health: a kuso platform workload (Traefik, buildkitd,
+	// registry, operator, ...) is crashlooping / unready, the public
+	// ingress path stopped answering or carrying traffic, or the alert
+	// rule engine can't evaluate (Prometheus unreachable).
+	EventPlatformUnhealthy EventType = "platform.unhealthy"
+	EventPlatformRecovered EventType = "platform.recovered"
+	EventIngressDown       EventType = "ingress.down"
+	EventAlertEngineDown   EventType = "alert.engine_degraded"
 	// Vulnerability scanning (internal/vulnscan, docs/VULN_SCANNING.md).
 	// deploy_blocked is emitted by the build poller through
 	// builds.EventEnvelope, so its string is duplicated there.
@@ -167,6 +182,13 @@ var EventCatalogue = []EventTypeInfo{
 	{EventScanFailed, "Vulnerability scan failed", "other", ""},
 	{EventAddonImageUpdated, "Addon image updated", "other", ""},
 	{EventUpdateAvailable, "kuso update available", "other", ""},
+	{EventUpdateFailed, "kuso update failed", "other", "@here"},
+	{EventUpdatePartial, "kuso update needs manual steps", "other", ""},
+	{EventUpdateRejected, "kuso update rejected (verification)", "other", "@here"},
+	{EventPlatformUnhealthy, "Platform component unhealthy", "runtime", "@here"},
+	{EventPlatformRecovered, "Platform component recovered", "runtime", ""},
+	{EventIngressDown, "Ingress down / traffic stopped", "runtime", "@here"},
+	{EventAlertEngineDown, "Alert engine degraded", "runtime", "@here"},
 }
 
 // AllEventTypes is the canonical list of every event type the notify
@@ -849,7 +871,8 @@ func eventTone(e Event) tone {
 	}
 	switch e.Type {
 	case EventBuildSucceeded, EventBackupOK, EventRunSucceeded,
-		EventNodeRecovered, EventNodeUpdatesApplied, EventPodRecovered, EventUptimeRecovered:
+		EventNodeRecovered, EventNodeUpdatesApplied, EventPodRecovered, EventUptimeRecovered,
+		EventPlatformRecovered:
 		return toneSuccess
 	case EventBuildCancelled, EventBuildSuperseded:
 		return toneNeutral

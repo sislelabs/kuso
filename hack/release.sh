@@ -433,6 +433,34 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
   fi
 fi
 
+# ---- 2a. pin the build clone image by digest -----------------------
+#
+# Every build's clone step runs this third-party image with the repo's
+# clone token and writes the source tree buildkit compiles, so a re-pushed
+# tag would be source injection across every project. Resolve the tag's
+# current registry digest at ship time and bake tag@digest into the
+# server binary (and the legacy kusobuild chart). Re-resolved every ship,
+# so bumping the tag in buildcontroller.go is all an image update needs.
+CLONE_IMAGE_GO=server-go/internal/buildcontroller/buildcontroller.go
+CLONE_IMAGE_CHART=operator/helm-charts/kusobuild/templates/job.yaml
+CLONE_IMAGE_TAG="$(sed -nE 's|^[[:space:]]*defaultCloneImage[[:space:]]*=[[:space:]]*"([^"@]+)(@sha256:[0-9a-f]{64})?"|\1|p' "$CLONE_IMAGE_GO")"
+[[ -n "$CLONE_IMAGE_TAG" ]] || fail "could not read defaultCloneImage from ${CLONE_IMAGE_GO}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin ${CLONE_IMAGE_TAG} to its registry digest in ${CLONE_IMAGE_GO} + ${CLONE_IMAGE_CHART}"
+else
+  CLONE_IMAGE_DIGEST="$(docker buildx imagetools inspect "$CLONE_IMAGE_TAG" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+  [[ "$CLONE_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "could not resolve the registry digest of ${CLONE_IMAGE_TAG} (got '${CLONE_IMAGE_DIGEST}')"
+  CLONE_IMAGE_PINNED="${CLONE_IMAGE_TAG}@${CLONE_IMAGE_DIGEST}"
+  sed -i.bak -E "s|^([[:space:]]*defaultCloneImage[[:space:]]*=[[:space:]]*)\"[^\"]+\"|\\1\"${CLONE_IMAGE_PINNED}\"|" "$CLONE_IMAGE_GO"
+  rm "${CLONE_IMAGE_GO}.bak"
+  sed -i.bak -E "s|image: alpine/git:[^[:space:]]+|image: ${CLONE_IMAGE_PINNED}|" "$CLONE_IMAGE_CHART"
+  rm "${CLONE_IMAGE_CHART}.bak"
+  grep -q "\"${CLONE_IMAGE_PINNED}\"" "$CLONE_IMAGE_GO" || fail "clone image pin did not land in ${CLONE_IMAGE_GO}"
+  log "clone image pinned: ${CLONE_IMAGE_PINNED}"
+fi
+
 # ---- 2b. CHANGELOG -------------------------------------------------
 #
 # git-cliff regenerates the full release history from commit messages.
@@ -995,6 +1023,17 @@ MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/upgrade-manifests.yaml")"
 [[ "$CRDS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/crds.yaml (got '${CRDS_SHA256}')"
 [[ "$MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/upgrade-manifests.yaml (got '${MANIFESTS_SHA256}')"
 
+# install-manifests.tar.gz: every manifest hack/install.sh applies (deploy/
+# and the CRD bases) as of this release. install.sh fetches it as a
+# release asset, checks it against this signed sha256 and applies from it,
+# instead of trusting raw files under a git tag anyone with push can move.
+INSTALL_TAR_FLAGS=()
+[[ "$(uname -s)" == "Darwin" ]] && INSTALL_TAR_FLAGS+=(--no-mac-metadata)
+COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/install-manifests.tar.gz" "${INSTALL_TAR_FLAGS[@]}" \
+  deploy operator/config/crd/bases
+INSTALL_MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/install-manifests.tar.gz")"
+[[ "$INSTALL_MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/install-manifests.tar.gz (got '${INSTALL_MANIFESTS_SHA256}')"
+
 # Image references in release.json carry the registry digest, so the
 # Ed25519 signature covers the image bytes too. Tags are mutable: a
 # re-push of :${VERSION} (a re-run ship, a leaked ghcr token) would
@@ -1098,6 +1137,10 @@ cat > "$DIST_DIR/release.json" <<EOF
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/upgrade-manifests.yaml",
     "sha256": "${MANIFESTS_SHA256}"
   },
+  "installManifests": {
+    "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/install-manifests.tar.gz",
+    "sha256": "${INSTALL_MANIFESTS_SHA256}"
+  },
   "breaking": ${BREAKING}
 }
 EOF
@@ -1127,6 +1170,10 @@ KUSO_RELEASE_PRIVATE_KEY="${KUSO_RELEASE_PRIVATE_KEY:-${KUSO_KEYS_DIR}/release.p
 # the private key must match it: a freshly generated (or wrong) key
 # signs a release that every instance rejects while the ship "succeeds".
 EMBEDDED_RELEASE_PUB="$(tr -d '[:space:]' < server-go/internal/updater/releasekey.pub 2>/dev/null || true)"
+# install.sh verifies release.json with its own inline copy of the key.
+if [[ -n "$EMBEDDED_RELEASE_PUB" ]] && ! grep -qF "KUSO_RELEASE_PUBKEY=\"${EMBEDDED_RELEASE_PUB}\"" hack/install.sh; then
+  fail "hack/install.sh KUSO_RELEASE_PUBKEY does not match server-go/internal/updater/releasekey.pub; fresh installs would reject this release"
+fi
 
 if [[ "${KUSO_RELEASE_UNSIGNED:-0}" == "1" ]]; then
   warn "KUSO_RELEASE_UNSIGNED=1 set — shipping release.json without a signature"
@@ -1359,7 +1406,7 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
           fail "couldn't create GH release after 3 tries"
         fi
       fi
-      ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "$DIST_DIR/upgrade-manifests.yaml" "${CLI_ASSETS[@]}" )
+      ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "$DIST_DIR/upgrade-manifests.yaml" "$DIST_DIR/install-manifests.tar.gz" "${CLI_ASSETS[@]}" )
       # Upload the signature too when present.
       if [[ -f "$DIST_DIR/release.json.sig" ]]; then
         ALL_ASSETS+=( "$DIST_DIR/release.json.sig" )
@@ -1557,6 +1604,9 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     cli/cmd/kusoCli/version/CLI_VERSION
     cli/pkg/kusoApi/VERSION
     skills/kuso/SKILL.md
+    # The clone-image digest pin from step 2a.
+    server-go/internal/buildcontroller/buildcontroller.go
+    operator/helm-charts/kusobuild/templates/job.yaml
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)

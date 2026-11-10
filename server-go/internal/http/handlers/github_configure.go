@@ -38,6 +38,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/kube"
 )
@@ -49,6 +50,7 @@ import (
 type GithubConfigureHandler struct {
 	Kube      *kube.Client
 	Namespace string // kuso namespace, defaults to "kuso"
+	Audit     *audit.Service
 	Logger    *slog.Logger
 }
 
@@ -170,6 +172,13 @@ func (h *GithubConfigureHandler) Configure(w http.ResponseWriter, r *http.Reques
 		"slug", body.AppSlug,
 		"app_id", body.AppID,
 		"actor", actorName(r.Context()))
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "github.configure",
+		Resource: "secret/kuso-github-app",
+		Message:  fmt.Sprintf("configured GitHub App slug=%q appId=%q org=%q (credentials redacted)", body.AppSlug, body.AppID, body.Org),
+	})
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"saved":     true,

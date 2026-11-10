@@ -54,9 +54,14 @@ type Watcher struct {
 	SelfCheck func(ctx context.Context) bool
 	Now       func() time.Time
 	Budget    time.Duration
+	// IngressProbe / IngressBase replace the through-Traefik prober and
+	// the Traefik Service discovery (ingress.go).
+	IngressProbe func(ctx context.Context, url, host string) Result
+	IngressBase  func(ctx context.Context) string
 
 	// skipped counts consecutive ticks lost to a failed self-check.
 	skipped int
+	ingress ingressState
 }
 
 // selfCheckAddr is dialled to tell "this pod's network is broken" from
@@ -168,6 +173,10 @@ func (w *Watcher) Tick(ctx context.Context) {
 		}
 	}
 	results := w.probeAll(ctx, toProbe)
+	// After the commit and sends below, with its own deadline: a dead
+	// Traefik makes these probes time out, and that must not eat the
+	// per-service budget.
+	defer w.checkIngress(ctx, targets, results)
 
 	now := w.Now()
 	var rows []db.UptimeState

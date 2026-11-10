@@ -22,6 +22,9 @@ var (
 	upgradeForce   bool
 	upgradeVersion string
 	upgradeYes     bool
+	// upgradeAllowUnverified accepts a release whose release.json has no
+	// asset sha256s / updater digest (releases from before those existed).
+	upgradeAllowUnverified bool
 )
 
 // versionRe matches vX.Y.Z, optionally with a dash-suffix. Used to
@@ -121,8 +124,15 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		// server; non-empty pins the tag.
 		fmt.Println("Starting update job…")
 		var bodyBytes []byte
-		if upgradeVersion != "" {
-			bodyBytes, _ = json.Marshal(map[string]string{"version": upgradeVersion})
+		if upgradeVersion != "" || upgradeAllowUnverified {
+			req := map[string]any{}
+			if upgradeVersion != "" {
+				req["version"] = upgradeVersion
+			}
+			if upgradeAllowUnverified {
+				req["allowUnverified"] = true
+			}
+			bodyBytes, _ = json.Marshal(req)
 		}
 		startResp, err := api.RawPost("/api/system/update", bodyBytes, "application/json")
 		if err := checkRespErr(startResp, err); err != nil {
@@ -251,4 +261,5 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeForce, "force", false, "trigger update even if already current")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
 	upgradeCmd.Flags().BoolVarP(&upgradeYes, "yes", "y", false, "skip the confirmation prompt")
+	upgradeCmd.Flags().BoolVar(&upgradeAllowUnverified, "allow-unverified", false, "accept a release whose release.json can't pin its assets or updater image by hash (older releases); the server refuses them otherwise")
 }

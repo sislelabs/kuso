@@ -56,7 +56,7 @@ func TestBuildJob(t *testing.T) {
 			if tt.phase == "implement" {
 				repo = RepoInfo{Owner: "o", Name: "r", DefaultBranch: "main", GitToken: "ght"}
 			}
-			job := s.buildJob(in, tt.phase, repo)
+			job := s.buildJob(in, tt.phase, repo, "kuso-shop")
 
 			if job.Name != tt.wantName {
 				t.Errorf("Name = %q, want %q", job.Name, tt.wantName)
@@ -120,16 +120,39 @@ func TestBuildJob(t *testing.T) {
 			if env["KUSO_API_URL"] != s.APIBaseURL {
 				t.Errorf("KUSO_API_URL = %q", env["KUSO_API_URL"])
 			}
-			if env["INCIDENT_TOKEN"] != in.AgentToken {
-				t.Errorf("INCIDENT_TOKEN = %q", env["INCIDENT_TOKEN"])
-			}
 			// KUSO_TOKEN must NOT reuse the incident bearer (least privilege):
 			// empty in v1 (agent falls back to the read-only SA + kubectl).
 			if env["KUSO_TOKEN"] != "" {
 				t.Errorf("KUSO_TOKEN = %q, want empty (must not reuse AgentToken)", env["KUSO_TOKEN"])
 			}
-			if env["CONTEXT_PACK"] != string(in.ContextPack) {
+			// The log-carrying context pack is investigate-only.
+			_, hasPack := env["CONTEXT_PACK"]
+			if tt.phase == "investigate" && env["CONTEXT_PACK"] != string(in.ContextPack) {
 				t.Errorf("CONTEXT_PACK = %q", env["CONTEXT_PACK"])
+			}
+			if tt.phase == "implement" && hasPack {
+				t.Errorf("implement phase must not carry CONTEXT_PACK")
+			}
+			if env["LOG_NAMESPACE"] != "kuso-shop" {
+				t.Errorf("LOG_NAMESPACE = %q", env["LOG_NAMESPACE"])
+			}
+			if !*job.Spec.Suspend {
+				t.Errorf("job must be created suspended until its secret + egress policy exist")
+			}
+			// Credentials only via secretKeyRef, never as literals.
+			for _, e := range c.Env {
+				if e.Name != "INCIDENT_TOKEN" && e.Name != "GIT_TOKEN" {
+					continue
+				}
+				if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+					e.ValueFrom.SecretKeyRef.Name != agentSecretName(job.Name) {
+					t.Errorf("%s must come from secret %s, got %+v", e.Name, agentSecretName(job.Name), e)
+				}
+			}
+			for _, e := range c.Env {
+				if e.Value == in.AgentToken || (repo.GitToken != "" && e.Value == repo.GitToken) {
+					t.Errorf("credential leaked as literal env %s", e.Name)
+				}
 			}
 			if env["PROJECT"] != in.Project {
 				t.Errorf("PROJECT = %q", env["PROJECT"])
@@ -149,7 +172,7 @@ func TestBuildJob(t *testing.T) {
 
 func TestBuildJobDefaultImage(t *testing.T) {
 	s := &KubeSpawner{} // no AgentImage → default
-	job := s.buildJob(db.Incident{ID: "inc-x"}, "investigate", RepoInfo{})
+	job := s.buildJob(db.Incident{ID: "inc-x"}, "investigate", RepoInfo{}, "")
 	if got := job.Spec.Template.Spec.Containers[0].Image; got != DefaultAgentImage {
 		t.Errorf("Image = %q, want default %q", got, DefaultAgentImage)
 	}

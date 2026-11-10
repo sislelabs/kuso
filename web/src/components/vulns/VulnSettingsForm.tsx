@@ -111,8 +111,10 @@ export function VulnSettingsForm({ initial }: { initial: VulnScanSettings }) {
             Auto-update addon images
             <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">
               Moves each addon onto the newest build of its version (postgres:16 stays 16) in the 4 hours after the
-              nightly sweep, once that build is scanned and has no more fixable critical/high findings. Addons restart
-              one or two at a time; a build that doesn&apos;t become ready within 30 minutes is rolled back.
+              nightly sweep, once that build has been out for 3 days, is scanned and has no more fixable critical/high
+              findings. Only images published by the upstream project roll on their own; third-party images (mailpit,
+              MinIO) wait for Update now. Addons restart one or two at a time; a build that doesn&apos;t become ready
+              within 30 minutes is rolled back.
             </span>
           </span>
         </label>

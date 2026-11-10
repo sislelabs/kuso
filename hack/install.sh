@@ -133,7 +133,11 @@ Flags / env:
   KUSO_SKIP_ARCH_CHECK=1                 skip the amd64-only architecture guard
                                          (only with self-built images)
   KUSO_REF                               git ref for manifests (default: the
-                                         server release tag)
+                                         server release tag, whose signed
+                                         manifest bundle is verified; any
+                                         other ref is applied unverified)
+  KUSO_ALLOW_UNVERIFIED_MANIFESTS=1      skip release signature verification
+                                         (releases without a signed bundle)
 
 To remove kuso: hack/uninstall.sh
 USAGE
@@ -157,6 +161,73 @@ KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/${KUSO_REF}"
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- signed release manifests ---
+# Ed25519 release-signing public key (server-go/internal/updater/
+# releasekey.pub; release.sh refuses to ship when the two differ).
+KUSO_RELEASE_PUBKEY="PA/PGYRHPzk4HkFDek3poIQjFeOyMc+5Nq5zBLhnRks="
+KUSO_MANIFEST_TREE=""
+
+# prepare_manifests downloads the release's signed release.json, verifies
+# it against KUSO_RELEASE_PUBKEY, then fetches install-manifests.tar.gz
+# (a release asset, immutable once published) and checks it against the
+# signed sha256. Every manifest below is then read from that tree rather
+# than from raw.githubusercontent.com/<tag>, since a git tag can be moved.
+prepare_manifests() {
+  if [[ "$KUSO_REF" != "$KUSO_SERVER_VERSION" ]]; then
+    warn "KUSO_REF=${KUSO_REF} is not the server release (${KUSO_SERVER_VERSION}): manifests come from that git ref UNVERIFIED — dev installs only"
+    return 0
+  fi
+  if [[ "${KUSO_ALLOW_UNVERIFIED_MANIFESTS:-0}" == "1" ]]; then
+    warn "KUSO_ALLOW_UNVERIFIED_MANIFESTS=1: applying manifests from git tag ${KUSO_REF} WITHOUT signature verification"
+    return 0
+  fi
+  local unverified_hint="set KUSO_ALLOW_UNVERIFIED_MANIFESTS=1 to install from the git tag without verification"
+  command -v openssl >/dev/null 2>&1 \
+    || die "openssl is needed to verify the signed release (apt-get install openssl), or ${unverified_hint}"
+  local dir base sha url got
+  dir="$(mktemp -d)"
+  base="https://github.com/${KUSO_REPO}/releases/download/${KUSO_SERVER_VERSION}"
+  log "verifying signed release ${KUSO_SERVER_VERSION}"
+  curl -fsSL --retry 3 "${base}/release.json" -o "${dir}/release.json" \
+    || die "could not download ${base}/release.json — ${unverified_hint}"
+  curl -fsSL --retry 3 "${base}/release.json.sig" -o "${dir}/release.json.sig" \
+    || die "release ${KUSO_SERVER_VERSION} has no release.json.sig — ${unverified_hint}"
+  # DER SubjectPublicKeyInfo for Ed25519: fixed 12-byte prefix + raw key.
+  { printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'
+    printf '%s' "$KUSO_RELEASE_PUBKEY" | openssl base64 -d -A; } > "${dir}/pub.der"
+  tr -d '[:space:]' < "${dir}/release.json.sig" | openssl base64 -d -A > "${dir}/sig.raw"
+  openssl pkeyutl -verify -pubin -keyform DER -inkey "${dir}/pub.der" -rawin \
+      -in "${dir}/release.json" -sigfile "${dir}/sig.raw" >/dev/null 2>&1 \
+    || die "release.json signature verification FAILED for ${KUSO_SERVER_VERSION} (tampered release, or openssl older than 3.0) — refusing to install. ${unverified_hint}"
+  sha="$(awk '/"installManifests"/{f=1} f && /"sha256"/{gsub(/[^0-9a-f]/, "", $2); print $2; exit}' FS='": ' "${dir}/release.json")"
+  url="$(awk '/"installManifests"/{f=1} f && /"url"/{gsub(/^ *"|",? *$/, "", $2); print $2; exit}' FS='": ' "${dir}/release.json")"
+  if [[ ! "$sha" =~ ^[0-9a-f]{64}$ || "$url" != "${base}/install-manifests.tar.gz" ]]; then
+    die "release ${KUSO_SERVER_VERSION} predates signed install bundles — ${unverified_hint}"
+  fi
+  curl -fsSL --retry 3 "$url" -o "${dir}/install-manifests.tar.gz" || die "could not download ${url}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "${dir}/install-manifests.tar.gz" | awk '{print $1}')"
+  else
+    got="$(shasum -a 256 "${dir}/install-manifests.tar.gz" | awk '{print $1}')"
+  fi
+  [[ "$got" == "$sha" ]] \
+    || die "install-manifests.tar.gz sha256 ${got} does not match the signed release (${sha}) — refusing to install"
+  mkdir -p "${dir}/tree"
+  tar -xzf "${dir}/install-manifests.tar.gz" -C "${dir}/tree"
+  KUSO_MANIFEST_TREE="${dir}/tree"
+  log "release ${KUSO_SERVER_VERSION} verified; manifests from its signed bundle"
+}
+
+# kuso_manifest <repo path>: a manifest from the verified bundle, or from
+# the raw git ref when prepare_manifests allowed that.
+kuso_manifest() {
+  if [[ -n "$KUSO_MANIFEST_TREE" ]]; then
+    cat "${KUSO_MANIFEST_TREE}/$1"
+  else
+    curl -sfL "${KUSO_RAW}/$1"
+  fi
+}
 
 random_string() {
   if command -v openssl >/dev/null 2>&1; then
@@ -295,6 +366,15 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
     K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
   fi
+  # A separate agent token, so the Add Node flow (nodejoin) hands joining
+  # workers a credential that can only join agents. Without it they get
+  # the server token, which also unlocks the cluster CA keys. A config
+  # drop-in (root-only) rather than a flag keeps it out of the systemd
+  # unit, which is world-readable. Fresh installs only: k3s can't take an
+  # agent token after the cluster exists.
+  mkdir -p /etc/rancher/k3s/config.yaml.d
+  ( umask 077; printf 'agent-token: "%s"\n' "$(random_string)$(random_string)" \
+      > /etc/rancher/k3s/config.yaml.d/50-kuso-agent-token.yaml )
   # Node joins pin their agent to the server's version (nodejoin), so this
   # choice carries to every node added later.
   # Pinned, not "stable channel": a fresh install months from now must
@@ -619,25 +699,26 @@ DEFAULT_ISSUER="letsencrypt-${KUSO_LE_ENV}"
 # KusoRun CRD and the operator crashed on every boot. When you add a new
 # watched kind, add its CRD plural here too. (kusobuilds is no longer
 # watched as of v0.10 but the CRD is still applied for older clusters.)
+prepare_manifests
 log "applying kuso CRDs (from ${KUSO_REF})"
 for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds kusocrons kusoruns; do
-  url="${KUSO_RAW}/operator/config/crd/bases/application.kuso.sislelabs.com_${crd}.yaml"
-  yaml="$(curl -sfL "$url" || true)"
+  url="operator/config/crd/bases/application.kuso.sislelabs.com_${crd}.yaml"
+  yaml="$(kuso_manifest "$url" 2>/dev/null || true)"
   if [[ -z "$yaml" ]]; then
-    die "CRD ${crd} not reachable at ${url} — is KUSO_REF=${KUSO_REF} correct?"
+    die "CRD ${crd} not found at ${url} — is KUSO_REF=${KUSO_REF} correct?"
   fi
   if ! printf '%s\n' "$yaml" | kubectl apply -f - >/dev/null; then
     die "CRD ${crd} failed to apply (kubectl error). yaml from ${url}"
   fi
 done
 # Optional legacy CRD; tolerate 404.
-curl -sfL "${KUSO_RAW}/operator/config/crd/bases/application.kuso.dev_kusoes.yaml" \
+kuso_manifest "operator/config/crd/bases/application.kuso.dev_kusoes.yaml" 2>/dev/null \
   | kubectl apply -f - >/dev/null 2>&1 || true
 
 # -------- 8. registry --------
 log "deploying in-cluster registry"
 kubectl create namespace kuso 2>/dev/null || true
-curl -sfL "${KUSO_RAW}/deploy/registry.yaml" | kubectl apply -f - >/dev/null
+kuso_manifest "deploy/registry.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')
@@ -650,7 +731,7 @@ ensure_registry_hosts_entry "$REGISTRY_IP"
 # (the daemon runs privileged once; the build Jobs are unprivileged
 # thin clients).
 log "deploying in-cluster buildkitd"
-curl -sfL "${KUSO_RAW}/deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
+kuso_manifest "deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
 
@@ -662,7 +743,7 @@ kubectl wait --for=condition=Available --timeout=180s \
 # kuso-prometheus.kuso.svc.cluster.local:9090. CPU + memory still
 # work without prom (they read kube metrics-server).
 log "deploying in-cluster prometheus"
-curl -sfL "${KUSO_RAW}/deploy/prometheus.yaml" | kubectl apply -f - >/dev/null
+kuso_manifest "deploy/prometheus.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=120s \
   deployment/kuso-prometheus -n kuso || warn "kuso-prometheus not yet ready"
 
@@ -804,7 +885,7 @@ else
   #
   # KUSO_POSTGRES_SINGLE_NODE is honoured for back-compat with older
   # install commands but is a no-op now (single-node is the default).
-  PG_MANIFEST=$(curl -sfL "${KUSO_RAW}/deploy/postgres.yaml")
+  PG_MANIFEST=$(kuso_manifest "deploy/postgres.yaml")
   if [[ "${KUSO_POSTGRES_HA:-0}" == "1" || "${KUSO_POSTGRES_HA:-false}" == "true" ]]; then
     log "KUSO_POSTGRES_HA: scaling kuso-postgres Cluster to 3 instances (primary + 2 standbys)"
     PG_MANIFEST=$(echo "$PG_MANIFEST" | sed 's/^  instances: 1$/  instances: 3/' \
@@ -1252,7 +1333,7 @@ log "applying kuso operator (image tag ${KUSO_VERSION})"
 # Same image-rewrite pattern as the server: tolerant regex so the
 # committed manifest's tag (vX.Y.Z OR v0.1.0-dev legacy) gets
 # replaced with whatever the user asked for.
-curl -sfL "${KUSO_RAW}/deploy/operator.yaml" \
+kuso_manifest "deploy/operator.yaml" \
   | sed -E "s|kuso-operator:[A-Za-z0-9._-]+|kuso-operator:${KUSO_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
@@ -1271,7 +1352,7 @@ kubectl delete clusterrolebinding kuso-server-cluster-admin --ignore-not-found 2
 # rewrite to whatever the user requested via --server-version. The
 # regex matches `kuso-server-go:vX.Y.Z` regardless of the embedded
 # tag so an upgrade-via-install works without surgery on the YAML.
-curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
+kuso_manifest "deploy/server-go.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 
@@ -1279,7 +1360,7 @@ curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
 # write RBAC in kuso-managed namespaces; the internet-facing activator
 # may only flip replicas). kuso-server can't apply or remove these
 # itself, so they're installed here, as cluster-admin.
-curl -sfL "${KUSO_RAW}/deploy/kuso-admission-policy.yaml" | kubectl apply -f - >/dev/null \
+kuso_manifest "deploy/kuso-admission-policy.yaml" | kubectl apply -f - >/dev/null \
   || warn "deploy/kuso-admission-policy.yaml apply failed — kuso-server's RBAC is not namespace-fenced; apply it manually"
 
 # Node-join: the /bootstrap/register-node endpoint mints a join command
@@ -1325,7 +1406,7 @@ fi
 # traefik errors-Middleware it defines is what wakes slept services.
 # Best-effort: a cluster without scale-to-zero users still works, the
 # activator just sits idle. Same image-tag rewrite as the server.
-curl -sfL "${KUSO_RAW}/deploy/kuso-activator.yaml" \
+kuso_manifest "deploy/kuso-activator.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null 2>&1 || warn "kuso-activator apply failed (scale-to-zero wake won't work until fixed)"
 
@@ -1357,7 +1438,7 @@ curl -sfL "${KUSO_RAW}/deploy/kuso-activator.yaml" \
 # auto-updater only flips image tags and does not (re)apply manifests.
 for aux in incident-agent-rbac pkg-probe postgres-backup; do
   log "applying deploy/${aux}.yaml"
-  curl -sfL "${KUSO_RAW}/deploy/${aux}.yaml" | kubectl apply -f - >/dev/null \
+  kuso_manifest "deploy/${aux}.yaml" | kubectl apply -f - >/dev/null \
     || warn "deploy/${aux}.yaml apply failed — feature backed by it will be degraded; re-run installer or apply manually"
 done
 

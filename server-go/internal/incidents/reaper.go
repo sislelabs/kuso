@@ -78,6 +78,7 @@ func (m *Manager) Run(ctx context.Context) {
 			reapStuck(rctx, m.DB, investigateTimeout, m.clock(), m.log())
 			m.reapStuckImplementing(rctx)
 			m.reapIdleOpen(rctx)
+			m.revokeIdleLogAccess(rctx)
 			cancel()
 			serverstate.LoopHeartbeat(serverstate.LoopIncidents)
 		}
@@ -185,6 +186,53 @@ func (m *Manager) reapStuckImplementing(ctx context.Context) {
 		})
 		if err := m.DB.SetIncidentState(ctx, in.ID, db.IncidentTimedOut); err != nil {
 			m.log().Warn("incident reaper: transition implementing", "id", in.ID, "err", err)
+		}
+	}
+}
+
+// revokeIdleLogAccess empties the subjects of every agent log RoleBinding
+// whose namespace no unfinished agent Job was granted. kuso-server can't
+// delete RoleBindings, so revocation is an update. Bindings are listed
+// BEFORE Jobs: launch creates the Job before granting, so a grant that
+// lands between the two lists is either invisible here (no revoke) or
+// already backed by a listed Job.
+func (m *Manager) revokeIdleLogAccess(ctx context.Context) {
+	if m.Kube == nil || m.Kube.Clientset == nil {
+		return
+	}
+	ns := jobNamespace
+	if ks, ok := m.Spawner.(*KubeSpawner); ok {
+		ns = ks.namespace()
+	}
+	rbs, err := m.Kube.Clientset.RbacV1().RoleBindings(metav1.NamespaceAll).List(ctx,
+		metav1.ListOptions{LabelSelector: labelApp + "=" + logAccessName})
+	if err != nil {
+		m.log().Warn("incident reaper: list agent log bindings", "err", err)
+		return
+	}
+	jobs, err := m.Kube.Clientset.BatchV1().Jobs(ns).List(ctx,
+		metav1.ListOptions{LabelSelector: labelApp + "=" + labelAppAgent})
+	if err != nil {
+		m.log().Warn("incident reaper: list agent jobs", "err", err)
+		return
+	}
+	live := map[string]bool{}
+	for _, j := range jobs.Items {
+		if j.Status.CompletionTime != nil || (j.Status.Failed > 0 && j.Status.Active == 0) {
+			continue
+		}
+		if l := j.Labels[labelLogNamespace]; l != "" {
+			live[l] = true
+		}
+	}
+	for i := range rbs.Items {
+		rb := &rbs.Items[i]
+		if live[rb.Namespace] || len(rb.Subjects) == 0 {
+			continue
+		}
+		rb.Subjects = nil
+		if _, err := m.Kube.Clientset.RbacV1().RoleBindings(rb.Namespace).Update(ctx, rb, metav1.UpdateOptions{}); err != nil {
+			m.log().Warn("incident reaper: revoke agent log access", "ns", rb.Namespace, "err", err)
 		}
 	}
 }

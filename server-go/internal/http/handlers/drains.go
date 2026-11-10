@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/drains"
 )
@@ -34,6 +36,7 @@ type drainTester interface {
 type DrainsHandler struct {
 	Store  drainStore
 	Tester drainTester
+	Audit  *audit.Service
 	Logger *slog.Logger
 	// ProjectExists rejects project-scoped drains for unknown projects.
 	// Nil skips the check.
@@ -221,6 +224,19 @@ func (h *DrainsHandler) save(ctx context.Context, w http.ResponseWriter, r *http
 		h.fail(w, "save", err)
 		return
 	}
+	action := "drain.update"
+	if status == http.StatusCreated {
+		action = "drain.create"
+	}
+	// Host only: drain URLs routinely carry tokens in the path or query.
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   action,
+		Pipeline: d.Project,
+		Resource: "drain/" + d.ID,
+		Message:  fmt.Sprintf("drain %q type=%s host=%s project=%q enabled=%v", d.Name, d.Type, drainHost(d.URL), d.Project, d.Enabled),
+	})
 	writeJSON(w, status, maskDrain(d))
 }
 
@@ -231,6 +247,13 @@ func (h *DrainsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "delete", err)
 		return
 	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "drain.delete",
+		Resource: "drain/" + chi.URLParam(r, "id"),
+		Message:  "deleted drain " + chi.URLParam(r, "id"),
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
