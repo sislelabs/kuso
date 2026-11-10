@@ -2007,16 +2007,22 @@ func (p *Poller) tick(ctx context.Context) error {
 // on log tailing) shows up as a p99 climb on this histogram.
 func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 	start := time.Now()
-	// All builds in the namespace via the informer cache; we filter
-	// out done ones in code (the cache helper takes equality maps
-	// only, can't express `!build-state`). The active-build set is
-	// small relative to historical builds, so the scan cost is fine.
-	raw, err := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, nil)
+	// Only in-flight builds are decoded, plus the few done ones that
+	// still have poller work (doneBuildNeedsPoll). Decoding every
+	// retained build every 5s was 0.1–1 CPU-s at a few thousand CRs.
+	raw, err := p.Svc.Kube.ListKusoBuildsFiltered(ctx, ns, LabelBuildState+"!="+BuildStateDone, nil)
 	if err != nil {
 		p.Logger.Warn("build poller list", "ns", ns, "err", err)
 		metrics.ObserveReconcileObserve(start, err)
 		return
 	}
+	now := time.Now()
+	done, err := p.Svc.Kube.ListKusoBuildsFiltered(ctx, ns, LabelBuildState+"="+BuildStateDone,
+		func(u *unstructured.Unstructured) bool { return doneBuildNeedsPoll(u, now) })
+	if err != nil {
+		p.Logger.Warn("build poller list done", "ns", ns, "err", err)
+	}
+	raw = append(raw, done...)
 	for i := range raw {
 		b := &raw[i]
 		if b.Annotations[annRetryRelease] != "" {
@@ -4369,4 +4375,30 @@ func (p *Poller) getJobCached(ctx context.Context, ns, name string) (*batchv1.Jo
 		}
 	}
 	return p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
+// doneBuildNeedsPoll reports whether a done build still has poller work:
+// a requested release retry, or a GitHub commit status that may not be
+// final yet. Mirrors syncCommitStatuses: an unposted build that finished
+// before the backfill window is never posted, and a final status
+// (success/failure/error) only changes in the window right after the
+// build ends (release hook outcome), which the recency check covers.
+func doneBuildNeedsPoll(u *unstructured.Unstructured, now time.Time) bool {
+	a := u.GetAnnotations()
+	if a[annRetryRelease] != "" {
+		return true
+	}
+	finished := u.GetCreationTimestamp().Time
+	if t, err := time.Parse(time.RFC3339, a[annCompletedAt]); err == nil {
+		finished = t
+	}
+	if !finished.IsZero() && !finished.Before(now.Add(-commitStatusBackfillWindow)) {
+		return true
+	}
+	switch posted := a[annCommitStatus]; posted {
+	case "", "success", "failure", "error":
+		return false
+	default:
+		return true
+	}
 }

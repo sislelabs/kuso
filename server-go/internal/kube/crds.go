@@ -192,6 +192,49 @@ func (c *Client) ListKusoBuildsByLabels(ctx context.Context, namespace string, l
 	})
 }
 
+// ListKusoBuildsFiltered lists builds matching selector (full selector
+// syntax, e.g. "kuso.sislelabs.com/build-state!=done"), decoding only
+// those keep accepts. keep sees the raw object and must not mutate it;
+// nil keeps everything. Served from the informer when warm, so rejected
+// objects cost neither a DeepCopy nor a reflect decode.
+func (c *Client) ListKusoBuildsFiltered(ctx context.Context, namespace, selector string, keep func(*unstructured.Unstructured) bool) ([]KusoBuild, error) {
+	sel, err := labels.Parse(selector)
+	if err != nil {
+		return nil, fmt.Errorf("kube: parse build selector %q: %w", selector, err)
+	}
+	var items []*unstructured.Unstructured
+	cached := false
+	if c.Cache != nil {
+		items, cached = c.Cache.ListFromCacheShared(GVRBuilds, namespace, sel)
+	}
+	if !cached {
+		raw, err := c.Dynamic.Resource(GVRBuilds).Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return nil, fmt.Errorf("kube: list builds in %q: %w", namespace, err)
+		}
+		items = make([]*unstructured.Unstructured, len(raw.Items))
+		for i := range raw.Items {
+			items[i] = &raw.Items[i]
+		}
+	}
+	out := make([]KusoBuild, 0, len(items))
+	for _, u := range items {
+		if keep != nil && !keep(u) {
+			continue
+		}
+		var b KusoBuild
+		src := u
+		if cached {
+			src = u.DeepCopy()
+		}
+		if err := fromUnstructured(src, &b); err != nil {
+			return nil, fmt.Errorf("kube: decode build: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 // GetKusoBuild fetches one KusoBuild by name.
 func (c *Client) GetKusoBuild(ctx context.Context, namespace, name string) (*KusoBuild, error) {
 	return get[KusoBuild](ctx, c, GVRBuilds, namespace, name)

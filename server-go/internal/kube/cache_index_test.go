@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -80,5 +81,28 @@ func TestCache_IndexedLookups(t *testing.T) {
 	envs, err := c.ListKusoEnvironmentsByLabels(ctx, "kuso", map[string]string{LabelProject: "p"})
 	if err != nil || len(envs) != 2 {
 		t.Fatalf("typed list via index: n=%d err=%v", len(envs), err)
+	}
+}
+
+// The poller's selector must actually exclude done builds on the live
+// (cold-cache) path too, not only in the informer.
+func TestListKusoBuildsFiltered_LiveSelector(t *testing.T) {
+	t.Parallel()
+	b := func(name, state string) seedObj {
+		s := seed(GVRBuilds, "KusoBuild", "kuso", name, map[string]any{"project": "p"})
+		if state != "" {
+			s.obj.SetLabels(map[string]string{"kuso.sislelabs.com/build-state": state})
+		}
+		return s
+	}
+	c := fakeClient(t, b("a", ""), b("b", "done"), b("c", "done"))
+	got, err := c.ListKusoBuildsFiltered(context.Background(), "kuso", "kuso.sislelabs.com/build-state!=done", nil)
+	if err != nil || len(got) != 1 || got[0].Name != "a" {
+		t.Fatalf("active: got %d builds err=%v, want only a", len(got), err)
+	}
+	got, err = c.ListKusoBuildsFiltered(context.Background(), "kuso", "kuso.sislelabs.com/build-state=done",
+		func(u *unstructured.Unstructured) bool { return u.GetName() == "c" })
+	if err != nil || len(got) != 1 || got[0].Name != "c" {
+		t.Fatalf("done+keep: got %d err=%v, want only c", len(got), err)
 	}
 }
