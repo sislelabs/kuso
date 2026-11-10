@@ -231,7 +231,10 @@ function FeedPanel({ state, onClose }: { state: Feed; onClose: () => void }) {
           </button>
         )}
       </div>
-      <div className="max-h-[min(28rem,70dvh)] overflow-y-auto">
+      {/* relative: the sr-only "New:" span on each unread row is absolute;
+          without a positioned scroller it escapes the clip and stretches
+          the page under a long feed (a page scrollbar while open). */}
+      <div className="relative max-h-[min(28rem,70dvh)] overflow-y-auto">
         {feed.isPending ? (
           <LoadingState kind="inline" className="px-3 py-4" />
         ) : feed.isError ? (
