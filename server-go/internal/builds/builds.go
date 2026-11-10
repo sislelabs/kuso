@@ -1060,7 +1060,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	defer svcLock.Unlock()
 
 	if !manual && !userRef && !req.Retry && !syntheticRef {
-		name, ref, nerr := s.webhookBuildName(ctx, ns, project, service, sha, branch, req.PreviewEnv, identity)
+		name, ref, nerr := s.webhookBuildName(ctx, ns, project, service, sha, branch, defaultBranch, req.PreviewEnv, identity)
 		if nerr != nil {
 			return nil, false, nerr
 		}
@@ -1411,37 +1411,66 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 }
 
 // webhookBuildName picks the CR name and tag ref for a webhook build of
-// sha. The SHA-keyed name stays the common case, so a redelivery of the
-// same push lands on an existing CR and is reported as ErrConflict before
-// any token is minted. When that name is held by a build of the same
-// commit for a different branch or preview env (a fast-forward of
-// staging into main, a release PR whose head is already built), the
-// build gets a name and tag qualified by identity. Reusing the other
-// build was not an option: it only promotes to its own branch's envs and
-// baked that branch's build-time env.
+// sha. The SHA-keyed name stays the common case for production (default
+// branch, no preview), so a redelivery of the same push lands on an
+// existing CR and is reported as ErrConflict before any token is minted.
+// Every other branch and every preview is qualified by identity, always:
+// each bakes its own build-time env, and the CR whose existence used to
+// trigger the suffix is swept after 24h while its image lives on in the
+// registry (BLOB-1: a staging build then pushed over production's tag).
+//
+// The chosen tag is then checked against the registry. A tag that exists
+// with no CR claiming it was pushed by a build whose CR was swept;
+// pushing over it changes what every cold pull of a running env gets
+// without the env spec changing, so the build gets a unique tag instead.
 //
 // Callers hold the per-service lock, so the live reads here see every
 // earlier Create for this service from this process.
-func (s *Service) webhookBuildName(ctx context.Context, ns, project, service, sha, branch, previewEnv, identity string) (string, string, error) {
+func (s *Service) webhookBuildName(ctx context.Context, ns, project, service, sha, branch, defaultBranch, previewEnv, identity string) (string, string, error) {
 	name := buildCRName(project, service, sha)
 	existing, err := s.Kube.GetKusoBuild(ctx, ns, name)
-	if apierrors.IsNotFound(err) {
-		return name, sha, nil
-	}
-	if err != nil {
+	switch {
+	case apierrors.IsNotFound(err):
+		existing = nil
+	case err != nil:
 		return "", "", fmt.Errorf("check existing build %s: %w", name, err)
 	}
-	if existing.Spec.Branch == branch && existing.Annotations[AnnPreviewEnv] == previewEnv {
+	if existing != nil && existing.Spec.Branch == branch && existing.Annotations[AnnPreviewEnv] == previewEnv {
 		return "", "", fmt.Errorf("%w: build %s already exists for this commit", ErrConflict, name)
 	}
-	ref := sha[:12] + "-" + identity
-	name = buildCRName(project, service, ref)
-	if _, err := s.Kube.GetKusoBuild(ctx, ns, name); err == nil {
-		return "", "", fmt.Errorf("%w: build %s already exists for this commit and branch", ErrConflict, name)
-	} else if !apierrors.IsNotFound(err) {
-		return "", "", fmt.Errorf("check existing build %s: %w", name, err)
+	ref := sha
+	if existing != nil || branch != defaultBranch || previewEnv != "" {
+		ref = sha[:12] + "-" + identity
+		name = buildCRName(project, service, ref)
+		if _, err := s.Kube.GetKusoBuild(ctx, ns, name); err == nil {
+			return "", "", fmt.Errorf("%w: build %s already exists for this commit and branch", ErrConflict, name)
+		} else if !apierrors.IsNotFound(err) {
+			return "", "", fmt.Errorf("check existing build %s: %w", name, err)
+		}
+	}
+	if s.registryTagTaken(ctx, project, service, ImageTag(ref)) {
+		ref = sha[:12] + "-" + strconv.FormatInt(time.Now().UnixMilli(), 36)
+		name = buildCRName(project, service, ref)
 	}
 	return name, ref, nil
+}
+
+// registryTagTaken reports whether project/service:tag already exists in
+// the in-cluster registry. A failed probe counts as taken: a fresh unique
+// tag costs one cache miss, an overwrite can't be undone. Without a
+// registry client (external registry) nothing can be known and the
+// identity suffix is the only protection.
+func (s *Service) registryTagTaken(ctx context.Context, project, service, tag string) bool {
+	if s.Images == nil {
+		return false
+	}
+	repo := project + "/" + service
+	dg, err := s.Images.ResolveTagDigest(ctx, repo, tag)
+	if err != nil {
+		slog.Default().Warn("build: registry tag probe failed; using a unique tag", "repo", repo, "tag", tag, "err", err)
+		return true
+	}
+	return dg != ""
 }
 
 // adoptCloneTokenSecret stamps an ownerReference to the KusoBuild CR onto

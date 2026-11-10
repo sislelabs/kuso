@@ -38,6 +38,17 @@ s3_fetch() { # src dst
     if [ "${_i}" -ge 30 ]; then echo "==> could not download $1 after 60s" >&2; exit 1; fi
     echo "==> download failed, retrying (${_i})"; sleep 2
   done
+  # Encrypted artifacts (openssl "Salted__" header) are decrypted in place,
+  # so the manifest's plaintext sha256 check below and the restore itself
+  # see the same gzip a pre-encryption dump was. Legacy dumps pass as-is.
+  if [ "$(head -c 8 "$2" | tr -d '\0')" = "Salted__" ]; then
+    if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+      echo "==> $1 is encrypted but no backup encryption key is mounted (Secret <addon>-backup-key)" >&2; exit 1
+    fi
+    echo "==> decrypting"
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -pass env:BACKUP_ENCRYPTION_KEY -in "$2" -out "$2.plain"
+    mv "$2.plain" "$2"
+  fi
 }
 `
 

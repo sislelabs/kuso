@@ -382,14 +382,19 @@ func parseImageRef(ref string) (repo, tag, digest string) {
 // apiserver. The informer cache is deliberately bypassed: a lagging or
 // partially synced cache would make live objects look absent.
 func liveListAll[T any](ctx context.Context, kc *kube.Client, gvr schema.GroupVersionResource) ([]T, error) {
-	raw, err := kc.Dynamic.Resource(gvr).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	return liveList[T](ctx, kc, gvr, metav1.NamespaceAll)
+}
+
+// liveList is liveListAll scoped to one namespace.
+func liveList[T any](ctx context.Context, kc *kube.Client, gvr schema.GroupVersionResource, namespace string) ([]T, error) {
+	raw, err := kc.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("orphan-sweep list %s: %w", gvr.Resource, err)
+		return nil, fmt.Errorf("live list %s: %w", gvr.Resource, err)
 	}
 	out := make([]T, len(raw.Items))
 	for i := range raw.Items {
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &out[i]); err != nil {
-			return nil, fmt.Errorf("orphan-sweep decode %s %s: %w", gvr.Resource, raw.Items[i].GetName(), err)
+			return nil, fmt.Errorf("live decode %s %s: %w", gvr.Resource, raw.Items[i].GetName(), err)
 		}
 	}
 	return out, nil

@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,5 +37,26 @@ func TestRetainedData_ReportsKeptSecretsAndVolumes(t *testing.T) {
 		if len(got) != want {
 			t.Errorf("%s: retained = %v, want %d item(s)", name, got, want)
 		}
+	}
+}
+
+// BLOB-3: backups a deleted project left in the bucket count as retained
+// data; a bucket error must not block creation.
+func TestRetainedData_ReportsRetainedBackups(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	s.Kube.Clientset = kubefake.NewSimpleClientset()
+	s.RetainedBackups = func(_ context.Context, project string) ([]string, error) {
+		if project == "acme" {
+			return []string{"backups s3://b/acme/acme-pg/"}, nil
+		}
+		return nil, errors.New("bucket unreachable")
+	}
+	ctx := context.Background()
+	if got, err := s.RetainedData(ctx, CreateProjectRequest{Name: "acme"}); err != nil || len(got) != 1 {
+		t.Errorf("acme: retained = %v, err %v", got, err)
+	}
+	if got, err := s.RetainedData(ctx, CreateProjectRequest{Name: "other"}); err != nil || len(got) != 0 {
+		t.Errorf("other: retained = %v, err %v", got, err)
 	}
 }

@@ -778,6 +778,23 @@ func mountAuthenticatedRoutes(
 			// falls back to home-namespace-only resolution.
 			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Addons: d.Addons, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
+			if d.Projects != nil {
+				d.Projects.RetainedBackups = backupsH.RetainedBackups
+			}
+			// One-shot, per bucket: bind pre-existing backups to the
+			// addons that own them now (see backups_owner.go).
+			go func() {
+				for attempt := 0; attempt < 5; attempt++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					err := backupsH.ClaimLegacyBackupOwners(ctx)
+					cancel()
+					if err == nil {
+						return
+					}
+					d.Logger.Warn("backup: claim legacy backup owners", "attempt", attempt+1, "err", err)
+					time.Sleep(time.Duration(attempt+1) * time.Minute)
+				}
+			}()
 		}
 		// Mounted even without an updater: GET /api/system/version still
 		// reports the running version, and the write routes answer 503.

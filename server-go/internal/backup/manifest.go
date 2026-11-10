@@ -21,6 +21,17 @@ type Artifact struct {
 	SHA256      string `json:"sha256"`
 	Bytes       int64  `json:"bytes"`
 	PayloadKind string `json:"payloadKind"`
+	// Encryption is set when the stored object is encrypted. SHA256 is
+	// then the digest of the decrypted payload, so the restore verifies
+	// what it actually applies; Bytes stays the stored object's size.
+	Encryption *ArtifactEncryption `json:"encryption,omitempty"`
+}
+
+// ArtifactEncryption names how an artifact was encrypted and which key
+// (by KeyID fingerprint, never the key) decrypts it.
+type ArtifactEncryption struct {
+	Alg   string `json:"alg"`
+	KeyID string `json:"keyId"`
 }
 
 // Manifest describes one backup run and its artifacts.

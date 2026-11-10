@@ -62,7 +62,11 @@ RUN apk add --no-cache \
       redis \
       mongodb-tools \
       mysql-client \
+      openssl \
       gzip
+# openssl      -> client-side encryption of dumps (backup-cronjob.yaml) and
+#                decryption in the restore Job. The chart skips encryption
+#                when the binary is missing, so an older image still backs up.
 # rclone      -> cross-endpoint bucket sync for the s3 addon backup.
 #                `aws s3 sync` can only do s3->s3 within ONE endpoint and
 #                credential set, so the old code staged the whole bucket

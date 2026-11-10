@@ -93,6 +93,7 @@ spec:
                     exit 0
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
@@ -161,8 +162,7 @@ spec:
                   PGPASSWORD="${POSTGRES_PASSWORD}" "${PG_DUMP}" --clean --if-exists \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
                     | gzip > /tmp/dump.gz
-                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
-                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  seal /tmp/dump.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
                   # Integrity manifest written beside the artifact. Restore
@@ -170,8 +170,8 @@ spec:
                   # printf (not a heredoc): the script is indented inside a YAML
                   # block scalar, and an indented heredoc terminator is never
                   # matched — it would swallow the rest of the script.
-                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
-                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"%s}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" "${ENC_JSON}" > /tmp/manifest.json
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.gz /tmp/manifest.json
                   echo "==> manifest done"
@@ -210,14 +210,17 @@ spec:
                         echo "ERROR: pg_dump failed for ${DB}" >&2
                         FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz; continue
                       fi
-                      DBSHA=$(sha256sum /tmp/db.gz | awk '{print $1}')
-                      DBBYTES=$(wc -c < /tmp/db.gz | tr -d ' ')
+                      if ! seal /tmp/db.gz; then
+                        echo "ERROR: encrypt failed for ${DB}" >&2
+                        FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz /tmp/db.gz.enc; continue
+                      fi
+                      DBSHA="${SHA}"; DBBYTES="${BYTES}"
                       if ! aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db.gz "s3://${BUCKET}/${DBKEY}"; then
                         echo "ERROR: upload failed for ${DB}" >&2
                         FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz; continue
                       fi
-                      printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
-                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${DBKEY}" "${DBSHA}" "${DBBYTES}" > /tmp/db-manifest.json
+                      printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"%s}]}\n' \
+                        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${DBKEY}" "${DBSHA}" "${DBBYTES}" "${ENC_JSON}" > /tmp/db-manifest.json
                       aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db-manifest.json "s3://${BUCKET}/${DBKEY}.manifest.json" || true
                       echo "==> ${DB} done (sha256=${DBSHA} bytes=${DBBYTES})"
                       rm -f /tmp/db.gz /tmp/db-manifest.json
@@ -280,6 +283,7 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
 {{- /*
@@ -362,6 +366,7 @@ spec:
                     exit 0
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping external ${ADDON} → s3://${BUCKET}/${KEY}"
@@ -414,15 +419,14 @@ spec:
                   # sha256 the artifact and emit an integrity manifest — the
                   # restore path verifies sha256 before applying.
                   "${PG_DUMP}" --clean --if-exists --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
-                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
-                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  seal /tmp/dump.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
                   # Integrity manifest written beside the artifact. printf
                   # (not a heredoc): indented heredoc terminators never match
                   # inside a YAML block scalar.
-                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
-                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"%s}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" "${ENC_JSON}" > /tmp/manifest.json
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.gz /tmp/manifest.json
                   echo "==> manifest done"
@@ -458,6 +462,7 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
 {{- /*
@@ -533,6 +538,7 @@ spec:
                     exit 0
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
                   KEY="${PROJECT}/${ADDON}/${TS}.rdb.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> snapshotting ${ADDON} → s3://${BUCKET}/${KEY}"
@@ -552,12 +558,11 @@ spec:
                   done
                   redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
                   gzip -c /tmp/dump.rdb > /tmp/dump.rdb.gz
-                  SHA=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
-                  BYTES=$(wc -c < /tmp/dump.rdb.gz | tr -d ' ')
+                  seal /tmp/dump.rdb.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.rdb.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
-                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"redis","producer":"redis_rdb","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"redis_rdb"}]}\n' \
-                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"redis","producer":"redis_rdb","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"redis_rdb"%s}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" "${ENC_JSON}" > /tmp/manifest.json
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.rdb /tmp/dump.rdb.gz /tmp/manifest.json
                   echo "==> upload done"
@@ -594,6 +599,7 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
 {{- /*
@@ -659,6 +665,7 @@ spec:
                     exit 0
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
                   KEY="${PROJECT}/${ADDON}/${TS}.archive.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
@@ -680,12 +687,11 @@ spec:
                     sleep 2
                   done
                   mongodump --uri "${MONGO_URL}" --archive --gzip > /tmp/dump.archive.gz
-                  SHA=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
-                  BYTES=$(wc -c < /tmp/dump.archive.gz | tr -d ' ')
+                  seal /tmp/dump.archive.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.archive.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
-                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mongodb","producer":"mongodump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mongodump"}]}\n' \
-                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mongodb","producer":"mongodump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mongodump"%s}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" "${ENC_JSON}" > /tmp/manifest.json
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.archive.gz /tmp/manifest.json
                   echo "==> manifest done"
@@ -718,6 +724,7 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
 {{- /*
@@ -782,6 +789,7 @@ spec:
                     exit 0
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
@@ -800,12 +808,11 @@ spec:
                     sleep 2
                   done
                   MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz
-                  SHA=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
-                  BYTES=$(wc -c < /tmp/dump.sql.gz | tr -d ' ')
+                  seal /tmp/dump.sql.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.sql.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
-                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mysql","producer":"mysqldump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mysqldump"}]}\n' \
-                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mysql","producer":"mysqldump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mysqldump"%s}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" "${ENC_JSON}" > /tmp/manifest.json
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.sql.gz /tmp/manifest.json
                   echo "==> manifest done"
@@ -838,6 +845,7 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
 {{- /*
@@ -952,6 +960,20 @@ spec:
                     --transfers 16 --checkers 16 --retries 3 \
                     --s3-no-check-bucket --stats-one-line --stats 30s
                   echo "==> sync done"
+                  # Buckets an app created besides S3_BUCKET (D4) go to
+                  # sibling prefixes <TS>.bucket-<name>/, which share the
+                  # snapshot's stamp, so retention prunes them together and
+                  # the main snapshot's layout is unchanged.
+                  if BUCKETS=$(rclone lsf --dirs-only "src:" 2>/dev/null); then
+                    for B in $(printf '%s\n' "${BUCKETS}" | tr -d '/' | grep -E '^[a-z0-9][a-z0-9.-]{1,62}$' | grep -vxF "${SRC_BUCKET}" || true); do
+                      echo "==> syncing extra bucket ${B}"
+                      rclone copy "src:${B}" "dst:${BUCKET}/${PROJECT}/${ADDON}/${TS}.bucket-${B}/" \
+                        --transfers 16 --checkers 16 --retries 3 \
+                        --s3-no-check-bucket --stats-one-line --stats 30s
+                    done
+                  else
+                    echo "WARNING: could not list buckets on the addon; only ${SRC_BUCKET} was backed up" >&2
+                  fi
 
                   {{- include "kusoaddon.backupPrune" (dict "mode" "prefixes") | nindent 18 }}
                   echo "==> done"
@@ -971,16 +993,18 @@ spec:
                     secretKeyRef:
                       name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
                       key: S3_ENDPOINT
+                # Root, not the app user: the app user is scoped to
+                # S3_BUCKET, and the backup must see every bucket (D4).
                 - name: SRC_ACCESS_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
-                      key: S3_ACCESS_KEY_ID
+                      name: {{ include "kusoaddon.s3RootSecretName" . | quote }}
+                      key: MINIO_ROOT_USER
                 - name: SRC_SECRET_KEY
                   valueFrom:
                     secretKeyRef:
-                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
-                      key: S3_SECRET_ACCESS_KEY
+                      name: {{ include "kusoaddon.s3RootSecretName" . | quote }}
+                      key: MINIO_ROOT_PASSWORD
                 # Destination: cluster-wide backup bucket.
                 # S3 creds are optional:true so the CronJob installs and
                 # RUNS even before backup S3 settings are configured — the
@@ -1001,4 +1025,40 @@ spec:
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
+{{- end }}
+
+{{- /*
+Backup encryption key (BLOB-8). One random key per addon, minted once and
+read back with lookup so a reconcile never rotates it (a rotated key
+would make every earlier dump unreadable). helm keep: deleting the addon
+must not delete the only key its retained dumps can be decrypted with.
+The CronJobs mount it optional, so the first run after an upgrade that
+races this Secret just uploads plaintext, as before.
+
+Back it up: losing this Secret makes the addon's encrypted dumps
+unrecoverable. kubectl -n <ns> get secret <addon>-backup-key -o yaml.
+*/ -}}
+{{- if and (.Values.backup).schedule (has .Values.kind (list "postgres" "redis" "mongodb" "mysql")) (not .Values.useInstanceAddon) }}
+{{- $keyName := include "kusoaddon.backupKeySecretName" . }}
+{{- $existingKey := lookup "v1" "Secret" .Release.Namespace $keyName }}
+{{- $key := "" }}
+{{- if and $existingKey $existingKey.data (index $existingKey.data "key") }}
+{{- $key = index $existingKey.data "key" | b64dec }}
+{{- else }}
+{{- $key = randAlphaNum 64 }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $keyName | quote }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup-key
+type: Opaque
+data:
+  key: {{ $key | b64enc | quote }}
 {{- end }}

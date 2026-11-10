@@ -388,6 +388,8 @@ func (s *Service) ReferenceableConnSecrets(ctx context.Context, project string) 
 // quoting in DDL we execute as superuser, and no real addon needs them.
 var pgIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]{0,62}$`)
 
+var s3BucketRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+
 // validDatabaseName gates KusoAddon.spec.database. Empty is allowed —
 // the field is optional and the charts derive a default from the addon
 // name when it's unset. Any non-empty value must be a plain Postgres
@@ -442,6 +444,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if !validDatabaseName(req.Database) {
 		return nil, fmt.Errorf("%w: database must be a valid Postgres identifier "+
 			"(letter or underscore, then letters/digits/underscore/$, max 63 chars)", ErrInvalid)
+	}
+	// For s3 the field is the bucket name, which reaches the MinIO init
+	// shell and IAM policy JSON (K8S-10/A14). `$` and upper case pass the
+	// Postgres rule but are not valid bucket names.
+	if req.Kind == "s3" && req.Database != "" && !s3BucketRe.MatchString(req.Database) {
+		return nil, fmt.Errorf("%w: an s3 bucket name must be 3-63 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit", ErrInvalid)
 	}
 	// SECURITY: storageSize is rendered into 15 addon manifests. Emitted
 	// unvalidated, a YAML block scalar carrying a newline + `---` injects

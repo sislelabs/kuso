@@ -56,6 +56,10 @@ type Service struct {
 	// inherit a deleted project's builds as rollback targets. nil = no-op.
 	BuildHistoryCleanupForProject func(ctx context.Context, project string) error
 
+	// RetainedBackups lists backup prefixes a deleted project left in the
+	// backup bucket, for RetainedData. nil = not checked.
+	RetainedBackups func(ctx context.Context, project string) ([]string, error)
+
 	// AddonConnSecrets returns the project's addon connection-secret
 	// names so a freshly-created env starts with envFromSecrets
 	// already pointing at every existing addon (DATABASE_URL etc.

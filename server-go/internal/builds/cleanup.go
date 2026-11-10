@@ -211,7 +211,7 @@ func SweepImagesPastWindow(
 	byKey := map[svcKey][]imageRetentionRecord{}
 	seen := map[string]bool{}
 	add := func(project string, r imageRetentionRecord) {
-		if r.imageTag == "" || !r.succeeded || seen[r.buildName] {
+		if r.imageTag == "" || seen[r.buildName] {
 			return
 		}
 		seen[r.buildName] = true
@@ -225,7 +225,8 @@ func SweepImagesPastWindow(
 			seen[b.Name] = true
 			continue
 		}
-		if b.Spec.Image == nil || buildPhase(b) != "succeeded" {
+		ph := buildPhase(b)
+		if b.Spec.Image == nil || !imageBearingPhase(ph) {
 			continue
 		}
 		add(b.Spec.Project, imageRetentionRecord{
@@ -233,7 +234,7 @@ func SweepImagesPastWindow(
 			service:   strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"),
 			imageTag:  b.Spec.Image.Tag,
 			createdAt: b.CreationTimestamp.Time,
-			succeeded: true,
+			succeeded: ph == "succeeded",
 		})
 	}
 	// Projects that actually live in THIS namespace. Archived rows are
@@ -270,6 +271,9 @@ func SweepImagesPastWindow(
 					skipped++
 					continue // belongs to another namespace; not ours to sweep
 				}
+				if !imageBearingPhase(a.Status) {
+					continue
+				}
 				add(a.Project, imageRetentionRecord{
 					buildName: a.BuildName,
 					project:   a.Project,
@@ -293,8 +297,13 @@ func SweepImagesPastWindow(
 	// rarely rebuild (staging branches, long-lived previews) fall out of
 	// the newest-N window while other envs keep building; sweeping their
 	// tag turns the next pod restart into a permanent ImagePullBackOff.
+	//
+	// Envs, crons and runs are read live, not from the informer cache: a
+	// rollback that just re-pointed an env at an old tag may not have
+	// reached the cache yet, and untagging it then turns the rollback
+	// into ImagePullBackOff (BLOB-9).
 	protected := map[string]bool{}
-	if envs, eerr := kc.ListKusoEnvironments(ctx, namespace); eerr != nil {
+	if envs, eerr := liveList[kube.KusoEnvironment](ctx, kc, kube.GVREnvironments, namespace); eerr != nil {
 		// Fail CLOSED: without the live-env view we can't know which
 		// tags are load-bearing, and a skipped sweep is recoverable
 		// while an over-eager one is not.
@@ -325,7 +334,7 @@ func SweepImagesPastWindow(
 	// Fail CLOSED like the env lookup above: without the cron view we
 	// cannot know which tags are load-bearing, and a skipped sweep is
 	// recoverable while an over-eager one is not.
-	if crons, cerr := kc.ListKusoCrons(ctx, namespace); cerr != nil {
+	if crons, cerr := liveList[kube.KusoCron](ctx, kc, kube.GVRCrons, namespace); cerr != nil {
 		return 0, fmt.Errorf("image-sweep list crons: %w", cerr)
 	} else {
 		for i := range crons {
@@ -347,7 +356,7 @@ func SweepImagesPastWindow(
 	// eviction of those pods has no good image to pull. Same pod-aware
 	// view the orphan sweep uses. Fail closed like the lists above.
 	live := protectedImages{tags: map[string]bool{}, digests: map[string]bool{}, repos: map[string]bool{}}
-	runs, rerr := kc.ListKusoRuns(ctx, namespace)
+	runs, rerr := liveList[kube.KusoRun](ctx, kc, kube.GVRRuns, namespace)
 	if rerr != nil {
 		return 0, fmt.Errorf("image-sweep list runs: %w", rerr)
 	}
@@ -471,19 +480,47 @@ type untagTarget struct {
 // ImagePullBackOff.
 func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int, protected map[string]bool) []untagTarget {
 	var out []untagTarget
-	for k, recs := range byKey {
-		if len(recs) <= keep {
-			continue
+	now := nowFn()
+	for k, all := range byKey {
+		var recs, other []imageRetentionRecord
+		for _, r := range all {
+			if r.succeeded {
+				recs = append(recs, r)
+			} else {
+				other = append(other, r)
+			}
 		}
 		sortRecordsNewestFirst(recs)
 		repo := fmt.Sprintf("%s/%s", k.project, k.service)
 		// Rebuilds of one commit share a tag; an aged-out record must not
 		// untag what a kept record still points at.
 		kept := map[string]bool{}
-		for _, r := range recs[:keep] {
-			kept[r.imageTag] = true
+		for i, r := range recs {
+			if i < keep {
+				kept[r.imageTag] = true
+			}
 		}
-		for _, r := range recs[keep:] {
+		if len(recs) > keep {
+			for _, r := range recs[keep:] {
+				if protected[repo+":"+r.imageTag] || kept[r.imageTag] {
+					continue
+				}
+				out = append(out, untagTarget{repo: repo, tag: r.imageTag, project: k.project, buildName: r.buildName})
+			}
+		}
+		// B-29: a build that pushed but never went live (release hook
+		// failed, hold expired, cancelled after push) never counted
+		// toward the window, so its image was kept forever. It takes no
+		// window slot; it goes once a later build succeeded and it is
+		// old enough that a release retry is no longer plausible.
+		if len(recs) == 0 {
+			continue
+		}
+		newestOK := recs[0].createdAt
+		for _, r := range other {
+			if !r.createdAt.Before(newestOK) || now.Sub(r.createdAt) < failedImageGrace {
+				continue
+			}
 			if protected[repo+":"+r.imageTag] || kept[r.imageTag] {
 				continue
 			}
@@ -491,6 +528,22 @@ func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int, protected 
 		}
 	}
 	return out
+}
+
+// failedImageGrace keeps a never-promoted image around long enough for a
+// release retry or a hold re-approval to still find it.
+const failedImageGrace = 72 * time.Hour
+
+var nowFn = time.Now
+
+// imageBearingPhase reports whether a terminal build phase may have
+// pushed an image. Only these feed the image-retention sweep.
+func imageBearingPhase(phase string) bool {
+	switch phase {
+	case "succeeded", "release-failed", "failed", "cancelled":
+		return true
+	}
+	return false
 }
 
 func sortRecordsNewestFirst(recs []imageRetentionRecord) {

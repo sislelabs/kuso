@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/audit"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/db"
 )
 
@@ -157,8 +159,9 @@ func (h *BackupsHandler) DownloadObject(w http.ResponseWriter, r *http.Request) 
 	// Ownership is settled before touching S3 so a foreign key is refused
 	// even when backups aren't configured.
 	owned, bucketOverride := false, ""
+	var loc *instanceTenantBackupLoc
 	if cr.Spec.UseInstanceAddon != "" {
-		loc, err := h.instanceTenantBackups(ctx, ns, cr)
+		loc, err = h.instanceTenantBackups(ctx, ns, cr)
 		if err != nil {
 			h.Logger.Error("backup: resolve instance tenant backups", "err", err)
 			writeErr(w, http.StatusBadGateway, "resolve instance backups: "+err.Error())
@@ -201,6 +204,43 @@ func (h *BackupsHandler) DownloadObject(w http.ResponseWriter, r *http.Request) 
 	}
 	defer out.Body.Close()
 
+	// A same-name predecessor's dump is not this addon's (BLOB-3).
+	keyNS, keyName := ns, backup.KeySecretName(cr.Name)
+	if loc != nil {
+		keyNS, keyName = loc.keyNS, loc.keyName
+		if !loc.ownsAt(key, backupObjectTime(loc.prefix, key, aws.ToTime(out.LastModified))) {
+			writeErr(w, http.StatusBadRequest, "key does not belong to this addon")
+			return
+		}
+	} else {
+		prefix := project + "/" + cr.Name + "/"
+		if !h.addonBackupOwnership(ctx, cli, bucket, prefix, cr).owns(backupObjectTime(prefix, key, aws.ToTime(out.LastModified))) {
+			writeErr(w, http.StatusBadRequest, "key does not belong to this addon")
+			return
+		}
+	}
+	// Encrypted artifacts (BLOB-8) are decrypted here so a download is
+	// the same gzip the caller always got.
+	body := bufio.NewReaderSize(out.Body, 64*1024)
+	var payload io.Reader = body
+	encrypted := false
+	if head, _ := body.Peek(16); backup.IsEncrypted(head) {
+		encrypted = true
+		passphrase, err := h.readBackupKey(ctx, keyNS, keyName)
+		if err == nil && passphrase == "" {
+			err = backup.ErrEncryptedNoKey
+		}
+		if err != nil {
+			h.Logger.Error("backup: download needs encryption key", "secret", keyNS+"/"+keyName, "err", err)
+			writeErr(w, http.StatusInternalServerError, "backup is encrypted and its key Secret "+keyName+" is unavailable")
+			return
+		}
+		if payload, err = backup.NewDecryptReader(body, passphrase); err != nil {
+			writeErr(w, http.StatusInternalServerError, "decrypt backup: "+err.Error())
+			return
+		}
+	}
+
 	name := strings.NewReplacer(`"`, "", `\`, "", "\r", "", "\n", "").Replace(path.Base(key))
 	if h.Audit != nil {
 		h.Audit.Log(ctx, audit.Entry{
@@ -219,11 +259,11 @@ func (h *BackupsHandler) DownloadObject(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-	if out.ContentLength != nil && *out.ContentLength >= 0 {
+	if !encrypted && out.ContentLength != nil && *out.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(*out.ContentLength, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, out.Body); err != nil {
+	if _, err := io.Copy(w, payload); err != nil {
 		h.Logger.Error("backup: stream object", "key", key, "err", err)
 	}
 }
