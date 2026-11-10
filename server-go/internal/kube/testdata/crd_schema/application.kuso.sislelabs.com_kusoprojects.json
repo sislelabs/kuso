@@ -25,6 +25,10 @@
           "configAsCode": {
             "description": "Controls the kuso.yaml-on-push behaviour. When enabled (default), a push to the default branch makes kuso fetch kuso.yaml via the GitHub Contents API and apply it before builds run.",
             "properties": {
+              "allowPrune": {
+                "description": "Lets a push honour kuso.yaml prune:true and delete services, addons and crons missing from the file. Off by default; kuso apply is not affected.",
+                "type": "boolean"
+              },
               "enabled": {
                 "default": true,
                 "type": "boolean"
