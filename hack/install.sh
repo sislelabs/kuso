@@ -366,6 +366,15 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
     K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
   fi
+  # A separate agent token, so the Add Node flow (nodejoin) hands joining
+  # workers a credential that can only join agents. Without it they get
+  # the server token, which also unlocks the cluster CA keys. A config
+  # drop-in (root-only) rather than a flag keeps it out of the systemd
+  # unit, which is world-readable. Fresh installs only: k3s can't take an
+  # agent token after the cluster exists.
+  mkdir -p /etc/rancher/k3s/config.yaml.d
+  ( umask 077; printf 'agent-token: "%s"\n' "$(random_string)$(random_string)" \
+      > /etc/rancher/k3s/config.yaml.d/50-kuso-agent-token.yaml )
   # Node joins pin their agent to the server's version (nodejoin), so this
   # choice carries to every node added later.
   # Pinned, not "stable channel": a fresh install months from now must
