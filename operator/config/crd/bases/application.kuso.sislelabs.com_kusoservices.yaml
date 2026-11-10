@@ -556,6 +556,14 @@ spec:
                     When true, GitHub pushes don't build this service. Manual
                     deploys, deploy hooks and PR previews are unaffected.
                     Absent/false = pushes deploy as usual.
+                strictBuildSecrets:
+                  type: boolean
+                  description: |
+                    Dockerfile builds only. When true, credential-bearing
+                    build env values (URLs with a password, *_PASS/*_PWD,
+                    webhook URLs) reach the build only as BuildKit secrets
+                    (RUN --mount=type=secret), never as build-args. Absent/
+                    false keeps passing them as build-args too (legacy).
                 waitForCI:
                   type: boolean
                   description: |

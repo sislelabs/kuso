@@ -21,18 +21,63 @@ func envMap(env []corev1.EnvVar) map[string]string {
 	return m
 }
 
+// Legacy (default) Dockerfile builds: an existing `ARG DATABASE_URL`
+// Dockerfile must keep receiving the value as a build-arg after upgrade;
+// it is offered as a BuildKit secret too, with a log warning.
+func TestCredentialLiteralLegacyDockerfileBuildArg(t *testing.T) {
+	const dsn = "postgres://u:pw@ep-x.neon.tech/db"
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{BuildEnv: map[string]string{
+		"DATABASE_URL":   dsn,
+		"APP_NAME":       "shop",
+		"OPENAI_API_KEY": "sk-live", // old name rule: still withheld entirely
+	}, Image: &kube.KusoImage{Repository: "registry.local/a/b", Tag: "sha"}}}
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	env := envMap(c.Env)
+	if env["KUSO_BUILDENV_KEYS"] != "APP_NAME DATABASE_URL" {
+		t.Errorf("KUSO_BUILDENV_KEYS = %q, want DATABASE_URL kept on the build-arg path", env["KUSO_BUILDENV_KEYS"])
+	}
+	if env["KUSO_BUILDENV_SECRET_KEYS"] != "DATABASE_URL" || env["KUSO_BE_DATABASE_URL"] != dsn {
+		t.Errorf("DATABASE_URL must also be offered as a BuildKit secret: %v", env)
+	}
+	if env["KUSO_BUILDENV_LEGACY_ARG_KEYS"] != "DATABASE_URL" {
+		t.Errorf("KUSO_BUILDENV_LEGACY_ARG_KEYS = %q, want the warning list", env["KUSO_BUILDENV_LEGACY_ARG_KEYS"])
+	}
+	if _, ok := env["KUSO_BUILDENV_NOARG_SECRET_KEYS"]; ok {
+		t.Error("no key lost its build-arg, so the empty-ARG warning must not fire")
+	}
+	if _, ok := env["KUSO_BE_OPENAI_API_KEY"]; ok {
+		t.Error("name-sensitive keys keep their withheld behaviour")
+	}
+	n := 0
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BE_DATABASE_URL" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("KUSO_BE_DATABASE_URL emitted %d times", n)
+	}
+	if !strings.Contains(c.Args[0], "KUSO_BUILDENV_LEGACY_ARG_KEYS") {
+		t.Error("buildkit script never prints the legacy build-arg warning")
+	}
+}
+
 // A DATABASE_URL literal with a password must reach the build without ever
-// being a build-arg or ENV line: dockerfile and nixpacks get it as a BuildKit
-// secret, static keeps it in its throwaway build pod.
+// being a build-arg or ENV line once strict: dockerfile (strictBuildSecrets)
+// and nixpacks get it as a BuildKit secret, static keeps it in its
+// throwaway build pod.
 func TestCredentialLiteralRoutedAsBuildSecret(t *testing.T) {
 	const dsn = "postgres://u:pw@ep-x.neon.tech/db"
 	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{BuildEnv: map[string]string{
 		"DATABASE_URL": dsn,
 		"APP_NAME":     "shop",
-	}, Image: &kube.KusoImage{Repository: "registry.local/a/b", Tag: "sha"}}}
+	}, Image: &kube.KusoImage{Repository: "registry.local/a/b", Tag: "sha"}, StrictBuildSecrets: true}}
 
 	for _, strategy := range []string{"dockerfile", "nixpacks"} {
 		env := envMap(renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}).Env)
+		if strategy == "dockerfile" && env["KUSO_BUILDENV_NOARG_SECRET_KEYS"] != "DATABASE_URL" {
+			t.Errorf("strict dockerfile must warn that ARG DATABASE_URL is now empty, got %q", env["KUSO_BUILDENV_NOARG_SECRET_KEYS"])
+		}
 		if env["KUSO_BUILDENV_KEYS"] != "APP_NAME" {
 			t.Errorf("%s: KUSO_BUILDENV_KEYS = %q, want only APP_NAME (build-arg channel)", strategy, env["KUSO_BUILDENV_KEYS"])
 		}

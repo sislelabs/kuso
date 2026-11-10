@@ -153,6 +153,9 @@ spec:
                 dryRun:
                   type: boolean
                   default: false
+                # Mirrored from the service's spec.strictBuildSecrets.
+                strictBuildSecrets:
+                  type: boolean
                 # Strategy-specific configuration. Both blocks are
                 # preserve-unknown-fields-friendly since the chart
                 # interprets them; the server only needs to round-trip.

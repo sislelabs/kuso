@@ -168,6 +168,9 @@
               "static"
             ],
             "type": "string"
+          },
+          "strictBuildSecrets": {
+            "type": "boolean"
           }
         },
         "required": [
