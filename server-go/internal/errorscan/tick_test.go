@@ -226,3 +226,35 @@ func TestTick_ResumeAfterRestartDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("events after restart = %q, want finished + held, once each", got)
 	}
 }
+
+// With MaxBatchSize set, batches grow with the lag so a bounded number of
+// batches still drains the backlog (SCL-5).
+func TestTick_BatchesScaleWithBacklog(t *testing.T) {
+	d := openTestDB(t)
+	seedLogLines(t, d, 95, 7, 93)
+
+	s := &Scanner{DB: d, Logger: slog.Default(), BatchSize: 10, MaxBatchSize: 100, MaxBatchesPerTick: 3}
+	s.tick(context.Background())
+
+	if got := watermark(t, d); got != 95 {
+		t.Errorf("watermark = %d, want 95 (3 scaled batches cover the lag)", got)
+	}
+	if got := errorEventCount(t, d); got != 2 {
+		t.Errorf("ErrorEvent rows = %d, want 2", got)
+	}
+}
+
+// A skip-ahead is reported, not just logged.
+func TestTick_SkipAheadCallsOnSkip(t *testing.T) {
+	d := openTestDB(t)
+	seedLogLines(t, d, 95)
+
+	var skipped int64
+	s := &Scanner{DB: d, Logger: slog.Default(), BatchSize: 10, MaxLag: 20,
+		OnSkip: func(_ context.Context, n int64) { skipped += n }}
+	s.tick(context.Background())
+
+	if skipped != 75 {
+		t.Errorf("OnSkip got %d skipped rows, want 75", skipped)
+	}
+}

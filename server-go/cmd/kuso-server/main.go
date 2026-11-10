@@ -1105,7 +1105,12 @@ func main() {
 						Logger:    logger,
 						Interval:  errorscan.HeartbeatInterval,
 						BatchSize: 500,
-						Pods:      podKinds,
+						// Batches grow with the backlog so one tick can
+						// drain up to MaxLag (SCL-5).
+						MaxBatchSize: 5000,
+						TickBudget:   25 * time.Second,
+						Pods:         podKinds,
+						OnSkip:       errorScanSkipNotifier(notifyDisp),
 					}).Run(workCtx)
 				})
 			}
@@ -2482,4 +2487,37 @@ func kusoServerPeers(kc *kube.Client, ns string) int {
 		}
 	}
 	return n
+}
+
+// errorScanSkipNotifier turns an error-scanner skip-ahead into a
+// notification, at most once an hour: skipped lines are never scanned,
+// so the Errors tab and error alerts under-report until log volume
+// drops.
+func errorScanSkipNotifier(d *notify.Dispatcher) func(context.Context, int64) {
+	var (
+		mu   sync.Mutex
+		last time.Time
+		acc  int64
+	)
+	return func(_ context.Context, skipped int64) {
+		mu.Lock()
+		acc += skipped
+		if !last.IsZero() && time.Since(last) < time.Hour {
+			mu.Unlock()
+			return
+		}
+		total := acc
+		acc, last = 0, time.Now()
+		mu.Unlock()
+		msg := fmt.Sprintf("Log volume outran the error scanner, so %d log lines were skipped without being checked for errors. "+
+			"The Errors tab and error alerts under-report while this lasts. Watch kuso_errorscan_lag_rows.", total)
+		d.Emit(notify.Event{
+			Type:        notify.EventAlertFired,
+			Title:       "⚠ Error scanner fell behind",
+			Description: msg,
+			Body:        msg,
+			Severity:    "warn",
+			Fields:      []notify.EventField{{Name: "Skipped lines", Value: strconv.FormatInt(total, 10), Inline: true}},
+		})
+	}
 }

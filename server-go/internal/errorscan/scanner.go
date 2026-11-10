@@ -20,6 +20,7 @@ package errorscan
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"log/slog"
 	"regexp"
@@ -28,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/metrics"
 	"kuso/server/internal/serverstate"
 )
 
@@ -70,10 +72,15 @@ type Scanner struct {
 	DB       *db.DB
 	Logger   *slog.Logger
 	Interval time.Duration
-	// BatchSize caps how many LogLine rows we pull per tick. Larger
-	// batches close the catch-up gap faster on a backlog but burn
-	// more memory; 500 is a comfortable middle ground for a 4 GB box.
+	// BatchSize is the rows pulled per batch when the scanner is close to
+	// caught up. Larger batches close a backlog faster but burn more
+	// memory; 500 is a comfortable middle ground for a 4 GB box.
 	BatchSize int
+	// MaxBatchSize lets a batch grow with the backlog: each batch takes
+	// ceil(lag / MaxBatchesPerTick) rows, clamped to [BatchSize,
+	// MaxBatchSize], so one tick can drain a lag up to MaxLag. Unset (or
+	// <= BatchSize) keeps batches fixed at BatchSize.
+	MaxBatchSize int
 	// MaxBatchesPerTick and TickBudget bound one tick's catch-up loop,
 	// which runs on the leader: it stops at whichever comes first, or
 	// at a short batch (caught up).
@@ -83,6 +90,11 @@ type Scanner struct {
 	// Further behind, the scanner jumps to max(id)-MaxLag: those lines
 	// are near the prune edge and nobody reads week-old error groups.
 	MaxLag int64
+	// OnSkip, when set, is told each time the watermark jumps ahead and
+	// skippedRows lines (error lines among them) go unscanned. main.go
+	// turns it into a notification; the skip is also counted in
+	// kuso_errorscan_skipped_rows_total.
+	OnSkip func(ctx context.Context, skippedRows int64)
 	// Pods is logship's record of which pods are builds/release hooks.
 	// Optional: nil, or a pod it hasn't seen, falls back to a heuristic.
 	Pods *PodKinds
@@ -177,7 +189,7 @@ func (s *Scanner) tick(ctx context.Context) {
 		return
 	}
 	prev := wm
-	wm, err = s.skipAhead(ctx, wm)
+	wm, maxID, err := s.skipAhead(ctx, wm)
 	if err != nil {
 		s.Logger.Warn("errorscan: skip ahead", "err", err)
 		return
@@ -190,14 +202,18 @@ func (s *Scanner) tick(ctx context.Context) {
 	from := max(wm, s.fedTo)
 	deadline := time.Now().Add(s.TickBudget)
 	caughtUp := false
+	defer func() { metrics.SetErrorScanLag(max(maxID-from, 0)) }()
+	// Sized once from the tick's starting lag, so MaxBatchesPerTick
+	// batches cover all of it.
+	batch := s.batchFor(maxID - from)
 	for i := 0; i < s.MaxBatchesPerTick && ctx.Err() == nil; i++ {
-		scanned, next, err := s.scanBatch(ctx, from)
+		scanned, next, err := s.scanBatch(ctx, from, batch)
 		if err != nil {
 			s.Logger.Warn("errorscan: batch", "err", err)
 			return
 		}
 		from = next
-		if scanned < s.BatchSize {
+		if scanned < batch {
 			caughtUp = true
 			break
 		}
@@ -213,30 +229,60 @@ func (s *Scanner) tick(ctx context.Context) {
 	}
 }
 
+// batchFor sizes the next batch to the remaining lag (see MaxBatchSize).
+func (s *Scanner) batchFor(lag int64) int {
+	if s.MaxBatchSize <= s.BatchSize || s.MaxBatchesPerTick <= 0 {
+		return s.BatchSize
+	}
+	n := (lag + int64(s.MaxBatchesPerTick) - 1) / int64(s.MaxBatchesPerTick)
+	return int(min(max(n, int64(s.BatchSize)), int64(s.MaxBatchSize)))
+}
+
 // skipAhead moves the watermark to max(id)-MaxLag when it trails further
-// than that, and returns the watermark to scan from.
-func (s *Scanner) skipAhead(ctx context.Context, wm int64) (int64, error) {
+// than that, and returns the watermark to scan from plus max(id).
+func (s *Scanner) skipAhead(ctx context.Context, wm int64) (int64, int64, error) {
 	var maxID int64
 	if err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM "LogLine"`).Scan(&maxID); err != nil {
-		return wm, err
+		return wm, 0, err
 	}
 	if maxID-wm <= s.MaxLag {
-		return wm, nil
+		return wm, maxID, nil
 	}
 	target := maxID - s.MaxLag
 	if err := s.DB.SaveScannerWatermark(ctx, watermarkKey, target); err != nil {
-		return wm, err
+		return wm, maxID, err
 	}
+	skipped := target - wm
 	s.Logger.Warn("errorscan: backlog too large, skipping ahead",
-		"from", wm, "to", target, "skippedRows", target-wm)
-	return target, nil
+		"from", wm, "to", target, "skippedRows", skipped)
+	metrics.AddErrorScanSkipped(skipped)
+	if s.OnSkip != nil {
+		s.OnSkip(ctx, skipped)
+	}
+	return target, maxID, nil
 }
+
+// candidateLineRe is a case-insensitive superset of errorPatterns,
+// evaluated by Postgres (~*) so lines that can't be errors aren't sent
+// to the scanner. TestCandidateRegexIsSupersetOfPatterns keeps the two
+// in step: extend this whenever a pattern is added.
+const candidateLineRe = `error|fatal|severe|panic|emerg|alert|crit|traceback|exception|unhandled|actioncontroller::|activerecord::|"status"\s*:\s*5`
+
+// contGapSQL mirrors contGap for the batch query.
+const contGapSQL = "100 milliseconds"
 
 // scanBatch feeds up to BatchSize LogLine rows after `from` to the
 // grouper and returns rows scanned and the last id read. Chains stay open
 // across batches: a batch boundary falls anywhere, including inside a
 // traceback, so only flushSettled closes a chain nothing has extended.
-func (s *Scanner) scanBatch(ctx context.Context, from int64) (int, int64, error) {
+//
+// Postgres returns the line text only for rows that can matter: those
+// matching candidateLineRe, and those within contGap of the previous row
+// of the same pod in the batch (or the pod's first row in the batch), which
+// are the only rows the grouper could append to an open chain. Every other
+// row comes back with a NULL line and is skipped, so on a quiet log stream
+// the scanner pulls ids instead of text and runs no Go regex at all.
+func (s *Scanner) scanBatch(ctx context.Context, from int64, batch int) (int, int64, error) {
 	// $N placeholders, NOT `?`. The driver is lib/pq (see internal/db),
 	// which passes `?` through as a literal — the query then fails to
 	// parse on EVERY tick, so this scanner silently never populated
@@ -244,12 +290,23 @@ func (s *Scanner) scanBatch(ctx context.Context, from int64) (int, int64, error)
 	// handlers/log_search.go; the db package's `?`→$N shim was removed
 	// in v0.18 and this query was missed. Guarded by TestTickQueryUsesPositionalPlaceholders.
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, ts, pod, project, service, env, line
-		FROM "LogLine"
-		WHERE id > $1
-		ORDER BY id ASC
-		LIMIT $2`,
-		from, s.BatchSize,
+		WITH b AS (
+			SELECT id, ts, pod, project, service, env, line
+			FROM "LogLine"
+			WHERE id > $1
+			ORDER BY id ASC
+			LIMIT $2
+		), w AS (
+			SELECT b.*, lag(ts) OVER (PARTITION BY pod ORDER BY id) AS prev_ts FROM b
+		)
+		SELECT id, ts, pod, project, service, env,
+			CASE WHEN prev_ts IS NULL
+			       OR ts - prev_ts <= $4::interval
+			       OR line ~* $3
+			     THEN line END
+		FROM w
+		ORDER BY id ASC`,
+		from, batch, candidateLineRe, contGapSQL,
 	)
 	if err != nil {
 		return 0, from, err
@@ -261,7 +318,8 @@ func (s *Scanner) scanBatch(ctx context.Context, from int64) (int, int64, error)
 	maxID := from
 	for rows.Next() {
 		var l scanLine
-		if err := rows.Scan(&l.id, &l.ts, &l.pod, &l.project, &l.service, &l.env, &l.line); err != nil {
+		var line sql.NullString
+		if err := rows.Scan(&l.id, &l.ts, &l.pod, &l.project, &l.service, &l.env, &line); err != nil {
 			s.Logger.Warn("errorscan: scan row", "err", err)
 			continue
 		}
@@ -269,6 +327,17 @@ func (s *Scanner) scanBatch(ctx context.Context, from int64) (int, int64, error)
 		if l.id > maxID {
 			maxID = l.id
 		}
+		// Not a candidate and more than contGap after the pod's previous
+		// line, so it can't extend a chain; feeding it would close the
+		// pod's open chain, so do exactly that. A pod logship knows is
+		// non-runtime is skipped, as runtimeLine would.
+		if !line.Valid {
+			if rt, known := s.Pods.Lookup(l.pod); !known || rt {
+				s.g.close(l.pod)
+			}
+			continue
+		}
+		l.line = line.String
 		if !s.runtimeLine(l.pod, l.line) {
 			continue
 		}
