@@ -405,22 +405,41 @@ func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64
 		// (block,offset) exists in every day-partition, so a bare
 		// `ctid IN (...)` also deleted today's rows at the tids of old
 		// ones. (tableoid, ctid) names a row uniquely across partitions.
-		res, err := d.ExecContext(ctx, `
+		n, err := d.pruneLogChunk(ctx, before, chunk)
+		if err != nil {
+			return total, fmt.Errorf("prune logs: %w", err)
+		}
+		total += n
+		if n < chunk {
+			return total, nil
+		}
+	}
+}
+
+// pruneLogChunk deletes one chunk in its own transaction with a longer
+// statement timeout than the role's request-path default: a 50k-row chunk
+// on a cold, large LogLine can legitimately take more than a minute.
+func (d *LogDB) pruneLogChunk(ctx context.Context, before time.Time, chunk int) (int64, error) {
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '10min'`); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
 DELETE FROM "LogLine"
 WHERE (tableoid, ctid) IN (
   SELECT tableoid, ctid FROM "LogLine"
   WHERE ts < $1
   LIMIT $2
 )`, before.UTC(), chunk)
-		if err != nil {
-			return total, fmt.Errorf("prune logs: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		total += n
-		if n < chunk {
-			return total, nil
-		}
+	if err != nil {
+		return 0, err
 	}
+	n, _ := res.RowsAffected()
+	return n, tx.Commit()
 }
 
 // escapeLike escapes the SQL LIKE / ILIKE wildcards `%`, `_`, and the

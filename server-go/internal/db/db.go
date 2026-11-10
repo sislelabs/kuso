@@ -45,6 +45,17 @@ type DB struct {
 	*sql.DB
 	Stats   Stats
 	tenancy *tenancyCache
+	// maint is the direct maintenance pool (see direct.go); nil when the
+	// main pool serves that role. pooledOnly is set when the only path is
+	// a transaction-mode pooler, where session locks and SETs don't hold.
+	maint      *sql.DB
+	pooledOnly bool
+}
+
+// Close closes the main pool and the maintenance pool.
+func (d *DB) Close() error {
+	d.closeMaintenance()
+	return d.DB.Close()
 }
 
 // Pool sizing. defaultMaxOpenConns is the historical hard-coded value;
@@ -171,6 +182,8 @@ func Open(dsn string) (*DB, error) {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	d := &DB{DB: sqldb, tenancy: newTenancyCache()}
+	maint, sessionSafe := openMaintenance(dsn, slog.Default())
+	d.maint, d.pooledOnly = maint, !sessionSafe
 	// Apply the baseline schema (idempotent) + any pending versioned
 	// migrations, in order, recorded in SchemaMigration. runMigrations
 	// calls applySchema internally for the baseline.
@@ -183,6 +196,12 @@ func Open(dsn string) (*DB, error) {
 	if err := d.migrateRoleSystemV2(context.Background()); err != nil {
 		_ = d.Close()
 		return nil, err
+	}
+	// After migrations, so the baseline and migrations never run under
+	// the new defaults on the boot that introduces them. Not fatal: a
+	// managed Postgres may refuse ALTER ROLE.
+	if err := d.applyRoleTimeouts(context.Background()); err != nil {
+		slog.Default().Warn("db: could not apply role statement timeouts", "err", err)
 	}
 	return d, nil
 }

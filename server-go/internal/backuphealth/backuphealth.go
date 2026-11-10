@@ -282,6 +282,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 	}
 
 	secretPresent := map[string]*bool{} // nil entry = lookup errored
+	jobsByNS := map[string][]batchv1.Job{}
 	var out []AddonBackupStatus
 	// Instance-shared tenant rows are resolved after the loop against the
 	// row of the instance addon that actually holds their database.
@@ -323,11 +324,16 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 		st.Schedule = a.Spec.Backup.Schedule
 		st.ScheduleConfigured = true
 		if !kube.AddonBackupCronJobRendered(a) {
-			// The chart deliberately renders no CronJob for this
-			// shape — nothing to monitor, and paging would be a false
-			// alarm.
-			st.Healthy = true
-			st.Detail = "no backup CronJob for this addon shape (instance-shared or unsupported kind) — schedule is inert"
+			if !kube.AddonKindHasBackupProducer(a.Spec.Kind) {
+				// Someone asked for backups of a kind kuso can't dump:
+				// the schedule never runs, which is a failure, not a gap.
+				st.Healthy = false
+				st.Detail = "no backup producer for kind " + a.Spec.Kind + "; this schedule never runs and the data has no backup"
+			} else {
+				// External shape: the provider's backups, not kuso's.
+				st.Healthy = true
+				st.Detail = "no backup CronJob for this addon shape (external) — schedule is inert"
+			}
 			out = append(out, st)
 			continue
 		}
@@ -360,24 +366,31 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 				continue
 			}
 		}
+		cronProblem := ""
 		cj, cerr := kc.Clientset.BatchV1().CronJobs(ns).Get(ctx, a.Name+"-backup", metav1.GetOptions{})
 		switch {
 		case cerr == nil:
 			st.CronJobPresent = true
-			if cj.Status.LastSuccessfulTime != nil {
-				st.LastSuccessAt = cj.Status.LastSuccessfulTime.UTC().Format(time.RFC3339)
-			}
 			if cj.Status.LastScheduleTime != nil {
 				st.LastScheduleAt = cj.Status.LastScheduleTime.UTC().Format(time.RFC3339)
 			}
-			// Failing = a run was scheduled but hasn't succeeded since
-			// (grace period absorbs in-flight dumps + one retry).
-			// Never-scheduled (new CronJob) is healthy-so-far.
-			lateFail := cj.Status.LastScheduleTime != nil &&
-				time.Since(cj.Status.LastScheduleTime.Time) > addonBackupLateGrace &&
-				(cj.Status.LastSuccessfulTime == nil ||
-					cj.Status.LastSuccessfulTime.Time.Before(cj.Status.LastScheduleTime.Time))
-			st.Healthy = st.SecretPresent && !lateFail
+			jobs, ok := jobsByNS[ns]
+			if !ok {
+				list, jerr := kc.Clientset.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
+				if jerr != nil {
+					complete = false
+					skipped[a.Name] = true
+					continue // transient — skip, don't guess
+				}
+				jobs = list.Items
+				jobsByNS[ns] = jobs
+			}
+			v := judgeCronJob(cj, jobs, time.Now())
+			if !v.lastSuccess.IsZero() {
+				st.LastSuccessAt = v.lastSuccess.UTC().Format(time.RFC3339)
+			}
+			st.Healthy = st.SecretPresent && v.problem == ""
+			cronProblem = v.problem
 		case apierrors.IsNotFound(cerr):
 			// Eligible but not rendered → operator hasn't reconciled
 			// (or is wedged). Unhealthy, distinct detail below.
@@ -391,6 +404,8 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			st.Detail = "kuso-backup-s3 Secret missing in " + ns + " — every scheduled run no-ops; configure backup settings or remove the schedule"
 		case !st.CronJobPresent:
 			st.Detail = "backup CronJob not rendered yet (operator reconcile pending or wedged)"
+		case cronProblem != "":
+			st.Detail = cronProblem
 		case !st.Healthy:
 			st.Detail = "last scheduled run has not succeeded"
 		}
@@ -665,7 +680,7 @@ func AddonsHealthy(addons []AddonBackupStatus) bool {
 func AddonsWorstSeverity(addons []AddonBackupStatus) string {
 	worst := "warn"
 	for i := range addons {
-		if !addons[i].Healthy && !addons[i].SecretPresent {
+		if !addons[i].Healthy && addons[i].Covered && !addons[i].SecretPresent {
 			worst = "error"
 		}
 	}
@@ -709,6 +724,9 @@ type Watcher struct {
 	evaluated bool
 	// incompleteTicks counts consecutive ticks with a failed read.
 	incompleteTicks int
+	// persistWarned: a failed state write is logged at warn once, then
+	// quietly; a restart may re-notify until it works again.
+	persistWarned bool
 }
 
 func (w *Watcher) Run(ctx context.Context) {
@@ -1189,8 +1207,15 @@ func (w *Watcher) saveState(ctx context.Context, state string) {
 		`{"metadata":{"annotations":{%q:%q}}}`, StateAnnotation, state))
 	if _, err := w.Kube.Clientset.AppsV1().Deployments(w.ns()).
 		Patch(ctx, stateCarrier, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		w.Logger.Debug("backup health: persist state failed (a restart may re-notify)", "err", err)
+		if !w.persistWarned {
+			w.persistWarned = true
+			w.Logger.Warn("backup health: persist state failed (a restart may re-notify)", "err", err)
+		} else {
+			w.Logger.Debug("backup health: persist state failed (a restart may re-notify)", "err", err)
+		}
+		return
 	}
+	w.persistWarned = false
 }
 
 func (w *Watcher) ns() string {

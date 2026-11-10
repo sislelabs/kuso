@@ -339,11 +339,11 @@ data:
     ; transaction pool: per-transaction multiplexing. See Mode comment
     ; above for the audit confirming kuso's DB usage is compatible.
     pool_mode = transaction
-    ; Per-pool server connections. With 3 kuso-server replicas the
-    ; pooler holds at most 3 × 50 = 150 client conns total against
-    ; ~50 actual server conns — comfortable under the default
-    ; CNPG max_connections=100 with ~50 headroom for CNPG internals,
-    ; replication, and admin tooling.
+    ; Per-pool server connections. Every kuso-server replica opens up to
+    ; KUSO_DB_MAX_CONNS (25) client conns here, all multiplexed onto this
+    ; one (user, db) pool of 25 (+5 reserve) server conns, which leaves
+    ; ~65 of CNPG's max_connections=100 for its internals, admin tooling
+    ; and kuso-server's direct maintenance conns (2 per replica).
     max_client_conn = 200
     default_pool_size = 25
     ; Reserve a couple of slots so admin SQL (psql -h ...) can always

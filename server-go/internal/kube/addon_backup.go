@@ -1,5 +1,15 @@
 package kube
 
+// AddonKindHasBackupProducer reports whether any backup CronJob variant
+// exists for the kind (same kinds as AddonBackupCronJobRendered).
+func AddonKindHasBackupProducer(kind string) bool {
+	switch kind {
+	case "postgres", "redis", "mongodb", "mysql", "s3":
+		return true
+	}
+	return false
+}
+
 // AddonBackupCronJobRendered mirrors the render conditions of the six
 // backup-CronJob variants in
 // operator/helm-charts/kusoaddon/templates/backup-cronjob.yaml. The
