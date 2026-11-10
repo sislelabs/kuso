@@ -479,6 +479,7 @@ func mountAuthenticatedRoutes(
 ) {
 	r.Group(func(r chi.Router) {
 		r.Use(cookieCSRFMiddleware)
+		r.Use(httphandlers.RefuseConsoleOriginatedAPI)
 		r.Use(d.Issuer.Middleware())
 		r.Get("/api/auth/session", authH.Session)
 

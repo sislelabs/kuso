@@ -105,3 +105,33 @@ func TestAddonWebUIMinRole(t *testing.T) {
 		}
 	}
 }
+
+// SEC-8: a page served from an addon console may only reach its own
+// console mount, not the rest of /api.
+func TestRefuseConsoleOriginatedAPI(t *testing.T) {
+	h := RefuseConsoleOriginatedAPI(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	const console = "https://kuso.example.com/api/projects/p/addons/mq/webui/#/queues"
+	cases := []struct {
+		path, referer string
+		want          int
+	}{
+		{"/api/projects/p/secrets", console, http.StatusForbidden},
+		{"/api/projects/p/addons/other/webui/api/overview", console, http.StatusForbidden},
+		{"/api/projects/p/addons/mq/webui/api/overview", console, http.StatusNoContent},
+		{"/api/projects/p/secrets", "https://kuso.example.com/projects/p", http.StatusNoContent},
+		{"/api/projects/p/secrets", "", http.StatusNoContent},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "https://kuso.example.com"+c.path, nil)
+		if c.referer != "" {
+			r.Header.Set("Referer", c.referer)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code != c.want {
+			t.Errorf("%s from %q: got %d want %d", c.path, c.referer, rec.Code, c.want)
+		}
+	}
+}

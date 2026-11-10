@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -198,6 +199,9 @@ func confineConsoleResponse(res *http.Response, prefix string) {
 			res.Header.Add("Set-Cookie", c.String())
 		}
 	}
+	// RefuseConsoleOriginatedAPI keys off the Referer; don't let the
+	// console's own policy turn it off for every request it makes.
+	res.Header.Set("Referrer-Policy", "same-origin")
 	if res.Request == nil {
 		return
 	}
@@ -206,6 +210,36 @@ func confineConsoleResponse(res *http.Response, prefix string) {
 	if strings.HasPrefix(p, "/api/") || (strings.HasPrefix(p, "/view/") && strings.Contains(last, ".")) {
 		res.Header.Set("Content-Security-Policy", webUIContentSandbox)
 	}
+}
+
+// consolePrefixRE matches the kuso-side mount of an addon console.
+var consolePrefixRE = regexp.MustCompile(`^/api/projects/[^/]+/addons/[^/]+/webui(?:/|$)`)
+
+func consolePrefix(path string) string {
+	return strings.TrimSuffix(consolePrefixRE.FindString(path), "/")
+}
+
+// RefuseConsoleOriginatedAPI rejects /api requests that a page served
+// from an addon console sends anywhere other than its own console mount.
+// Consoles share the kuso origin (and so the session cookie), so a
+// script-injection bug in RabbitMQ's or Mailpit's UI could otherwise
+// call any kuso API as the viewer. The dashboard never issues requests
+// from a console URL, so this costs nothing legitimate. It keys off the
+// Referer, which a deliberate script can suppress; it closes ordinary
+// payloads, not a targeted one. Only a separate console origin closes
+// it fully.
+func RefuseConsoleOriginatedAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ref := r.Header.Get("Referer"); ref != "" && strings.HasPrefix(r.URL.Path, "/api/") {
+			if u, err := url.Parse(ref); err == nil && (u.Host == "" || strings.EqualFold(u.Host, r.Host)) {
+				if from := consolePrefix(u.Path); from != "" && consolePrefix(r.URL.Path) != from {
+					writeErr(w, http.StatusForbidden, "requests from an addon console may only reach that console")
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // addonWebUIMinRole is Viewer for safe methods and Editor otherwise.
