@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/metadata"
 
 	"kuso/server/internal/activator"
 	"kuso/server/internal/addons"
@@ -43,6 +44,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/gitremote"
 	"kuso/server/internal/health"
+	"kuso/server/internal/helmhistory"
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/incidents"
@@ -1044,6 +1046,28 @@ func main() {
 					return buildSvc.ScanNamespaces(c)
 				}
 				goSafe(logger, "finalizer-sweep", func() { runFinalizerSweep(workCtx, kc, sweepNamespaces, logger) })
+			}
+			// helm-operator v1.42 keeps unlimited release history (no
+			// max-history flag exists), so prune old revision Secrets
+			// here (SCL-16). Keeps the newest KUSO_HELM_HISTORY_MAX
+			// (default 10) per release plus any deployed/pending one.
+			if os.Getenv("KUSO_HELM_HISTORY_PRUNE_DISABLED") != "true" && kc.Config != nil {
+				if md, err := metadata.NewForConfig(kc.Config); err != nil {
+					logger.Warn("helm history prune: metadata client", "err", err)
+				} else {
+					pruner := &helmhistory.Pruner{
+						Meta: md,
+						Keep: envInt("KUSO_HELM_HISTORY_MAX", helmhistory.DefaultKeep),
+						Namespaces: func(c context.Context) []string {
+							if buildSvc == nil {
+								return []string{*namespace}
+							}
+							return buildSvc.ScanNamespaces(c)
+						},
+						Logger: logger.With("component", "helm-history"),
+					}
+					goSafe(logger, "helm-history", func() { pruner.Run(workCtx) })
+				}
 			}
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 				goSafe(logger, "daily-cleanup", func() { runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger) })
