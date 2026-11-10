@@ -19,8 +19,8 @@
 package activator
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -102,6 +103,17 @@ type Activator struct {
 	readyMu sync.Mutex
 	readyAt map[string]time.Time
 
+	// inflightMu / inflight count proxied requests per env (ns/name) that
+	// are still open. A WebSocket or SSE stream stamps activity once at
+	// its start; KeepActive re-stamps every env with an open stream so
+	// scaledown doesn't sleep it mid-connection. Drain reads the total.
+	inflightMu sync.Mutex
+	inflight   map[string]int
+
+	// held counts requests waiting on a wake; maxHeld caps it.
+	held    atomic.Int64
+	maxHeld int64
+
 	// nowFn is time.Now, overridable in tests. Read via now().
 	nowFn func() time.Time
 }
@@ -122,7 +134,10 @@ type hostEntry struct {
 	// Cached alongside env/ns; the short hostTTL bounds staleness after
 	// a start/stop toggle.
 	stopped bool
-	at      time.Time
+	// miss: no env claims this host. Stored with at shifted so the entry
+	// expires after negativeHostTTL rather than hostTTL.
+	miss bool
+	at   time.Time
 }
 
 type wakeState struct {
@@ -147,8 +162,20 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		proxyTransport: newProxyTransport(hold),
 		lastStamp:      map[string]time.Time{},
 		readyAt:        map[string]time.Time{},
+		inflight:       map[string]int{},
+		maxHeld:        resolveMaxHeld(),
 		nowFn:          time.Now,
 	}
+}
+
+// resolveMaxHeld returns KUSO_ACTIVATOR_MAX_HELD (min 1), default 1000.
+// A held request costs a goroutine plus its connection buffers, so 1000
+// stays well inside the activator's memory limit.
+func resolveMaxHeld() int64 {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("KUSO_ACTIVATOR_MAX_HELD"))); err == nil && v >= 1 {
+		return int64(v)
+	}
+	return 1000
 }
 
 // resolveHoldTimeout returns the per-request wake hold budget:
@@ -267,7 +294,107 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	// place to stamp a last-activity marker. Throttled to at most once per
 	// activityStampInterval per env to avoid an API write per request.
 	a.recordActivity(ctx, ns, env)
+	done := a.beginProxy(ns, env)
+	defer done()
+	// The ready cache can say "up" while scaledown is zeroing the env.
+	// The first refused dial re-triggers the wake instead of retrying
+	// against a 0-endpoint Service for the whole budget with nothing
+	// scaling it back up.
+	r = r.WithContext(withDialRetryHook(ctx, func() {
+		a.forgetReady(ns, env)
+		a.kickWake(ns, env)
+	}))
 	proxy.ServeHTTP(w, r)
+}
+
+// beginProxy registers an open proxied request for ns/env and returns
+// the func that unregisters it.
+func (a *Activator) beginProxy(ns, env string) func() {
+	key := ns + "/" + env
+	a.inflightMu.Lock()
+	a.inflight[key]++
+	a.inflightMu.Unlock()
+	return func() {
+		a.inflightMu.Lock()
+		if a.inflight[key] <= 1 {
+			delete(a.inflight, key)
+		} else {
+			a.inflight[key]--
+		}
+		a.inflightMu.Unlock()
+	}
+}
+
+// InFlight returns the number of proxied requests still open, including
+// upgraded (WebSocket) connections, which http.Server.Shutdown does not
+// track.
+func (a *Activator) InFlight() int {
+	a.inflightMu.Lock()
+	defer a.inflightMu.Unlock()
+	n := 0
+	for _, c := range a.inflight {
+		n += c
+	}
+	return n
+}
+
+// openEnvs returns the ns/name keys with at least one open proxied request.
+func (a *Activator) openEnvs() []string {
+	a.inflightMu.Lock()
+	defer a.inflightMu.Unlock()
+	out := make([]string, 0, len(a.inflight))
+	for k := range a.inflight {
+		out = append(out, k)
+	}
+	return out
+}
+
+// KeepActive re-stamps last-activity for every env with an open proxied
+// connection until ctx ends. Without it a WebSocket/SSE stream counts as
+// one request at its start and the env is slept under it once the idle
+// window passes. The tick is half the stamp interval so recordActivity's
+// throttle, not tick alignment, sets the write rate.
+func (a *Activator) KeepActive(ctx context.Context) {
+	t := time.NewTicker(activityStampInterval / 2)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.stampOpen(ctx)
+		}
+	}
+}
+
+func (a *Activator) stampOpen(ctx context.Context) {
+	for _, key := range a.openEnvs() {
+		if ns, env, ok := strings.Cut(key, "/"); ok {
+			a.recordActivity(ctx, ns, env)
+		}
+	}
+}
+
+// kickWake starts a coalesced wake for ns/name without waiting on it.
+func (a *Activator) kickWake(ns, name string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), a.holdTimeout)
+		defer cancel()
+		if err := a.wakeAndWait(ctx, ns, name); err != nil {
+			a.logger.Warn("activator: re-wake after refused dial", "ns", ns, "env", name, "err", err)
+		}
+	}()
+}
+
+type dialRetryHookKey struct{}
+
+func withDialRetryHook(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, dialRetryHookKey{}, fn)
+}
+
+func dialRetryHook(ctx context.Context) func() {
+	fn, _ := ctx.Value(dialRetryHookKey{}).(func())
+	return fn
 }
 
 // activityStampInterval throttles how often the activator writes the
@@ -358,36 +485,35 @@ type retryTransport struct {
 	budget time.Duration
 }
 
-// maxRetryBodyBytes caps how much request body retryTransport buffers so
-// it can be replayed. Larger bodies are streamed once with no retry.
-const maxRetryBodyBytes = 1 << 20
-
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// The base transport closes req.Body on every RoundTrip, errors
-	// included, so a retry must get a fresh body from GetBody.
 	// RoundTrippers must not mutate the caller's request, so work on a copy.
 	req = req.Clone(req.Context())
-	canRetry, err := ensureGetBody(req)
-	if err != nil {
-		return nil, err
+	var body *untouchedBody
+	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
+		body = &untouchedBody{rc: req.Body}
+		req.Body = body
 	}
+	hook := dialRetryHook(req.Context())
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		r := req
 		if attempt > 0 && req.GetBody != nil {
-			body, err := req.GetBody()
+			b, err := req.GetBody()
 			if err != nil {
 				return nil, err
 			}
 			r = req.Clone(req.Context())
-			r.Body = body
+			r.Body = b
 		}
 		resp, err := t.base.RoundTrip(r)
 		if err == nil {
 			return resp, nil
 		}
-		if !canRetry || !retriableDialErr(err) {
+		if !retriableDialErr(err) || (body != nil && body.touched()) {
 			return nil, err
+		}
+		if attempt == 0 && hook != nil {
+			hook()
 		}
 		if t.budget > 0 && time.Since(start) >= t.budget {
 			return nil, err
@@ -400,32 +526,24 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// ensureGetBody makes req's body replayable when it is small enough,
-// reporting whether the request can be safely re-sent.
-func ensureGetBody(req *http.Request) (bool, error) {
-	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
-		return true, nil
-	}
-	orig := req.Body
-	buf, err := io.ReadAll(io.LimitReader(orig, maxRetryBodyBytes+1))
-	if err != nil {
-		_ = orig.Close()
-		return false, fmt.Errorf("activator: buffer request body: %w", err)
-	}
-	if len(buf) > maxRetryBodyBytes {
-		req.Body = struct {
-			io.Reader
-			io.Closer
-		}{io.MultiReader(bytes.NewReader(buf), orig), orig}
-		return false, nil
-	}
-	_ = orig.Close()
-	req.Body = io.NopCloser(bytes.NewReader(buf))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(buf)), nil
-	}
-	return true, nil
+// untouchedBody streams the client's request body to the app instead of
+// buffering it in memory. A failed dial never reads the body, so while
+// nothing has been read the same body can go out on the next attempt.
+// Close is a no-op so the base transport's close-on-error doesn't spend
+// it; the http.Server closes the real body when the handler returns.
+type untouchedBody struct {
+	rc   io.ReadCloser
+	read atomic.Bool
 }
+
+func (b *untouchedBody) Read(p []byte) (int, error) {
+	b.read.Store(true)
+	return b.rc.Read(p)
+}
+
+func (b *untouchedBody) Close() error { return nil }
+
+func (b *untouchedBody) touched() bool { return b.read.Load() }
 
 // retriableDialErr reports whether err is a cold-start CONNECTION-
 // ESTABLISHMENT failure we should retry (connection refused, a dial
@@ -452,7 +570,6 @@ func retriableDialErr(err error) bool {
 // concurrent callers) and blocks until it reports a Ready replica or
 // ctx expires.
 func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
-	key := ns + "/" + name
 	start := a.now()
 
 	// Fast path: already serving? (e.g. another request already woke it,
@@ -463,10 +580,56 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 		return nil
 	}
 
+	st, inFlight := a.startWake(ns, name)
+
+	// Each held request pins a goroutine and a client connection for up
+	// to the hold budget. Past the cap, the wake still runs but the
+	// request gets the 503 + Retry-After instead of being held.
+	if !a.tryHold() {
+		return errHoldCapacity
+	}
+	defer a.held.Add(-1)
+
+	// Whether we own the wake or not, wait for readiness (the owner's
+	// doWake only triggers the scale; readiness is observed here so
+	// every waiter gets unblocked the moment a pod is Ready).
+	select {
+	case <-st.done:
+		if st.err != nil {
+			return st.err
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	err := a.waitReady(ctx, ns, name)
+	if !inFlight && err == nil {
+		// One line per real cold start (the owning waiter only), so wake
+		// latency is measurable from logs instead of pod timestamps.
+		a.logger.Info("activator: woke", "namespace", ns, "service", name, "readyAfter", a.now().Sub(start).Round(time.Millisecond).String())
+	}
+	return err
+}
+
+// errHoldCapacity: too many requests are already held waiting for wakes.
+var errHoldCapacity = errors.New("activator: held-request capacity reached")
+
+func (a *Activator) tryHold() bool {
+	if a.held.Add(1) > a.maxHeld {
+		a.held.Add(-1)
+		return false
+	}
+	return true
+}
+
+// startWake starts the scale-up for ns/name unless one is already in
+// flight, and returns the wake to wait on. inFlight reports whether the
+// wake was already running (the caller doesn't own it).
+func (a *Activator) startWake(ns, name string) (st *wakeState, inFlight bool) {
+	key := ns + "/" + name
 	// Coalesce: if a wake is already in flight for this service, wait on
 	// its result instead of issuing a second scale-up.
 	a.wakeMu.Lock()
-	st, inFlight := a.waking[key]
+	st, inFlight = a.waking[key]
 	if !inFlight {
 		st = &wakeState{done: make(chan struct{})}
 		a.waking[key] = st
@@ -492,31 +655,25 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	} else {
 		a.wakeMu.Unlock()
 	}
-
-	// Whether we own the wake or not, wait for readiness (the owner's
-	// doWake only triggers the scale; readiness is observed here so
-	// every waiter gets unblocked the moment a pod is Ready).
-	select {
-	case <-st.done:
-		if st.err != nil {
-			return st.err
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	err := a.waitReady(ctx, ns, name)
-	if !inFlight && err == nil {
-		// One line per real cold start (the owning waiter only), so wake
-		// latency is measurable from logs instead of pod timestamps.
-		a.logger.Info("activator: woke", "namespace", ns, "service", name, "readyAfter", a.now().Sub(start).Round(time.Millisecond).String())
-	}
-	return err
+	return st, inFlight
 }
 
 // doWake restores the env to its pre-sleep replica count (idempotent /
 // level-triggered). See scaledown.Wake for the ordering contract.
+//
+// Slept envs this one calls in-cluster are woken alongside it, off the
+// request path, so its first server-side call doesn't hit a 0-endpoint
+// Service (see scaledown/dependencies.go).
 func (a *Activator) doWake(ctx context.Context, ns, name string) error {
-	return scaledown.Wake(ctx, a.kc, a.logger, ns, name, a.now())
+	if err := scaledown.Wake(ctx, a.kc, a.logger, ns, name, a.now()); err != nil {
+		return err
+	}
+	go func() {
+		dctx, cancel := context.WithTimeout(context.Background(), wakeOpTimeout)
+		defer cancel()
+		scaledown.WakeDependencies(dctx, a.kc, a.logger, ns, name, a.now())
+	}()
+	return nil
 }
 
 // waitReady polls until the target Service has at least one READY
@@ -643,6 +800,9 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	a.hostMu.RLock()
 	if e, ok := a.hostCache[host]; ok && time.Since(e.at) < a.hostTTL {
 		a.hostMu.RUnlock()
+		if e.miss {
+			return "", "", false, fmt.Errorf("no env matches host %q (cached)", host)
+		}
 		return e.env, e.ns, e.stopped, nil
 	}
 	a.hostMu.RUnlock()
@@ -677,14 +837,40 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	if wild != nil {
 		return a.cacheHost(host, wild)
 	}
+	// Remember the miss briefly: every unclaimed host on the internet lands
+	// here via the catch-all route, and each miss decodes every env CR.
+	a.storeHost(host, hostEntry{miss: true, at: time.Now().Add(negativeHostTTL - a.hostTTL)})
 	return "", "", false, fmt.Errorf("no env matches host %q", host)
 }
 
+const (
+	// negativeHostTTL is kept short so a just-created env's host stops
+	// 404ing within seconds.
+	negativeHostTTL = 5 * time.Second
+	// maxHostCache bounds hostCache: wildcard domains and unclaimed hosts
+	// make its key space attacker-controlled.
+	maxHostCache = 4096
+)
+
 func (a *Activator) cacheHost(host string, e *kube.KusoEnvironment) (string, string, bool, error) {
-	a.hostMu.Lock()
-	a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()}
-	a.hostMu.Unlock()
+	a.storeHost(host, hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()})
 	return e.Name, e.Namespace, e.Spec.Stopped, nil
+}
+
+func (a *Activator) storeHost(host string, entry hostEntry) {
+	a.hostMu.Lock()
+	defer a.hostMu.Unlock()
+	if _, ok := a.hostCache[host]; !ok && len(a.hostCache) >= maxHostCache {
+		for h, e := range a.hostCache {
+			if time.Since(e.at) >= a.hostTTL {
+				delete(a.hostCache, h)
+			}
+		}
+		if len(a.hostCache) >= maxHostCache {
+			a.hostCache = make(map[string]hostEntry, maxHostCache)
+		}
+	}
+	a.hostCache[host] = entry
 }
 
 func hostMatches(host string, e *kube.KusoEnvironment) bool {

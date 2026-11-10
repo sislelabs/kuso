@@ -21,12 +21,14 @@ package scaledown
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -149,14 +151,138 @@ func (w *Watcher) evaluate(ctx context.Context) {
 	for i := range svcs {
 		svcByKey[svcs[i].Namespace+"/"+svcs[i].Name] = &svcs[i]
 	}
+	// Pass 1: per-env decision. Candidates are idle envs that passed every
+	// gate; nothing is slept until the dependency pass below.
+	// Bounded concurrency and a per-pass deadline: one Prometheus query
+	// per env run serially let a slow Prometheus stretch a tick to
+	// envs × 5s. An env whose check runs out of time is not a candidate,
+	// so the failure mode is "stays awake".
+	candidates := map[string]*kube.KusoEnvironment{}
+	policies := make(map[string]Policy, len(envs))
 	for i := range envs {
 		env := &envs[i]
-		svc, ok := svcByKey[env.Namespace+"/"+env.Spec.Service]
+		if svc, ok := svcByKey[env.Namespace+"/"+env.Spec.Service]; ok {
+			policies[envKey(env)] = resolvePolicy(projByName[env.Spec.Project], svc, env)
+		}
+	}
+	passCtx, cancel := context.WithTimeout(ctx, evaluatePassBudget)
+	defer cancel()
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, evaluateConcurrency)
+	)
+	for i := range envs {
+		env := &envs[i]
+		pol, ok := policies[envKey(env)]
 		if !ok {
 			continue // orphan env: no service, no policy
 		}
-		pol := resolvePolicy(projByName[env.Spec.Project], svc, env)
-		w.evaluateEnv(ctx, svc, env, pol)
+		svc := svcByKey[env.Namespace+"/"+env.Spec.Service]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if w.evaluateEnv(passCtx, svc, env, pol) {
+				mu.Lock()
+				candidates[envKey(env)] = env
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Pass 2: in-cluster references (see dependencies.go). Drop every
+	// candidate that an awake, non-sleeping env calls, to a fixed point
+	// so a chain web → api → auth stays up as a unit. Envs that call each
+	// other and are all idle remain candidates and sleep together.
+	refs := referrersByTarget(envs)
+	for changed := true; changed; {
+		changed = false
+		for key := range candidates {
+			if by := w.awakeReferrer(ctx, refs[key], candidates); by != "" {
+				w.Logger.Debug("scaledown: idle env kept up; an awake env calls it in-cluster", "env", key, "referrer", by)
+				delete(candidates, key)
+				changed = true
+			}
+		}
+	}
+	for _, env := range candidates {
+		ns := env.Namespace
+		if ns == "" {
+			ns = w.Namespace
+		}
+		if err := w.scaleToZero(ctx, ns, env.Name, policies[envKey(env)].AfterMinutes); err != nil {
+			if errors.Is(err, errRecentlyActive) {
+				continue
+			}
+			w.Logger.Warn("scaledown: scale to zero", "env", env.Name, "err", err)
+			continue
+		}
+		pol := policies[envKey(env)]
+		w.Logger.Info("scaledown: slept idle env", "env", env.Name, "production", pol.Production, "idleMinutes", pol.AfterMinutes)
+	}
+
+	w.wakeReferencedSleepers(ctx, envs, refs, candidates, policies)
+}
+
+func envKey(e *kube.KusoEnvironment) string { return e.Namespace + "/" + e.Name }
+
+const (
+	evaluateConcurrency = 8
+	evaluatePassBudget  = 45 * time.Second
+)
+
+// maxDependencyWakesPerTick caps how many slept envs one tick wakes
+// because an awake env calls them. Envs slept under an older kuso that
+// ignored in-cluster calls are healed gradually rather than all at once.
+const maxDependencyWakesPerTick = 3
+
+// awakeReferrer returns the first referrer that is awake (replicas > 0)
+// and not itself about to sleep, or "".
+func (w *Watcher) awakeReferrer(ctx context.Context, referrers []string, candidates map[string]*kube.KusoEnvironment) string {
+	for _, r := range referrers {
+		if _, sleeping := candidates[r]; sleeping {
+			continue
+		}
+		ns, name := splitKey(r)
+		if n, ok := w.deploymentReplicas(ctx, ns, name); ok && n > 0 {
+			return r
+		}
+	}
+	return ""
+}
+
+// wakeReferencedSleepers wakes envs scaledown slept that an awake env
+// calls in-cluster: those calls are being refused right now and nothing
+// else wakes the target. Under the pass-2 rule such an env would not
+// have been slept, so the wake doesn't flap.
+func (w *Watcher) wakeReferencedSleepers(ctx context.Context, envs []kube.KusoEnvironment, refs map[string][]string, candidates map[string]*kube.KusoEnvironment, policies map[string]Policy) {
+	woken := 0
+	for i := range envs {
+		if woken >= maxDependencyWakesPerTick {
+			return
+		}
+		env := &envs[i]
+		key := envKey(env)
+		pol, ok := policies[key]
+		if !ok || pol.Stopped || env.Spec.Stopped || env.Annotations[PreSleepReplicasAnnotation] == "" || len(refs[key]) == 0 {
+			continue
+		}
+		if r, ok := w.deploymentReplicas(ctx, env.Namespace, env.Name); !ok || r != 0 {
+			continue
+		}
+		by := w.awakeReferrer(ctx, refs[key], candidates)
+		if by == "" {
+			continue
+		}
+		if err := Wake(ctx, w.Kube, w.Logger, env.Namespace, env.Name, w.now()); err != nil {
+			w.Logger.Warn("scaledown: wake env called by an awake env", "env", key, "err", err)
+			continue
+		}
+		woken++
+		w.Logger.Info("scaledown: woke slept env an awake env calls in-cluster", "env", key, "referrer", by)
 	}
 }
 
@@ -212,7 +338,9 @@ func (w *Watcher) deploymentReplicas(ctx context.Context, ns, name string) (int3
 	return *dep.Spec.Replicas, true
 }
 
-func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *kube.KusoEnvironment, pol Policy) {
+// evaluateEnv reconciles one env's routing / wake state and reports
+// whether it is idle and may be slept (evaluate makes the final call).
+func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *kube.KusoEnvironment, pol Policy) bool {
 	ns := env.Namespace
 	if ns == "" {
 		ns = w.Namespace
@@ -228,7 +356,7 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 		if r, ok := w.deploymentReplicas(ctx, ns, envName); ok && r == 0 {
 			if err := Wake(ctx, w.Kube, w.Logger, ns, envName, w.now()); err != nil {
 				w.Logger.Warn("scaledown: wake env no longer allowed to sleep", "env", envName, "err", err)
-				return
+				return false
 			}
 			w.Logger.Info("scaledown: woke env no longer allowed to sleep", "env", envName)
 		}
@@ -242,14 +370,14 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 		if err := w.setAutoSleep(ctx, ns, envName, pol.AutoRoute); err != nil {
 			w.Logger.Warn("scaledown: set autoSleep", "env", envName, "err", err)
 		}
-		return
+		return false
 	}
 
 	if !pol.Eligible() {
-		return
+		return false
 	}
 	if r, ok := w.deploymentReplicas(ctx, ns, envName); !ok || r == 0 {
-		return // missing, or already asleep / pre-build hold
+		return false // missing, or already asleep / pre-build hold
 	}
 
 	idleMin := pol.AfterMinutes
@@ -258,10 +386,10 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 		// Prometheus unreachable / no data — fail safe by NOT scaling
 		// down (better a warm pod than a wrongly-slept app).
 		w.Logger.Warn("scaledown: prometheus query", "env", envName, "err", err)
-		return
+		return false
 	}
 	if active > 0 {
-		return // had traffic in the window → still in use
+		return false // had traffic in the window → still in use
 	}
 
 	// HIGH-5a: an activator-routed env's traffic flows through
@@ -269,13 +397,13 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 	// above reads 0. The activator stamps a last-activity annotation;
 	// honor it so a busy env is not wrongly slept.
 	if w.recentlyActive(ctx, ns, envName, idleMin) {
-		return
+		return false
 	}
 
 	// Don't sleep a service while one of its crons/runs is mid-flight.
 	// Cron- and run-spawned Jobs carry kuso.sislelabs.com/service=<fqn>.
 	if w.hasActiveJobs(ctx, ns, svc.Name) {
-		return
+		return false
 	}
 
 	// Last gate, checked against the live object rather than the env CR:
@@ -284,14 +412,9 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 	// hits a 0-endpoint Service and 503s with nothing to wake it.
 	if !w.routedViaActivator(ctx, ns, envName) {
 		w.Logger.Info("scaledown: idle env not yet routed via kuso-activator; leaving it up", "env", envName)
-		return
+		return false
 	}
-
-	if err := w.scaleToZero(ctx, ns, envName); err != nil {
-		w.Logger.Warn("scaledown: scale to zero", "env", envName, "err", err)
-		return
-	}
-	w.Logger.Info("scaledown: slept idle env", "env", envName, "production", pol.Production, "idleMinutes", idleMin)
+	return true
 }
 
 // setAutoSleep writes env.spec.autoSleep. Turning it on also stamps
@@ -375,15 +498,7 @@ func (w *Watcher) recentlyActive(ctx context.Context, ns, envName string, idleMi
 	if err != nil || env == nil {
 		return false
 	}
-	v := env.Annotations[LastActivityAnnotation]
-	if v == "" {
-		return false
-	}
-	ts, err := time.Parse(time.RFC3339, v)
-	if err != nil {
-		return false
-	}
-	return w.now().Sub(ts) < time.Duration(idleMin)*time.Minute
+	return activeSince(env.Annotations[LastActivityAnnotation], w.now(), idleMin)
 }
 
 // hasActiveJobs reports whether any cron/run Job for this service is
@@ -414,7 +529,14 @@ func (w *Watcher) hasActiveJobs(ctx context.Context, ns, serviceFQN string) bool
 // replicaCount=0 on the env CR (so the helm-operator reconcile doesn't
 // scale it back up). Before zeroing, it stashes the current replica count
 // in an annotation so wake can restore it.
-func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string) error {
+//
+// The env CR is written first, as a compare-and-swap on the last-activity
+// stamp: the update re-reads the CR and aborts with errRecentlyActive if
+// the activator stamped it since the idle check, and a stamp landing
+// mid-update makes the write conflict and re-run that check. A request
+// that still slips in after the CR write hits a refused dial, which makes
+// the activator wake the env again.
+func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string, idleMin int) error {
 	// Capture the pre-sleep replica count from the live Deployment (the
 	// source of truth for current capacity) so wake restores it exactly.
 	prior := 1
@@ -424,12 +546,11 @@ func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string) error {
 		}
 	}
 
-	patch := []byte(`{"spec":{"replicas":0}}`)
-	if _, err := w.Kube.Clientset.AppsV1().Deployments(ns).Patch(
-		ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("patch deployment: %w", err)
-	}
+	now := w.now()
 	if _, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(e *kube.KusoEnvironment) error {
+		if activeSince(e.Annotations[LastActivityAnnotation], now, idleMin) {
+			return errRecentlyActive
+		}
 		// Stash the pre-sleep count on the CR before zeroing, so the
 		// activator can restore it on wake (HIGH-5b).
 		if e.Annotations == nil {
@@ -439,11 +560,32 @@ func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string) error {
 		e.Spec.SetReplicaCount(0)
 		return nil
 	}); err != nil {
-		// Non-fatal: the Deployment is already at 0; this just prevents
-		// the operator from reverting on its next reconcile.
-		w.Logger.Warn("scaledown: persist replicaCount=0", "env", envName, "err", err)
+		return fmt.Errorf("persist replicaCount=0: %w", err)
+	}
+
+	patch := []byte(`{"spec":{"replicas":0}}`)
+	if _, err := w.Kube.Clientset.AppsV1().Deployments(ns).Patch(
+		ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch deployment: %w", err)
 	}
 	return nil
+}
+
+// errRecentlyActive aborts scaleToZero when the env saw traffic after the
+// idle check.
+var errRecentlyActive = errors.New("scaledown: env became active")
+
+// activeSince reports whether an RFC3339 last-activity stamp falls within
+// the idle window ending at now. Missing or unparseable → false.
+func activeSince(stamp string, now time.Time, idleMin int) bool {
+	if stamp == "" {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return false
+	}
+	return now.Sub(ts) < time.Duration(idleMin)*time.Minute
 }
 
 // promInstant runs a PromQL instant query and returns the first scalar

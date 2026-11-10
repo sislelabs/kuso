@@ -742,14 +742,16 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 6
           startupProbe:
-            # Up to 90s for first-boot to absorb Postgres connection
-            # ping retries (the pod may start before postgres is
-            # fully up on a fresh install) plus kube informer
-            # restoration. Uses /readyz so we wait for cache sync
-            # before serving any traffic.
-            httpGet: { path: /readyz, port: http }
+            # "Process is up and serving HTTP", NOT /readyz. A startupProbe
+            # that never passes restarts the container, so gating it on
+            # readiness turned the CRD-stale degraded mode (deliberately up
+            # but unready, to show its banner) and any slow informer sync
+            # into a CrashLoopBackOff. Readiness still keeps traffic off
+            # the pod until /readyz passes. 5 min covers boot-time schema
+            # migrations, which run before the listener comes up.
+            httpGet: { path: /healthz, port: http }
             periodSeconds: 5
-            failureThreshold: 18
+            failureThreshold: 60
           volumeMounts:
             # Admin bootstrap password projected as a file. Kept off
             # the env so `kubectl exec` / `describe pod` doesn't

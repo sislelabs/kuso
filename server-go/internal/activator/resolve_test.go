@@ -2,13 +2,21 @@ package activator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 )
@@ -135,5 +143,82 @@ func TestResolveByHost_SkipsInternalAndWorkerEnvs(t *testing.T) {
 	}
 	if env, _, _, err := a.resolveByHost(context.Background(), "web.alpha.example.com"); err != nil || env != "alpha-web-production" {
 		t.Errorf("public env: got (%q, %v)", env, err)
+	}
+}
+
+// Every unclaimed host on the internet reaches the activator via the
+// catch-all route; a miss must not re-list every env CR per request, and
+// the cache keyed by those hosts must stay bounded.
+func TestResolveByHost_CachesMissesAndStaysBounded(t *testing.T) {
+	t.Parallel()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
+	var lists atomic.Int32
+	dyn.PrependReactor("list", "kusoenvironments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		lists.Add(1)
+		return false, nil, nil
+	})
+	a := New(&kube.Client{Dynamic: dyn}, slog.Default())
+	for i := 0; i < 3; i++ {
+		if _, _, _, err := a.resolveByHost(context.Background(), "nothing.example.com"); err == nil {
+			t.Fatal("unknown host resolved")
+		}
+	}
+	if got := lists.Load(); got != 1 {
+		t.Errorf("3 lookups of one unknown host listed envs %d times, want 1", got)
+	}
+
+	for i := 0; i < maxHostCache+50; i++ {
+		a.storeHost(fmt.Sprintf("h%d.example.com", i), hostEntry{miss: true, at: time.Now()})
+	}
+	a.hostMu.RLock()
+	n := len(a.hostCache)
+	a.hostMu.RUnlock()
+	if n > maxHostCache {
+		t.Errorf("hostCache grew to %d entries, cap %d", n, maxHostCache)
+	}
+}
+
+// Past the held-request cap the request is refused instead of held, but
+// the wake it asked for still happens.
+func TestWakeAndWait_OverHoldCapStillWakes(t *testing.T) {
+	const ns, name = "kuso", "app-web-staging"
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
+	env := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+		"kind":       "KusoEnvironment",
+		"metadata": map[string]any{"name": name, "namespace": ns,
+			"annotations": map[string]any{"kuso.sislelabs.com/pre-sleep-replicas": "2"}},
+		"spec": map[string]any{"replicaCount": int64(0)},
+	}}
+	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
+		t.Fatal(err)
+	}
+	zero := int32(0)
+	cs := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &zero},
+	})
+	a := New(&kube.Client{Clientset: cs, Dynamic: dyn}, slog.Default())
+	a.maxHeld = 1
+	a.held.Store(1)
+
+	if err := a.wakeAndWait(context.Background(), ns, name); !errors.Is(err, errHoldCapacity) {
+		t.Fatalf("err = %v, want errHoldCapacity", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		d, err := cs.AppsV1().Deployments(ns).Get(context.Background(), name, metav1.GetOptions{})
+		if err == nil && *d.Spec.Replicas == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("refused request did not trigger the wake")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if a.held.Load() != 1 {
+		t.Errorf("held = %d after refusal, want 1 (refusal must not leak a slot)", a.held.Load())
 	}
 }

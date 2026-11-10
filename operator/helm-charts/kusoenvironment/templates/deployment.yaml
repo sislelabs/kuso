@@ -52,6 +52,18 @@ spec:
   */}}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit | default 3 }}
   {{- /*
+    A new pod must stay Ready this long before it counts as available and
+    the rollout kills an old one. Without it a worker (no probes) or a web
+    app that binds and then crashes on async init replaced the only
+    healthy pod within a second. It gates rollout availability only, not
+    Ready/endpoints, so wake latency is unchanged. A Deployment-spec field:
+    changing it does not restart pods. .Values.minReadySeconds overrides
+    (0 allowed).
+  */}}
+  {{- $minReady := 10 }}
+  {{- if not (kindIs "invalid" .Values.minReadySeconds) }}{{ $minReady = int .Values.minReadySeconds }}{{ end }}
+  minReadySeconds: {{ $minReady }}
+  {{- /*
     Zero-downtime rolling update. maxSurge=1 + maxUnavailable=0 means
     kube ALWAYS brings up a new pod and waits for it to be Ready
     before killing any old pod, even at replicas=1. Combined with the

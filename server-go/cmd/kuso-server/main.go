@@ -2478,14 +2478,9 @@ func runActivator(addr string, logger *slog.Logger) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
+	go act.KeepActive(ctx)
 	logger.Info("kuso activator listening", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := act.Serve(ctx, srv, activator.ResolveDrainConfig(), logger); err != nil && err != http.ErrServerClosed {
 		logger.Error("activator: serve", "err", err)
 		os.Exit(1)
 	}

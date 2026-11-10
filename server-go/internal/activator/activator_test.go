@@ -166,60 +166,22 @@ func TestResolveHoldTimeout(t *testing.T) {
 	}
 }
 
-func TestRetryTransport_ReplaysBodyOnDialRetry(t *testing.T) {
+// A body the app may already have received must never be re-sent: a
+// retry would double-execute a non-idempotent request.
+func TestRetryTransport_NoRetryOnceBodyWasRead(t *testing.T) {
 	t.Parallel()
-	// The real transport closes the body on every attempt; a retry that
-	// reuses it sends an empty POST to the freshly woken app.
-	var got []string
 	calls := 0
 	rt := &retryTransport{base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
-		b, err := io.ReadAll(r.Body)
-		_ = r.Body.Close()
-		if err != nil {
-			return nil, err
-		}
-		got = append(got, string(b))
-		if calls < 3 {
-			return nil, errors.New("dial tcp 10.0.0.1:80: connect: connection refused")
-		}
-		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+		_, _ = io.ReadAll(r.Body)
+		return nil, errors.New("dial tcp 10.0.0.1:80: i/o timeout")
 	}), wait: time.Millisecond}
-	req, _ := http.NewRequest("POST", "http://x/hook", io.NopCloser(strings.NewReader(`{"a":1}`)))
-	req.GetBody = nil
-	if _, err := rt.RoundTrip(req); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 attempts, got %d", len(got))
-	}
-	for i, b := range got {
-		if b != `{"a":1}` {
-			t.Errorf("attempt %d body = %q, want the original payload", i, b)
-		}
-	}
-}
-
-func TestRetryTransport_OversizedBodyIsNotRetried(t *testing.T) {
-	t.Parallel()
-	big := strings.Repeat("x", maxRetryBodyBytes+10)
-	calls := 0
-	var n int
-	rt := &retryTransport{base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		calls++
-		b, _ := io.ReadAll(r.Body)
-		n = len(b)
-		return nil, errors.New("dial tcp 10.0.0.1:80: connect: connection refused")
-	}), wait: time.Millisecond}
-	req, _ := http.NewRequest("POST", "http://x/", io.NopCloser(strings.NewReader(big)))
+	req, _ := http.NewRequest("POST", "http://x/", io.NopCloser(strings.NewReader("payload")))
 	req.GetBody = nil
 	if _, err := rt.RoundTrip(req); err == nil {
-		t.Fatal("want the dial error back")
+		t.Fatal("want the error back")
 	}
 	if calls != 1 {
-		t.Errorf("oversized body retried: %d attempts, want 1", calls)
-	}
-	if n != len(big) {
-		t.Errorf("streamed %d bytes, want %d", n, len(big))
+		t.Errorf("read body was retried: %d attempts, want 1", calls)
 	}
 }

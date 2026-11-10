@@ -81,6 +81,13 @@ func toAny(m map[string]string) map[string]any {
 
 func (f *fixture) run(t *testing.T, now time.Time) *kube.Client {
 	t.Helper()
+	w := f.watcher(t, now)
+	w.evaluate(context.Background())
+	return w.Kube
+}
+
+func (f *fixture) watcher(t *testing.T, now time.Time) *Watcher {
+	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
 			kube.GVREnvironments: "KusoEnvironmentList",
@@ -123,8 +130,7 @@ func (f *fixture) run(t *testing.T, now time.Time) *kube.Client {
 		PromURL: prom.URL, httpc: prom.Client(),
 		Now: func() time.Time { return now },
 	}
-	w.evaluate(context.Background())
-	return kc
+	return w
 }
 
 func replicas(t *testing.T, kc *kube.Client, name string) int32 {

@@ -92,6 +92,19 @@ spec:
     spec:
       serviceAccountName: kuso-activator
       priorityClassName: kuso-platform
+      # On SIGTERM the activator keeps accepting for 5s (traefik lag), then
+      # drains in-flight requests for up to KUSO_ACTIVATOR_DRAIN_SECONDS.
+      # 5 + 65 covers a full 60s wake hold and still exits before SIGKILL.
+      terminationGracePeriodSeconds: 75
+      # Spread the two replicas so one node drain or loss can't take both.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: { app.kubernetes.io/name: kuso-activator }
       # uid/gid 100/101 = the image's `kuso` user (server-go/Dockerfile
       # adduser -S). Numeric because runAsNonRoot can't verify a named
       # USER. Activator mode writes nothing to disk, hence the read-only
@@ -112,6 +125,10 @@ spec:
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
             - { name: KUSO_NAMESPACE, value: kuso }
+            - { name: KUSO_ACTIVATOR_DRAIN_SECONDS, value: "65" }
+            # ~80% of the memory limit: the GC works harder before the
+            # kernel OOM-kills the one proxy every sleep-routed app uses.
+            - { name: GOMEMLIMIT, value: "200MiB" }
           ports:
             - { name: http, containerPort: 3000 }
           livenessProbe:
@@ -127,6 +144,19 @@ spec:
             # fixed shared cost amortized across every scaled-to-zero app.
             requests: { cpu: 25m, memory: 64Mi }
             limits: { memory: 256Mi }
+---
+# Every sleep-routed host goes through the activator, so a node drain must
+# never evict both replicas at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kuso-activator
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-activator }
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-activator }
 ---
 apiVersion: v1
 kind: Service

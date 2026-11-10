@@ -160,27 +160,66 @@ PRIOR_SERVER_IMAGE=$(kubectl get -n "$NS" deploy/kuso-server \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="server")].image}' 2>/dev/null || true)
 
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
+
+revert_server() {
+  local why="$1"
+  if [ -n "$PRIOR_SERVER_IMAGE" ] && [ "$PRIOR_SERVER_IMAGE" != "${KUSO_SERVER_IMAGE}" ]; then
+    echo "==> reverting kuso-server to ${PRIOR_SERVER_IMAGE}"
+    write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverting to ${PRIOR_SERVER_IMAGE}"
+    kubectl set image -n "$NS" deploy/kuso-server "server=${PRIOR_SERVER_IMAGE}" >/dev/null || true
+    if kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
+      write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverted to working ${PRIOR_SERVER_IMAGE}"
+    else
+      write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why} AND revert to ${PRIOR_SERVER_IMAGE} did not stabilise — manual intervention required"
+    fi
+  else
+    # No prior image to revert to (fresh install) or same image — nothing
+    # safe to roll back to. Report failure and leave state for an operator.
+    write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why} and no prior image to revert to — manual intervention required"
+  fi
+  exit 1
+}
+
 # Wrap rollout status so a timeout/crashloop on the new image triggers a
 # revert instead of aborting under `set -e` with the deploy stuck. The
 # explicit `if !` keeps this robust to set -euo pipefail.
 if ! kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
   echo "==> kuso-server rollout to ${KUSO_SERVER_IMAGE} did NOT become ready"
-  if [ -n "$PRIOR_SERVER_IMAGE" ] && [ "$PRIOR_SERVER_IMAGE" != "${KUSO_SERVER_IMAGE}" ]; then
-    echo "==> reverting kuso-server to ${PRIOR_SERVER_IMAGE}"
-    write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed to roll out; reverting to ${PRIOR_SERVER_IMAGE}"
-    kubectl set image -n "$NS" deploy/kuso-server "server=${PRIOR_SERVER_IMAGE}" >/dev/null || true
-    if kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
-      write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed; reverted to working ${PRIOR_SERVER_IMAGE}"
-    else
-      write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed AND revert to ${PRIOR_SERVER_IMAGE} did not stabilise — manual intervention required"
-    fi
-  else
-    # No prior image to revert to (fresh install) or same image — nothing
-    # safe to roll back to. Report failure and leave state for an operator.
-    write_status "failed" "server image ${KUSO_SERVER_IMAGE} failed to roll out and no prior image to revert to — manual intervention required"
-  fi
-  exit 1
+  revert_server "failed to roll out"
 fi
+
+# Leader gate. The new pod comes up as a non-leader (the old pod still
+# holds the leases), and a non-leader's /readyz skips the build-poller
+# check, so `rollout status` passes even when the leader-only loops are
+# broken on the new version. Wait for the new pod to take the lease and
+# report its poller. Only an explicit "stalled" reverts: an unreachable
+# endpoint or a slow lease handover is a warning, never a rollback of a
+# working server.
+LEADER_GATE_SECONDS="${KUSO_LEADER_GATE_SECONDS:-150}"
+leader_gate_deadline=$(( $(date +%s) + LEADER_GATE_SECONDS ))
+poller_state=""
+while [ "$(date +%s)" -lt "$leader_gate_deadline" ]; do
+  readyz=$(curl -s --connect-timeout 5 --max-time 10 "http://kuso-server.${NS}.svc:80/readyz" 2>/dev/null || true)
+  observed=$(printf '%s' "$readyz" | jq -r '.checks.buildPoller // empty' 2>/dev/null || true)
+  if [ -n "$observed" ]; then
+    poller_state="$observed"
+  fi
+  if [ "$poller_state" = "ok" ]; then
+    echo "==> new kuso-server leads and its build poller is beating"
+    break
+  fi
+  sleep 5
+done
+case "$poller_state" in
+  ok) ;;
+  stalled)
+    echo "==> new kuso-server took the leader lease but its build poller is stalled"
+    revert_server "took the leader lease with a stalled build poller"
+    ;;
+  *)
+    echo "==> WARNING: could not confirm the new kuso-server's build poller within ${LEADER_GATE_SECONDS}s; continuing"
+    ;;
+esac
 
 # The activator runs the SAME kuso-server-go image in `--activator` mode
 # (deploy/kuso-activator.yaml). Roll it in lockstep with the server so
