@@ -133,10 +133,12 @@ type Service struct {
 	// active-Job check covers other replicas and earlier calls.
 	startMu sync.Mutex
 
-	mu     sync.RWMutex
-	state  State
-	etag   string // for If-None-Match on the GH releases endpoint
-	client *http.Client
+	mu    sync.RWMutex
+	state State
+	etag  string // for If-None-Match on the GH releases endpoint
+	// rejectedTag is the release the last poll refused on verification.
+	rejectedTag string
+	client      *http.Client
 }
 
 // New builds a Service with sensible defaults. Repo overridable for
@@ -163,13 +165,21 @@ func New(database *db.DB, kc *kube.Client, namespace, current string, logger *sl
 func (s *Service) Run(ctx context.Context) {
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
+	// The updater Job replaces this process mid-run, so its outcome is
+	// read back from the status ConfigMap: once at boot (the new server
+	// after a roll) and every minute (a rollback leaves the old one up).
+	outcome := time.NewTicker(time.Minute)
+	defer outcome.Stop()
 	s.tick(ctx)
+	s.checkUpdateOutcome(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.tick(ctx)
+		case <-outcome.C:
+			s.checkUpdateOutcome(ctx)
 		}
 	}
 }
@@ -196,7 +206,21 @@ func (s *Service) Refresh(ctx context.Context) State {
 func (s *Service) tick(ctx context.Context) {
 	if s.pollOnce(ctx) {
 		s.maybeNotifyAvailable(ctx, s.State())
+		return
 	}
+	s.mu.RLock()
+	tag, reason := s.rejectedTag, s.state.LastCheckError
+	s.mu.RUnlock()
+	if tag != "" {
+		s.notifyRejected(ctx, tag, reason)
+	}
+}
+
+// isVerificationError reports whether a poll error means the release
+// itself was refused (signature / unsigned-manifest gate), as opposed to
+// GitHub being unreachable.
+func isVerificationError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "verify manifest signature")
 }
 
 // pollOnce refreshes state from GitHub; reports whether the poll succeeded.
@@ -206,7 +230,11 @@ func (s *Service) pollOnce(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.LastChecked = now
+	s.rejectedTag = ""
 	if err != nil {
+		if isVerificationError(err) {
+			s.rejectedTag = tag
+		}
 		s.state.LastCheckError = err.Error()
 		s.Logger.Warn("updater: poll", "err", err)
 		return false
