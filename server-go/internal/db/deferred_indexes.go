@@ -62,7 +62,18 @@ func (d *DB) BuildDeferredIndexes(ctx context.Context, logger *slog.Logger) erro
 	if logger == nil {
 		logger = slog.Default()
 	}
-	conn, err := d.Conn(ctx)
+	if d.pooledOnly {
+		// The build lock and SET statement_timeout=0 are session-scoped,
+		// and CREATE INDEX CONCURRENTLY can't run in a transaction, so a
+		// transaction-mode pooler can serve none of it safely.
+		logger.Warn("deferred indexes: skipped, no direct connection to the primary (set KUSO_DB_DIRECT_DSN)")
+		return nil
+	}
+	pool := d.DB
+	if d.maint != nil {
+		pool = d.maint
+	}
+	conn, err := pool.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("deferred indexes: acquire conn: %w", err)
 	}

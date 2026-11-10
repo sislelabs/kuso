@@ -1114,7 +1114,11 @@ func main() {
 				}
 			}
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-				goSafe(logger, "daily-cleanup", func() { runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger) })
+				// Maintenance(): the janitor's bulk deletes run without the
+				// request-path statement timeout.
+				goSafe(logger, "daily-cleanup", func() {
+					runDailyCleanup(workCtx, database.Maintenance(), database.Maintenance().AsLogDB(), kc, buildSvc, *namespace, logger)
+				})
 			}
 			// Opt-in: convert the regular LogLine table to daily-
 			// partitioned. Runs once on the leader; subsequent boots
@@ -1128,7 +1132,7 @@ func main() {
 				goSafe(logger, "log-partition-migration", func() {
 					mctx, mcancel := context.WithTimeout(workCtx, 30*time.Minute)
 					defer mcancel()
-					if err := database.MigrateLogLineToPartitioned(mctx, logger.With("component", "log-partition")); err != nil {
+					if err := database.Maintenance().MigrateLogLineToPartitioned(mctx, logger.With("component", "log-partition")); err != nil {
 						logger.Error("log-partition migration failed", "err", err)
 					}
 				})

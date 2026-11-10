@@ -565,12 +565,19 @@ spec:
   #   - WebSocket reconnects on pod failover (acceptable for log
   #     tails; the next frame is the current tail anyway)
   #   - The DB connection pool is PER POD: each replica opens up to
-  #     KUSO_DB_MAX_CONNS (default 25). Fleet total = that × replicas,
-  #     so 4 replicas exhausts Postgres's default max_connections of
-  #     100 and new sessions — including the operator's and your own
-  #     psql — start failing with "too many clients already". Past 2
-  #     replicas either raise max_connections or lower
-  #     KUSO_DB_MAX_CONNS so the product stays under ~60% of it.
+  #     KUSO_DB_MAX_CONNS (default 25) client connections to
+  #     kuso-pgbouncer, plus at most 2 direct connections to
+  #     kuso-postgres-rw for migrations and the janitor. PgBouncer
+  #     (deploy/postgres.yaml) multiplexes every replica onto ONE pool of
+  #     default_pool_size=25 (+5 reserve) server connections, so more
+  #     replicas add queueing at the pooler, not Postgres backends. Keep
+  #     KUSO_DB_MAX_CONNS × replicas under max_client_conn (200). Raising
+  #     CNPG max_connections (100) restarts the control-plane Postgres:
+  #     an optional manual step, never applied by the updater.
+  #   - The app role gets statement_timeout=KUSO_DB_STATEMENT_TIMEOUT
+  #     (default 60s) and idle_in_transaction_session_timeout=
+  #     KUSO_DB_IDLE_TX_TIMEOUT (default 5m) as role defaults at boot;
+  #     "0" removes one.
   #
   # The DB still needs to be HA on its own — point KUSO_DB_DSN at a
   # managed Postgres (RDS / Crunchy / Supabase) when running >1

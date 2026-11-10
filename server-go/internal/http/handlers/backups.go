@@ -600,6 +600,15 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest, fmt.Sprintf("restore overwrites %q's live data — set \"confirm\":%q to acknowledge", destAddon, destAddon))
 		return
 	}
+	// Resolve the restore shell by the destination addon's kind before any
+	// side effect: an unrestorable kind (redis: manual only) is a 400, not
+	// a mirrored Secret plus a doomed Job. (src/dest kinds are already
+	// validated equal above when restoring into a sibling.)
+	restoreShell, err := restoreScriptForKind(destCR.Spec.Kind)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
 	// kuso-backup-s3 Secret, which SetSettings only ever writes into the
 	// HOME namespace. For a project with a per-project execution namespace,
@@ -624,15 +633,6 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
-
-	// Resolve the restore shell by the destination addon's kind. An
-	// unbackable kind is a 400 rather than a doomed Job. (src/dest kinds
-	// are already validated equal above when restoring into a sibling.)
-	restoreShell, err := restoreScriptForKind(destCR.Spec.Kind)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	// Bucket from the SOURCE addon — the artifact being restored lives
 	// where its own CronJob wrote it, which may not be the destination's
 	// bucket when restoring into a sibling.

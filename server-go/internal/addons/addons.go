@@ -1050,6 +1050,11 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 				if s != "" && !cronExpr5.MatchString(s) {
 					return fmt.Errorf("%w: backup schedule %q must be a 5-field cron expression (e.g. `0 3 * * *`)", ErrInvalid, s)
 				}
+				// Only a changed schedule is checked, so re-applying an
+				// existing config (kuso apply) keeps working.
+				if s != "" && s != addon.Spec.Backup.Schedule && !kube.AddonKindHasBackupProducer(addon.Spec.Kind) {
+					return fmt.Errorf("%w: kuso has no backup producer for kind %s, so a backup schedule would never run; back it up outside kuso", ErrInvalid, addon.Spec.Kind)
+				}
 				addon.Spec.Backup.Schedule = s
 			}
 			if req.Backup.RetentionDays != nil {

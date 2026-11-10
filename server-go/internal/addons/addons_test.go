@@ -3,6 +3,7 @@ package addons
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -406,6 +407,20 @@ func TestUpdate_BackupRoundTrip(t *testing.T) {
 		}
 		if got.Spec.Backup == nil || got.Spec.Backup.Schedule != "0 3 * * *" || got.Spec.Backup.RetentionDays != 14 {
 			t.Errorf("backup not persisted: %+v", got.Spec.Backup)
+		}
+	})
+
+	t.Run("kind without a backup producer rejected", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "ch", "clickhouse"),
+		)
+		sched := "0 3 * * *"
+		_, err := s.Update(context.Background(), "alpha", "ch", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{Schedule: &sched},
+		})
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "no backup producer for kind clickhouse") {
+			t.Fatalf("got %v, want ErrInvalid naming the kind", err)
 		}
 	})
 

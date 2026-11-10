@@ -83,14 +83,14 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Graceful no-op when backup S3 isn't configured: the
+                  # Backup S3 not configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
-                  # is optional). Exit 0 with a clear message rather than
-                  # failing every scheduled run.
+                  # is optional). Fail the run: a schedule that dumps nothing
+                  # must not read as a successful backup.
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
@@ -363,14 +363,14 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Graceful no-op when backup S3 isn't configured: the
+                  # Backup S3 not configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
-                  # is optional). Exit 0 with a clear message rather than
-                  # failing every scheduled run.
+                  # is optional). Fail the run: a schedule that dumps nothing
+                  # must not read as a successful backup.
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
@@ -535,14 +535,14 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Graceful no-op when backup S3 isn't configured: the
+                  # Backup S3 not configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
-                  # is optional). Exit 0 with a clear message rather than
-                  # failing every scheduled run.
+                  # is optional). Fail the run: a schedule that dumps nothing
+                  # must not read as a successful backup.
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
@@ -668,8 +668,8 @@ spec:
                 - |
                   set -euo pipefail
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
@@ -792,8 +792,8 @@ spec:
                 - |
                   set -euo pipefail
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   {{- include "kusoaddon.backupSealFn" . | nindent 18 }}
@@ -916,14 +916,14 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Graceful no-op when backup S3 isn't configured: the
+                  # Backup S3 not configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
-                  # is optional). Exit 0 with a clear message rather than
-                  # failing every scheduled run.
+                  # is optional). Fail the run: a schedule that dumps nothing
+                  # must not read as a successful backup.
                   if [ -z "${BUCKET:-}" ]; then
-                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
-                    exit 0
+                    echo "ERROR: backup S3 not configured (no kuso-backup-s3 secret); nothing was backed up" >&2
+                    exit 1
                   fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   DEST="s3://${BUCKET}/${PROJECT}/${ADDON}/${TS}/"
