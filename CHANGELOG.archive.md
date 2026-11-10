@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.4] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(addons): label the s3 init hook pod so NetworkPolicy admits it ([66d0705](https://github.com/sislelabs/kuso/commit/66d070540152afec95f30d0b600e81c221b0b6b0))
+
 ## [0.26.3] — 2026-09-23
 
 ### 🐛 Bug Fixes
