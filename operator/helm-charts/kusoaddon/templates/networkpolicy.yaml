@@ -16,7 +16,11 @@
 {{- $subKey := include "kusoaddon.subscriberKey" $conn }}
 {{- $base := include "kusoaddon.fullname" . | trunc 40 | trimSuffix "-" }}
 {{- $platformNS := .Values.platformNamespace | default "kuso" }}
-{{- if and (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- /* The shared instance server (project kuso-instance) is reached by
+       tenants of every project, so it must not get a project-scoped
+       ingress allow-list: any ingress policy selecting its pods denies
+       everything else. Tenant reach is narrowed on the egress side below. */}}
+{{- if and (not .Values.external) (not .Values.useInstanceAddon) (ne $project "kuso-instance") }}
 {{- /* Redpanda (Kafka + admin API) and Mailpit (inbox) have no auth, so
        env membership is not enough: only subscribers get in. */}}
 {{- $credentialless := has .Values.kind (list "redpanda" "mailpit") }}

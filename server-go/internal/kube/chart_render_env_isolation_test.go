@@ -138,3 +138,17 @@ func TestEnvIsolation_CredentiallessAddonsAdmitSubscribersOnly(t *testing.T) {
 		}
 	}
 }
+
+// The shared instance server is reached from every project. A project-
+// scoped ingress allow-list on it denied all tenants on the live cluster
+// (v0.42.0, 2026-11-10), so it must render no subscribers policy.
+func TestInstanceServerGetsNoIngressAllowList(t *testing.T) {
+	t.Parallel()
+	out := renderChart(t, "kusoaddon", "kuso-instance-pg", "--set", "project=kuso-instance", "--set", "kind=postgres", "--set", "pooler.enabled=true")
+	if strings.Contains(out, "kuso-instance-pg-subscribers") {
+		t.Fatal("shared instance server rendered a project-scoped ingress allow-list")
+	}
+	if !strings.Contains(renderChart(t, "kusoaddon", "p-db", "--set", "project=p", "--set", "kind=postgres"), "p-db-subscribers") {
+		t.Fatal("regular addon lost its subscribers policy")
+	}
+}
