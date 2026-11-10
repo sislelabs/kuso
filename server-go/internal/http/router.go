@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/db"
 	"kuso/server/internal/drains"
+	"kuso/server/internal/envisolation"
 	"kuso/server/internal/github"
 	"kuso/server/internal/gitremote"
 	httphandlers "kuso/server/internal/http/handlers"
@@ -568,6 +569,9 @@ func mountAuthenticatedRoutes(
 			invitesH.Mount(r)
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
+				(&httphandlers.EnvIsolationHandler{DB: d.DB, Logger: d.Logger, Svc: &envisolation.Service{
+					Kube: d.Kube, HomeNS: d.Namespace, NS: kube.NewProjectNamespaceResolver(d.Kube, d.Namespace),
+				}}).Mount(r)
 			}
 			if d.Kube != nil && d.Projects != nil && d.Addons != nil {
 				sweeper := &vulnscan.Sweeper{DB: d.DB, Cluster: vulnscan.KubeCluster{Kube: d.Kube}, Logger: d.Logger}

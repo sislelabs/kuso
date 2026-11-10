@@ -95,6 +95,9 @@ spec:
         {{- /* labels already carries the selectorLabels keys; including
                both emitted duplicate map keys, which strict YAML rejects. */}}
         {{- include "kusoenvironment.labels" . | nindent 8 }}
+        {{- with include "kusoenvironment.isolationLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
         {{- if not .Values.privateEgress }}
         kuso.sislelabs.com/network-egress-public: "true"
         {{- end }}

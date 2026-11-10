@@ -1,0 +1,87 @@
+{{- /*
+  Env-isolation policies (ISO-3 / ISO-5). Every object here only ALLOWS
+  traffic, so rendering them on an install where the project's
+  networkPolicy.envIsolation is off changes nothing: the project chart's
+  allow-intra-project still admits every project pod. They start to matter
+  once envIsolation narrows that rule; until then they are pre-staged so
+  enabling isolation never waits on an addon reconcile.
+
+  Subscribers are env pods carrying kusoaddon.subscriberKey for this
+  addon's conn Secret (stamped by the kusoenvironment chart from
+  envFromSecrets / secretKeyRef). Pods without any env label (legacy pods,
+  Jobs) are admitted by the project chart's allow-addon-legacy rule.
+*/ -}}
+{{- $project := .Values.project | default "unknown" }}
+{{- $conn := include "kusoaddon.connSecretName" . }}
+{{- $subKey := include "kusoaddon.subscriberKey" $conn }}
+{{- $base := include "kusoaddon.fullname" . | trunc 40 | trimSuffix "-" }}
+{{- $platformNS := .Values.platformNamespace | default "kuso" }}
+{{- if and (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- /* Redpanda (Kafka + admin API) and Mailpit (inbox) have no auth, so
+       env membership is not enough: only subscribers get in. */}}
+{{- $credentialless := has .Values.kind (list "redpanda" "mailpit") }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $base }}-subscribers
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ $project | quote }}
+      kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $project | quote }}
+              {{ $subKey }}: "true"
+        # The addon's own pods: replication (redis-ha, nats-ha, CNPG),
+        # pooler -> DB, backup Jobs.
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $project | quote }}
+              kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+        {{- if not $credentialless }}
+        # Production pods reaching a production DB with hand-copied
+        # credentials keep working; only non-production envs are refused.
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $project | quote }}
+              kuso.sislelabs.com/env: production
+        {{- end }}
+{{- end }}
+{{- if .Values.useInstanceAddon }}
+{{- /* ISO-5: egress to the shared instance Postgres for this project's
+       subscribers only. The project chart's legacy project-wide rule
+       stays until spec.networkPolicy.instanceDBEgress=false. */}}
+{{- range $i, $sel := list (dict "matchLabels" (dict "kuso.sislelabs.com/project" $project $subKey "true")) (dict "matchLabels" (dict "kuso.sislelabs.com/project" $project) "matchExpressions" (list (dict "key" "kuso.sislelabs.com/env" "operator" "DoesNotExist") (dict "key" "app.kubernetes.io/component" "operator" "NotIn" "values" (list "kusobuild")))) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $base }}-instance-db-{{ ternary "subscribers" "unlabelled" (eq $i 0) }}
+  labels:
+    {{- include "kusoaddon.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $sel | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $platformNS | quote }}
+          podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: kuso-instance
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: kuso-instance
+      ports:
+        - { port: 5432, protocol: TCP }
+        - { port: 6432, protocol: TCP }
+{{- end }}
+{{- end }}

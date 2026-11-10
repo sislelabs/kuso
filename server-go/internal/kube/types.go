@@ -106,6 +106,13 @@ type KusoProjectNetworkPolicy struct {
 	PlatformNamespace      string   `json:"platformNamespace,omitempty"`
 	ExtraBlockCIDRs        []string `json:"extraBlockCIDRs,omitempty"`
 	ExtraIngressNamespaces []string `json:"extraIngressNamespaces,omitempty"`
+	// EnvIsolation turns on the env-aware ingress rules (ISO-3). Only
+	// flipped through the env-isolation endpoint, which refuses while
+	// any env pod is still unlabelled.
+	EnvIsolation *bool `json:"envIsolation,omitempty"`
+	// InstanceDBEgress: nil/true keeps the legacy project-wide egress to
+	// the instance Postgres; false leaves only the per-addon rule.
+	InstanceDBEgress *bool `json:"instanceDBEgress,omitempty"`
 }
 
 // KusoProjectQuota is spec.quota on KusoProject (ResourceQuota +
@@ -738,9 +745,13 @@ type KusoEnvironment struct {
 }
 
 type KusoEnvironmentSpec struct {
-	Project     string           `json:"project"`
-	Service     string           `json:"service"`
-	Kind        string           `json:"kind,omitempty"`
+	Project string `json:"project"`
+	Service string `json:"service"`
+	Kind    string `json:"kind,omitempty"`
+	// EnvScope mirrors the CR's LabelEnv so the chart (which only sees
+	// spec) can stamp it on pods for the env-isolation NetworkPolicies.
+	// Never set by hand: toUnstructured derives it on every write.
+	EnvScope    string           `json:"envScope,omitempty"`
 	Branch      string           `json:"branch,omitempty"`
 	PullRequest *KusoPullRequest `json:"pullRequest,omitempty"`
 	TTL         *KusoTTL         `json:"ttl,omitempty"`

@@ -37,7 +37,14 @@ matching `nobody` user).
 {{- end -}}
 {{- end -}}
 
+{{- /* Pod-level hardening. automountServiceAccountToken lives here so every
+       template that already includes this helper (s3.yaml included) drops
+       the token without a per-template edit: no addon image talks to the
+       kube API. The runAsUser/fsGroup values below are unchanged from what
+       live StatefulSets already run with, so existing data dirs keep their
+       owner. */ -}}
 {{- define "kusoaddon.podSecurityContext" -}}
+automountServiceAccountToken: false
 securityContext:
   runAsNonRoot: true
   runAsUser: {{ include "kusoaddon.uidForKind" . }}
@@ -52,6 +59,19 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]
+{{- end -}}
+
+{{- /* Alias of containerSecurityContext under the name other templates
+       are told to use. */ -}}
+{{- define "kusoaddon.securityContext" -}}
+{{- include "kusoaddon.containerSecurityContext" . -}}
+{{- end -}}
+
+{{- /* MUST stay byte-identical to kusoenvironment.subscriberKey: env pods
+       that mount <conn> carry this label key, and the addon's
+       subscribers NetworkPolicy admits them by it. */ -}}
+{{- define "kusoaddon.subscriberKey" -}}
+{{- printf "conn.kuso.sislelabs.com/%s" (sha256sum . | trunc 20) -}}
 {{- end -}}
 
 {{/*

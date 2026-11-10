@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -217,6 +218,12 @@ func (c *Client) ListKusoes(ctx context.Context, namespace string) ([]Kuso, erro
 // toUnstructured serialises a typed CRD struct into the unstructured shape
 // the dynamic client requires, attaching the proper apiVersion + kind.
 func toUnstructured(obj any, gvr schema.GroupVersionResource, kind string) (*unstructured.Unstructured, error) {
+	// Single choke point for every typed env write. updateWithRetry runs
+	// this on its "before" copy too, so the stamp alone never turns a
+	// no-op update into a write (which would roll pods on its own).
+	if e, ok := obj.(*KusoEnvironment); ok && e != nil {
+		e.Spec.EnvScope = e.Labels[LabelEnv]
+	}
 	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
 		return nil, fmt.Errorf("kube: encode %s: %w", kind, err)
@@ -517,6 +524,24 @@ func (c *Client) CreateKusoRun(ctx context.Context, namespace string, k *KusoRun
 
 func (c *Client) DeleteKusoRun(ctx context.Context, namespace, name string) error {
 	return deleteCR(ctx, c, GVRRuns, namespace, name)
+}
+
+// StampKusoEnvironmentScope merge-patches the env label and its spec
+// mirror together. A patch, not an update: the typed update paths stamp
+// their no-op baseline too, so they would skip an env whose only gap is
+// the missing spec field.
+func (c *Client) StampKusoEnvironmentScope(ctx context.Context, namespace, name, scope string) error {
+	body, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"labels": map[string]string{LabelEnv: scope}},
+		"spec":     map[string]any{"envScope": scope},
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := c.Dynamic.Resource(GVREnvironments).Namespace(namespace).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("kube: stamp env scope %s/%s: %w", namespace, name, err)
+	}
+	return nil
 }
 
 // UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
