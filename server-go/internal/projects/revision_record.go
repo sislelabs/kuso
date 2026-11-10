@@ -146,7 +146,7 @@ func maskEnvVarsForRevision(in []kube.KusoEnvVar) []kube.KusoEnvVar {
 	out := make([]kube.KusoEnvVar, 0, len(in))
 	for _, e := range in {
 		c := kube.KusoEnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom}
-		if c.Value != "" && c.ValueFrom == nil && builds.IsSensitiveBuildEnvKey(c.Name) {
+		if c.Value != "" && c.ValueFrom == nil && builds.IsCredentialLiteral(c.Name, c.Value) {
 			c.Value = revisionMaskSentinel
 		}
 		out = append(out, c)
