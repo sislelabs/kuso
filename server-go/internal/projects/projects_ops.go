@@ -299,8 +299,17 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 		return nil, err
 	}
 	requestLimitsChanged := false
-	if _, err := s.Get(ctx, name); err != nil {
+	existing, err := s.Get(ctx, name)
+	if err != nil {
 		return nil, err
+	}
+	// Only turning previews on is gated, so a project that already has
+	// them on keeps saving its other settings.
+	if req.Previews != nil && req.Previews.Enabled != nil && *req.Previews.Enabled &&
+		(existing.Spec.Previews == nil || !existing.Spec.Previews.Enabled) {
+		if err := s.requirePreviewBaseEnv(ctx, existing); err != nil {
+			return nil, err
+		}
 	}
 	// RMW under optimistic concurrency: mutate the freshly-fetched CR so
 	// a concurrent settings edit on another replica (or a mid-flight

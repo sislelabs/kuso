@@ -188,14 +188,16 @@ type KusoPreviewsSpec struct {
 	// branch (pre-v0.17.0 behavior). Non-empty = only spawn when
 	// the PR's base ref matches one of the entries; the matched
 	// trigger's BaseEnv name selects which existing env to clone
-	// env-vars + addon subscriptions from.
+	// env-vars, per-env secrets + addon subscriptions from. Production is
+	// never a base: an empty or "production" BaseEnv means "staging", and
+	// a service with no such env gets no preview.
 	//
 	// Typical config:
 	//   triggers:
-	//     - branch: main      # PR → main inherits production
-	//       baseEnv: production
-	//     - branch: staging   # PR → staging inherits staging
+	//     - branch: main      # PR → main inherits staging
 	//       baseEnv: staging
+	//     - branch: develop   # PR → develop inherits qa
+	//       baseEnv: qa
 	// PRs targeting branches NOT listed (e.g. feature → other-feature)
 	// silently produce no preview, which is the desired behavior:
 	// previews are reviewer-facing artifacts, not dev-branch noise.
