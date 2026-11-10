@@ -57,7 +57,7 @@ type VulnsHandler struct {
 	// Audit records policy and ignore writes. nil = not audited.
 	Audit  *audit.Service
 	Logger *slog.Logger
-	Now              func() time.Time
+	Now    func() time.Time
 }
 
 func (h *VulnsHandler) Mount(r chi.Router) {

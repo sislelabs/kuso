@@ -132,7 +132,7 @@ func TestAddonS3Endpoint_QualifiesHostForCustomNamespace(t *testing.T) {
 		"S3_ACCESS_KEY_ID":     "a",
 		"S3_SECRET_ACCESS_KEY": "s",
 	})
-	cli, _, err := h.addonS3Client(context.Background(), customNS, "e2e-db")
+	cli, _, err := h.addonS3Client(context.Background(), customNS, "e2e-db", false)
 	if err != nil {
 		t.Fatalf("addonS3Client: %v", err)
 	}
