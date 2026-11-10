@@ -14,8 +14,8 @@ import (
 
 // TestBuildRichCard_Succeeded covers the happy-path build card: title
 // in "<glyph> <verb> · <project>/<service>" shape, description from
-// the commit message (first line only), three inline fields in order
-// Ref / By / Built in.
+// the commit message (first line only), three inline facts in order
+// ref / author / duration.
 func TestBuildRichCard_Succeeded(t *testing.T) {
 	b := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
@@ -35,7 +35,7 @@ func TestBuildRichCard_Succeeded(t *testing.T) {
 		},
 	}
 	title, desc, fields := buildRichCard(b, "web", "succeeded", "", nil)
-	if title != "✓ Build succeeded · distill / web" {
+	if title != "✓ Built · distill/web" {
 		t.Errorf("title: %q", title)
 	}
 	if desc != "feat(brand): real Papelito mark" {
@@ -50,7 +50,7 @@ func TestBuildRichCard_Succeeded(t *testing.T) {
 	if fields[1].Name != "By" || fields[1].Value != "ivo9999" {
 		t.Errorf("by field: %+v", fields[1])
 	}
-	if fields[2].Name != "Built in" || fields[2].Value != "1m 24s" {
+	if fields[2].Name != "Duration" || fields[2].Value != "1m 24s" {
 		t.Errorf("duration field: %+v", fields[2])
 	}
 }
@@ -74,7 +74,7 @@ func TestBuildRichCard_Failed(t *testing.T) {
 		},
 	}
 	title, desc, fields := buildRichCard(b, "web", "failed", "kaniko: COPY failed: not found", nil)
-	if title != "✗ Build failed · distill / web" {
+	if title != "✗ Build failed · distill/web" {
 		t.Errorf("title: %q", title)
 	}
 	if desc != "kaniko: COPY failed: not found" {
@@ -84,7 +84,7 @@ func TestBuildRichCard_Failed(t *testing.T) {
 	if len(fields) != 2 {
 		t.Fatalf("expected 2 fields, got %d (%+v)", len(fields), fields)
 	}
-	if fields[1].Name != "Failed after" || fields[1].Value != "42s" {
+	if fields[1].Value != "failed after 42s" {
 		t.Errorf("duration label/value: %+v", fields[1])
 	}
 }
@@ -170,7 +170,7 @@ func TestLookupBuildTargets(t *testing.T) {
 				"internal-system-verify.scubatony.sislelabs.com", []string{"internal-system-verify.scubatony.sislelabs.com"}, false),
 		)
 		got := lookup(s, build("scubatony", "internal-system", "bugfix/verified-fixes-2026-09"))
-		want := []buildTarget{{Env: "verify", URL: "https://internal-system-verify.scubatony.sislelabs.com"}}
+		want := []buildTarget{{Env: "verify", URL: "https://internal-system-verify.scubatony.sislelabs.com", Branch: "bugfix/verified-fixes-2026-09"}}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %+v, want %+v", got, want)
 		}
@@ -182,10 +182,10 @@ func TestLookupBuildTargets(t *testing.T) {
 			env("distill", "web", "production", "main", "web.distill.sislelabs.com", []string{"web.distill.sislelabs.com"}, false),
 			env("distill", "web", "staging", "staging", "web-staging.distill.sislelabs.com", nil, false),
 		)
-		if got := lookup(s, build("distill", "web", "main")); !reflect.DeepEqual(got, []buildTarget{{Env: "production", URL: "https://custom.example.com"}}) {
+		if got := lookup(s, build("distill", "web", "main")); !reflect.DeepEqual(got, []buildTarget{{Env: "production", URL: "https://custom.example.com", Branch: "main"}}) {
 			t.Errorf("main: got %+v", got)
 		}
-		if got := lookup(s, build("distill", "web", "staging")); !reflect.DeepEqual(got, []buildTarget{{Env: "staging", URL: "http://web-staging.distill.sislelabs.com"}}) {
+		if got := lookup(s, build("distill", "web", "staging")); !reflect.DeepEqual(got, []buildTarget{{Env: "staging", URL: "http://web-staging.distill.sislelabs.com", Branch: "staging"}}) {
 			t.Errorf("staging: got %+v", got)
 		}
 	})
@@ -196,7 +196,7 @@ func TestLookupBuildTargets(t *testing.T) {
 			env("p", "worker", "production", "main", "worker.p.example.com", []string{"worker.p.example.com"}, true),
 		)
 		got := lookup(s, build("p", "worker", "main"))
-		if !reflect.DeepEqual(got, []buildTarget{{Env: "production"}}) {
+		if !reflect.DeepEqual(got, []buildTarget{{Env: "production", Branch: "main"}}) {
 			t.Errorf("got %+v", got)
 		}
 	})
@@ -228,7 +228,7 @@ func TestBuildRichCard_TargetsInTitle(t *testing.T) {
 	}
 	for _, phase := range []string{"succeeded", "failed", "cancelled", "superseded"} {
 		title, _, fields := buildRichCard(b, "internal-system", phase, "boom", targets)
-		if !strings.HasSuffix(title, " · scubatony / internal-system → production, worker-env, verify") {
+		if !strings.HasSuffix(title, " · scubatony/internal-system → production, worker-env, verify") {
 			t.Errorf("%s title: %q", phase, title)
 		}
 		for _, f := range fields {
@@ -258,12 +258,13 @@ func TestBuildCardLinks(t *testing.T) {
 			{"View failure", base + "?tab=deployments"},
 		}},
 		{"succeeded opens every env with a URL", "succeeded", two, nil, []EnvelopeLink{
-			{"Deployments", base + "?tab=deployments"},
 			{"Open production", "https://s.example.com"},
 		}},
 		{"succeeded, one env", "succeeded", one, nil, []EnvelopeLink{
-			{"Deployments", base + "?tab=deployments&env=staging"},
 			{"Open staging", "https://s-staging.example.com"},
+		}},
+		{"succeeded, no live URL", "succeeded", []buildTarget{{Env: "internal"}}, nil, []EnvelopeLink{
+			{"Deployments", base + "?tab=deployments&env=internal"},
 		}},
 		{"cancelled", "cancelled", two, nil, []EnvelopeLink{{"Deployments", base + "?tab=deployments"}}},
 		{"superseded", "superseded", one, nil, []EnvelopeLink{{"Deployments", base + "?tab=deployments&env=staging"}}},
@@ -381,7 +382,7 @@ func TestBuildRichCard_NoData(t *testing.T) {
 		},
 	}
 	title, desc, fields := buildRichCard(b, "s", "succeeded", "", nil)
-	if title != "✓ Build succeeded · p / s" {
+	if title != "✓ Built · p/s" {
 		t.Errorf("title: %q", title)
 	}
 	if desc != "" {
@@ -540,5 +541,48 @@ func TestWithEnvParam(t *testing.T) {
 	}
 	if got := withEnvParam("", []buildTarget{{Env: "x"}}); got != "" {
 		t.Errorf("empty url: %q", got)
+	}
+}
+
+// The branch an env already tracks is noise on its card; a push names
+// its trigger; a failed build says what production still serves.
+func TestBuildRichCard_CompactFacts(t *testing.T) {
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			annTriggerUser:   "Bozhidar003",
+			annTriggerSource: "webhook",
+			annStartedAt:     "2026-05-16T12:00:00Z",
+			annCompletedAt:   "2026-05-16T12:00:17Z",
+		}},
+		Spec: kube.KusoBuildSpec{
+			Project: "upleaf", Service: "upleaf-web", Branch: "main", Ref: "0b31507aaaaa",
+			Repo: &kube.KusoRepoRef{URL: "https://github.com/sislelabs/website"},
+		},
+	}
+	prod := []buildTarget{{Env: "production", Branch: "main", Serving: "c850e9b0ef35"}}
+
+	title, _, fields := buildRichCard(b, "web", "succeeded", "", prod)
+	if title != "✓ Deployed · upleaf/web → production" {
+		t.Errorf("title = %q", title)
+	}
+	var vals []string
+	for _, f := range fields {
+		vals = append(vals, f.Value)
+	}
+	if got := strings.Join(vals, " · "); got != "[`0b31507`](https://github.com/sislelabs/website/commit/0b31507aaaaa) · Bozhidar003 · push · 17s" {
+		t.Errorf("facts = %q", got)
+	}
+
+	_, _, fields = buildRichCard(b, "web", "failed", "", prod)
+	last := fields[len(fields)-1]
+	if last.Name != "Still live" || last.Inline ||
+		last.Value != "production on [`c850e9b`](https://github.com/sislelabs/website/commit/c850e9b0ef35)" {
+		t.Errorf("still-live field = %+v", last)
+	}
+
+	preview := []buildTarget{{Env: "preview-pr-7", Branch: "main"}}
+	_, _, fields = buildRichCard(b, "web", "succeeded", "", preview)
+	if !strings.Contains(fields[0].Value, "`main`") {
+		t.Errorf("a preview card keeps the branch: %+v", fields[0])
 	}
 }

@@ -3088,6 +3088,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		title, desc, fields := buildRichCard(b, label, "succeeded", "", targets)
 		if notDeployed {
 			desc = notDeployedMessage
+			title = strings.Replace(title, "✓ Deployed", "✓ Built", 1)
 		}
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSucceeded,
@@ -4235,12 +4236,11 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 		}
 		targets := []buildTarget{{Env: env}}
 		_, _, fields := buildRichCard(b, label, "failed", "", nil)
-		title := fmt.Sprintf("✗ Release failed · %s / %s → %s", b.Spec.Project, label, env)
+		title := fmt.Sprintf("✗ Release failed · %s/%s → %s", b.Spec.Project, label, env)
 		desc := msg + "\nImage was **not** promoted — existing pods keep running the previous version."
-		fields = append(fields,
-			EnvelopeField{Name: "Outcome", Value: string(res.Outcome), Inline: true},
-			EnvelopeField{Name: "Job", Value: "`" + res.JobName + "`", Inline: true},
-		)
+		if res.Outcome == releaserun.OutcomeTimedOut {
+			fields = append(fields, EnvelopeField{Name: "Outcome", Value: "hook timed out", Inline: true})
+		}
 		// Reuse the eventBuildFailed channel so existing webhook
 		// subscribers pick this up — release failures are a flavour
 		// of build-failure as far as alert routing is concerned.

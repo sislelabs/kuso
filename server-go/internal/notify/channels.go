@@ -34,7 +34,7 @@ const plainLogLines = 8
 //
 //	<emoji> <Title>
 //	<description / body>
-//	<Field: Value> lines
+//	<Field: Value> lines (full-width fields), then one line of facts
 //	<last few log lines>
 //	<project · service>   <time>
 //	<url>
@@ -54,10 +54,13 @@ func plainSummary(e Event, limit int) string {
 		head.WriteString(diag + "\n")
 	}
 	for _, f := range e.Fields {
-		if f.Name == "" || f.Value == "" {
+		if f.Inline || f.Name == "" || f.Value == "" {
 			continue
 		}
 		head.WriteString(f.Name + ": " + discordToMarkup(expandTimes(f.Value, m), m) + "\n")
+	}
+	if facts := factsLine(e.Fields, m); facts != "" {
+		head.WriteString(expandTimes(facts, m) + "\n")
 	}
 
 	var foot strings.Builder
@@ -149,13 +152,12 @@ func slackPayload(e Event) map[string]any {
 	}
 	fields := make([]map[string]any, 0, len(e.Fields))
 	for _, f := range e.Fields {
-		if f.Name == "" || f.Value == "" {
+		if f.Inline || f.Name == "" || f.Value == "" {
 			continue
 		}
 		fields = append(fields, map[string]any{
 			"title": truncateRunes(f.Name, 256),
 			"value": truncateRunes(discordToMarkup(expandTimes(f.Value, m), m), 1024),
-			"short": f.Inline,
 		})
 	}
 	if len(fields) > 0 {
@@ -173,8 +175,15 @@ func slackPayload(e Event) map[string]any {
 		// Slack renders triple-backtick as a monospace block.
 		text = strings.TrimSpace(text + "\n```\n" + truncateRunes(tail, 2000) + "\n```")
 	}
+	var last []string
+	if facts := factsLine(e.Fields, m); facts != "" {
+		last = append(last, expandTimes(facts, m))
+	}
 	if links := linksLine(e, m); links != "" {
-		text = strings.TrimSpace(text + "\n" + links)
+		last = append(last, links)
+	}
+	if len(last) > 0 {
+		text = strings.TrimSpace(text + "\n" + strings.Join(last, " · "))
 	}
 	att["text"] = text
 	return map[string]any{

@@ -257,7 +257,7 @@ func (p *Poller) markVulnBlocked(ctx context.Context, ns string, b *kube.KusoBui
 	if p.Notifier != nil {
 		p.Notifier.Emit(EventEnvelope{
 			Type:           eventDeployBlocked,
-			Title:          fmt.Sprintf("⊘ Deploy blocked · %s / %s", b.Spec.Project, short),
+			Title:          fmt.Sprintf("⊘ Deploy blocked · %s/%s", b.Spec.Project, short),
 			Description:    msg + "\nImage was **not** promoted — existing pods keep running the previous version.",
 			Body:           msg,
 			Project:        b.Spec.Project,
@@ -277,7 +277,7 @@ func (p *Poller) emitVulnScanFailed(b *kube.KusoBuild, short, reason string) {
 	}
 	p.Notifier.Emit(EventEnvelope{
 		Type:        eventScanFailed,
-		Title:       fmt.Sprintf("⚠ Promoted unscanned · %s / %s", b.Spec.Project, short),
+		Title:       fmt.Sprintf("⚠ Promoted unscanned · %s/%s", b.Spec.Project, short),
 		Description: "promoted unscanned: " + reason,
 		Body:        "promoted unscanned: " + reason,
 		Project:     b.Spec.Project,

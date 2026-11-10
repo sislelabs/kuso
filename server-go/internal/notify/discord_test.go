@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,15 +47,15 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 	if em["title"] != e.Title {
 		t.Errorf("title %q", em["title"])
 	}
-	// Success cards are compact: the description stays plain prose (a
-	// phone shows it verbatim), the details fold into one blank-named field.
+	// The description stays plain prose (a phone shows it verbatim); the
+	// inline fields fold into one label-less, blank-named field.
 	if em["description"] != e.Description {
 		t.Errorf("description %q", em["description"])
 	}
 	cf := fieldsOf(em)
 	if len(cf) != 1 || cf[0]["name"] != blankFieldName ||
-		cf[0]["value"] != "**Ref** `main` · `53d3f34` · **By** ivo9999 · **Built in** 1m 24s" {
-		t.Errorf("compact details field: %+v", cf)
+		cf[0]["value"] != "`main` · `53d3f34` · ivo9999 · 1m 24s" {
+		t.Errorf("facts field: %+v", cf)
 	}
 	if _, has := got["content"]; has {
 		t.Errorf("no mention → no message content (it would repeat the card): %v", got["content"])
@@ -70,11 +71,14 @@ func TestDiscordPayload_RichCard(t *testing.T) {
 		t.Errorf("avatar_url %v", got["avatar_url"])
 	}
 
-	// A failure keeps the full field block.
+	// A failure folds its inline fields the same way; full-width ones
+	// render as "**Name** value" lines above the facts.
 	e.Type, e.Severity = EventBuildFailed, "error"
+	e.Fields = append(e.Fields, EventField{Name: "Still live", Value: "production on `abc1234`"})
 	fem := discordPayload(e, "")["embeds"].([]any)[0].(map[string]any)
 	fields := fieldsOf(fem)
-	if len(fields) != 3 || fields[0]["name"] != "Ref" || !fields[0]["inline"].(bool) {
+	if len(fields) != 2 || fields[0]["value"] != "**Still live** production on `abc1234`" ||
+		fields[1]["value"] != "`main` · `53d3f34` · ivo9999 · 1m 24s" {
 		t.Errorf("failure fields: %+v", fields)
 	}
 }
@@ -104,36 +108,59 @@ func TestDiscordPayload_LogTailInDescription(t *testing.T) {
 	}
 }
 
-// TestDiscordPayload_LogTailFieldOverflow verifies long log tails
-// spill into a separate Logs field when they'd blow the description
-// budget. Trims to fit Discord's 1024-char field-value cap.
-func TestDiscordPayload_LogTailFieldOverflow(t *testing.T) {
-	// Build a log tail that, fenced, exceeds the 3800 inline budget.
-	long := strings.Repeat("x", 4000)
+// TestDiscordPayload_LogTailCapped: a card shows only the last few log
+// lines, each capped, so a noisy failure can't fill the screen.
+func TestDiscordPayload_LogTailCapped(t *testing.T) {
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, fmt.Sprintf("line-%02d %s", i, strings.Repeat("x", 400)))
+	}
 	e := Event{
 		Type:        EventBuildFailed,
 		Timestamp:   time.Now(),
 		Title:       "fail",
 		Description: "short prose",
-		LogTail:     long,
+		LogTail:     strings.Join(lines, "\n") + "\n\n",
 	}
-	got := discordPayload(e, "")
-	em := got["embeds"].([]any)[0].(map[string]any)
-	if desc, _ := em["description"].(string); strings.Contains(desc, long) {
-		t.Fatalf("long log tail leaked into description")
+	desc, _ := embedOf(discordPayload(e, ""))["description"].(string)
+	if strings.Contains(desc, "line-23 ") || !strings.Contains(desc, "line-24 ") || !strings.Contains(desc, "line-29 ") {
+		t.Fatalf("want exactly the last %d lines: %q", discordLogLines, desc)
 	}
-	var logsField map[string]any
-	for _, f := range fieldsOf(em) {
-		if f["name"] == "Logs" {
-			logsField = f
+	for _, l := range strings.Split(desc, "\n") {
+		if n := len([]rune(l)); n > logLineMaxRunes {
+			t.Fatalf("log line of %d runes, cap is %d", n, logLineMaxRunes)
 		}
 	}
-	if logsField == nil {
-		t.Fatalf("Logs field not present for overflowing tail")
+}
+
+// TestDiscordPayload_ProseCapped: long descriptions keep their first
+// lines; bulleted lists keep every row the emit site sent.
+func TestDiscordPayload_ProseCapped(t *testing.T) {
+	e := Event{Type: EventUpdateFailed, Timestamp: time.Now(), Title: "x", Description: "one\ntwo\n\nthree\nfour\nfive"}
+	if got := embedOf(discordPayload(e, ""))["description"]; got != "one\ntwo\nthree…" {
+		t.Errorf("prose = %q", got)
 	}
-	v, _ := logsField["value"].(string)
-	if len([]rune(v)) > 1024 {
-		t.Fatalf("Logs field value exceeds 1024-rune cap: %d", len([]rune(v)))
+	e.Description = "• a: down\n• b: down\n• c: down\n• d: down"
+	if got := embedOf(discordPayload(e, ""))["description"]; got != e.Description {
+		t.Errorf("list = %q", got)
+	}
+}
+
+// TestCardTitle_GlyphFromTone: titles written without a glyph get one.
+func TestCardTitle_GlyphFromTone(t *testing.T) {
+	for _, c := range []struct {
+		e    Event
+		want string
+	}{
+		{Event{Title: "kuso update failed", Severity: "error"}, "✗ kuso update failed"},
+		{Event{Title: "GitHub webhook delivery failed", Severity: "warn"}, "⚠ GitHub webhook delivery failed"},
+		{Event{Type: EventBackupOK, Title: "Backups fine", Severity: "info"}, "✓ Backups fine"},
+		{Event{Title: "kuso v1.2.0 available", Severity: "info"}, "kuso v1.2.0 available"},
+		{Event{Title: "✗ Crashing · a/b", Severity: "error"}, "✗ Crashing · a/b"},
+	} {
+		if got := cardTitle(c.e); got != c.want {
+			t.Errorf("cardTitle(%q) = %q, want %q", c.e.Title, got, c.want)
+		}
 	}
 }
 

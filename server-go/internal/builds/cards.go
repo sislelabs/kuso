@@ -145,11 +145,16 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, target
 	case "cancelled":
 		glyph, verb = "⊘", "Build cancelled"
 	case "superseded":
-		glyph, verb = "⊘", "Build superseded"
+		glyph, verb = "⊘", "Superseded"
 	default:
-		glyph, verb = "✓", "Build succeeded"
+		// Promotion runs before the success card, so a build with a
+		// target env is live there by now.
+		glyph, verb = "✓", "Built"
+		if len(targets) > 0 {
+			verb = "Deployed"
+		}
 	}
-	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, label)
+	title = fmt.Sprintf("%s %s · %s/%s", glyph, verb, b.Spec.Project, label)
 	if len(targets) > 0 {
 		envs := make([]string, len(targets))
 		for i, t := range targets {
@@ -186,10 +191,10 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, target
 		description = failureReason
 	}
 
-	// Field block — kept compact. Branch and ref share a row because
-	// they're conceptually one pointer ("main · abcdef"); author and
-	// duration each get their own slot. Both link to the forge when the
-	// repo URL is a recognised host.
+	// Facts, rendered label-less on one line: "`0b31507` · Bozhidar003 ·
+	// push · 17s". The branch is left out when it's just the branch the
+	// target envs track. Branch and ref link to the forge when the host
+	// is known.
 	var repoURL string
 	if b.Spec.Repo != nil {
 		repoURL = b.Spec.Repo.URL
@@ -203,7 +208,7 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, target
 		ref = ref[:7]
 	}
 	branchMD := ""
-	if b.Spec.Branch != "" {
+	if b.Spec.Branch != "" && (isSynth || !tracksBranch(targets, b.Spec.Branch)) {
 		branchMD = mdCodeLink(b.Spec.Branch, forgeBranchURL(repoURL, b.Spec.Branch))
 	}
 	branchAndRef := ""
@@ -222,24 +227,19 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, target
 	}
 	if user := strings.TrimSpace(annos[annTriggerUser]); user != "" {
 		fields = append(fields, EnvelopeField{Name: "By", Value: user, Inline: true})
-	} else if src := strings.TrimSpace(annos[annTriggerSource]); src != "" {
-		fields = append(fields, EnvelopeField{Name: "By", Value: src, Inline: true})
+	}
+	if t := triggerLabel(annos[annTriggerSource]); t != "" {
+		fields = append(fields, EnvelopeField{Name: "Trigger", Value: t, Inline: true})
 	}
 	if d := buildDurationMs(b); d > 0 {
-		var label string
+		value := formatBuildDuration(d)
 		switch phase {
 		case "failed":
-			label = "Failed after"
+			value = "failed after " + value
 		case "cancelled", "superseded":
-			label = "Stopped after"
-		default:
-			label = "Built in"
+			value = "stopped after " + value
 		}
-		fields = append(fields, EnvelopeField{
-			Name:   label,
-			Value:  formatBuildDuration(d),
-			Inline: true,
-		})
+		fields = append(fields, EnvelopeField{Name: "Duration", Value: value, Inline: true})
 	}
 	// The commit message took the description slot, so the reason
 	// would otherwise only live in Body — which no renderer shows once a
@@ -247,7 +247,49 @@ func buildRichCard(b *kube.KusoBuild, label, phase, failureReason string, target
 	if failureReason != "" && phase != "succeeded" && description != failureReason {
 		fields = append(fields, EnvelopeField{Name: "Reason", Value: failureReason})
 	}
+	// A failed build changes nothing live; say what is still serving so
+	// nobody has to open the dashboard to know whether the site is up.
+	if phase == "failed" {
+		var live []string
+		for _, t := range targets {
+			if isHexSHA(t.Serving) && !strings.HasPrefix(rawRef, t.Serving) {
+				live = append(live, t.Env+" on "+mdCodeLink(t.Serving[:7], forgeCommitURL(repoURL, t.Serving)))
+			}
+		}
+		if len(live) > 0 {
+			fields = append(fields, EnvelopeField{Name: "Still live", Value: strings.Join(live, " · ")})
+		}
+	}
 	return title, description, fields
+}
+
+// tracksBranch reports whether every target env follows branch, so the
+// card can drop it as noise. Previews keep it: there the branch is the
+// only hint of what the PR is.
+func tracksBranch(targets []buildTarget, branch string) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	for _, t := range targets {
+		if t.Branch != branch || strings.HasPrefix(t.Env, "preview-") {
+			return false
+		}
+	}
+	return true
+}
+
+// triggerLabel names what started a build in the words a person uses.
+func triggerLabel(source string) string {
+	switch s := strings.TrimSpace(source); s {
+	case "webhook":
+		return "push"
+	case "user":
+		return "manual"
+	case "system":
+		return "auto"
+	default:
+		return s
+	}
 }
 
 // mdCodeLink renders text as inline code, wrapped in a markdown link
@@ -394,11 +436,15 @@ func buildCardLinks(project, short, phase string, targets []buildTarget, c *fail
 	case "release-failed":
 		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
 	case "succeeded":
-		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
+		// The title already opens the service page, so a live site
+		// replaces the Deployments link rather than sitting next to it.
 		for _, t := range targets {
 			if t.URL != "" {
 				links = append(links, EnvelopeLink{Label: "Open " + t.Env, URL: t.URL})
 			}
+		}
+		if len(links) == 0 {
+			links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
 		}
 	default:
 		links = append(links, EnvelopeLink{Label: "Deployments", URL: deployments})
@@ -456,6 +502,11 @@ func buildDurationMs(b *kube.KusoBuild) int64 {
 type buildTarget struct {
 	Env string
 	URL string
+	// Branch is the branch the env follows (its pin, else the default).
+	Branch string
+	// Serving is the image tag the env runs right now (a SHA prefix for
+	// commit builds); "" when unknown.
+	Serving string
 }
 
 // lookupBuildTargets resolves the environments a build deploys to, using
@@ -521,7 +572,13 @@ func lookupBuildTargets(ctx context.Context, kc *kube.Client, ns, homeNS string,
 		if name == "" {
 			name = strings.TrimPrefix(e.Name, fqn+"-")
 		}
-		t := buildTarget{Env: name}
+		t := buildTarget{Env: name, Branch: e.Spec.Branch}
+		if t.Branch == "" {
+			t.Branch = defaultBranch
+		}
+		if e.Spec.Image != nil {
+			t.Serving = e.Spec.Image.Tag
+		}
 		switch {
 		case e.Spec.Internal:
 		case name == "production" && domainURL != "":

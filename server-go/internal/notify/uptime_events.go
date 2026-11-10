@@ -37,13 +37,11 @@ func UptimeDown(project string, targets []UptimeTarget) Event {
 		e.Description = "Not answering: " + t.Reason
 		e.Body = t.Reason
 		e.URL = ServiceLink(project, t.Service, "", "")
-		e.Fields = []EventField{{Name: "Reason", Value: t.Reason, Inline: true}}
 		if tok := TimeToken(t.Since); tok != "" {
-			e.Fields = append(e.Fields, EventField{Name: "Since", Value: tok, Inline: true})
+			e.Fields = []EventField{{Name: "Since", Value: "since " + tok, Inline: true}}
 		}
 		e.Links = []EventLink{
 			{Label: "Logs", URL: ServiceLink(project, t.Service, "logs", "")},
-			{Label: "Service", URL: ServiceLink(project, t.Service, "", "")},
 		}
 		return e
 	}
@@ -124,7 +122,7 @@ func uptimeProjects(targets []UptimeTarget) int {
 // uptimeLines renders one line per target, capped so a large outage
 // still fits a Discord embed.
 func uptimeLines(targets []UptimeTarget, withProject, recovered bool) string {
-	const maxLines = 20
+	const maxLines = 8
 	ts := append([]UptimeTarget(nil), targets...)
 	sort.Slice(ts, func(i, j int) bool {
 		if ts[i].Project != ts[j].Project {
@@ -135,7 +133,7 @@ func uptimeLines(targets []UptimeTarget, withProject, recovered bool) string {
 	var b strings.Builder
 	for i, t := range ts {
 		if i == maxLines {
-			fmt.Fprintf(&b, "…and %d more", len(ts)-maxLines)
+			fmt.Fprintf(&b, "• …and %d more", len(ts)-maxLines)
 			break
 		}
 		name := t.Service

@@ -43,7 +43,7 @@ type VulnItem struct {
 }
 
 // vulnListMax bounds the findings listed on a card; the rest is a count.
-const vulnListMax = 10
+const vulnListMax = 5
 
 // VulnerabilitiesFound: a scan found fixable critical/high CVEs this
 // owner hasn't been told about. Error severity when any is critical.
@@ -61,10 +61,10 @@ func VulnerabilitiesFound(o VulnOwner, items []VulnItem) Event {
 	var b strings.Builder
 	for i, it := range items {
 		if i == vulnListMax {
-			fmt.Fprintf(&b, "…and %d more\n", len(items)-vulnListMax)
+			fmt.Fprintf(&b, "• …and %d more\n", len(items)-vulnListMax)
 			break
 		}
-		fmt.Fprintf(&b, "%s %s · %s %s → %s\n", it.Severity, it.VulnID, it.PkgName, it.InstalledVersion, it.FixedVersion)
+		fmt.Fprintf(&b, "• %s %s · %s %s → %s\n", it.Severity, it.VulnID, it.PkgName, it.InstalledVersion, it.FixedVersion)
 	}
 	noun := "vulnerabilities"
 	if len(items) == 1 {
@@ -80,8 +80,8 @@ func VulnerabilitiesFound(o VulnOwner, items []VulnItem) Event {
 		URL:         o.link(),
 		Severity:    sev,
 		Fields: []EventField{
-			{Name: "Critical", Value: strconv.Itoa(crit), Inline: true},
-			{Name: "High", Value: strconv.Itoa(len(items) - crit), Inline: true},
+			{Name: "Critical", Value: strconv.Itoa(crit) + " critical", Inline: true},
+			{Name: "High", Value: strconv.Itoa(len(items)-crit) + " high", Inline: true},
 		},
 		Extra: map[string]string{"ownerKind": o.Kind, "addon": o.Addon, "namespace": o.Namespace, "workload": o.Workload},
 	}

@@ -3,7 +3,7 @@ package notify
 // events.go: constructors for the events notify owns end to end
 // (crashes, recovery, nodes, runs, alerts). Title grammar everywhere:
 //
-//	<glyph> <What> · <project> / <service> → <env>
+//	<glyph> <What> · <project>/<service> → <env>
 //
 // glyphs: ✓ ok · ✗ failure · ⚠ warning · ⊘ stopped · ▶ started.
 
@@ -16,12 +16,12 @@ import (
 	"kuso/server/internal/failures"
 )
 
-// Scope renders "<project> / <service> → <env>", dropping empty parts.
+// Scope renders "<project>/<service> → <env>", dropping empty parts.
 func Scope(project, service, env string) string {
 	s := project
 	if service != "" {
 		if s != "" {
-			s += " / "
+			s += "/"
 		}
 		s += service
 	}
@@ -95,6 +95,26 @@ func crashHeadline(reason string, previousServing bool) string {
 	return "Crashing"
 }
 
+// crashFacts: the kubelet reason and restart count as card facts.
+func crashFacts(reason string, restarts int) []EventField {
+	var fields []EventField
+	if reason != "" {
+		fields = append(fields, EventField{Name: "Reason", Value: "`" + reason + "`", Inline: true})
+	}
+	if restarts > 0 {
+		fields = append(fields, EventField{Name: "Restarts", Value: Plural(restarts, "restart"), Inline: true})
+	}
+	return fields
+}
+
+// Plural renders "1 restart" / "5 restarts".
+func Plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
+}
+
 // PodCrashed: a service's pods are crashlooping / can't pull / can't
 // start. Production crashes are error severity (default @here); other
 // envs are warn. The classifier's diagnosis renders on the card.
@@ -109,12 +129,9 @@ func PodCrashed(c PodCrash) Event {
 		cp.Remediation = &rem
 		c.Classification = &cp
 	}
-	fields := []EventField{{Name: "Reason", Value: c.Reason, Inline: true}}
-	if c.Restarts > 0 {
-		fields = append(fields, EventField{Name: "Restarts", Value: strconv.Itoa(c.Restarts), Inline: true})
-	}
+	fields := crashFacts(c.Reason, c.Restarts)
 	if tok := TimeToken(c.Since); tok != "" {
-		fields = append(fields, EventField{Name: "Since", Value: tok, Inline: true})
+		fields = append(fields, EventField{Name: "Since", Value: "since " + tok, Inline: true})
 	}
 	link := serviceURL(c.Project, c.Service)
 	if link != "" && c.Classification != nil && c.Classification.Tab != "" {
@@ -145,7 +162,6 @@ func PodCrashed(c PodCrash) Event {
 		Classification: c.Classification,
 		Links: []EventLink{
 			{Label: "Logs", URL: ServiceLink(c.Project, c.Service, "logs", c.Env)},
-			{Label: "Service", URL: ServiceLink(c.Project, c.Service, "", c.Env)},
 		},
 	}
 }
@@ -179,10 +195,7 @@ func AddonCrashed(project, addon, addonKind, podName, reason, logTail string, re
 	if addonKind != "" {
 		name += " (" + addonKind + ")"
 	}
-	fields := []EventField{{Name: "Reason", Value: reason, Inline: true}}
-	if restarts > 0 {
-		fields = append(fields, EventField{Name: "Restarts", Value: strconv.Itoa(restarts), Inline: true})
-	}
+	fields := crashFacts(reason, restarts)
 	return Event{
 		Type:     EventAddonCrashed,
 		Title:    "✗ Addon crashing · " + Scope(project, name, ""),
@@ -207,10 +220,10 @@ func NodeUnreachable(node, reason string, downFor time.Duration, affectedPods in
 	}
 	var fields []EventField
 	if reason != "" {
-		fields = append(fields, EventField{Name: "Reason", Value: reason, Inline: true})
+		fields = append(fields, EventField{Name: "Reason", Value: "`" + reason + "`", Inline: true})
 	}
 	if affectedPods > 0 {
-		fields = append(fields, EventField{Name: "Pods on node", Value: strconv.Itoa(affectedPods), Inline: true})
+		fields = append(fields, EventField{Name: "Pods on node", Value: Plural(affectedPods, "pod") + " on it", Inline: true})
 	}
 	return Event{
 		Type:        EventNodeUnreachable,
@@ -278,7 +291,7 @@ func RunStarted(project, service, runName string, command []string, triggeredByU
 		Severity:    "info",
 		Fields: []EventField{
 			{Name: "Run", Value: "`" + runName + "`", Inline: true},
-			{Name: "By", Value: by, Inline: true},
+			{Name: "By", Value: "by " + by, Inline: true},
 		},
 	}
 }

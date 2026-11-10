@@ -909,24 +909,25 @@ const blankFieldName = "\u200b"
 //
 // Card grammar:
 //
-//	┌─ <glyph> <What> · <project> / <service> → <env>  (linked) ─┐
-//	│ Description — commit message, crash summary, …            │
+//	┌─ <glyph> <What> · <project>/<service> → <env>  (linked) ──┐
+//	│ Description: commit message, crash summary (≤3 lines)     │
 //	│ 💡 Diagnosis + fix (failures kuso recognises)              │
-//	│ ```log tail```                                            │
-//	│ Field A    Field B    Field C   (inline, 3-up)            │
-//	│ Logs · Deployments · Site      (link row)                  │
-//	│ <instance host>                                   <time>  │
+//	│ ```last 6 log lines``` (failures only)                    │
+//	│ **Name** value       (full-width fields, one line each)   │
+//	│ fact · fact · fact · Link · Link   (inline fields, links) │
+//	│ <instance host> · <time>                                  │
 //	└───────────────────────────────────────────────────────────┘
 //
-// Compact cards (successes, cancellations) fold the fields into one
-// description line and skip the log tail, so failures stand out.
+// Inline fields render label-less, so their values must read on their
+// own ("5 restarts", not "5"). Success and neutral cards skip the log
+// tail so failures stand out.
 // Extra is NOT rendered: it's raw-webhook data (ids, internal keys),
 // and cards showing "rule_id: r1" was noise. Anything a human should
 // see goes in Fields.
 func discordPayload(e Event, mention string) map[string]any {
 	const m = markupDiscord
 	embed := map[string]any{
-		"title":     truncateRunes(e.Title, 256),
+		"title":     truncateRunes(cardTitle(e), 256),
 		"color":     discordColor(e),
 		"timestamp": e.Timestamp.Format(time.RFC3339),
 	}
@@ -949,6 +950,7 @@ func discordPayload(e Event, mention string) map[string]any {
 	if pingSrc == whyDescription {
 		desc = dropFirstLine(desc)
 	}
+	desc = shortProse(desc)
 	if desc != "" {
 		parts = append(parts, expandTimes(desc, m))
 	}
@@ -957,7 +959,7 @@ func discordPayload(e Event, mention string) map[string]any {
 	}
 	// Log tail goes inline when it fits, else into a Logs field (field
 	// values cap at 1024, description at 4096).
-	logTail := strings.TrimSpace(e.LogTail)
+	logTail := tailLines(e.LogTail, discordLogLines)
 	logInDesc := false
 	if logTail != "" && !compact {
 		fenced := "```\n" + logTail + "\n```"
@@ -973,40 +975,48 @@ func discordPayload(e Event, mention string) map[string]any {
 		embed["description"] = truncateRunes(body, 4096)
 	}
 
-	fields := make([]map[string]any, 0, len(e.Fields)+2)
-	if compact {
-		if line := inlineFields(e.Fields, m); line != "" {
-			fields = append(fields, map[string]any{
-				"name": blankFieldName, "value": truncateRunes(expandTimes(line, m), 1024), "inline": false,
-			})
+	fields := make([]map[string]any, 0, 3)
+	var labeled, facts []EventField
+	for _, f := range e.Fields {
+		if f.Name == "" || f.Value == "" || (pingSrc == whyReason && f.Name == "Reason") {
+			continue
 		}
-	} else {
-		for _, f := range e.Fields {
-			if f.Name == "" || f.Value == "" || (pingSrc == whyReason && f.Name == "Reason") {
-				continue
-			}
-			// "Job has reached the specified backoff limit" says only that
-			// the Job failed, which the title already does.
-			if f.Name == "Reason" && isKubeJobMessage(f.Value) {
-				continue
-			}
-			fields = append(fields, map[string]any{
-				"name":   truncateRunes(f.Name, 256),
-				"value":  truncateRunes(expandTimes(f.Value, m), 1024),
-				"inline": f.Inline,
-			})
+		// "Job has reached the specified backoff limit" says only that
+		// the Job failed, which the title already does.
+		if f.Name == "Reason" && isKubeJobMessage(f.Value) {
+			continue
 		}
-		if logTail != "" && !logInDesc {
-			fields = append(fields, map[string]any{
-				"name":   "Logs",
-				"value":  truncateRunes("```\n"+logTail+"\n```", 1024),
-				"inline": false,
-			})
+		if f.Inline {
+			facts = append(facts, f)
+		} else {
+			labeled = append(labeled, f)
 		}
 	}
+	if block := labeledLines(labeled, m); block != "" {
+		fields = append(fields, map[string]any{
+			"name": blankFieldName, "value": truncateRunes(expandTimes(block, m), 1024), "inline": false,
+		})
+	}
+	if logTail != "" && !logInDesc {
+		fields = append(fields, map[string]any{
+			"name":   "Logs",
+			"value":  truncateRunes("```\n"+logTail+"\n```", 1024),
+			"inline": false,
+		})
+	}
+	// The last row is one line: the facts (label-less inline fields)
+	// followed by the links. The facts give way so the links always fit.
 	links := linksLine(e, m)
-	if len(fields) > 24 {
-		fields = fields[:24]
+	if line := expandTimes(factsLine(facts, m), m); line != "" {
+		room := 1024
+		if links != "" {
+			room -= len([]rune(links)) + len(" · ")
+		}
+		if line = truncateRunes(line, room); line != "" && links != "" {
+			links = line + " · " + links
+		} else if line != "" {
+			links = line
+		}
 	}
 	if links != "" {
 		fields = append(fields, map[string]any{

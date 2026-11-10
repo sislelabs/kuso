@@ -36,14 +36,14 @@ func TestFailedEvent_AddonCard(t *testing.T) {
 		t.Errorf("Title = %q", ev.Title)
 	}
 	for _, want := range []string{
-		"• **shop / pg (postgres)** — last scheduled run has not succeeded · last success " + notify.TimeToken(last),
-		"• **shop / redis (redis)** — kuso-backup-s3 Secret missing in shop",
+		"• **shop/pg (postgres)** — last scheduled run has not succeeded · last success " + notify.TimeToken(last),
+		"• **shop/redis (redis)** — kuso-backup-s3 Secret missing in shop",
 	} {
 		if !strings.Contains(ev.Description, want) {
 			t.Errorf("Description missing %q:\n%s", want, ev.Description)
 		}
 	}
-	if strings.Contains(ev.Description, "shop / redis (redis)** — kuso-backup-s3 Secret missing in shop · last success") {
+	if strings.Contains(ev.Description, "shop/redis (redis)** — kuso-backup-s3 Secret missing in shop · last success") {
 		t.Errorf("addon without a success stamp got a last-success suffix:\n%s", ev.Description)
 	}
 	if ev.Body != "raw detail" || ev.URL != "/settings/backups" || ev.Type != notify.EventBackupFailed {
@@ -85,7 +85,7 @@ func TestFailedEvent_ControlPlaneAndCap(t *testing.T) {
 			t.Errorf("Description missing %q:\n%s", want, ev.Description)
 		}
 	}
-	if n := strings.Count(ev.Description, "**p / x**"); n != maxAddonLines {
+	if n := strings.Count(ev.Description, "**p/x**"); n != maxAddonLines {
 		t.Errorf("addon bullets = %d, want %d", n, maxAddonLines)
 	}
 

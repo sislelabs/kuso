@@ -204,12 +204,12 @@ func TestPodCrashed_SinceIsEpisodeStart(t *testing.T) {
 	}
 	found := false
 	for _, f := range h.events[0].Fields {
-		if f.Name == "Since" && f.Value == notify.TimeToken(start) {
+		if f.Name == "Since" && f.Value == "since "+notify.TimeToken(start) {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Fields = %+v, want Since = %q", h.events[0].Fields, notify.TimeToken(start))
+		t.Errorf("Fields = %+v, want Since = %q", h.events[0].Fields, "since "+notify.TimeToken(start))
 	}
 }
 

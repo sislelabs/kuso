@@ -299,7 +299,7 @@ func TestCronFailedEvent(t *testing.T) {
 	code := int32(2)
 	ev := cronFailedEvent(cron, job, podFailure{exitCode: &code, logTail: "boom"})
 
-	if ev.Title != "✗ Cron failed · alpha / nightly" {
+	if ev.Title != "✗ Cron failed · alpha/nightly" {
 		t.Errorf("Title = %q", ev.Title)
 	}
 	if want := "Failed " + notify.TimeToken(end) + " after 41s"; ev.Description != want {
@@ -312,7 +312,7 @@ func TestCronFailedEvent(t *testing.T) {
 	for _, f := range ev.Fields {
 		got[f.Name] = f.Value
 	}
-	want := map[string]string{"Service": "web", "Schedule": "`0 3 * * *`", "Exit code": "2", "Job": "`nightly-29001`"}
+	want := map[string]string{"Schedule": "`0 3 * * *`", "Exit code": "exit 2"}
 	if len(got) != len(want) {
 		t.Errorf("Fields = %+v, want %v", ev.Fields, want)
 	}

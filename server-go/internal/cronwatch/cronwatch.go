@@ -388,19 +388,15 @@ func cronFailedEvent(cron *kube.KusoCron, job *batchv1.Job, pf podFailure) notif
 	}
 
 	var fields []notify.EventField
-	if short != "" {
-		fields = append(fields, notify.EventField{Name: "Service", Value: short, Inline: true})
-	}
 	if cron.Spec.Schedule != "" {
 		fields = append(fields, notify.EventField{Name: "Schedule", Value: "`" + cron.Spec.Schedule + "`", Inline: true})
 	}
 	body := "Job " + job.Name + " failed"
 	if pf.exitCode != nil {
 		code := strconv.Itoa(int(*pf.exitCode))
-		fields = append(fields, notify.EventField{Name: "Exit code", Value: code, Inline: true})
+		fields = append(fields, notify.EventField{Name: "Exit code", Value: "exit " + code, Inline: true})
 		body += " (exit code " + code + ")"
 	}
-	fields = append(fields, notify.EventField{Name: "Job", Value: "`" + job.Name + "`", Inline: true})
 
 	var links []notify.EventLink
 	if short != "" {
@@ -419,7 +415,7 @@ func cronFailedEvent(cron *kube.KusoCron, job *batchv1.Job, pf podFailure) notif
 		// Short slug, like every other event: the bell feed + incidents
 		// key on it and the web's ?service= expects it.
 		Service:     short,
-		Title:       "✗ Cron failed · " + project + " / " + cron.Name,
+		Title:       "✗ Cron failed · " + notify.Scope(project, cron.Name, ""),
 		Description: desc,
 		Body:        body,
 		LogTail:     pf.logTail,

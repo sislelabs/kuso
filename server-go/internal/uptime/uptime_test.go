@@ -147,7 +147,7 @@ func TestLoopOneDownOneRecovered(t *testing.T) {
 	h := newHarness(a, tgt("shop", "api"))
 	h.failing[a.URL] = true
 	h.ticks(10)
-	if got := h.notify.titles(); len(got) != 1 || got[0] != "uptime.down ✗ Down · shop / web" {
+	if got := h.notify.titles(); len(got) != 1 || got[0] != "uptime.down ✗ Down · shop/web" {
 		t.Fatalf("after 10 failing ticks: %v", got)
 	}
 	if e := h.notify.events[0]; e.Severity != "error" || e.Project != "shop" || e.Service != "web" {
@@ -156,7 +156,7 @@ func TestLoopOneDownOneRecovered(t *testing.T) {
 	h.failing[a.URL] = false
 	h.ticks(10)
 	got := h.notify.titles()
-	if len(got) != 2 || got[1] != "uptime.recovered ✓ Back up · shop / web" {
+	if len(got) != 2 || got[1] != "uptime.recovered ✓ Back up · shop/web" {
 		t.Fatalf("after recovery: %v", got)
 	}
 	// Failed at ticks 0..9, first good check at tick 10.
@@ -258,7 +258,7 @@ func TestLoopOptOutWhileDownClosesTheAlertedOutage(t *testing.T) {
 	h.cluster.targets = []Target{a}
 	h.ticks(3)
 	got := h.notify.titles()
-	if len(got) != 2 || got[1] != "uptime.recovered ◼ No longer checked · shop / web" {
+	if len(got) != 2 || got[1] != "uptime.recovered ◼ No longer checked · shop/web" {
 		t.Fatalf("opt-out of an alerted outage: %v", got)
 	}
 	if d := h.notify.events[1].Description; !strings.Contains(d, "uptime checks were turned off") {
@@ -308,7 +308,7 @@ func TestLoopFailedNotifyRetriesNextTick(t *testing.T) {
 	}
 	h.notify.fail = false
 	h.ticks(5)
-	if got := h.notify.titles(); len(got) != 1 || got[0] != "uptime.down ✗ Down · shop / web" {
+	if got := h.notify.titles(); len(got) != 1 || got[0] != "uptime.down ✗ Down · shop/web" {
 		t.Fatalf("want the lost page sent once on retry, got %v", got)
 	}
 }
@@ -406,7 +406,7 @@ func TestLoopStormGroupsAcrossProjects(t *testing.T) {
 	if cluster.Title != "✗ 4 services down across 3 projects" {
 		t.Fatalf("cluster title = %q", cluster.Title)
 	}
-	if strings.Contains(cluster.Description, "d / web") {
+	if strings.Contains(cluster.Description, "d/web") {
 		t.Fatal("muted project listed in the cluster-wide event")
 	}
 }
@@ -421,7 +421,7 @@ func TestGroupBelowStormIsPerProject(t *testing.T) {
 	if len(evs) != 2 {
 		t.Fatalf("want 2 per-project events, got %d", len(evs))
 	}
-	if evs[0].Title != "✗ 2 services down · a" || evs[1].Title != "✗ Down · b / web" {
+	if evs[0].Title != "✗ 2 services down · a" || evs[1].Title != "✗ Down · b/web" {
 		t.Fatalf("titles: %q, %q", evs[0].Title, evs[1].Title)
 	}
 	if !strings.Contains(evs[0].Description, "api: connection refused") {

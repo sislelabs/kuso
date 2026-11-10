@@ -1,10 +1,11 @@
 package notify
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"kuso/server/internal/failures"
 )
 
 func fieldNames(em map[string]any) []string {
@@ -22,20 +23,23 @@ func embedOf(p map[string]any) map[string]any {
 func TestDiscordPayload_AddonCrashedNoDuplicateFields(t *testing.T) {
 	e := AddonCrashed("shop", "db", "postgres", "shop-db-0", "CrashLoopBackOff", "", 3)
 	e.Timestamp = time.Now()
-	got := fieldNames(embedOf(discordPayload(e, "")))
-	want := []string{"Reason", "Restarts"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fields %v, want %v (addon + kind are in the title; Extra never renders)", got, want)
+	got := fieldsOf(embedOf(discordPayload(e, "")))
+	if len(got) != 1 || got[0]["value"] != "`CrashLoopBackOff` · 3 restarts" {
+		t.Fatalf("fields %v, want one facts line (addon + kind are in the title; Extra never renders)", got)
 	}
-	if e.Title != "✗ Addon crashing · shop / db (postgres)" {
+	if e.Title != "✗ Addon crashing · shop/db (postgres)" {
 		t.Errorf("title %q", e.Title)
 	}
 }
 
 func TestDiscordPayload_EmbedWithin6000(t *testing.T) {
-	fields := make([]EventField, 0, 10)
+	// Description and log are capped, so only an unbounded diagnosis plus
+	// a huge footer, facts row and labeled block can overflow the embed.
+	fields := make([]EventField, 0, 20)
 	for i := 0; i < 10; i++ {
-		fields = append(fields, EventField{Name: strings.Repeat("n", 200), Value: strings.Repeat("v", 1000)})
+		fields = append(fields,
+			EventField{Name: strings.Repeat("n", 200), Value: strings.Repeat("v", 1000)},
+			EventField{Name: "f", Value: strings.Repeat("i", 1000), Inline: true})
 	}
 	e := Event{
 		Type: EventBuildFailed, Timestamp: time.Now(), Severity: "error",
@@ -43,7 +47,11 @@ func TestDiscordPayload_EmbedWithin6000(t *testing.T) {
 		Description: strings.Repeat("d", 3500),
 		LogTail:     strings.Repeat("l", 3000),
 		Fields:      fields,
-		Footer:      strings.Repeat("f", 100),
+		Links:       []EventLink{{Label: "Logs", URL: "https://k.example.com/logs"}},
+		Classification: &failures.Classification{
+			Kind: failures.KindOOM, Summary: strings.Repeat("s", 3000),
+		},
+		Footer: strings.Repeat("f", 2048),
 	}
 	em := embedOf(discordPayload(e, ""))
 	total := len([]rune(em["title"].(string)))
@@ -57,11 +65,9 @@ func TestDiscordPayload_EmbedWithin6000(t *testing.T) {
 	if total > discordEmbedMaxChars {
 		t.Fatalf("embed has %d chars, Discord cap is %d", total, discordEmbedMaxChars)
 	}
-	if _, ok := em["description"]; ok {
-		t.Error("description should be trimmed away before fields are dropped")
-	}
-	if len(fieldsOf(em)) == 0 {
-		t.Error("all fields dropped; only enough to fit should go")
+	fs := fieldsOf(em)
+	if len(fs) == 0 || !strings.Contains(fs[len(fs)-1]["value"].(string), "[Logs](") {
+		t.Errorf("the facts + links row must survive trimming: %+v", fs)
 	}
 }
 
@@ -129,7 +135,7 @@ func TestPodCrashed_EnvInURL(t *testing.T) {
 	if e.URL != "/projects/shop/services/web?env=preview-pr-7" {
 		t.Errorf("url %q", e.URL)
 	}
-	if e.Title != "✗ Crashing · shop / web → preview-pr-7" {
+	if e.Title != "✗ Crashing · shop/web → preview-pr-7" {
 		t.Errorf("title %q", e.Title)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"kuso/server/internal/failures"
 )
@@ -77,7 +78,7 @@ func cardDescription(e Event) string {
 	}
 	body := strings.TrimSpace(e.Body)
 	for _, f := range e.Fields {
-		if strings.TrimSpace(f.Value) == body {
+		if strings.Trim(strings.TrimSpace(f.Value), "`") == body {
 			return ""
 		}
 	}
@@ -239,18 +240,131 @@ func isCompact(e Event) bool {
 	return false
 }
 
-// inlineFields folds fields into "**Name** value · **Name** value".
-func inlineFields(fields []EventField, m markup) string {
+// factsLine folds inline fields into one label-less line: "`OOMKilled` ·
+// 5 restarts · since 3m ago". Inline values must read on their own; the
+// Name only survives for raw-webhook consumers.
+func factsLine(fields []EventField, m markup) string {
 	parts := make([]string, 0, len(fields))
 	for _, f := range fields {
-		if f.Name == "" || f.Value == "" {
+		v := strings.TrimSpace(f.Value)
+		if !f.Inline || v == "" {
 			continue
 		}
 		// Multi-line values (several Site links) join on one line too.
-		v := strings.ReplaceAll(f.Value, "\n", ", ")
-		parts = append(parts, bold(f.Name, m)+" "+v)
+		parts = append(parts, discordToMarkup(strings.ReplaceAll(v, "\n", ", "), m))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// labeledLines renders full-width fields as "**Name** value", one per
+// line, so they take a line each instead of a header row plus a value.
+func labeledLines(fields []EventField, m markup) string {
+	lines := make([]string, 0, len(fields))
+	for _, f := range fields {
+		v := strings.TrimSpace(f.Value)
+		if f.Inline || f.Name == "" || v == "" {
+			continue
+		}
+		lines = append(lines, bold(f.Name, m)+" "+discordToMarkup(v, m))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// discordLogLines is how many trailing log lines a Discord card shows:
+// enough to see the failing line without the card filling the screen.
+const discordLogLines = 6
+
+// logLineMaxRunes caps one log line; minified stack traces otherwise
+// turn six lines into a wall.
+const logLineMaxRunes = 180
+
+// tailLines keeps the last n non-blank lines of a log, each capped.
+func tailLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+		if l = strings.TrimRight(l, " \t\r"); strings.TrimSpace(l) != "" {
+			lines = append(lines, truncateRunes(l, logLineMaxRunes))
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// proseMaxLines / proseMaxRunes bound a card's description. Anything
+// longer belongs in the dashboard the title links to.
+const (
+	proseMaxLines = 3
+	proseMaxRunes = 320
+)
+
+// listMaxRunes caps a bulleted description (down services, new CVEs):
+// there the rows ARE the information, so it isn't cut by lines.
+const listMaxRunes = 900
+
+// shortProse trims a description to its first few lines. A bulleted
+// list keeps its rows (the emit site caps how many); a description
+// carrying a code fence is only rune-capped, since cutting it by lines
+// could leave the fence open.
+func shortProse(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if isBulleted(s) {
+		return truncateRunes(s, listMaxRunes)
+	}
+	if !strings.Contains(s, "```") {
+		var keep []string
+		for _, l := range strings.Split(s, "\n") {
+			if strings.TrimSpace(l) == "" {
+				continue
+			}
+			if len(keep) == proseMaxLines {
+				keep[len(keep)-1] = strings.TrimRight(keep[len(keep)-1], ".…") + "…"
+				break
+			}
+			keep = append(keep, l)
+		}
+		s = strings.Join(keep, "\n")
+		return truncateRunes(s, proseMaxRunes)
+	}
+	return truncateRunes(s, proseMaxRunes*2)
+}
+
+// isBulleted: more than one line starts with "• ".
+func isBulleted(s string) bool {
+	n := 0
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "• ") {
+			n++
+		}
+	}
+	return n > 1
+}
+
+// cardTitle is the event title with a status glyph in front. Most emit
+// sites write one ("✗ Crashing · …"); the few that don't get one from
+// the event's tone so every card in a channel scans the same way.
+func cardTitle(e Event) string {
+	t := strings.TrimSpace(e.Title)
+	if t == "" {
+		return t
+	}
+	if r := []rune(t)[0]; unicode.IsLetter(r) || unicode.IsDigit(r) {
+		switch eventTone(e) {
+		case toneError:
+			return "✗ " + t
+		case toneWarn:
+			return "⚠ " + t
+		case toneSuccess:
+			return "✓ " + t
+		case toneNeutral:
+			return "⊘ " + t
+		}
+	}
+	return t
 }
 
 // publicBase is the dashboard's base URL (no trailing slash), "" when

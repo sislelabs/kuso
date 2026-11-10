@@ -18,8 +18,8 @@ func TestEmitRolledBack_NamesBuildsByCommit(t *testing.T) {
 	if e.Description != "admin rolled production back to c850e9b.\nPreviously live: d1e2f3a." {
 		t.Errorf("description = %q", e.Description)
 	}
-	if e.Fields[0].Value != "`c850e9b`" {
-		t.Errorf("build field = %q", e.Fields[0].Value)
+	if len(e.Fields) != 0 {
+		t.Errorf("fields = %+v; build and actor are already in the description", e.Fields)
 	}
 	if strings.Contains(e.URL, "?service=") || !strings.HasPrefix(e.URL, "/projects/shop/services/api") {
 		t.Errorf("url = %q, want the service page", e.URL)

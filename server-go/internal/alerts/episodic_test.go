@@ -395,7 +395,7 @@ func TestEvaluateCertExpiry(t *testing.T) {
 	if d := f.details["cert:kuso/shop-api-production-tls"]; !strings.Contains(d, "not Ready (Failed: ACME order failed)") || !strings.Contains(d, "api.shop.example.com") {
 		t.Errorf("not-ready detail = %q", d)
 	}
-	if d := f.details["cert:kuso/shop-web-production-tls"]; !strings.Contains(d, "expires in") || !strings.Contains(d, "shop / web → production") {
+	if d := f.details["cert:kuso/shop-web-production-tls"]; !strings.Contains(d, "expires in") || !strings.Contains(d, "shop/web → production") {
 		t.Errorf("expiry detail = %q", d)
 	}
 
@@ -534,7 +534,7 @@ func TestResolvedEvent(t *testing.T) {
 	if ev.Type != notify.EventAlertFired || ev.Severity != "info" {
 		t.Errorf("type/severity = %s/%s", ev.Type, ev.Severity)
 	}
-	if !strings.HasPrefix(ev.Title, "✓ Resolved · 5xx rate") || !strings.Contains(ev.Title, "shop / web") {
+	if !strings.HasPrefix(ev.Title, "✓ Resolved · 5xx rate") || !strings.Contains(ev.Title, "shop/web") {
 		t.Errorf("title = %q", ev.Title)
 	}
 	if ev.Extra["state"] != "resolved" || ev.Extra["rule_id"] != "r1" {

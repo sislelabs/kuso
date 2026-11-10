@@ -129,7 +129,7 @@ func TestEvaluateNodeWithoutKubeFailsSafe(t *testing.T) {
 func TestAlertEvent(t *testing.T) {
 	r := &db.AlertRule{ID: "r1", Name: "5xx spike", Kind: "log_match", Project: "alpha", Service: "web", Severity: "warn"}
 	ev := alertEvent(r, "matched 12 times")
-	if ev.Title != "⚠ Alert · 5xx spike · alpha / web" {
+	if ev.Title != "⚠ Alert · 5xx spike · alpha/web" {
 		t.Errorf("Title = %q", ev.Title)
 	}
 	if ev.Type != notify.EventAlertFired || ev.Body != "matched 12 times" || ev.Severity != "warn" {

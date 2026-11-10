@@ -452,7 +452,7 @@ func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, 
 	targets := []buildTarget{{Env: group}}
 	s.Notifier.Emit(EventEnvelope{
 		Type:        eventDeployRolledBack,
-		Title:       fmt.Sprintf("↩ Rolled back · %s / %s → %s", project, service, group),
+		Title:       fmt.Sprintf("↩ Rolled back · %s/%s → %s", project, service, group),
 		Description: desc,
 		Body:        desc,
 		Project:     project,
@@ -460,9 +460,5 @@ func (s *Service) emitRolledBack(project, service, group, buildName, prevBuild, 
 		Env:         group,
 		URL:         withEnvParam(buildEventURL(project, service), targets),
 		Severity:    "warn",
-		Fields: []EnvelopeField{
-			{Name: "Build", Value: "`" + buildLabel(buildName) + "`", Inline: true},
-			{Name: "By", Value: who, Inline: true},
-		},
 	})
 }

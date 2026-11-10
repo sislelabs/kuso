@@ -16,13 +16,12 @@ func PlatformUnhealthy(component, namespace, reason string, since time.Time) Eve
 		Description: reason,
 		Body:        reason,
 		Fields: []EventField{
-			{Name: "Component", Value: component, Inline: true},
-			{Name: "Namespace", Value: namespace, Inline: true},
+			{Name: "Component", Value: "`" + namespace + "/" + component + "`", Inline: true},
 		},
 		Extra: map[string]string{"component": component, "namespace": namespace},
 	}
 	if tok := TimeToken(since); tok != "" {
-		e.Fields = append(e.Fields, EventField{Name: "Since", Value: tok, Inline: true})
+		e.Fields = append(e.Fields, EventField{Name: "Since", Value: "since " + tok, Inline: true})
 	}
 	return e
 }
@@ -32,7 +31,7 @@ func PlatformUnhealthy(component, namespace, reason string, since time.Time) Eve
 func PlatformRecovered(component string, downFor time.Duration) Event {
 	desc := component + " is healthy again"
 	if downFor > 0 {
-		desc += fmt.Sprintf(" after %s", downFor.Round(time.Second))
+		desc += " after " + formatShortDuration(downFor)
 	}
 	return Event{
 		Type:        EventPlatformRecovered,

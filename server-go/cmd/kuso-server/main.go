@@ -1660,7 +1660,7 @@ func main() {
 						Type:        notify.EventBuildFailed,
 						Project:     project,
 						Service:     short,
-						Title:       fmt.Sprintf("✗ Release failed · %s / %s", project, short),
+						Title:       fmt.Sprintf("✗ Release failed · %s/%s", project, short),
 						Description: msg + "\nThe new image was not deployed; existing pods keep running the previous version.",
 						Body:        msg,
 						Severity:    "error",
@@ -2600,7 +2600,7 @@ func errorScanSkipNotifier(d *notify.Dispatcher) func(context.Context, int64) {
 			Description: msg,
 			Body:        msg,
 			Severity:    "warn",
-			Fields:      []notify.EventField{{Name: "Skipped lines", Value: strconv.FormatInt(total, 10), Inline: true}},
+			Fields:      []notify.EventField{{Name: "Skipped lines", Value: strconv.FormatInt(total, 10) + " lines skipped", Inline: true}},
 		})
 	}
 }
