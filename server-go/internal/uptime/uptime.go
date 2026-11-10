@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -14,10 +15,22 @@ import (
 )
 
 const (
-	probeWorkers = 16
+	// probeWorkers is the minimum pool; workersFor grows it with the
+	// target count so hanging probes (ProbeTimeout each) can't use up the
+	// tick budget before every target gets a verdict.
+	probeWorkers    = 16
+	maxProbeWorkers = 128
 	// tickBudget leaves room inside Interval for the DB write and sends.
 	tickBudget = 50 * time.Second
 )
+
+// workersFor sizes the pool so every target can get one worst-case
+// (ProbeTimeout) probe inside tickBudget.
+func workersFor(targets int) int {
+	perWorker := max(int(tickBudget/ProbeTimeout), 1)
+	need := (targets + perWorker - 1) / perWorker
+	return min(max(need, probeWorkers), maxProbeWorkers)
+}
 
 // Disabled reports the KUSO_UPTIME_DISABLED kill switch. main.go gates
 // both the heartbeat registration and the loop on it: a registered loop
@@ -167,6 +180,12 @@ func (w *Watcher) Tick(ctx context.Context) {
 			toProbe = append(toProbe, t)
 		}
 	}
+	// Least recently checked first, so if the budget runs out the targets
+	// left unprobed this tick are first in line next tick instead of
+	// whatever the informer's map order happened to put last.
+	sort.SliceStable(toProbe, func(i, j int) bool {
+		return priorByKey[toProbe[i].Key()].LastCheckedAt.Before(priorByKey[toProbe[j].Key()].LastCheckedAt)
+	})
 	results := w.probeAll(ctx, toProbe)
 
 	now := w.Now()
@@ -324,7 +343,7 @@ func (w *Watcher) probeAll(ctx context.Context, targets []Target) map[string]Res
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	work := make(chan Target)
-	for i := 0; i < probeWorkers; i++ {
+	for range workersFor(len(targets)) {
 		wg.Add(1)
 		// safego keeps a panicking probe from killing the process; the
 		// worker then stops, so recover per target too, or a dead pool
