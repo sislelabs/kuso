@@ -1,0 +1,144 @@
+# OPT-IN: sharded BuildKit daemons for clusters where one kuso-buildkitd
+# (deploy/buildkitd.yaml, 4 CPU, max-parallelism 3) is the build
+# throughput ceiling. Not applied by install.sh or the updater; this file
+# lives outside deploy/*.yaml on purpose.
+#
+# How it works: kuso-server with KUSO_BUILDKITD_SHARDS=N renders every
+# build Job with BUILDKIT_ADDR pointing at shard (fnv32a(project) % N), so
+# each project keeps its layer cache on one daemon. The automatic build
+# admission cap becomes N × max-parallelism × 2 (bounded below by
+# cluster CPU / 4).
+#
+# The single Deployment is untouched: its RWO PVC and cache stay where
+# they are, and it keeps serving anything still addressed to
+# kuso-buildkitd:1234. Shard pods carry app.kubernetes.io/name:
+# kuso-buildkitd so the existing ingress NetworkPolicy and the per-project
+# egress policy cover them; the side effect is that the kuso-buildkitd
+# Service also load-balances onto shards, which is harmless (they are
+# identical daemons).
+#
+# Enable:
+#   1. Set `replicas` below to N, then
+#      kubectl apply -f deploy/optional/buildkitd-shards.yaml
+#      kubectl -n kuso rollout status statefulset/kuso-buildkitd-shard
+#   2. kubectl -n kuso set env deploy/kuso-server KUSO_BUILDKITD_SHARDS=N
+#      (N must equal replicas; a build hashed to a missing shard fails to
+#      connect.)
+#   3. Optional, once no build is in flight on it:
+#      kubectl -n kuso scale deploy/kuso-buildkitd --replicas=0
+#      (the PVC is kept; scale back to 1 to return to the single daemon.)
+#
+# Disable: unset KUSO_BUILDKITD_SHARDS on kuso-server (and scale
+# deploy/kuso-buildkitd back to 1 if you scaled it down), wait for
+# in-flight builds, then delete the StatefulSet. The shard PVCs survive
+# a StatefulSet delete; remove data-kuso-buildkitd-shard-* by hand.
+#
+# Changing N re-hashes projects onto different shards: their first build
+# afterwards is cache-cold (still correct, the registry cache import
+# covers most of it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-buildkitd-shard
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-buildkitd
+    app.kubernetes.io/component: buildkitd-shard
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: kuso-buildkitd
+    app.kubernetes.io/component: buildkitd-shard
+  ports:
+    - name: grpc
+      port: 1234
+      targetPort: 1234
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kuso-buildkitd-shard
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-buildkitd
+    app.kubernetes.io/component: buildkitd-shard
+spec:
+  serviceName: kuso-buildkitd-shard
+  replicas: 2
+  # Parallel: shards are independent; OrderedReady would serialise a
+  # cold start for no benefit.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-buildkitd
+      app.kubernetes.io/component: buildkitd-shard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuso-buildkitd
+        app.kubernetes.io/component: buildkitd-shard
+    spec:
+      priorityClassName: kuso-platform
+      affinity:
+        # Hard rule here (the single Deployment's is preferred only so a
+        # one-node install can still build): sharding implies workers
+        # exist, and a build daemon on the k3s control-plane node starves
+        # the API server.
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kuso-buildkitd
+      containers:
+        - name: buildkitd
+          image: moby/buildkit:v0.34.2
+          args:
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --oci-worker-snapshotter=overlayfs
+            - --config
+            - /etc/buildkit/buildkitd.toml
+          ports:
+            - name: grpc
+              containerPort: 1234
+          securityContext:
+            privileged: true
+          readinessProbe:
+            exec:
+              command: [buildctl, --addr, tcp://127.0.0.1:1234, debug, workers]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/buildkit
+            - name: config
+              mountPath: /etc/buildkit
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+      volumes:
+        - name: config
+          configMap:
+            name: kuso-buildkitd-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi

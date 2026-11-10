@@ -19,9 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -32,6 +32,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/backuphealth"
 	"kuso/server/internal/buildcontroller"
+	"kuso/server/internal/buildkit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
@@ -649,11 +650,7 @@ func main() {
 		// so an admin who tuned /settings stays tuned; this only
 		// changes what a fresh install sees on first boot.
 		//
-		// Heuristic: max(2, allocatableCPU / 4). Each kaniko build
-		// requests 200m + bursts to 1500m (operator/helm-charts/
-		// kusobuild/values.yaml). Dividing allocatable by 4 leaves
-		// half the cluster for user workloads even if every build
-		// hits its limit.
+		// Sized to buildkitd capacity, see adaptiveBuildCap.
 		defaultBuildCap := adaptiveBuildCap(ctx, kc, logger)
 		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", defaultBuildCap)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
@@ -2071,85 +2068,55 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 
 // envInt reads an env var as int with a fallback. Used for tunables
 // that are days/hours/seconds with a sane default.
-// adaptiveBuildCap returns a sensible default for the cluster-wide
-// concurrent-build cap based on the sum of allocatable CPU across
-// Ready nodes. Heuristic: max(2, totalAllocatableMillicores / 4000).
+// adaptiveBuildCap returns the automatic cluster-wide concurrent-build
+// cap: buildkit.DefaultBuildCap over the Ready nodes' allocatable CPU
+// and the configured buildkitd topology. Every build runs inside the
+// shared daemon(s), so daemon capacity (daemons × max-parallelism × 2)
+// is the ceiling; cluster CPU only lowers it on small boxes. The old
+// CPU-only formula admitted up to 8 (unclamped: 40 on 20 nodes) builds
+// into one 4-CPU daemon with 3 vertex slots.
 //
-//	2-core box  →  cap = 2  (matches the legacy default)
-//	4-core box  →  cap = 2
-//	8-core box  →  cap = 2  (still 2 — buildpacks can use the bigger box per build)
-//	16-core box →  cap = 4
-//	32-core box →  cap = 8
-//	3 × 8-core  →  cap = 6
-//
-// We divide by 4 (not 1 or 2) because a single kaniko build bursts
-// to 1500m and we want the cluster to stay responsive for user
-// workloads even when every build is at its limit. Operators who
-// want more aggressive parallelism set KUSO_BUILD_MAX_CONCURRENT or
-// raise build.maxConcurrent in /settings.
-//
-// Best-effort: kube list errors → fall back to 2 (the historical
-// hard-coded default). Logs the chosen value so operators can audit.
+// Best-effort: a node list error falls back to the daemon-capacity cap.
+// An admin's explicit build.maxConcurrent / KUSO_BUILD_MAX_CONCURRENT
+// still wins.
 func adaptiveBuildCap(ctx context.Context, kc *kube.Client, logger *slog.Logger) int {
-	const safeDefault = 2
-	if kc == nil || kc.Clientset == nil {
-		return safeDefault
-	}
-	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})
-	if err != nil {
-		logger.Warn("adaptive build cap: list nodes", "err", err, "fallback", safeDefault)
-		return safeDefault
-	}
+	daemons, par := buildkit.Daemons(), buildkit.MaxParallelism()
 	totalMilli := int64(0)
 	readyCount := 0
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
-		// Skip NotReady nodes — counting them inflates the cap when
-		// the cluster is degraded, which is exactly when we want to
-		// be conservative.
-		ready := false
-		for _, c := range n.Status.Conditions {
-			if c.Type == "Ready" && string(c.Status) == "True" {
-				ready = true
-				break
+	if kc != nil && kc.Clientset != nil {
+		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})
+		cancel()
+		if err != nil {
+			logger.Warn("adaptive build cap: list nodes", "err", err)
+		} else {
+			for i := range nodes.Items {
+				n := &nodes.Items[i]
+				// NotReady nodes would inflate the cap exactly when the
+				// cluster is degraded.
+				ready := false
+				for _, c := range n.Status.Conditions {
+					if c.Type == "Ready" && string(c.Status) == "True" {
+						ready = true
+						break
+					}
+				}
+				if !ready {
+					continue
+				}
+				readyCount++
+				if cpu, ok := n.Status.Allocatable["cpu"]; ok {
+					totalMilli += cpu.MilliValue()
+				}
 			}
 		}
-		if !ready {
-			continue
-		}
-		readyCount++
-		if cpu, ok := n.Status.Allocatable["cpu"]; ok {
-			totalMilli += cpu.MilliValue()
-		}
 	}
-	if readyCount == 0 || totalMilli == 0 {
-		logger.Warn("adaptive build cap: no Ready nodes / no CPU info", "fallback", safeDefault)
-		return safeDefault
-	}
-	chosen := int(totalMilli / 4000)
-	if chosen < safeDefault {
-		chosen = safeDefault
-	}
-	// Clamp to what the build backend can actually absorb. Every build
-	// Job is a thin buildctl client against ONE shared buildkitd replica
-	// (deploy/buildkitd.yaml: replicas 1, RWO snapshot PVC, limit 4 CPU).
-	// Past roughly that width the extra Jobs don't build faster — they
-	// sit blocked inside the daemon while still holding pod slots and
-	// cluster memory. On a 20-node cluster the unclamped formula would
-	// admit 40 concurrent builds into a 4-CPU daemon. An admin who
-	// genuinely wants more can still set build.maxConcurrent explicitly;
-	// this only bounds the AUTOMATIC default.
-	const adaptiveCeiling = 8
-	if chosen > adaptiveCeiling {
-		logger.Info("adaptive build cap clamped to the shared buildkitd ceiling",
-			"computed", chosen, "clamped", adaptiveCeiling)
-		chosen = adaptiveCeiling
-	}
+	chosen := buildkit.DefaultBuildCap(totalMilli, daemons, par)
 	logger.Info("adaptive build cap",
 		"readyNodes", readyCount,
 		"allocatableMilliCPU", totalMilli,
+		"buildkitDaemons", daemons,
+		"buildkitMaxParallelism", par,
 		"cap", chosen)
 	return chosen
 }

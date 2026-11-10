@@ -80,7 +80,6 @@ const (
 	defaultBuildkitImage      = "moby/buildkit:v0.34.2"
 	defaultCloneImage         = "alpine/git:2.54.0"
 	defaultCacheInitImage     = "alpine:3.24"
-	defaultBuildkitHost       = "tcp://kuso-buildkitd.kuso.svc.cluster.local:1234"
 
 	defaultCPURequest   = "200m"
 	defaultMemRequest   = "512Mi"
