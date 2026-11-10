@@ -875,13 +875,17 @@ func buildEnvContainerVars(b *kube.KusoBuild, keepBuildSecrets bool) []corev1.En
 // at the render boundary — the server also validates on write) and sorted for
 // deterministic output.
 func buildArgsContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
-	if b == nil || len(b.Spec.BuildArgs) == 0 {
+	if b == nil {
+		return nil
+	}
+	args := buildArgsWithPublicEnv(b)
+	if len(args) == 0 {
 		return nil
 	}
 	var out []corev1.EnvVar
 	var keys []string
-	for _, k := range sortedBuildArgsKeys(b) {
-		v := b.Spec.BuildArgs[k]
+	for _, k := range sortedBuildArgsKeys(args) {
+		v := args[k]
 		// Defensive: a plain BuildArgs value can't be a secret ref by
 		// construction, but drop one if it ever is (see doc above).
 		if builds.IsBuildEnvSecretRef(v) {
@@ -897,14 +901,34 @@ func buildArgsContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
 	return out
 }
 
+// buildArgsWithPublicEnv is BuildArgs plus one KEY=__KUSO_RUNTIME_KEY__ entry
+// per PublicEnv name. The sentinel overrides a BuildArgs value for the same
+// key: the image entrypoint swaps in the per-environment value at start, so baking
+// a fixed value would defeat publicEnv. Riding the BuildArgs channel also puts
+// the sentinel after the literal buildEnv copy of the key, which is usually
+// the real runtime value.
+func buildArgsWithPublicEnv(b *kube.KusoBuild) map[string]string {
+	if len(b.Spec.PublicEnv) == 0 {
+		return b.Spec.BuildArgs
+	}
+	out := make(map[string]string, len(b.Spec.BuildArgs)+len(b.Spec.PublicEnv))
+	for k, v := range b.Spec.BuildArgs {
+		out[k] = v
+	}
+	for _, k := range b.Spec.PublicEnv {
+		out[k] = "__KUSO_RUNTIME_" + k + "__"
+	}
+	return out
+}
+
 // sortedBuildArgsKeys returns the identifier-valid BuildArgs keys in stable
 // order. Mirrors sortedBuildEnvKeys — the identifier check is defense-in-depth
 // at the render boundary (keys are interpolated into KUSO_BA_<key> shell var
 // names and Dockerfile ENV lines / build-arg flags); the server validates on
 // write via validateBuildArgs.
-func sortedBuildArgsKeys(b *kube.KusoBuild) []string {
-	names := make([]string, 0, len(b.Spec.BuildArgs))
-	for k := range b.Spec.BuildArgs {
+func sortedBuildArgsKeys(args map[string]string) []string {
+	names := make([]string, 0, len(args))
+	for k := range args {
 		if envKeyRE.MatchString(k) {
 			names = append(names, k)
 		}
@@ -1447,14 +1471,11 @@ exit "$RC"
 	if names := buildSecretLiteralKeyNames(b); legacyArgs && names != "" {
 		envs = append(envs, corev1.EnvVar{Name: "KUSO_BUILDENV_LEGACY_ARG_KEYS", Value: names})
 	}
-	// BuildArgs: the explicit non-secret build-time value channel. Forwarded
-	// as KUSO_BA_<KEY> container env for ALL buildkit strategies (dockerfile,
-	// nixpacks, static). For dockerfile the script turns each into a `--opt
-	// build-arg`; for nixpacks the nixpacks-plan container already baked them
-	// as ENV so buildkit needs nothing further, but carrying the vars here is
-	// harmless (buildkit only forwards build-args the script emits, and the
-	// dockerfile-only loop is gated on the generated .nixpacks/Dockerfile
-	// path). BuildArgs values are user-authored plain strings that can never
+	// BuildArgs (incl. publicEnv sentinels): the explicit non-secret
+	// build-time value channel. The buildkit container only needs them for
+	// dockerfile, where the script turns each KUSO_BA_<KEY> into a `--opt
+	// build-arg`; nixpacks bakes them as ENV in the nixpacks-plan container
+	// and static exports them in its own build container. BuildArgs values are user-authored plain strings that can never
 	// be secret-sourced (see buildArgsContainerVars), so — unlike buildEnv —
 	// there is no secret channel to split off. They ARE meant to persist in
 	// the image (non-secret build-time constants); that's the whole point.

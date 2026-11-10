@@ -602,12 +602,12 @@ spec:
       # Opt in to the in-cluster Prometheus's pod-discovery scrape.
       # Picked up by the `kubernetes-pods` job in deploy/prometheus.yaml
       # via the prometheus.io/scrape="true" relabel rule. /metrics is
-      # mounted by the chi router on port 8080 (the same port the
+      # served on the kuso-server listener, port 3000 (the same port the
       # service listens on); no extra Service needed because the
       # scrape goes pod-to-pod.
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
+        prometheus.io/port: "3000"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: kuso-server

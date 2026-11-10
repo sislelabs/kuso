@@ -8,10 +8,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/web"
 
 echo "==> installing web/ deps"
-npm ci --no-audit --no-fund
+pnpm install --frozen-lockfile
 
 echo "==> building web/ (next export)"
-npm run build
+pnpm build
 
 echo "==> syncing web/out -> server-go/internal/web/dist"
 DEST="$ROOT/server-go/internal/web/dist"

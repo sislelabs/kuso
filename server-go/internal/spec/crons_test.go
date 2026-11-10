@@ -19,3 +19,20 @@ func TestCronCreateReq_MapsByKind(t *testing.T) {
 		t.Fatalf("http-kind mapping wrong: %+v", hreq)
 	}
 }
+
+func TestParseCronScheduleMatchesCronRoutes(t *testing.T) {
+	ok := []string{"@daily", "@hourly", "0 2 * * *", "0 9 * * mon-fri"}
+	for _, s := range ok {
+		raw := "project: p\ncrons:\n  - name: c\n    kind: http\n    url: https://x\n    schedule: \"" + s + "\"\n"
+		if _, err := Parse([]byte(raw)); err != nil {
+			t.Errorf("schedule %q rejected: %v", s, err)
+		}
+	}
+	bad := []string{"@every 5m", "0 25 * * *", "* * * *"}
+	for _, s := range bad {
+		raw := "project: p\ncrons:\n  - name: c\n    kind: http\n    url: https://x\n    schedule: \"" + s + "\"\n"
+		if _, err := Parse([]byte(raw)); err == nil {
+			t.Errorf("schedule %q accepted, want error", s)
+		}
+	}
+}

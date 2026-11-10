@@ -373,7 +373,8 @@ type KusoServiceSpec struct {
 	// BuildArgs is the supported NON-SECRET build-time value channel. Each
 	// KEY=VALUE is passed to the image build (dockerfile: `--build-arg
 	// KEY=VAL` consumed by a matching `ARG KEY`; nixpacks: injected as an
-	// `ENV KEY VALUE` line in the generated Dockerfile) — true build-time
+	// `ENV KEY VALUE` line in the generated Dockerfile; static: exported into
+	// the build command's env) — true build-time
 	// constants, identical across every environment. Distinct from EnvVars,
 	// which are the service's RUNTIME env (only literal, non-secret EnvVars
 	// additionally reach the build via BuildEnv). BuildArgs values are plain
@@ -381,12 +382,12 @@ type KusoServiceSpec struct {
 	// API only writes a string map, never a valueFrom), so these values are
 	// safe to persist in the published image. Keys must be POSIX env-var
 	// identifiers (validated on write); a secret-ref-shaped value is defensively
-	// dropped at render. Static/buildpacks strategies do not consume BuildArgs
-	// (buildpacks has its own project-descriptor arg mechanism).
+	// dropped at render. The buildpacks strategy does not consume BuildArgs
+	// (it has its own project-descriptor arg mechanism).
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
-	// PublicEnv names env vars baked as sentinels at build and
-	// substituted at pod start (build-once-run-anywhere for inlined
-	// public values like Next.js NEXT_PUBLIC_*).
+	// PublicEnv names env vars baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+	// build. The pod gets KUSO_PUBLIC_ENV listing them; the image's own
+	// entrypoint does the substitution at start (kuso ships no wrapper).
 	PublicEnv []string `json:"publicEnv,omitempty"`
 	// Image is set on runtime=image services to point at an existing
 	// registry image. The propagation step copies this onto every
@@ -869,8 +870,8 @@ type KusoEnvironmentSpec struct {
 	EnvOverrides   []string `json:"envOverrides,omitempty"`
 	EnvFromSecrets []string `json:"envFromSecrets,omitempty"`
 	// PublicEnv names env vars baked as __KUSO_RUNTIME_<KEY>__ sentinels
-	// at build; the env chart substitutes each with its real runtime value
-	// (from envVars/envFromSecrets) at pod start. Propagated from the
+	// at build; the env chart exposes them as KUSO_PUBLIC_ENV so the image's
+	// entrypoint can substitute the real runtime values at pod start. Propagated from the
 	// service's spec.publicEnv. nil/empty = no substitution step.
 	PublicEnv []string `json:"publicEnv,omitempty"`
 	// SharedEnvKeys mirrors KusoService.spec.sharedEnvKeys so the

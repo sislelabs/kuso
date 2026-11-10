@@ -23,7 +23,7 @@
 #   initContainer dump   (postgres:16-bookworm)  pg_dump → gzip → emptyDir (validated before handoff)
 #   container    upload  (amazon/aws-cli)        aws s3 cp ← emptyDir
 #
-# Restore is documented in docs/runbooks/restore-postgres.md and is
+# Restore is documented in docs/BACKUP_RESTORE.md and is
 # manual: pause kuso-server, exec into postgres pod, psql < dump.sql.
 # A future v0.10 will add a /api/admin/restore endpoint.
 apiVersion: batch/v1

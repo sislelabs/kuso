@@ -990,3 +990,7 @@ func (s *Service) DeleteProject(ctx context.Context, project, name string) error
 	s.recordRevision(ctx, project, fqn, "cron.delete", "cron delete", nil, nil)
 	return nil
 }
+
+// ValidateSchedule is validateSchedule for callers outside the cron routes
+// (kuso.yml parsing) so both entry points accept exactly the same schedules.
+func ValidateSchedule(s string) error { return validateSchedule(s) }

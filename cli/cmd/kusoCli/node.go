@@ -192,10 +192,11 @@ var nodePendingCmd = &cobra.Command{
 var nodeRevokeYes bool
 
 var nodeRevokeCmd = &cobra.Command{
-	Use:   "revoke <jti>",
+	Use:   "revoke <jti-hash>",
 	Args:  cobra.ExactArgs(1),
-	Short: "Revoke a pending bootstrap token by jti.",
-	Long: "Revoke a pending bootstrap token by jti.\n\n" +
+	Short: "Revoke a pending bootstrap token by its jti hash (or a unique prefix).",
+	Long: "Revoke a pending bootstrap token by its jti hash, as shown by\n" +
+		"`kuso node pending` (a unique prefix of 8+ characters is enough).\n\n" +
 		"Takes effect immediately: any node join still presenting the token\n" +
 		"will fail. Revocation cannot be undone — mint a fresh token if you\n" +
 		"revoke the wrong one.",
@@ -204,7 +205,7 @@ var nodeRevokeCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		// Same guard as the twin `token revoke` — instant, irreversible,
-		// and the jti alone gives no hint which join it belongs to.
+		// and the hash alone gives no hint which join it belongs to.
 		if err := confirmDestructive(nodeRevokeYes,
 			fmt.Sprintf("Revoke pending bootstrap token %s? Any node join still using it will fail.", args[0])); err != nil {
 			return err

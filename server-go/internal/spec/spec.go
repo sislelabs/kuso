@@ -51,11 +51,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 
 	"gopkg.in/yaml.v3"
 
+	"kuso/server/internal/crons"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
 )
@@ -69,14 +69,14 @@ type File struct {
 	BaseDomain string `yaml:"baseDomain,omitempty"`
 	// Uptime is the project-wide uptime-check opt-out. A missing block
 	// leaves the live setting alone.
-	Uptime   *ProjectUptimeSpec `yaml:"uptime,omitempty"`
+	Uptime *ProjectUptimeSpec `yaml:"uptime,omitempty"`
 	// RequestLimits is the project default for its services' ingress
 	// limits. A missing block leaves the live setting alone.
 	RequestLimits *RequestLimitsSpec `yaml:"requestLimits,omitempty"`
-	Prune    bool               `yaml:"prune,omitempty"`
-	Services []ServiceSpec      `yaml:"services,omitempty"`
-	Addons   []AddonSpec        `yaml:"addons,omitempty"`
-	Crons    []CronSpec         `yaml:"crons,omitempty"`
+	Prune         bool               `yaml:"prune,omitempty"`
+	Services      []ServiceSpec      `yaml:"services,omitempty"`
+	Addons        []AddonSpec        `yaml:"addons,omitempty"`
+	Crons         []CronSpec         `yaml:"crons,omitempty"`
 }
 
 // ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
@@ -91,26 +91,26 @@ type ServiceSpec struct {
 	PrivateEgress bool   `yaml:"privateEgress,omitempty"`
 	// PlatformAPIEgress allows the service's pods to call the kuso API
 	// over in-cluster DNS (for apps that orchestrate kuso).
-	PlatformAPIEgress bool                `yaml:"platformApiEgress,omitempty"`
-	WaitForCI         bool                `yaml:"waitForCI,omitempty"`
+	PlatformAPIEgress bool `yaml:"platformApiEgress,omitempty"`
+	WaitForCI         bool `yaml:"waitForCI,omitempty"`
 	// Uptime sets the uptime-check opt-out and path. A missing block
 	// leaves the live settings alone.
 	Uptime *UptimeSpec `yaml:"uptime,omitempty"`
 	// RequestLimits caps the service's use of the shared ingress. A
 	// missing block leaves the live limits alone; a present block is
 	// written whole, omitted keys falling back to the project's.
-	RequestLimits *RequestLimitsSpec `yaml:"requestLimits,omitempty"`
-	Command           []string            `yaml:"command,omitempty"`
-	Domains           []DomainSpec        `yaml:"domains,omitempty"`
-	Env               map[string]EnvValue `yaml:"env,omitempty"`
-	Scale             *ScaleSpec          `yaml:"scale,omitempty"`
-	Sleep             *SleepSpec          `yaml:"sleep,omitempty"`
-	Placement         *PlacementSpec      `yaml:"placement,omitempty"`
-	Volumes           []VolumeSpec        `yaml:"volumes,omitempty"`
-	Static            *StaticSpec         `yaml:"static,omitempty"`
-	Buildpacks        *BuildpacksSpec     `yaml:"buildpacks,omitempty"`
-	Image             *ImageSpec          `yaml:"image,omitempty"`
-	Release           *ReleaseSpec        `yaml:"release,omitempty"`
+	RequestLimits *RequestLimitsSpec  `yaml:"requestLimits,omitempty"`
+	Command       []string            `yaml:"command,omitempty"`
+	Domains       []DomainSpec        `yaml:"domains,omitempty"`
+	Env           map[string]EnvValue `yaml:"env,omitempty"`
+	Scale         *ScaleSpec          `yaml:"scale,omitempty"`
+	Sleep         *SleepSpec          `yaml:"sleep,omitempty"`
+	Placement     *PlacementSpec      `yaml:"placement,omitempty"`
+	Volumes       []VolumeSpec        `yaml:"volumes,omitempty"`
+	Static        *StaticSpec         `yaml:"static,omitempty"`
+	Buildpacks    *BuildpacksSpec     `yaml:"buildpacks,omitempty"`
+	Image         *ImageSpec          `yaml:"image,omitempty"`
+	Release       *ReleaseSpec        `yaml:"release,omitempty"`
 	// BuildArgs are passed to the image build as --build-arg KEY=VAL.
 	// True build-time constants — the SAME across every environment (the
 	// built artifact is identical), so use them for things compiled in,
@@ -466,8 +466,8 @@ func Parse(raw []byte) (*File, error) {
 		if c.Name == "" {
 			return nil, fmt.Errorf("%w: every cron needs a name", ErrInvalid)
 		}
-		if !cronExpr5.MatchString(c.Schedule) {
-			return nil, fmt.Errorf("%w: cron %s has invalid schedule %q (want 5-field cron)", ErrInvalid, c.Name, c.Schedule)
+		if err := crons.ValidateSchedule(c.Schedule); err != nil {
+			return nil, fmt.Errorf("%w: cron %s: %v", ErrInvalid, c.Name, err)
 		}
 		// apply manages crons through the project cron routes, which take
 		// only http and command; accepting kind=service here made a file
@@ -499,9 +499,6 @@ func validRuntime(r string) bool {
 		return false
 	}
 }
-
-// cronExpr5 matches a standard five-field cron expression.
-var cronExpr5 = regexp.MustCompile(`^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s*$`)
 
 // Plan is the diff between kuso.yaml and live state. *ToDelete sets
 // are only populated when the File's prune flag is true; otherwise

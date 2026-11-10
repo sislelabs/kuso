@@ -252,7 +252,7 @@ func RegisterWithMigrations(db DBStatser, mig MigrationProbe, kc *kube.Client, c
 			Namespace: "kuso",
 			Subsystem: "build",
 			Name:      "running",
-			Help:      "Count of in-flight kaniko build pods cluster-wide.",
+			Help:      "Count of in-flight build pods cluster-wide.",
 		}, func() float64 {
 			_, running := bq.snapshot()
 			return float64(running)

@@ -9,7 +9,7 @@ package kusoCli
 // `kuso db connect` is a convenience wrapper: opens the tunnel on an
 // auto-picked local port, fetches the addon's conn secret (admin
 // only), and prints a localhost-rewritten DSN the user copies into
-// their tool. With --exec it execs psql/redis-cli directly.
+// their tool. With --exec it execs the matching client (psql/redis-cli/mongosh) directly.
 //
 // Admin-only — the server enforces settings:admin on the WS handler;
 // the CLI checks the conn-secret fetch (which requires secrets:read)
@@ -98,7 +98,7 @@ Requires settings:admin (the addon conn-secret fetch is admin-gated).`,
 func init() {
 	pfCmd.Flags().IntVar(&pfLocalPort, "port", 0, "local port to bind (0 = pick a free one)")
 	pfCmd.Flags().StringVar(&pfBindAddr, "bind", "127.0.0.1", "local address to bind")
-	dbConnectCmd.Flags().BoolVar(&connectExec, "exec", false, "exec the matching client (psql/redis-cli) against the tunnel")
+	dbConnectCmd.Flags().BoolVar(&connectExec, "exec", false, "exec the matching client (psql/redis-cli/mongosh) against the tunnel")
 	dbCmd.AddCommand(pfCmd)
 	dbCmd.AddCommand(dbConnectCmd)
 	rootCmd.AddCommand(dbCmd)
