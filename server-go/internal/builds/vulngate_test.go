@@ -108,6 +108,40 @@ func TestVulnGate_PendingPastMaxWaitFailsOpen(t *testing.T) {
 	}
 }
 
+// Opt-in block mode: a scan that never finished must not deploy, and the
+// build must end terminal so the service's queue moves on.
+func TestVulnGate_PendingPastMaxWaitBlocksWhenConfigured(t *testing.T) {
+	since := time.Now().Add(-vulnGateMaxWait - time.Minute).UTC().Format(time.RFC3339)
+	build := vulnGatedBuild(map[string]string{annVulnGateSince: since, annPromoteHold: VulnScanHoldMessage})
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	em := &recordingEmitter{}
+	p := &Poller{Svc: s, Interval: time.Hour, Notifier: em,
+		VulnGate: &fakeVulnGate{verdict: VulnGateVerdict{Decision: VulnPending}}, VulnGateBlockOnTimeout: true}
+	if err := p.markSucceeded(context.Background(), "kuso", build); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", build.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Spec.Image != nil && env.Spec.Image.Tag == "v1" {
+		t.Fatal("unscanned image was promoted in block mode")
+	}
+	if buildPhase(got) != "failed" || !isTerminal(got) || got.Annotations[annVulnGate] != "blocked" {
+		t.Fatalf("phase=%q terminal=%v gate=%q", buildPhase(got), isTerminal(got), got.Annotations[annVulnGate])
+	}
+	if !strings.Contains(got.Annotations[annMessage], "not finished") {
+		t.Errorf("message = %q, want the timeout reason", got.Annotations[annMessage])
+	}
+	if !slices.Contains(em.types(), eventDeployBlocked) {
+		t.Errorf("events = %v, want %s", em.types(), eventDeployBlocked)
+	}
+}
+
 func mustParse(t *testing.T, s string) time.Time {
 	t.Helper()
 	v, err := time.Parse(time.RFC3339, s)

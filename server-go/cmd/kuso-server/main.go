@@ -1010,6 +1010,7 @@ func main() {
 				// *Gate there would read as "gate present" and panic.
 				if vulnGate != nil {
 					buildPoller.VulnGate = vulnGate
+					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block"
 				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}

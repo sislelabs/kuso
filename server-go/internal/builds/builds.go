@@ -1676,6 +1676,12 @@ type Poller struct {
 	// VulnGate scans a built image before promotion (vulngate.go).
 	// Optional: nil → promote without scanning.
 	VulnGate VulnGate
+	// VulnGateBlockOnTimeout: a build whose scan hasn't finished within
+	// vulnGateMaxWait ends failed (not promoted) instead of promoting
+	// unscanned with a failed-open flag and a scan_failed notification.
+	// Off by default so a slow scanner never freezes deploys; set via
+	// KUSO_VULN_GATE_ON_TIMEOUT=block.
+	VulnGateBlockOnTimeout bool
 	// vulnGateSeen: ns/build → when this process first gated it, the
 	// fallback clock when the since-annotation doesn't stick.
 	vulnGateMu   sync.Mutex

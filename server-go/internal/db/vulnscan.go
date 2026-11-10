@@ -368,6 +368,28 @@ func (d *DB) ClaimNextVulnScan(ctx context.Context) (*VulnScan, error) {
 	return &scans[0], nil
 }
 
+// HasQueuedVulnScan reports whether a scan with reason is waiting.
+func (d *DB) HasQueuedVulnScan(ctx context.Context, reason string) (bool, error) {
+	var ok bool
+	if err := d.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM "VulnScan" WHERE "status" = 'queued' AND "reason" = $1)`, reason).Scan(&ok); err != nil {
+		return false, fmt.Errorf("has queued vuln scan: %w", err)
+	}
+	return ok, nil
+}
+
+// RequeueVulnScan puts a running scan back in the queue, freeing the one
+// running slot (a gate scan preempting a background one). No-op unless
+// the scan is still running.
+func (d *DB) RequeueVulnScan(ctx context.Context, id int64) error {
+	if _, err := d.ExecContext(ctx, `
+		UPDATE "VulnScan" SET "status" = 'queued', "startedAt" = NULL, "jobName" = ''
+		WHERE "id" = $1 AND "status" = 'running'`, id); err != nil {
+		return fmt.Errorf("requeue vuln scan: %w", err)
+	}
+	return nil
+}
+
 // SetVulnScanJob records the Job running a scan.
 func (d *DB) SetVulnScanJob(ctx context.Context, id int64, jobName string) error {
 	if _, err := d.ExecContext(ctx, `UPDATE "VulnScan" SET "jobName" = $2 WHERE "id" = $1`, id, jobName); err != nil {
