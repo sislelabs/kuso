@@ -1482,8 +1482,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		buildService = parentSvc.Spec.FromService
 	}
 	prior := d.priorBuildsForSHA(ctx, ns, proj.Name, buildService, pr.PullRequest.Head.SHA, envName, buildService != short, pr.Number)
+	var seedBuild *kube.KusoBuild
 	if d.Builds != nil && prior.succeeded == nil && !prior.inFlight {
-		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{
+		if b, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{
 			// The SHA-keyed build ended without an image (cancelled by a
 			// close, or failed): a reopen or redelivery rebuilds the commit
 			// under its own name instead of colliding with the dead one.
@@ -1499,7 +1500,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// parent service's production secrets. envName == the preview
 			// KusoEnvironment CR created/updated above.
 			PreviewEnv: envName,
-		}); err != nil {
+		}); err == nil {
+			seedBuild = b
+		} else {
 			if errors.Is(err, builds.ErrConflict) {
 				d.Logger.Debug("preview build trigger deduped (already in flight)",
 					"service", serviceFQN, "pr", pr.Number)
@@ -1516,6 +1519,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// the trigger above builds + promotes normally.
 	if prior.succeeded != nil {
 		d.stampExistingBuildImage(ctx, ns, prior.succeeded, envName)
+		seedBuild = prior.succeeded
 	}
 	// User-defined seed command (v0.17.0 Phase 2). Runs as a one-shot
 	// kube Job in a clone of the build image so it has access to the
@@ -1525,7 +1529,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// doesn't fail the dispatch — the preview pod still comes up;
 	// reviewer sees "seed failed" on the reviewer page.
 	if parentSvc != nil && parentSvc.Spec.Previews != nil && parentSvc.Spec.Previews.Seed != "" {
-		buildImage := previewBuildImage(proj.Name, short, pr.PullRequest.Head.SHA)
+		buildImage := previewSeedImage(seedBuild, proj.Name, short, pr.PullRequest.Head.SHA)
 		seedEnvVars := envVarsForSeed(mergedEnvVars)
 		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars); err != nil {
 			d.Logger.Warn("preview seed job", "env", envName, "err", err)
@@ -1628,6 +1632,16 @@ func (d *Dispatcher) unclonedProductionConns(ctx context.Context, ns, project st
 // The 12-char SHA prefix is what builds.ImageTag returns for a SHA-
 // shaped ref. We can't call builds.ImageTag directly without an
 // import cycle, so the function lives here as a one-liner mirror.
+// previewSeedImage prefers the image the preview's own build records:
+// preview builds carry an identity-qualified (and sometimes uniquified)
+// tag, so the bare-SHA convention below only holds for legacy builds.
+func previewSeedImage(b *kube.KusoBuild, project, service, sha string) string {
+	if b != nil && b.Spec.Image.Repository != "" && b.Spec.Image.Tag != "" {
+		return b.Spec.Image.Repository + ":" + b.Spec.Image.Tag
+	}
+	return previewBuildImage(project, service, sha)
+}
+
 func previewBuildImage(project, service, sha string) string {
 	tag := sha
 	if len(sha) >= 12 {
