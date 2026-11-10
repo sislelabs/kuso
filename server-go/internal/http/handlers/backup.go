@@ -155,9 +155,10 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	// 10 GB hard cap on the upload — nobody's metadata DB is that
-	// big and the cap stops a runaway client.
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<30))
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(restoreUploadWindow))
+	// Only the first secretRestoreMax+1 bytes are held in memory; a larger
+	// dump is spooled to disk and staged in the backup bucket.
+	body, err := io.ReadAll(io.LimitReader(r.Body, secretRestoreMax+1))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
@@ -166,15 +167,8 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "empty or truncated dump")
 		return
 	}
-	// Secret data caps out near 1 MiB on most kubelets. For large
-	// dumps an operator should pg_restore directly against
-	// kuso-postgres; we surface a clear error rather than fail in
-	// confusing ways.
-	if len(body) > 900*1024 {
-		writeErr(w,
-
-			http.StatusRequestEntityTooLarge, "dump exceeds 900 KiB — for larger dumps run pg_restore directly against kuso-postgres (see docs/BACKUP_RESTORE.md)")
-
+	if len(body) > secretRestoreMax {
+		h.restoreViaS3(w, r, body)
 		return
 	}
 
@@ -270,6 +264,10 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 		// a stuck apiserver doesn't block the status response.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if key := job.Annotations[restoreKeyAnnotation]; key != "" {
+			h.deleteStagedDump(key)
+			return
+		}
 		if err := h.deleteRestoreSecret(cleanupCtx, secretName); err != nil {
 			h.Logger.Warn("restore: cleanup data secret", "secret", secretName, "err", err)
 		}

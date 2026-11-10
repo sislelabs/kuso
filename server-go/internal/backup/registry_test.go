@@ -175,6 +175,41 @@ func TestMongoMysqlRestore_WaitForServerBeforeApply(t *testing.T) {
 // redirected into a temp dir so runs don't share files.
 func runRestoreScript(t *testing.T, script, apply, ncBody, connEnv string) (string, bool, string, error) {
 	t.Helper()
+	return runRestoreScriptWith(t, script, apply, ncBody, connEnv, "", "ALLOW_UNVERIFIED=1")
+}
+
+// The manifest is mandatory: a missing one used to restore unverified.
+// Legacy (pre-manifest) backups stay restorable through the named override.
+func TestRestoreScripts_ManifestRequired(t *testing.T) {
+	const emptySHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	p, _ := NewDefaultRegistry().For("mongodb")
+	s := p.RestoreScript()
+	env := "MONGO_URL=mongodb://u:p@mongo:27017/db"
+	cases := []struct {
+		name, manifest string
+		extra          []string
+		wantApplied    bool
+		wantOut        string
+	}{
+		{"no manifest", "", nil, false, "allowUnverified"},
+		{"no manifest, override", "", []string{"ALLOW_UNVERIFIED=1"}, true, "NOT verified"},
+		{"manifest without sha256", `{"schemaVersion":1}`, nil, false, "allowUnverified"},
+		{"checksum mismatch, override ignored", `{"sha256":"deadbeef"}`, []string{"ALLOW_UNVERIFIED=1"}, false, "MISMATCH"},
+		{"checksum ok", `{"sha256":"` + emptySHA + `"}`, nil, true, "checksum OK"},
+	}
+	for _, c := range cases {
+		out, applied, _, err := runRestoreScriptWith(t, s, "mongorestore", "exit 0", env, c.manifest, c.extra...)
+		if applied != c.wantApplied || (err == nil) != c.wantApplied {
+			t.Errorf("%s: applied=%v err=%v, want applied=%v\n%s", c.name, applied, err, c.wantApplied, out)
+		}
+		if !strings.Contains(out, c.wantOut) {
+			t.Errorf("%s: output missing %q:\n%s", c.name, c.wantOut, out)
+		}
+	}
+}
+
+func runRestoreScriptWith(t *testing.T, script, apply, ncBody, connEnv, manifest string, extraEnv ...string) (string, bool, string, error) {
+	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {
@@ -183,8 +218,9 @@ func runRestoreScript(t *testing.T, script, apply, ncBody, connEnv string) (stri
 	marker := filepath.Join(dir, "applied")
 	ncLog := filepath.Join(dir, "nc.log")
 	stubs := map[string]string{
-		// aws s3 cp --endpoint-url E src dst: no manifest, artifact "downloads".
-		"aws":    `case "$5" in *.manifest.json) exit 1;; esac; : > "$6"`,
+		// aws s3 cp --endpoint-url E src dst: the manifest is $MANIFEST
+		// (absent when empty); the artifact "downloads" as an empty file.
+		"aws":    `case "$5" in *.manifest.json) [ -n "$MANIFEST" ] || exit 1; printf '%s' "$MANIFEST" > "$6";; *) : > "$6";; esac`,
 		"nc":     `echo "$@" >> ` + ncLog + "\n" + ncBody,
 		"sleep":  "exit 0",
 		"gunzip": "echo 'select 1;'",
@@ -201,7 +237,9 @@ func runRestoreScript(t *testing.T, script, apply, ncBody, connEnv string) (stri
 		"PATH=" + bin + ":" + os.Getenv("PATH"),
 		"BUCKET=b", "S3_ENDPOINT=e", "KEY=p/a/k", connEnv,
 		"MYSQL_USER=u", "MYSQL_DB=d", "MYSQL_PASSWORD=pw",
+		"MANIFEST=" + manifest,
 	}
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	_, statErr := os.Stat(marker)
 	nc, _ := os.ReadFile(ncLog)

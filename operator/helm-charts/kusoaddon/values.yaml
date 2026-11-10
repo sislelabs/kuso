@@ -146,6 +146,10 @@ pooler:
   # usable connection cap for an external backend (PlanetScale's plan leaves
   # ~9 after its own roles: 6 is safe). The reserve pool scales with it.
   poolSize: 0
+  # maxUserConnections / maxDbConnections: PgBouncer's global backend caps
+  # per user / per database across all pools. 0 = no cap (not rendered).
+  maxUserConnections: 0
+  maxDbConnections: 0
   # serverTLSSslmode: PgBouncer's TLS mode toward an external backend.
   # "require" encrypts without verifying the chain, which is what managed
   # providers expect from a pooler. Ignored for in-cluster backends.

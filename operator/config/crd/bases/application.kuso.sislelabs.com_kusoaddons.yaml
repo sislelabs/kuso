@@ -150,6 +150,20 @@ spec:
                         user/db). 0 = chart default of 25. Set below an
                         external provider's usable connection cap; the reserve
                         pool scales with it.
+                    maxUserConnections:
+                      type: integer
+                      format: int32
+                      description: >-
+                        PgBouncer max_user_connections (backend connections
+                        per user across all its pools). 0 = unset (no cap).
+                        Changing it restarts the pooler.
+                    maxDbConnections:
+                      type: integer
+                      format: int32
+                      description: >-
+                        PgBouncer max_db_connections (backend connections
+                        per database across all its pools). 0 = unset (no
+                        cap). Changing it restarts the pooler.
                 imagePin:
                   type: object
                   description: >-

@@ -477,6 +477,9 @@ type RestoreRequest struct {
 	// acknowledgement. Ignored only when restoring into a GENUINELY
 	// distinct sibling addon (non-destructive to the source).
 	Confirm string `json:"confirm,omitempty"`
+	// AllowUnverified restores a backup that has no checksum manifest
+	// (taken before manifests existed). Without it the Job refuses one.
+	AllowUnverified bool `json:"allowUnverified,omitempty"`
 }
 
 // Restore creates a one-shot Job that downloads the backup and pipes
@@ -660,6 +663,9 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	if siblingDB != "" {
 		restoreEnv = overrideEnv(restoreEnv, corev1.EnvVar{Name: "POSTGRES_DB", Value: siblingDB})
+	}
+	if req.AllowUnverified {
+		restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "ALLOW_UNVERIFIED", Value: "1"})
 	}
 
 	keyEnv, keyCopy, err := h.restoreKeyEnv(ctx, ns, jobName, project, req.Key, tenantLoc)

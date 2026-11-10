@@ -334,6 +334,19 @@ max_client_conn = 1000
 {{- $poolSize := int (default 25 .Values.pooler.poolSize) }}
 default_pool_size = {{ $poolSize }}
 reserve_pool_size = {{ if .Values.pooler.poolSize }}{{ max 1 (div $poolSize 4) }}{{ else }}5{{ end }}
+{{- /* Global backend caps across every pool of one user / one database.
+       The shared instance pooler holds one pool per (tenant role, db), so
+       these bound how much of the server one tenant's pools can take. Only
+       rendered when set: changing pgbouncer.ini rolls the pooler, which drops
+       every tenant's connections, so an upgrade must not change it for
+       existing installs. Tenant roles also carry a CONNECTION LIMIT on the
+       server, which bounds pooled + DIRECT_URL connections together. */}}
+{{- with .Values.pooler.maxUserConnections }}
+max_user_connections = {{ int . }}
+{{- end }}
+{{- with .Values.pooler.maxDbConnections }}
+max_db_connections = {{ int . }}
+{{- end }}
 reserve_pool_timeout = 3
 query_wait_timeout = 30
 server_idle_timeout = 600

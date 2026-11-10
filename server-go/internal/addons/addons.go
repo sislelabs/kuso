@@ -46,6 +46,12 @@ type Service struct {
 
 	// refreshMu serialises env refreshes per project (project -> *sync.Mutex).
 	refreshMu sync.Map
+
+	// instanceSnaps (instance name -> *instanceSnap) and overviewCache
+	// (instance name -> *overviewEntry) back the shared-server health and
+	// the settings page; see instance_health.go / instance_overview.go.
+	instanceSnaps sync.Map
+	overviewCache sync.Map
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -625,7 +631,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		// one would otherwise rotate the winner's role under its running
 		// pods. A re-add over a retained Secret keeps its password too.
 		keepPW := string(s.connSecretData(ctx, ns, connSecretName(fqn))["POSTGRES_PASSWORD"])
-		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, keepPW)
+		dsn, pw, createdInstanceDB, err = s.provisionInstanceAddonDB(ctx, adminDSN, project, req.Name, keepPW, 0)
 		if err != nil {
 			return nil, fmt.Errorf("provision instance addon db: %w", err)
 		}
@@ -705,7 +711,7 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	if err != nil {
 		return err
 	}
-	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort, "")
+	dsn, pw, _, err := s.provisionInstanceAddonDB(ctx, adminDSN, project, addonShort, "", 0)
 	if err != nil {
 		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 	}
@@ -1307,6 +1313,21 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 			// teardown isn't wedged. An operator can reclaim the DB manually.
 			keepConn = true
 			slog.Default().Warn("addon delete: instance-pg DB NOT dropped (orphaned on shared server; conn secret kept)",
+				"project", project, "addon", name, "instance", cr.Spec.UseInstanceAddon, "err", derr)
+		}
+	} else if cr.Spec.UseInstanceAddon != "" {
+		// Retained database: keep the data, but stop the old credential
+		// from logging in to it. Best-effort; it must not block the delete.
+		adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon)
+		var dbAddon string
+		if derr == nil {
+			dbAddon, derr = s.resolveInstanceAddonName(ctx, ns, cr, project)
+		}
+		if derr == nil {
+			derr = s.disableInstanceRoleLogin(ctx, adminDSN, project, dbAddon)
+		}
+		if derr != nil {
+			slog.Default().Warn("addon delete: retained instance-pg role still has LOGIN",
 				"project", project, "addon", name, "instance", cr.Spec.UseInstanceAddon, "err", derr)
 		}
 	}

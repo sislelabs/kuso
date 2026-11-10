@@ -163,11 +163,17 @@ func TestInstanceAdd_RefusesDBOwnedByAnotherProject(t *testing.T) {
 	if err := s.Delete(context.Background(), p1, "api-db"); err != nil {
 		t.Fatalf("delete first addon: %v", err)
 	}
+	// DB-11: the retained database's credential stops logging in.
+	if perr := pingDSN(firstDSN); perr == nil {
+		t.Fatal("retained tenant role can still log in after its addon was deleted")
+	}
 
 	err := instanceAdd(s, p2, "db")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("second project's add: got %v, want ErrConflict", err)
 	}
+	// Re-enable login to check the refused add did not rotate the password.
+	adminExec(t, adminDSN, fmt.Sprintf(`ALTER ROLE %s LOGIN`, pq.QuoteIdentifier(ident)))
 	if perr := pingDSN(firstDSN); perr != nil {
 		t.Errorf("first project's stored credentials stopped working after the refused add: %v", perr)
 	}

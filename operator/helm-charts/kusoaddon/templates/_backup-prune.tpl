@@ -10,8 +10,8 @@ ISO form the old per-object parse used, so every object got obj_ts=0 and
 was skipped while the Job still exited 0.
 
 Fails safe: a failed or unparseable listing deletes nothing, names without
-a leading stamp are never touched, and the newest KEEP_MIN distinct stamps
-survive even when they are all past retention.
+a leading stamp are never touched, and the newest KEEP_MIN objects of each
+series survive even when they are all past retention.
 */ -}}
 {{- define "kusoaddon.backupPrune" -}}
 # retention-prune:begin
@@ -44,14 +44,18 @@ if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
         NAMES=$(printf '%s\n' "${NAMES}" | awk -v since="${OWNER_SINCE}" \
           'match($0, /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z/) { s = substr($0, 1, 8) substr($0, 10, 6); if (s >= since) print }')
       fi
-      # Oldest stamp among the newest KEEP_MIN; nothing at or after it goes.
-      KEEP_FROM=$(printf '%s\n' "${NAMES}" \
-        | sed -n 's/^\([0-9]\{8\}\)T\([0-9]\{6\}\)Z.*/\1\2/p' \
-        | sort -u | tail -n "${KEEP_MIN}" | head -n 1)
-      printf '%s\n' "${NAMES}" | while read -r name; do
-        stamp=$(printf '%s\n' "${name}" | sed -n 's/^\([0-9]\{8\}\)T\([0-9]\{6\}\)Z.*/\1\2/p')
-        [ -z "${stamp}" ] && continue
-        if [ "${stamp}" -lt "${CUTOFF}" ] && [ "${stamp}" -lt "${KEEP_FROM}" ]; then
+      # KEEP_MIN is per series (the name after the stamp: ".sql.gz",
+      # ".db-<tenant>.sql.gz", their manifests), not per run: a tenant
+      # whose dumps failed for the last few runs must still keep its own
+      # newest copies. "<stamp>|<series>|<name>", newest first per series;
+      # anything past the KEEP_MIN newest of its series and older than
+      # CUTOFF goes.
+      printf '%s\n' "${NAMES}" \
+        | sed -n 's/^\([0-9]\{8\}\)T\([0-9]\{6\}\)Z\(.*\)$/\1\2|\3|&/p' \
+        | sort -t '|' -k2,2 -k1,1r \
+        | awk -F '|' -v keep="${KEEP_MIN}" -v cutoff="${CUTOFF}" \
+            '{ if ($2 != prev) { n = 0; prev = $2 } n++; if (n > keep && ($1 + 0) < (cutoff + 0)) print $3 }' \
+        | while read -r name; do
           {{- if eq .mode "prefixes" }}
           echo "    rm -r s3://${BUCKET}/${PREFIX}${name}"
           aws s3 rm --endpoint-url "${S3_ENDPOINT}" --recursive "s3://${BUCKET}/${PREFIX}${name}" || true
@@ -59,7 +63,6 @@ if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
           echo "    rm s3://${BUCKET}/${PREFIX}${name}"
           aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
           {{- end }}
-        fi
       done
     fi ; } || true
 fi

@@ -149,9 +149,6 @@ func TestBackupPrune_DeletesOnlyExpiredObjects(t *testing.T) {
 	for _, days := range []int{60, 45, 31, 29, 20, 10, 1, 0} {
 		s := stampDaysAgo(now, days)
 		names := []string{s + ".sql.gz", s + ".sql.gz.manifest.json"}
-		if days == 60 {
-			names = append(names, s+".db-tenant.sql.gz")
-		}
 		for _, n := range names {
 			listing = append(listing, fileLine(n))
 			if days > 30 {
@@ -237,6 +234,27 @@ func TestBackupPrune_KeepsNewestThreeEvenWhenAllExpired(t *testing.T) {
 		}
 		assertDeleted(t, runPrune(t, docker, block, strings.Join(listing, "\n"), 0), want)
 	})
+}
+
+// KEEP_MIN counts per series. A tenant whose per-DB dump failed on the
+// last runs used to lose every copy once those were past retention,
+// because the newest three RUN stamps all lacked its dumps.
+func TestBackupPrune_KeepsNewestThreePerTenantSeries(t *testing.T) {
+	docker := requireBackupImage(t)
+	now := time.Now().UTC()
+	block := renderedPruneBlock(t, "postgres")
+	var listing, want []string
+	for _, days := range []int{100, 90, 80, 70, 3, 2, 1} {
+		s := stampDaysAgo(now, days)
+		listing = append(listing, fileLine(s+".sql.gz"))
+		if days >= 70 {
+			// The tenant's dumps stopped 70 days ago.
+			listing = append(listing, fileLine(s+".db-tenant.sql.gz"))
+			want = append(want, s+".sql.gz")
+		}
+	}
+	want = append(want, stampDaysAgo(now, 100)+".db-tenant.sql.gz")
+	assertDeleted(t, runPrune(t, docker, block, strings.Join(listing, "\n"), 0), want)
 }
 
 // Anything short of a clean listing must delete nothing.

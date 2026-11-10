@@ -99,7 +99,8 @@ func (s *Service) RepairPassword(ctx context.Context, project, name string) erro
 		})
 		if err2 != nil {
 			return fmt.Errorf("psql alter user failed: stdout=%s stderr=%s err=%w (fallback: stdout=%s stderr=%s err=%v)",
-				stdout, stderr, err, stdout2, stderr2, err2)
+				redactSecret(stdout, pw, escaped), redactSecret(stderr, pw, escaped), err,
+				redactSecret(stdout2, pw, escaped), redactSecret(stderr2, pw, escaped), err2)
 		}
 	}
 	return nil

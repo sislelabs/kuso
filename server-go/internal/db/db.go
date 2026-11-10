@@ -19,8 +19,10 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -157,19 +159,16 @@ func Open(dsn string) (*DB, error) {
 	// reconnect handshakes; negligible at our request rate.
 	sqldb.SetConnMaxLifetime(5 * time.Minute)
 
-	// Boot ping with retry — Postgres pod might still be starting on
-	// a fresh install. 10 second total budget; readiness probe wins
-	// after that.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err = sqldb.Ping(); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			_ = sqldb.Close()
-			return nil, fmt.Errorf("db: ping: %w", err)
-		}
-		time.Sleep(500 * time.Millisecond)
+	// Boot ping with backoff. Postgres may be starting on a fresh install
+	// or replaying WAL after a crash; exiting after a few seconds turned
+	// that recovery into a kuso-server crashloop. The budget stays inside
+	// the startupProbe's 5 minutes.
+	pctx, cancel := context.WithTimeout(context.Background(), bootPingBudget)
+	err = pingWithBackoff(pctx, sqldb.PingContext, slog.Default())
+	cancel()
+	if err != nil {
+		_ = sqldb.Close()
+		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	d := &DB{DB: sqldb, tenancy: newTenancyCache()}
 	// Apply the baseline schema (idempotent) + any pending versioned
@@ -188,6 +187,34 @@ func Open(dsn string) (*DB, error) {
 	return d, nil
 }
 
+const bootPingBudget = 4 * time.Minute
+
+// pingWithBackoff retries ping (500ms doubling to 15s) until it succeeds
+// or ctx ends, logging every failed attempt. Returns the last ping error.
+func pingWithBackoff(ctx context.Context, ping func(context.Context) error, log *slog.Logger) error {
+	delay := 500 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		err := ping(ctx)
+		if err == nil {
+			if attempt > 1 {
+				log.Info("db: reachable", "attempts", attempt)
+			}
+			return nil
+		}
+		log.Warn("db: not reachable yet, retrying", "attempt", attempt, "retryIn", delay.String(), "err", err)
+		t := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		case <-t.C:
+		}
+		if delay *= 2; delay > 15*time.Second {
+			delay = 15 * time.Second
+		}
+	}
+}
+
 // Stats holds runtime counters for the DB layer. Read by the alert
 // engine and exposed on /api/stats.
 type Stats struct {
@@ -202,6 +229,18 @@ func (d *DB) applySchema() error {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" || strings.HasPrefix(stmt, "--") {
 			continue
+		}
+		// ADD CONSTRAINT has no IF NOT EXISTS. Running it anyway takes an
+		// ACCESS EXCLUSIVE lock on the table (LogLine, ErrorEvent, User)
+		// on every boot before failing with "already exists"; probe first.
+		if m := addConstraintRe.FindStringSubmatch(stmt); m != nil {
+			var exists bool
+			if err := d.DB.QueryRow(
+				`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = $1 AND conrelid = to_regclass($2))`,
+				m[2], `"`+m[1]+`"`,
+			).Scan(&exists); err == nil && exists {
+				continue
+			}
 		}
 		if _, err := d.DB.Exec(stmt); err != nil {
 			// IF NOT EXISTS catches most re-runs; tolerate the
@@ -218,6 +257,8 @@ func (d *DB) applySchema() error {
 	}
 	return nil
 }
+
+var addConstraintRe = regexp.MustCompile(`(?is)^ALTER\s+TABLE\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+ADD\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s`)
 
 // splitSQL splits a multi-statement SQL blob on `;` while respecting
 // single-quoted strings, double-quoted identifiers, and `--` line

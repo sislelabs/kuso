@@ -444,9 +444,19 @@ func resolveInstanceShared(r instanceSharedRow, rows []AddonBackupStatus) AddonB
 		return st
 	}
 	st.Covered = false
-	// Same no-page policy as any unscheduled addon, unless the tenant
-	// asked for backups: then the silence is the failure.
-	st.Healthy = !st.ScheduleConfigured
+	// A managed instance addon exists but backs nothing up: the tenant has
+	// no other way to get a backup, so this is a failure, not an opt-out.
+	// No row for the backing addon means an external instance server,
+	// whose backups are its provider's; keep the no-page policy there
+	// unless the tenant asked for backups.
+	managedBacking := false
+	for _, b := range rows {
+		if b.Addon == r.backing {
+			managedBacking = true
+			break
+		}
+	}
+	st.Healthy = !managedBacking && !st.ScheduleConfigured
 	st.Detail = "instance-shared database is NOT backed up: instance addon " + r.backing +
 		" has no scheduled backup (or the instance server is external)"
 	if st.ScheduleConfigured {

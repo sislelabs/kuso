@@ -77,8 +77,22 @@ func TestComputeAddons_InstanceSharedWithoutBackingBackup(t *testing.T) {
 		t.Errorf("tenant with its own schedule and no backing backup must be uncovered+unhealthy: %+v", acme)
 	}
 	beta := rowFor(t, rows, "beta-pg")
-	if beta.Covered || beta.InstanceShared || !beta.Healthy {
-		t.Errorf("unscheduled tenant: uncovered gap, not paged: %+v", beta)
+	if beta.Covered || beta.InstanceShared || beta.Healthy {
+		t.Errorf("tenant of a managed instance with no backup has no way to get one; must be unhealthy: %+v", beta)
+	}
+}
+
+// An external instance server has no CR here; its backups are the
+// provider's, so an unscheduled tenant is a surfaced gap, not a page.
+func TestComputeAddons_InstanceSharedExternalServer(t *testing.T) {
+	t.Parallel()
+	kc := instanceKube(t, []*unstructured.Unstructured{
+		addonCR(t, "beta-pg", "beta", kube.KusoAddonSpec{Kind: "postgres", UseInstanceAddon: "pg"}),
+	})
+	rows, _ := ComputeAddons(context.Background(), kc, "kuso")
+	beta := rowFor(t, rows, "beta-pg")
+	if beta.Covered || !beta.Healthy {
+		t.Errorf("external-instance tenant: uncovered gap, not paged: %+v", beta)
 	}
 }
 

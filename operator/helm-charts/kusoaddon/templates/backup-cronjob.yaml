@@ -193,10 +193,10 @@ spec:
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
                     -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
                     2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
+                  FAILED_DBS=""
                   if [ -n "${OTHER_DBS}" ]; then
                     N=$(printf '%s\n' "${OTHER_DBS}" | grep -c . || true)
                     echo "==> addon hosts ${N} additional logical DB(s); dumping each"
-                    FAILED_DBS=""
                     for DB in ${OTHER_DBS}; do
                       DBKEY="${PROJECT}/${ADDON}/${TS}.db-${DB}.sql.gz"
                       echo "==> dumping ${DB} -> s3://${BUCKET}/${DBKEY}"
@@ -221,22 +221,29 @@ spec:
                       fi
                       printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"%s}]}\n' \
                         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${DBKEY}" "${DBSHA}" "${DBBYTES}" "${ENC_JSON}" > /tmp/db-manifest.json
-                      aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db-manifest.json "s3://${BUCKET}/${DBKEY}.manifest.json" || true
+                      # Restore refuses a dump without its manifest, so a
+                      # missing manifest is a failed dump, not a warning.
+                      if ! aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/db-manifest.json "s3://${BUCKET}/${DBKEY}.manifest.json"; then
+                        echo "ERROR: manifest upload failed for ${DB}" >&2
+                        FAILED_DBS="${FAILED_DBS} ${DB}"; rm -f /tmp/db.gz /tmp/db-manifest.json; continue
+                      fi
                       echo "==> ${DB} done (sha256=${DBSHA} bytes=${DBBYTES})"
                       rm -f /tmp/db.gz /tmp/db-manifest.json
                     done
-                    if [ -n "${FAILED_DBS}" ]; then
-                      echo "ERROR: logical DB dump failed for:${FAILED_DBS}" >&2
-                      exit 1
-                    fi
                   fi
 
                   # Retention prune. List existing dumps, drop ones
                   # older than RETENTION_DAYS. We keep the logic in the
                   # cronjob (rather than relying on bucket lifecycle)
                   # because some S3-compat backends (Wasabi, B2) don't
-                  # support lifecycle rules consistently.
+                  # support lifecycle rules consistently. It keeps the
+                  # newest copies per database, so it runs even when a
+                  # tenant's dump failed; the Job still fails afterwards.
                   {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
+                  if [ -n "${FAILED_DBS}" ]; then
+                    echo "ERROR: logical DB dump failed for:${FAILED_DBS}" >&2
+                    exit 1
+                  fi
                   echo "==> done"
               {{- include "kusoaddon.backupContainerExtras" . | nindent 14 }}
               env:

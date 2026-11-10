@@ -28,10 +28,12 @@ package instancepg
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/instancesecrets"
@@ -97,6 +100,23 @@ type Service struct {
 	// replica, so the read side must be safe under concurrent writes.
 	healthMu sync.RWMutex
 	health   healthSnapshot
+
+	// hardenedDSN is the admin DSN the last successful harden pass ran
+	// against; a pass runs once per DSN per process, retried after
+	// hardenRetry when it errors. Reconcile is the only writer.
+	hardenedDSN   string
+	lastHardenTry time.Time
+}
+
+// hardenRetry spaces out retries of a failed harden pass so an
+// unreachable or under-privileged server isn't hammered every tick.
+const hardenRetry = 10 * time.Minute
+
+// defaultBackup is the schedule a managed instance PG gets when nothing
+// set one: every tenant DB on it is dumped only through this CronJob, so
+// without it no tenant has any backup at all.
+func defaultBackup() map[string]any {
+	return map[string]any{"schedule": "0 3 * * *", "retentionDays": int64(14)}
 }
 
 // healthSnapshot is the result of the last `SELECT 1` probe against
@@ -185,6 +205,9 @@ type ProvisionManagedRequest struct {
 	HA          bool   `json:"ha,omitempty"`          // true → CNPG 3-replica cluster
 	Version     string `json:"version,omitempty"`     // "16" by default
 	StorageSize string `json:"storageSize,omitempty"` // e.g. "20Gi"
+	// ReattachData acknowledges that a data volume from an earlier managed
+	// PG still exists and will be reused as-is (same Postgres major only).
+	ReattachData bool `json:"reattachData,omitempty"`
 }
 
 // ConfigureExternalRequest is the POST /api/instance-pg/external body.
@@ -294,6 +317,26 @@ func (s *Service) ProvisionManaged(ctx context.Context, req ProvisionManagedRequ
 		return fmt.Errorf("%w: external PG already configured — DELETE first", ErrConflict)
 	}
 
+	// Disable keeps the data volume (and the chart reuses the old password),
+	// so a new CR silently reattaches it, and a different major would boot
+	// against an incompatible data directory and crash-loop. Make the admin
+	// say so explicitly.
+	if !req.ReattachData && s.Kube.Clientset != nil {
+		pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(s.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/name=kusoaddon,app.kubernetes.io/instance=" + addonCRName(),
+		})
+		if err != nil {
+			return fmt.Errorf("check retained data: %w", err)
+		}
+		if len(pvcs.Items) > 0 {
+			names := make([]string, 0, len(pvcs.Items))
+			for i := range pvcs.Items {
+				names = append(names, pvcs.Items[i].Name)
+			}
+			return fmt.Errorf("%w: data from an earlier managed cluster PG is still on volume(s) %s; set reattachData to reuse it (same Postgres major version only), or remove the volume(s) yourself first to start empty",
+				ErrConflict, strings.Join(names, ", "))
+		}
+	}
 	// Defaults that produce a sensible small-dev PG. The user can
 	// upgrade later via Disable + ProvisionManaged.
 	if req.Size == "" {
@@ -490,13 +533,16 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if addon == nil {
 		if dsn != "" {
 			s.probeAndRecord(ctx, dsn)
+			s.hardenOnce(ctx, dsn)
 		}
 		return nil
 	}
+	s.ensureBackupSchedule(ctx, addon)
 	// Path B: managed addon exists, DSN already registered. Probe to
 	// keep the unhealthy phase honest.
 	if dsn != "" {
 		s.probeAndRecord(ctx, dsn)
+		s.hardenOnce(ctx, dsn)
 		return nil
 	}
 	// Path C: managed addon exists, DSN not yet harvested. Walk the
@@ -527,7 +573,64 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// "unhealthy" the moment the DSN lands — pingDSN's own 5s timeout
 	// bounds the wait.
 	s.probeAndRecord(ctx, adminDSN)
+	s.hardenOnce(ctx, adminDSN)
 	return nil
+}
+
+// hardenOnce brings pre-existing tenants up to today's provisioning:
+// connection limits and CONNECT locked to each tenant's own role (see
+// addons.HardenInstanceServer). Skipped while the server is unhealthy.
+// KUSO_INSTANCEPG_LOCK_SHARED_DBS=off leaves postgres/template1/the
+// primary DB open to PUBLIC, for a tenant app that connects to the
+// maintenance database (e.g. an ORM's create-if-missing step).
+func (s *Service) hardenOnce(ctx context.Context, dsn string) {
+	if s.hardenedDSN == dsn {
+		return
+	}
+	if snap := s.healthSnapshotCopy(); !snap.ok {
+		return
+	}
+	if !s.lastHardenTry.IsZero() && time.Since(s.lastHardenTry) < hardenRetry {
+		return
+	}
+	s.lastHardenTry = time.Now()
+	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	lockShared := !strings.EqualFold(os.Getenv("KUSO_INSTANCEPG_LOCK_SHARED_DBS"), "off")
+	res, err := addons.HardenInstanceServer(hctx, dsn, lockShared)
+	for _, w := range res.Warnings {
+		s.Logger.Warn("instancepg: harden", "detail", w)
+	}
+	if err != nil {
+		s.Logger.Warn("instancepg: harden pass failed", "err", err)
+		return
+	}
+	s.hardenedDSN = dsn
+	s.Logger.Info("instancepg: harden pass done",
+		"limitsSet", res.LimitsSet, "tenantDBsLocked", res.TenantLocked, "sharedDBsLocked", strings.Join(res.SharedLocked, ","))
+}
+
+// ensureBackupSchedule gives a managed instance PG with no backup block the
+// default schedule. An existing block, even one with an empty schedule, is
+// the admin's choice and is left alone. Waits for the kuso-backup-s3 Secret:
+// without it every run would fail.
+func (s *Service) ensureBackupSchedule(ctx context.Context, addon *kube.KusoAddon) {
+	if addon == nil || addon.Spec.Backup != nil {
+		return
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, "kuso-backup-s3", metav1.GetOptions{}); err != nil {
+		return
+	}
+	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"backup": defaultBackup()}})
+	if err != nil {
+		return
+	}
+	if _, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.Namespace).
+		Patch(ctx, addon.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		s.Logger.Warn("instancepg: set default backup schedule", "err", err)
+		return
+	}
+	s.Logger.Info("instancepg: managed PG had no backup schedule; set the default", "schedule", defaultBackup()["schedule"])
 }
 
 // probeAndRecord runs a single SELECT 1 against the admin DSN and
@@ -672,6 +775,7 @@ func instanceAddonSpec(req ProvisionManagedRequest) map[string]any {
 		"size":        req.Size,
 		"ha":          req.HA,
 		"storageSize": req.StorageSize,
+		"backup":      defaultBackup(),
 		"pooler": map[string]any{
 			"enabled":        true,
 			"authMode":       "query",
