@@ -1,11 +1,14 @@
 package kube
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func renderChart(t *testing.T, chart, release string, args ...string) string {
@@ -91,6 +94,35 @@ func TestEnvIsolation_ProjectGate(t *testing.T) {
 		"--set", "networkPolicy.instanceDBEgress=false")
 	if strings.Contains(noIDB, "name: p-allow-instance-db-egress") {
 		t.Error("instanceDBEgress=false still renders the legacy rule")
+	}
+}
+
+// Dropping the SA token changes the pod template, which restarts the DB.
+// Existing addons (no spec.podHardening) must render without it so an
+// upgrade restarts nothing; addons the server creates get it.
+func TestAddonPodHardening_OnlyWhenStamped(t *testing.T) {
+	t.Parallel()
+	existing := renderChart(t, "kusoaddon", "p-db", "--set", "project=p", "--set", "kind=postgres", "--set", "pooler.enabled=true")
+	if strings.Contains(existing, "automountServiceAccountToken") {
+		t.Fatal("existing addon's pod template changed: automountServiceAccountToken rendered without podHardening")
+	}
+	hardened := renderChart(t, "kusoaddon", "p-db", "--set", "project=p", "--set", "kind=postgres", "--set", "pooler.enabled=true", "--set", "podHardening=true")
+	if n := strings.Count(hardened, "automountServiceAccountToken: false"); n != 2 {
+		t.Fatalf("hardened DB + pooler: %d automount=false, want 2", n)
+	}
+}
+
+func TestCreateKusoAddon_StampsPodHardening(t *testing.T) {
+	c := fakeClient(t)
+	got, err := c.CreateKusoAddon(context.Background(), "kuso", &KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "p-db", Namespace: "kuso"},
+		Spec:       KusoAddonSpec{Project: "p", Kind: "postgres"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Spec.PodHardening {
+		t.Fatal("new addon not stamped podHardening")
 	}
 }
 

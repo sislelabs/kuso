@@ -1006,6 +1006,10 @@ type KusoAddonSpec struct {
 	// they would with a native addon, but no StatefulSet/PVC is
 	// created. Set External XOR set the native fields above.
 	External *KusoAddonExternal `json:"external,omitempty"`
+	// PodHardening drops the SA token from addon pods. Set only at
+	// create (kube.CreateKusoAddon, addons.createAddon): turning it on
+	// for a live addon changes its pod template and restarts the DB.
+	PodHardening bool `json:"podHardening,omitempty"`
 	// UseInstanceAddon points at an instance-shared database server
 	// registered by an admin (Model 2). The kuso server creates an
 	// isolated database on the shared server for this project and

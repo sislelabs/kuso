@@ -461,6 +461,7 @@ func (c *Client) DeleteKusoBuild(ctx context.Context, namespace, name string) er
 // over-restricts the allowed kinds; here we just need to mirror an
 // already-validated production addon's spec into a new env's namespace.
 func (c *Client) CreateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {
+	a.Spec.PodHardening = true
 	return create[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
 }
 

@@ -37,14 +37,18 @@ matching `nobody` user).
 {{- end -}}
 {{- end -}}
 
-{{- /* Pod-level hardening. automountServiceAccountToken lives here so every
-       template that already includes this helper (s3.yaml included) drops
-       the token without a per-template edit: no addon image talks to the
-       kube API. The runAsUser/fsGroup values below are unchanged from what
-       live StatefulSets already run with, so existing data dirs keep their
-       owner. */ -}}
+{{- /* Pod-level hardening. The SA-token drop is gated on spec.podHardening,
+       which kuso-server sets only when it CREATES an addon: flipping it
+       on an existing addon changes the pod template and restarts the DB,
+       so existing addons render byte-identical until someone opts them
+       in (kubectl patch spec.podHardening=true). It lives in this helper
+       so every template that includes it (s3.yaml too) picks it up. No
+       addon image talks to the kube API. runAsUser/fsGroup are unchanged
+       from what live StatefulSets already run with. */ -}}
 {{- define "kusoaddon.podSecurityContext" -}}
+{{- if .Values.podHardening -}}
 automountServiceAccountToken: false
+{{ end -}}
 securityContext:
   runAsNonRoot: true
   runAsUser: {{ include "kusoaddon.uidForKind" . }}

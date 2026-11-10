@@ -113,7 +113,9 @@ spec:
       # before this pooler when a node goes hot. Matches the addon
       # StatefulSet and the instance pooler in deploy/postgres.yaml.
       priorityClassName: kuso-platform
+      {{- if .Values.podHardening }}
       automountServiceAccountToken: false
+      {{- end }}
       # Pod-level hardening. We deliberately do NOT use
       # kusoaddon.podSecurityContext here: that helper pins
       # runAsUser to the addon-kind UID (999 for postgres), which is

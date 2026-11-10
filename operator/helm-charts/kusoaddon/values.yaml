@@ -107,6 +107,11 @@ external: {}
 # into <name>-conn.
 useInstanceAddon: ""
 
+# podHardening: drop the ServiceAccount token from addon pods. Set by
+# kuso-server on every addon it creates; existing addons stay false (their
+# pod template, and so the running DB, is untouched) until opted in.
+podHardening: false
+
 # pooler: opt-in PgBouncer in front of a kind=postgres addon. When
 # enabled, single-node addons get a self-managed 1-replica PgBouncer
 # Deployment; HA (CNPG) addons get a CNPG-native Pooler CRD. Reach it
