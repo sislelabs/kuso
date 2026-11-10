@@ -31,6 +31,7 @@ A push is held to tighter rules than `kuso apply`, because whoever can push to t
 | `baseDomain` | string | Written by `project export`. Accepted, but apply does not change the project's base domain. |
 | `prune` | bool | Default `false`. See above. |
 | `requestLimits` | `{maxConcurrent, ratePerSecond, burst}` | Project default for its services' [ingress limits](#ingress-limits). Leave the block out to keep whatever is set in the UI or CLI. |
+| `uptime` | `{disabled}` | `disabled: true` turns uptime checks off for the whole project. Leave the block out to keep whatever is set in the UI or CLI. |
 | `services` | list | See [Services](#services). |
 | `addons` | list | See [Addons](#addons). |
 | `crons` | list | Project crons only. See [Crons](#crons). |
@@ -43,7 +44,7 @@ A push is held to tighter rules than `kuso apply`, because whoever can push to t
 | `repo` | string | Git URL. A `#subdir` suffix sets `path`. There is no project-level default repo in this file. |
 | `branch` | string | Branch production tracks. |
 | `path` | string | Subdirectory inside the repo (monorepos). |
-| `runtime` | string | `dockerfile`, `nixpacks`, `buildpacks`, `static`, `image` or `worker`. |
+| `runtime` | string | `dockerfile`, `nixpacks`, `static`, `image` or `worker`. `buildpacks` is rejected by the parser (its builds can't produce an image). |
 | `port` | int | The port the app listens on. kuso sets `$PORT` to this. |
 | `internal` | bool | No public ingress. |
 | `privateEgress` | bool | Allow egress to private ranges. |
@@ -59,7 +60,7 @@ A push is held to tighter rules than `kuso apply`, because whoever can push to t
 | `placement` | `{labels: map, nodes: list}` | If you leave it out, the project default applies. |
 | `volumes` | list | `{name, mountPath, sizeGi}`. |
 | `static` | `{buildCmd, outputDir}` | For `runtime: static`. |
-| `buildpacks` | `{builder}` | Builder image for `runtime: buildpacks`. |
+| `buildpacks` | `{builder}` | Builder image for `runtime: buildpacks`. Parsed, but that runtime is currently rejected, so it has no effect. |
 | `image` | `{repository, tag, pullSecret}` | For `runtime: image`. `repository` has no tag. `tag` defaults to `latest`. `pullSecret` names a registry login (`kuso registry login`). |
 | `release` | `{command, timeoutSeconds}` | Pre-deploy hook (migrations). It runs once per build, before promotion, and a failure blocks the rollout. If you leave it out, or leave `command` empty, the hook is cleared. The server's default timeout is 900s. |
 | `buildArgs` | map | `--build-arg KEY=VAL`, the same in every environment. Don't put secrets here. |
@@ -166,7 +167,7 @@ env:
 | `useInstanceAddon` | string | Attach to an instance-shared addon. |
 | `tls` | string | Postgres only: `disable` (default) or `require`. |
 
-**Addons are create-only in apply.** Changing an existing addon's fields in the file doesn't update it. The plan reports the drift as "not applied". Change live addons with `kuso project addon update` (version, size, ha and storageSize can't be changed on a live addon).
+**Addons are create-only in apply.** Changing an existing addon's fields in the file doesn't update it. The plan reports the drift as "not applied". Change live addons with `kuso project addon update` (version, ha, storageSize and database can't be changed on a live addon; size only when the change doesn't move the storage request).
 
 ## Crons
 
@@ -176,7 +177,7 @@ Only project crons (`kind: http` or `kind: command`) are managed here. Service c
 |---|---|---|
 | `name` | string | Required. |
 | `kind` | string | `http` or `command`. |
-| `schedule` | string | Required. A 5-field cron expression (month and day-of-week accept names like `JAN`, `MON-FRI`) or one of `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly`. `@every`, `@reboot`, `?` and a seconds field are rejected. |
+| `schedule` | string | Required. A 5-field cron expression (month and day-of-week accept names like `JAN`, `MON-FRI`). The macros `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight` and `@hourly` also work. `@every`, `@reboot`, `?` and a seconds field are rejected, and so are out-of-range values like hour `25`. |
 | `url` | string | Required for `http`. |
 | `image` | string | `repo:tag`. Required for `command`. The tag defaults to `latest`. |
 | `command` | list of strings | Required for `command`. |

@@ -1,36 +1,19 @@
 # `.claude/skills/`
 
-Project-specific skills for AI agents working on kuso. Each `.md` file is a skill an agent can read at the start of a session to ramp on conventions, architecture, and workflow rules that aren't obvious from the code.
+Project skills for agents working on the kuso repo. Claude Code loads each `<name>/SKILL.md` and decides when to use it from the frontmatter `description`. Repo layout, architecture and cluster rules live in the root `CLAUDE.md`, which is loaded every turn.
 
-## Index
+| Skill | Load it when |
+| --- | --- |
+| [`agentic-workflow`](./agentic-workflow/SKILL.md) | Making changes in the repo or touching a live instance: what needs asking, commit style. |
+| [`mcp-development`](./mcp-development/SKILL.md) | Touching `mcp/`: tool design rules, layout, adding a tool. |
+| [`smoke-tests`](./smoke-tests/SKILL.md) | Before a PR: which test layer catches what, in cost order. |
 
-| Skill                                                  | When to read it                                                                  |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| [`repo-orientation.md`](./repo-orientation.md)         | Start of every session. What lives where, what not to touch.                     |
-| [`platform-architecture.md`](./platform-architecture.md) | Before reasoning about scaling, persistence, leader election, multi-node placement. |
-| [`agentic-workflow.md`](./agentic-workflow.md)         | Before making changes — sets ground rules for what to do without asking.         |
-| [`mcp-development.md`](./mcp-development.md)           | Before touching `mcp/` — tool design rules, layout, how to add a new tool.       |
-| [`smoke-tests.md`](./smoke-tests.md)                   | Before opening a PR — which smoke test catches what, in cost order.              |
-| [`work-plan.md`](./work-plan.md)                       | For historical context on the platform work plan — what shipped and why.        |
+The kuso skill for consumer repos (`skills/kuso/`) is a separate, published artifact.
 
 ## Adding a skill
 
-If you (an agent) learn something non-obvious about kuso that future agents will need, add it here:
+1. Create `<name>/SKILL.md` with frontmatter `name: <name>` and a `description` that says when to load it ("Use when …").
+2. Keep it short; tables and examples beat prose. Split anything over ~200 lines.
+3. Add a row above.
 
-1. New file: `<topic>.md`
-2. YAML frontmatter:
-   ```
-   ---
-   name: <topic>
-   description: <one-line — when should this skill be loaded?>
-   ---
-   ```
-3. Body: structured markdown. Tables and concrete examples > prose.
-4. Add a row to the Index table above.
-
-Keep skills tight. If a skill is over ~200 lines, split it.
-
-## What goes here vs. `docs/`
-
-- **`docs/`**: product-facing — PRD, architecture diagrams, user docs. Stable, versioned with releases.
-- **`.claude/skills/`**: agent-facing — conventions, gotchas, "how we do things." Evolves continuously as the project matures.
+Product and operator docs go in `docs/`. Agent conventions and gotchas go here.

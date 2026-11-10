@@ -1,23 +1,24 @@
 ---
 name: smoke-tests
-description: Use when something looks like it might be broken after a refactor, or before opening a PR that touches operator/server/cli/mcp. Tells you which smoke test catches what.
+description: Use before opening a PR that touches server-go/, operator/, cli/, mcp/ or web/, or when something looks broken after a refactor. Lists the test layers (unit, MCP integration, kind CRD dry-run, sandbox e2e) in cost order and what each catches.
 ---
 
 # kuso smoke tests
 
-There are three layers of smoke tests, in increasing order of cost and coverage. Run the cheapest one first.
+There are four layers of smoke tests, in increasing order of cost and coverage. Run the cheapest one first.
 
 ## Level 1: per-subproject unit tests
 
 Fast (sub-second to a few seconds). No external dependencies.
 
 ```bash
-make verify                # canonical gate: web typecheck + server-go tests + CLI/API parity grep
+make verify                # web typecheck + every go.work module's tests + CLI/API parity + sandbox manifest drift + chart/RBAC/CRD-guard checks
+make test-db               # Go tests incl. the Postgres-backed ones (-race -p 1), = the CI gate
 # Or per-subproject:
 cd server-go && go test ./...
 cd cli && go test ./...
 cd mcp && go test ./...
-cd web && pnpm typecheck   # the web app has no unit tests; typecheck is the gate
+cd web && pnpm typecheck && pnpm test   # tsc + vitest unit tests
 cd operator && for c in helm-charts/*/; do helm lint "$c"; done
 ```
 
@@ -48,10 +49,16 @@ What it catches: CRD schema regressions, group/kind/plural mismatches, rebrand a
 
 Required tools: `kind`, `kubectl`, Docker.
 
-## What's NOT covered yet
+## Level 4: sandbox end-to-end
 
-- **Real operator install.** We don't yet build the operator binary or apply the deployment. To do that, we'd need to publish `ghcr.io/sislelabs/kuso-operator:*` images.
-- **Real server install.** Same — needs `ghcr.io/sislelabs/kuso-server:*`.
-- **End-to-end deploy.** `kuso install` → deploy a hello-world app → tear down. This is the next big smoke test, but it's gated on building real images.
+A disposable single-node kuso (k3s in Docker) built from the working tree. See `hack/sandbox/README.md`.
 
-When you've shipped a change and want to know what's covered, the order is: run Level 1 first (cheap, broad). If it passes, run Level 2 if you touched `mcp/`. Run Level 3 if you touched `operator/`. Don't skip Level 3 on operator changes — CRD bugs are how you spend a Saturday afternoon hunting a typo.
+```bash
+make sandbox-up       # build images, start k3s, install kuso, log the CLI in
+make sandbox-smoke    # project → dockerfile + nixpacks builds → live HTTP → postgres addon → rebuild → rollback → delete
+make sandbox-down
+```
+
+What it catches: real operator + server install, the full deploy lifecycle. Minutes, not seconds. Required tools: Docker, `curl`, `jq`.
+
+When you've shipped a change and want to know what's covered, the order is: run Level 1 first (cheap, broad). If it passes, run Level 2 if you touched `mcp/`. Run Level 3 if you touched `operator/`. Run Level 4 for anything that changes deploy behaviour. Don't skip Level 3 on operator changes — CRD bugs are how you spend a Saturday afternoon hunting a typo.

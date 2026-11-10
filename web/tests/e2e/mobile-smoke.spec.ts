@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // nobody notices because all the dev work happens at 1440×900.
 //
 // What we DON'T test here:
-//   - Authenticated flows. Those need a live API; the LIVE_TEST_PLAN
+//   - Authenticated flows. Those need a live API; docs/AGENT_SMOKE_TEST.md
 //     covers them via manual or against-cluster runs.
 //   - Pixel-perfect screenshots. They flake on font-rendering jitter
 //     and aren't useful for regression catching.

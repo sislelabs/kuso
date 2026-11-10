@@ -7,7 +7,7 @@ short-lived Job per incident phase (`investigate` / `implement`), spawned by
 
 ## What's in the image
 
-Base `node:20-bookworm-slim` (Claude Code is an npm package + needs real Node):
+Base `node:24-bookworm-slim` (Claude Code is an npm package + needs real Node):
 
 - **Claude Code CLI** (`@anthropic-ai/claude-code`) — the agent runtime,
   driven head-less with `claude -p`.
@@ -42,7 +42,7 @@ docker build \
 
 `make incident-agent-image` (repo-root Makefile) is the canonical build:
 it cross-builds the CLI into the context, then `docker buildx build --push`
-for linux/amd64 + linux/arm64. The manual invocations above are for
+for linux/amd64. The manual invocations above are for
 one-off debugging.
 
 ## Claude Code credentials secret
@@ -94,11 +94,12 @@ Job-builder and the image.
 
 | Env                  | Required | Meaning |
 | -------------------- | -------- | ------- |
-| `PHASE`              | yes      | `investigate` or `implement`. |
+| `PHASE`              | yes      | `investigate` or `implement` (`refresh` is the keep-alive mode the `kuso-incident-agent-refresher` CronJob runs). |
 | `INCIDENT_ID`        | yes      | Incident id (`inc-xxxx`). Used in prompts + the POST URLs. |
 | `KUSO_API_URL`       | yes      | Base URL of kuso-server, e.g. `http://kuso-server.kuso.svc.cluster.local`. |
 | `INCIDENT_TOKEN`     | yes      | Per-incident bearer for the agent-facing endpoints (`/findings`, `/pr`). Single-incident scope. Source: `Incident.agentToken`. |
-| `KUSO_TOKEN`         | yes      | Project-scoped kuso CLI token (viewer + sql). The CLI + the curl calls read it. |
+| `KUSO_TOKEN`         | no       | Project-scoped kuso CLI token (viewer + sql). Empty in v1 (`jobs.go` sets it to `""`), so the agent investigates via kubectl with its read-only SA. |
+| `LOG_NAMESPACE`      | no       | The one namespace the agent may read pod logs in (default `kuso`). |
 | `EVENT_TYPE`         | yes      | `pod.crashed` \| `alert.fired` \| `node.unreachable`. |
 | `PROJECT`            | yes      | Incident project. |
 | `SERVICE`            | yes      | Incident service (or node name for `node.unreachable`). |

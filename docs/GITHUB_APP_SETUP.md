@@ -4,6 +4,8 @@ kuso uses a GitHub App for repo access — OAuth for sign-in, an installation to
 
 This is a **one-time, click-through step.** You need an admin account on the org/user that will own the App. For SisleLabs, that's https://github.com/organizations/sislelabs.
 
+**Shortcut:** in the kuso UI, Settings → GitHub → **Create GitHub App** runs GitHub's App-manifest flow: kuso pre-fills every field, permission and event below, receives the credentials back, writes them to the `kuso-github-app` Secret and restarts kuso-server. Use it and skip to step 5. The manual steps below are for registering the App by hand.
+
 ## 1. Register the App
 
 Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
@@ -13,11 +15,11 @@ Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
 | **GitHub App name** | `kuso-sislelabs` (or any unique name; this becomes the App's slug) |
 | **Description** | "kuso PaaS — connects repos to deploys" |
 | **Homepage URL** | `https://kuso.sislelabs.com` |
-| **Identifying and authorizing users** → **Callback URL** | `https://kuso.sislelabs.com/api/github/setup-callback` |
+| **Identifying and authorizing users** → **Callback URL** | `https://kuso.sislelabs.com/api/auth/github/callback` (GitHub sign-in) |
 | **Post installation** → **Setup URL (optional)** | `https://kuso.sislelabs.com/api/github/setup-callback` |
-| **Identifying and authorizing users** → **Request user authorization (OAuth) during installation** | ✅ checked |
+| **Identifying and authorizing users** → **Request user authorization (OAuth) during installation** | unchecked (the manifest flow leaves it off; if checked, GitHub skips the Setup URL and kuso forwards the install redirect from the Callback URL) |
 | **Webhook** → **Active** | ✅ checked |
-| **Webhook URL** | `https://kuso.sislelabs.com/api/webhooks/github` |
+| **Webhook URL** | `https://kuso.sislelabs.com/api/github/webhook` (`/api/webhooks/github` is an alias) |
 | **Webhook secret** | Generate a random 32+ char string. Save it — you'll paste it into the kuso secret. |
 | **SSL verification** | Enabled |
 
@@ -25,10 +27,14 @@ Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
 
 | Permission | Access |
 | --- | --- |
-| Contents | Read-only |
+| Contents | Read & write (the incident agent pushes fix branches) |
 | Metadata | Read-only |
 | Pull requests | Read & write |
-| Webhooks | Read-only (the App self-installs hooks; we don't need to manage them) |
+| Commit statuses | Read & write (`kuso/<service>` status on every build) |
+| Checks | Read-only (wait-for-CI gate) |
+| Deployments | Read & write |
+
+kuso flags installations that are missing `statuses:write` or `checks:read` — permission changes on the App only apply once each installation accepts them.
 
 ### Account permissions
 
@@ -40,8 +46,8 @@ Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
 
 - ✅ Push
 - ✅ Pull request
-- ✅ Installation
-- ✅ Installation repositories
+
+`installation` and `installation_repositories` events are delivered to every GitHub App without a checkbox; kuso handles both to refresh its installation cache.
 
 ### Where can this GitHub App be installed?
 
@@ -66,14 +72,19 @@ From the App settings page, collect:
 
 ## 4. Wire the values into the kuso install
 
-Edit the `kuso-server-secrets` Secret on the cluster:
+Easiest: paste them into Settings → GitHub (manual form), or use the CLI:
 
 ```bash
-export KUBECONFIG=~/.kube/kuso-hetzner.yaml
-kubectl edit secret kuso-server-secrets -n kuso
+kuso github configure \
+  --app-id 1234567 --app-slug kuso-sislelabs \
+  --client-id Iv1.abc... --client-secret abc... \
+  --webhook-secret the-32-char-string-from-step-1 --org sislelabs \
+  --pem ~/Downloads/kuso-sislelabs.pem
 ```
 
-Set these `stringData` keys (the file shows them base64-encoded under `data` after first save; the editor lets you paste plaintext under `stringData` instead):
+Both post to `/api/github/configure`, which writes the `kuso-github-app` Secret in the `kuso` namespace and restarts kuso-server (~30s). kuso-server loads that Secret via `envFrom`.
+
+By hand over ssh, the same Secret carries these keys:
 
 ```yaml
 stringData:
@@ -82,6 +93,7 @@ stringData:
   GITHUB_APP_CLIENT_ID: "Iv1.abc..."
   GITHUB_APP_CLIENT_SECRET: "abc..."
   GITHUB_APP_WEBHOOK_SECRET: "the-32-char-string-from-step-1"
+  GITHUB_APP_ORG: "sislelabs"   # optional, informational
   # Paste the entire PEM. Newlines in the YAML are preserved by the
   # | block-literal syntax.
   GITHUB_APP_PRIVATE_KEY: |
@@ -91,33 +103,21 @@ stringData:
     -----END RSA PRIVATE KEY-----
 ```
 
-Roll the kuso-server pod so it picks up the new env:
-
-```bash
-kubectl rollout restart deployment/kuso-server -n kuso
-```
+then `kubectl rollout restart deployment/kuso-server -n kuso`.
 
 ## 5. Verify
 
 ```bash
-TOKEN=$(curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"kuso-admin"}' \
-  https://kuso.sislelabs.com/api/auth/login | jq -r .access_token)
-
-curl -s -H "Authorization: Bearer $TOKEN" \
-  https://kuso.sislelabs.com/api/github/install-url
+kuso github status
 ```
 
-You should get `{"configured":true,"url":"https://github.com/apps/kuso-sislelabs/installations/new"}`.
+It should report the App as configured, with install URL `https://github.com/apps/kuso-sislelabs/installations/new` (`GET /api/github/install-url` returns `{"configured":true,"url":"…"}`).
 
 Visit that URL, install the App on the org/user that owns the repos you want to deploy, then:
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  https://kuso.sislelabs.com/api/github/installations/refresh
-
-curl -s -H "Authorization: Bearer $TOKEN" \
-  https://kuso.sislelabs.com/api/github/installations | jq
+kuso github refresh
+kuso github installations
 ```
 
-You should see your installation with a list of accessible repos. Project create flow (Phase 4) reads from this cache.
+You should see your installation; `kuso github repos <installation-id>` lists the repos it can reach. The project create flow reads from this cache.

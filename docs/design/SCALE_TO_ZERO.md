@@ -63,11 +63,30 @@ not only production, and wakes via `scaledown.Wake` (restore the
 Deployment).
 
 **Toggle.** `kuso project service sleep <p> <s> on|off [--after 30m]
-[--non-production on|off]`, or Settings → Sleep in the web UI.
+[--non-production on|off] [--exclude-path /webhooks/x ...|--exclude-paths-clear]`,
+or Settings → Sleep in the web UI.
+
+**Where the code lives.** Idle detector: `server-go/internal/scaledown`
+(idle signal = Prometheus `traefik_service_requests_total`; disable with
+`KUSO_SCALEDOWN_DISABLED=true`). Activator: `server-go/internal/activator`,
+run as `kuso-server --activator` from `deploy/kuso-activator.yaml` (same
+image, no separate build). It holds the request until the env's Endpoints
+are ready, then proxies it; it does not buffer and replay. Hold budget:
+`KUSO_ACTIVATOR_HOLD_SECONDS` (default 60, clamped 5..300); also
+`KUSO_ACTIVATOR_MAX_HELD` and `KUSO_ACTIVATOR_DRAIN_SECONDS`. The Ingress
+switch is in `operator/helm-charts/kusoenvironment/templates/ingress.yaml`.
+It routes to the activator when `sleep.enabled`, `autoSleep` or `stopped`
+is set; stopped envs get a page and are not woken. Envs outside the `kuso`
+namespace reach it through the chart's per-env ExternalName Service
+(`activator-service.yaml`).
+
+The sections below are the original proposal. Mechanism 3 (errors
+middleware), the per-state route flip, and the planned
+`internal/activator` idle-detector loop were not built as described.
 
 ---
 
-**Status:** Draft / proposal
+**Status:** Original proposal (shipped; see the notes above for what changed)
 **Author:** (design doc)
 **Context:** Hosting many mostly-idle apps (e.g. an AI-app-builder backend) requires
 idle apps to cost ~0 pods, with the first visitor transparently waking the app

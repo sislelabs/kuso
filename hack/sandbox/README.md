@@ -57,7 +57,7 @@ images are loaded under the exact names the build controller hardcodes.
 ## How it differs from a real install
 
 - **Plain HTTP everywhere.** No cert-manager and no Let's Encrypt.
-- **kuso's own database is a plain `postgres:16`**, not the CloudNativePG cluster.
+- **kuso's own database is a plain `postgres:16-alpine`**, not the CloudNativePG cluster.
 - **buildkitd runs on the control-plane node.** The manifest forbids that; the sandbox
   removes the rule because it has one node.
 - **Kubelet eviction thresholds are lowered to 1%.** The node shares the Docker VM's disk.

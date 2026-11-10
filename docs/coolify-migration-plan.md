@@ -1,5 +1,14 @@
 # Coolify → kuso migration plan
 
+> **Status: historical (2026-06 one-off migration).** Phase 0 shipped in
+> v0.18.18: the cluster-DB PgBouncer exists, wired in
+> `server-go/internal/instancepg`, so the "does NOT exist yet" constraint below
+> no longer holds. The progress record is `docs/coolify-migration-log.md`. For a
+> new migration, use `kuso migrate coolify` (dry-run by default, `--apply` to
+> create resources, `--out-dir` for a report plus per-addon `migrate-data.sh`
+> stubs), built on the `coolify/` module. Its server-side preview is
+> `server-go/internal/http/handlers/import_coolify.go`.
+
 Migrate the 16 live Coolify apps to kuso (everything **except domains** — no DNS
 cutover, no Let's Encrypt issuance for now), kusify env vars, route DB-backed
 apps through a **shared PgBouncer in front of the cluster DB**, and **dump the

@@ -1,5 +1,7 @@
 # TCP Proxy — Design
 
+> **Current status (2026-11-10):** Shipped for addons only (`kuso project addon public-tcp`, Traefik IngressRouteTCP). `KusoService.spec.tcpProxy` does not exist.
+
 **Date:** 2026-05-21
 **Status:** Draft — for review before implementation
 

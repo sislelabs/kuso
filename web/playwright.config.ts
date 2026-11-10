@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Minimal Playwright config — we run a tiny set of mobile regression
 // smoke tests against the static-exported SPA. The full E2E surface is
-// validated against a live cluster (docs/LIVE_TEST_PLAN.md); this file
+// validated against a live cluster (docs/AGENT_SMOKE_TEST.md); this file
 // is for the cheap-and-fast "did the dashboard layout break on phone"
 // signal that's hard to catch by eye during normal dev.
 //

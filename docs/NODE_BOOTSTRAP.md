@@ -23,7 +23,7 @@ For scripted use:
 kuso node add-token --region eu --label tier=premium
 # … prints the curl command
 kuso node pending             # see what's outstanding
-kuso node revoke <jti>        # cancel a pending token
+kuso node revoke <jti-prefix> # cancel a pending token (hash prefix from `pending`)
 ```
 
 ## What the one-liner does
@@ -33,28 +33,31 @@ The script fetched by `GET /bootstrap?token=<jti>` runs in this order:
 1. `set -eu` + dependency check (curl, sh).
 2. Detect facts: `hostname`, `uname -m`, `/etc/os-release`, cloud
    metadata service (AWS IMDSv2 → Hetzner Cloud → silent skip).
-3. POST `/bootstrap/register-node` with the token + facts. Retries
-   up to 4 times with capped backoff (5s → 15s → 20s) for transient
-   network blips. Hard-fails with a friendly message on 410 (token
+3. POST `/bootstrap/register-node` with the token + facts. Up to 4
+   attempts with linear backoff (5s, 10s, 15s, …) on transient
+   network errors / 5xx. Hard-fails with a friendly message on 410 (token
    gone) or 404 (token unknown).
 4. Receives `{ installCommand, registryHost, registryIP, nodeName, labels }`
-   from kuso. (The k3s URL + token are embedded, already shell-escaped,
+   (plus the kuso-registry credential once one has been minted) from kuso. (The k3s URL + token are embedded, already shell-escaped,
    inside `installCommand` — they are never returned as separate fields,
    so a script error path can't echo the cluster secret.)
-5. Tunes `fs.inotify` sysctls (persisted to `/etc/sysctl.d`).
-6. **Wires the in-cluster registry** (when the control plane advertised
+5. **Wires the in-cluster registry** (when the control plane advertised
    one): appends `<registryIP> <registryHost-without-port>` to
-   `/etc/hosts` and writes `/etc/rancher/k3s/registries.yaml` pointing
-   the registry at plain `http://` with `insecure_skip_verify`. This is
+   `/etc/hosts` and writes `/etc/rancher/k3s/registries.yaml` (mode 600)
+   pointing the registry at plain `http://` with `insecure_skip_verify`,
+   plus an `auth:` block when a registry credential was returned. This is
    required — the k3s agent install does NOT set it up, and without it
    the node can't pull build images (see Troubleshooting). Both files
    are idempotent and survive reboot.
-7. Runs `curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC="agent --node-label …" sh -`.
+6. Tunes `fs.inotify` sysctls (persisted to `/etc/sysctl.d`).
+7. Runs `curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_VERSION=… INSTALL_K3S_EXEC="agent --node-label …" sh -`
+   (`INSTALL_K3S_VERSION` pins the control plane's own k3s version when
+   it can be read).
 8. Logs `done.` — the new node should appear in `kuso node list`
    within ~30 seconds as kubelet registers.
 
 The k3s shared secret is never logged in plain text. Operator-visible
-output redacts `K3S_TOKEN=***`.
+output redacts both `K3S_URL=***` and `K3S_TOKEN=***`.
 
 ## Prerequisite: KUSO_K3S_URL
 
@@ -72,8 +75,8 @@ publicly-reachable API endpoint:
 kubectl set env -n kuso deploy/kuso-server KUSO_K3S_URL=https://<control-plane-public-ip>:6443
 ```
 
-`/bootstrap/register-node` returns `503 control-plane URL not configured`
-only when neither `KUSO_K3S_URL` nor `KUBERNETES_SERVICE_HOST` is set;
+`/bootstrap/register-node` returns `503 control-plane URL not configured
+(set KUSO_K3S_URL)` only when neither `KUSO_K3S_URL` nor `KUBERNETES_SERVICE_HOST` is set;
 when the fallback is used you get a *working-looking* command that
 silently can't reach the API — so set `KUSO_K3S_URL` explicitly for any
 node that isn't on the control plane's own private network.
@@ -103,14 +106,15 @@ rule, which leaves exactly this half-broken state.
 | Property                | Value                                                  |
 | ----------------------- | ------------------------------------------------------ |
 | Token entropy           | 128 bits (16 random bytes, base64url)                  |
-| Default TTL             | 15 minutes (capped at 1 hour, floor 1 minute)          |
+| Default TTL             | 5 minutes (capped at 1 hour, floor 1 minute)           |
 | Single use              | Atomically consumed on `POST /bootstrap/register-node` |
 | Replay                  | Returns `410 Gone`                                     |
 | Revoke before use       | Admin via UI / CLI / API                               |
 | Public endpoint         | `/bootstrap` and `/bootstrap/register-node` only       |
 | Auth on public endpoint | The token IS the credential; no other gating           |
 
-A leaked token grants "join one node" power for at most 15 minutes.
+A leaked token grants "join one node" power until it expires (5
+minutes by default, 1 hour at most).
 Mitigations:
 
 - The token is never logged in cleartext past the mint response.
@@ -134,7 +138,7 @@ Mitigations:
 ```
 POST   /api/kubernetes/nodes/bootstrap-tokens         (admin)
 GET    /api/kubernetes/nodes/bootstrap-tokens         (admin)
-DELETE /api/kubernetes/nodes/bootstrap-tokens/{jti}   (admin)
+DELETE /api/kubernetes/nodes/bootstrap-tokens/{jtiPrefix} (admin; ≥8-char hash prefix)
 GET    /bootstrap?token=<jti>                         (public)
 POST   /bootstrap/register-node                       (public)
 ```
@@ -146,11 +150,12 @@ POST /api/kubernetes/nodes/bootstrap-tokens
 {
   "labels":     {"region": "eu", "tier": "premium"},
   "nodeName":   "worker-2",          // optional; default = VM hostname
-  "ttlSeconds": 900                  // optional; default 900, max 3600
+  "ttlSeconds": 300                  // optional; default 300, min 60, max 3600
 }
 → 201
 {
-  "jti":       "abc123…",
+  "jti":       "abc123…",            // cleartext, returned only here
+  "jtiPrefix": "9f2c41d0",           // hash prefix shown by the list endpoint
   "expiresAt": "2026-05-06T19:15:00Z",
   "oneLiner":  "curl -fsSL https://kuso.example.com/bootstrap?token=abc123… | sudo sh",
   "labels":    {"region": "eu", "tier": "premium"},
@@ -178,7 +183,8 @@ POST /bootstrap/register-node
   "labels":         {"region": "eu", "tier": "premium", "arch": "amd64", …},
   "installCommand": "unset HISTFILE; curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC=… sh -",
   "registryHost":   "kuso-registry.kuso.svc.cluster.local:5000",
-  "registryIP":     "10.43.206.191"
+  "registryIP":     "10.43.206.191",
+  "registryUsername": "…", "registryPassword": "…", "registryAuthMarker": "…"  // once minted
 }
 ```
 
@@ -207,7 +213,7 @@ key:
 
 All keys land in the `kuso.sislelabs.com/` namespace on the joined
 node so the placement matcher in
-`internal/projects.PlacementMatchesNode` works without changes.
+`internal/placement.Matches` works without changes.
 
 ## Comparison with the SSH path
 
@@ -225,8 +231,8 @@ operator's side and works in more network topologies.
 ## Troubleshooting
 
 **"token not found" 404**: The jti in the URL doesn't match a row.
-Likely cause: typo, or the token was already pruned (consumed > 24h
-ago). Mint a new one.
+Likely cause: typo, or the token was already pruned (rows are deleted
+7 days after they expire). Mint a new one.
 
 **"token already used, expired, or revoked" 410**: As advertised.
 `kuso node pending` will show whether the token was ever minted; if

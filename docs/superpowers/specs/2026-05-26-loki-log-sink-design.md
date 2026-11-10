@@ -1,5 +1,7 @@
 # Loki + Promtail log-sink addon (gap 6)
 
+> **Current status (2026-11-10):** Not built as addons. There is no `loki` or `promtail` addon kind. Log shipping is done by log drains (`server-go/internal/drains`: Loki/OTLP/HTTP push).
+
 ## Status
 
 **Deferred to next session.** Two new addon kinds + a DaemonSet + a Grafana dependency + datasource provisioning. The single most differentiating gap per the spec, but also the widest blast radius — needs careful staging.

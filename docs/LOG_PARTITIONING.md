@@ -2,8 +2,8 @@
 
 `LogLine` (the pod-log search index) is the largest write-volume
 table in the kuso control-plane DB. A 10 line/sec/pod workload on
-100 pods writes ~8.6M rows/day; with the default 14-day retention
-that's ~120M rows of working set. Routine retention prune (a chunked
+100 pods writes ~8.6M rows/day; with the default 7-day retention
+(`KUSO_LOG_RETENTION_DAYS`) that's ~60M rows of working set. Routine retention prune (a chunked
 `DELETE WHERE ts < ?`) keeps the table healthy, but each chunk still
 holds short writer locks that contend with the logship inserter.
 
@@ -16,7 +16,7 @@ partitioning by day moves prune from "delete 50k rows / repeat" to
 
 - You're writing > 10M log rows / day.
 - Daily cleanup is showing up as slow in `pg_stat_statements`.
-- You want > 14 day retention without your `LogLine` table climbing
+- You want > 7 day retention without your `LogLine` table climbing
   past 50 GB.
 
 If none of these apply, leave it off. The default chunked DELETE is
@@ -29,7 +29,9 @@ risk.
    on the legacy `LogLine` table for the rename phase (sub-second);
    the copy phase runs in 100k-row batches outside the lock but does
    write enough WAL to slow concurrent writers noticeably on a busy
-   install. Plan ~15-30 min for a 50 GB table on a c2 cnpg cluster.
+   install. Plan ~15-30 min for a 50 GB table on a c2 cnpg cluster;
+   the migration runs under a hard 30-minute timeout, so a bigger
+   table aborts mid-copy (see Rollback).
 
 2. Set the env on the kuso-server Deployment:
 
@@ -57,13 +59,14 @@ risk.
    - Provisions the next 3 daily partitions so writes never hit
      "no partition for row" at the midnight boundary.
    - Drops every partition whose end-of-day is past the configured
-     retention window (default 14 days).
+     retention window (`KUSO_LOG_RETENTION_DAYS`, default 7 days).
 
 ## Rollback
 
 If something goes wrong during the migration (e.g. disk fills during
-the copy phase), the legacy table is renamed to `LogLine_legacy` and
-still holds every row. Restore by:
+the copy phase, or the 30-minute timeout hits), the legacy table is
+renamed to `LogLine_legacy` and still holds every row (it is only
+dropped once the copy finishes). Restore by:
 
 ```sql
 DROP TABLE "LogLine" CASCADE;          -- drops the partial partitioned
@@ -71,7 +74,10 @@ ALTER TABLE "LogLine_legacy" RENAME TO "LogLine";
 ```
 
 …then unset `KUSO_LOG_PARTITIONING` and roll the deployment. The
-chunked DELETE prune resumes immediately.
+chunked DELETE prune resumes immediately. The migration dropped the
+legacy table's secondary indexes; the restart rebuilds them
+(`schema.sql` plus the deferred-index build), which takes a while on
+a large table.
 
 ## What's preserved
 

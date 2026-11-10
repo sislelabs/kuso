@@ -10,17 +10,18 @@ This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-h
 
 This skill is current to **v0.42.1**. Run `kuso version` to confirm what's on the user's machine; several gotchas below are version-gated.
 
-> **Env vars & secrets — the default rule:** set most variables (sensitive or
+> **Env vars & secrets — the default rule:** set variables (sensitive or
 > not) through `kuso env set` (service-level) or `kuso shared-secret set`
-> (project-level) so they show in the Variables tab, the rendered spec, and the
-> audit trail. `kuso secret set` writes a Kubernetes-Secret-backed value that
-> does NOT appear in `kuso env list` — but it IS listed (keys only) by
-> `kuso secret list`, and it is the RIGHT home for external/provider secrets a
-> project's own docs mandate keep out of the rendered spec (e.g. `STRIPE_SECRET_KEY`,
-> `RESEND_API_KEY`, webhook signing secrets). Prefer `env set`; reach for
-> `secret set` when a value must not surface in the spec/UI or a project's
-> CLAUDE.md explicitly requires it. Full rules in the "Env vars & secrets"
-> section below — read it before touching any variable.
+> (project-level). `env set` lets the server pick storage: a `${{ }}` ref
+> becomes addon/shared wiring, a name declared in `--public-env`/`--build-arg`
+> stays a literal on the spec (the build needs it), and every other value goes
+> to the service's managed Secret `<project>-<service>-secrets` — off the
+> rendered spec, but listed (masked) in `kuso env list` and the Variables tab.
+> `kuso secret set` writes to that same Secret; reach for it to scope a value to
+> one env (`--env`), to read it from stdin/a file, to override a project-shared
+> key (`--force`), or when a project's CLAUDE.md explicitly requires it. Full
+> rules in the "Env vars & secrets" section below — read it before touching any
+> variable.
 
 ## Mental model — read this first
 
@@ -45,7 +46,7 @@ The CLI is rooted at `kuso <command>`. Run `kuso <command> --help` whenever shap
 | `env unset` | `KEY [KEY ...]`; `--env <name>` for a per-env override |
 | `env share` / `env unshare` | `<p> <s> KEY [KEY ...]` — subscribe/unsubscribe a service to project/instance shared-secret keys |
 | `shared-secret set` | `KEY=value` (ONE pair per call — `accepts 2 arg(s)` if you pass more) |
-| `secret set` | 4 positional args `<p> <s> KEY VALUE`; Kubernetes-Secret-backed, NOT in `env list` (keys show in `secret list`). Shadowing a project-shared key 409s unless `--force` |
+| `secret set` | positional `<p> <s> KEY [VALUE]` (VALUE `-` = stdin, or `--from-file <path>`); same Secret `env set` uses, keys show masked in `env list` + `secret list`. Shadowing a project-shared key 409s unless `--force` |
 | `instance-addon register` | positional: `register <name> <dsn>` (no `--name`/`--dsn` flags) |
 
 This inconsistency is real. When you get `Error: accepts N arg(s), received M`, you've hit the wrong convention.
@@ -62,10 +63,10 @@ kuso login --api https://kuso.<your-domain> --token <pat>
 
 ### Finding your way around the CLI
 
-`kuso --help` groups all ~50 commands by task — **Ship code**, **Inspect &
+`kuso --help` groups its ~60 commands by task — **Ship code**, **Inspect &
 debug**, **Data & addons**, **Configure a project**, **Users & access**,
-**Cluster & platform**, **Setup & session**. Start there rather than guessing
-command names.
+**Cluster & platform**, **Setup & session** (`drain`, `registry` and `vulns`
+sit under Additional Commands). Start there rather than guessing command names.
 
 ```bash
 kuso --help                  # grouped command index
@@ -88,9 +89,9 @@ kuso completion bash > /etc/bash_completion.d/kuso
 kuso ships **two** agent surfaces. They hit the same API and the same
 auth/permission layers, so they see the same truth:
 
-- **The `kuso` CLI** — the complete surface (~50 command groups). Use it
+- **The `kuso` CLI** — the complete surface (~60 commands). Use it
   for anything not covered below.
-- **The `kuso-mcp` server** — a focused tool set: `list_projects`,
+- **The `kuso-mcp` server** — a focused tool set: `health`, `list_projects`,
   `describe_project`, `status`, `logs`, `plan`/`apply`, `build`,
   `build_status`, `list_builds`, `rollback`, `sql_tables`, `sql_query`,
   `get_vulnerabilities`,
@@ -168,8 +169,9 @@ kuso registry list papelito        # logout refuses while a service uses it
 # 4. Domains
 kuso domains add papelito web papelito.example.com
 
-# 5. Env vars — default `kuso env set` (visible in spec/audit). Provider secrets
-#    that must stay out of the spec (STRIPE_SECRET_KEY, …) → `kuso secret set`.
+# 5. Env vars — default `kuso env set` (the server stores most values in the
+#    service's managed Secret). `kuso secret set` writes the same Secret; use it
+#    for --env scoping, stdin input, or when the project's CLAUDE.md requires it.
 kuso env set papelito web NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 kuso secret set papelito web STRIPE_SECRET_KEY sk_live_xxx
 # Values shared across services → project-level shared secret (one K=V/call):
@@ -183,7 +185,8 @@ kuso project addon unsubscribe papelito web db cache   # drop DB/redis conns
 kuso project addon list papelito web                   # verify what's mounted
 
 # 6. The first build starts on its own: `service add` triggers it for
-#    repo-based runtimes and prints whether it started. After that, every push
+#    repo-based runtimes and prints whether it started (`--no-build` skips it, so
+#    you can set env vars first). After that, every push
 #    to the tracked branch auto-builds+deploys. Run `kuso build trigger` only if
 #    the add output says the first build did not start.
 #    Monorepo: every push builds every service of the repo unless the service
@@ -335,7 +338,8 @@ kuso project service sleep tickero api --exclude-paths-clear                    
 kuso cron add <p> <svc> --name nightly --schedule '0 3 * * *' --cmd './bin/sweep'   # runs on the service's image
 kuso cron add-command <p> --name sweep --schedule '0 * * * *' --image ghcr.io/org/api --image-tag v1.2.3 --cmd '/app/bin/sweep-refunds'
 kuso cron add-http <p> --name ping --schedule '*/5 * * * *' --url 'https://...'
-kuso cron sync <p> <svc> <name>       # re-resolve image/env from production after a deploy
+kuso cron sync <p> <svc> <name>       # re-resolve image/env from production now
+# Service crons follow the service's builds unless created/edited with --pin-image.
 kuso cron edit <p> <name> --schedule '...' --suspend=false              # project crons (http / command)
 kuso cron edit-service <p> <svc> <name> --schedule '...' --suspend=false  # service crons
 kuso cron edit-service <p> <svc> <name> --cmd './bin/sweep --all' --concurrency Replace --display-name 'Nightly sweep'
@@ -396,7 +400,7 @@ kuso backup --file kuso-backup-$(date +%s).sql.gz # control-plane DB dump
 
 ### External-DB backups — PlanetScale / Neon / Supabase / RDS
 
-When your addon is `external` (BYO managed Postgres via `spec.external.secretName`), kuso renders a `pg_dump` CronJob that snapshots to the cluster-wide S3 bucket:
+When your addon is `external` (BYO managed Postgres via `spec.external.secretName`; create one with `kuso project addon connect-external <p> <name> --kind postgres --secret <secret>` or `--set DATABASE_URL=…`), kuso renders a `pg_dump` CronJob that snapshots to the cluster-wide S3 bucket:
 
 ```yaml
 apiVersion: application.kuso.sislelabs.com/v1alpha1
@@ -452,9 +456,9 @@ Caveats:
 ## Marketplace — one-click self-hosted apps
 
 ```bash
-kuso marketplace list                     # catalog: gitea, metabase, n8n, obsidian-livesync,
-kuso marketplace info uptime-kuma         #   plausible, umami, uptime-kuma, vaultwarden
-kuso marketplace deploy uptime-kuma --project tools --set domain=status.example.com
+kuso marketplace list                     # catalog (~45 apps): gitea, grafana, metabase, n8n,
+kuso marketplace info uptime-kuma         #   obsidian-livesync, plausible, umami, uptime-kuma, vaultwarden, …
+kuso marketplace deploy uptime-kuma --project tools --set host=status.example.com   # prompt keys: `info`
 kuso marketplace deploy n8n --dry-run     # render without applying
 ```
 
@@ -480,8 +484,7 @@ Capabilities pass a server-side allowlist (escape-equivalent caps like `SYS_ADMI
 ## Env vars & secrets — the complete model
 
 There are four places a variable can live. Pick by scope. Default to `env set` /
-`shared-secret set` (visible in the spec + audit trail); use `secret set` for
-values that must stay OUT of the rendered spec — see the note under the table.
+`shared-secret set`; use `secret set` for the cases in the note under the table.
 
 | Where | Set with | Scope |
 |---|---|---|
@@ -490,20 +493,22 @@ values that must stay OUT of the rendered spec — see the note under the table.
 | Project shared | `kuso shared-secret set <p> KEY=value` | every service that subscribes (see subscriptions) |
 | Addon-injected | (automatic) | the `<project>-<addon>-conn` Secret, mounted per subscription |
 
-**The default: `kuso env set` / `kuso shared-secret set`, not `secret set`.**
-`secret set` writes a Kubernetes-Secret-backed value that does NOT appear in the
-Variables tab, the rendered service spec, or `kuso env list` — so most values
-(including JWT secrets, most API tokens) belong in `env set` where the user sees
-them in the UI and the audit trail captures them.
+**The default: `kuso env set` / `kuso shared-secret set`.** You don't pick
+plain-vs-secret: `env set` (service-level) lets the server choose storage. A
+`${{ }}` ref becomes a `secretKeyRef`; a name listed in `publicEnv` or
+`buildArgs` stays a literal on `spec.envVars` so the build can read it; every
+other value — JWT secrets and API tokens included — goes to the managed Secret
+`<project>-<service>-secrets`, off the CR and the rendered spec. Those keys show
+in `kuso env list` and the Variables tab with masked values (`env list --reveal`
+for admins). `env set --secret` forces the managed-Secret path.
 
-**But `secret set` is first-class, not forbidden.** Its keys ARE discoverable via
-`kuso secret list <p> <svc>` (values never returned), it supports `--env` scoping
-and a shadow-check against project-shared keys (409 unless `--force`), and it is
-the correct home for **external/provider secrets that must not surface in the
-committed spec** — `STRIPE_SECRET_KEY`, `RESEND_API_KEY`, `OPENAI_API_KEY`,
-webhook signing secrets. Several project scaffolds' CLAUDE.md hard-rules mandate
-exactly this. Decision: value must stay out of the rendered spec, or a project
-CLAUDE.md says so → `secret set`; everything else → `env set`.
+**`secret set` writes that same Secret** (its keys show in `kuso secret list <p>
+<svc>`, which never returns values, and in `env list`). Use it when you need what
+`env set` lacks: `--env <name>` scoping to a per-env Secret, VALUE `-`/`--from-file`
+to keep the value out of shell history, or `--force` to shadow a project-shared
+key (409 otherwise). Some project scaffolds' CLAUDE.md mandate `secret set` for
+provider secrets (`STRIPE_SECRET_KEY`, `RESEND_API_KEY`, webhook signing
+secrets); follow that when it says so.
 
 ### Build-time vs runtime: secrets are NOT available during the build (v0.23.0+)
 
@@ -537,8 +542,10 @@ the build log: `secret-sourced build env vars are no longer passed as build-args
   entirely — consume it at **runtime** instead (release hook + the env mounts the
   deployed pod already gets).
 
-**Non-secret build-time values are unaffected.** Plain `env set` literals still
-flow to the build (as `--build-arg` for dockerfile, `ENV` for nixpacks), and the
+**Only literals on the spec reach the build** (as `--build-arg` for dockerfile,
+`ENV` for nixpacks). `env set` keeps a value there only when its name is declared
+in `--public-env` or `--build-arg`; any other `env set` value lands in the managed
+Secret and the build never sees it. The
 `NEXT_PUBLIC_*`-style build-time-inlining problem has its own mechanism
 (`publicEnv` sentinels — see docs/FRONTEND_BUILD_TIME_ENVS.md; set the names with
 `service set --public-env NEXT_PUBLIC_API_URL`, repeatable, `--public-env-clear` to drop). Only
@@ -568,7 +575,9 @@ Add a postgres addon `db` → kuso writes `<project>-db-conn` and mounts it. Key
 
 | Addon kind | Keys it injects (verify per-instance: `kuso get addons <p> -o json`) |
 |---|---|
-| `postgres` | `DATABASE_URL` (pooled when a pooler runs), `DIRECT_URL` (always direct — use for migrations), `POSTGRES_HOST/PORT/USER/PASSWORD/DB`, `POOLER_*` |
+| `postgres` | `DATABASE_URL` (direct; pooled only on an instance-shared DB with a pooler), `DIRECT_URL` (always direct — use for migrations), `POSTGRES_HOST/PORT/USER/PASSWORD/DB`, `POOLER_*`; `--ha` adds `READONLY_DATABASE_URL` |
+| `mysql`    | `MYSQL_URL`, `DATABASE_URL`, `MYSQL_HOST/PORT/USER/PASSWORD/DB` |
+| `meilisearch` | `MEILI_URL`, `MEILI_HOST/PORT/MASTER_KEY` |
 | `redis`    | `REDIS_URL`, `REDIS_HOST/PORT/PASSWORD` |
 | `valkey`   | `VALKEY_URL/HOST/PORT` + Redis-compatible `REDIS_URL/HOST/PORT/PASSWORD` |
 | `mongodb`  | `MONGO_URL`, `MONGODB_URI`, `DATABASE_URL`, `MONGO_HOST/PORT/USER/PASSWORD/DB` |
@@ -605,7 +614,7 @@ kuso env set <p> api 'DATABASE_READ_URL=${{ db.DATABASE_URL }}'
   `sslmode=disable` — PgBouncer serves plaintext on :6432.
 - A live flip is data-safe BUT consuming pods resolve `envFrom` at container
   start — they keep the stale `sslmode` until restarted. Flip the addon, then
-  restart every subscribed env (`kuso redeploy` or an env-var touch).
+  restart every subscribed env (`kuso service restart <p> <svc> [--env e]`).
 
 ### Connection pooler (postgres)
 
@@ -786,7 +795,7 @@ secrets, no DB/Redis/NATS conns. Previews respect subscriptions too.
 - Prod apps often reject `sslmode=disable` DSNs. kuso's managed postgres is
   **plaintext by default** — flip `--tls require` (see "Addon TLS") or point the
   app at `DATABASE_URL` as-is if it tolerates it. Prisma migrations: use
-  `DIRECT_URL` for `directUrl` (the pooled `DATABASE_URL` breaks advisory locks).
+  `DIRECT_URL` for `directUrl` (a pooled URL breaks advisory locks).
 - A migration release hook needs the addon ready; the release Job's
   wait-for-addons step handles that. For `kuso run` one-shots against a
   just-created addon, wrap in a retry: `sh -c 'for i in $(seq 1 30); do nc -z -w2 <addon-host> 5432 && exec ./cmd; sleep 2; done'`.
@@ -826,6 +835,7 @@ adds a rule; `kuso alert list` shows each rule's threshold and whether it is fir
 | `deploy_failed` | none | newest build or release hook failed |
 | `healthcheck_failing` | minutes the uptime check has failed (default 5) | |
 | `rollout_failing` | none | the new version fails while the previous one still serves |
+| `log_match` / `node_cpu`, `node_mem`, `node_disk` | match count / percent | shortcuts: `kuso alert add-log-match --query …`, `kuso alert add-node-pressure <cpu/mem/disk>` |
 
 These fire once when the condition starts and send a `✓ Resolved` card when it
 clears. `--throttle` is the minimum gap between two fires, which damps flapping.
@@ -1006,13 +1016,13 @@ kuso build trigger <project> <service>          # manual rebuild of the default 
 #   --dry-run prints what would build and creates NOTHING; --compile-only runs a
 #   real build on the shared builder but skips push + promotion.
 kuso redeploy <project> <service>               # alias; --branch <name>, or --ref <full 40-char sha> for one commit
-kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes; --env <e>)
+kuso build rollback <project> <service> <id>    # re-point production at an older successful build (asks; --yes; --env <e>; --previous instead of <id>)
 kuso build retry-release <project> <service> <id>  # re-run a RELEASE FAILED build's hook; promotes on success
 kuso build cancel <project> <service> <id>      # kill an in-flight build
 #   (branch deletes / force-pushes auto-cancel their in-flight builds)
 
 # Env vars & secrets — see "Env vars & secrets" for the env-set-vs-secret-set rule.
-kuso env list <project> <service>               # plain vars + names of secret keys
+kuso env list <project> <service>               # vars, managed secrets (masked; -r reveals, admin), addon/shared refs
 kuso env set <project> <service> KEY=val KEY2=val2     # service-level; multiple K=V OK
 kuso env set <project> <service> --env <name> KEY=val  # per-env override (wins over service)
 kuso env unset <project> <service> KEY [KEY...]        # --env <name> to drop an override
@@ -1022,7 +1032,7 @@ kuso service apply-changes <project> <service> --set K=V... --unset K... [--patc
 kuso env example <project> <service>            # variables the repo's .env.example declares (SET column)
 kuso env share <project> <service> KEY [KEY...]        # subscribe svc to shared-secret keys
 kuso env unshare <project> <service> KEY [KEY...]      # unsubscribe
-kuso secret list|set|unset <project> <service> ...     # K8s-Secret-backed (KEY VALUE positional)
+kuso secret list|set|unset <project> <service> ...     # same managed Secret; KEY [VALUE|-] positional, --env scopes
 kuso shared-secret set <project> KEY=value      # ONE pair per call; subscribed services inherit
 kuso shared-secret list|unset <project> [KEY]
 
@@ -1036,7 +1046,7 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--scale-up-stabilization SEC] [--scale-up-pods N] [--scale-up-percent PCT] \
     [--scale-down-stabilization SEC] \
     [--max-concurrent N] [--rate-limit RPS] [--rate-burst N] \
-    [--internal on|off] [--private-egress on|off] \
+    [--internal on|off] [--private-egress on|off] [--auto-deploy on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off] \
     [--target-cpu PCT] [--command ARG]... [--dockerfile <rel>] \
     [--release-cmd '...'] [--release-timeout SEC] [--release-clear] \
@@ -1103,8 +1113,9 @@ kuso project addon add <project> <name> --kind <kind> [--version <v>] \
 kuso project addon pooler enable|set|disable <project> <addon> [--pool-size N] \
        [--external-backend on|off --host h --port p]
 kuso project addon update <project> <addon> [--tls ...] [--version ...] [--size ...]
-       # NB: version/size/ha/storageSize are rejected as immutable on live addons —
-       # migrate via addon-backup instead. --tls flips live (restart consumers after).
+       # NB: version/ha/storageSize/database changes are rejected (409) on live addons,
+       # and size too unless it keeps the same storage request — migrate via
+       # addon-backup instead. --tls flips live (restart consumers after).
 kuso project addon placement show|set|clear <project> <addon>   # pin to labeled nodes
 kuso project service add <project> <name> --runtime <rt> [--port N] [--path <subdir>] \
        [--dockerfile <rel>] [--replicas N] [--max-replicas N] \
@@ -1170,6 +1181,17 @@ kuso db row delete <p> <addon> --table todo --where id=7 --yes
 
 kuso env-group set-branch <p> <group> <service> <branch>   # one service on another branch (not production)
 kuso node remove <node> --dry-run                 # (admin) list the volumes that would be lost
+
+# More inspection / ops
+kuso audit --app <p>[/<svc>]                      # who changed what (no --app = instance-wide, admin)
+kuso get events [--namespace ns] [--type Warning] # kube events, no kubectl needed
+kuso env detected <p> <s>                         # env names the code/crash logs reference
+kuso service restart <p> <s> [--env e]            # roll pods without a rebuild
+kuso run list <p> <s>                             # past one-shot runs
+kuso project grant add <p> --user u --role editor # per-project access
+kuso notifications create discord|slack|webhook|… --url … [--events build.failed,…]
+kuso remote select <name>                         # switch between configured instances
+kuso migrate coolify --coolify-url … --coolify-token …   # dry-run unless --apply
 
 # Access (admin)
 kuso user get|set <id> [--email …] [--active=false]
@@ -1258,7 +1280,7 @@ kuso redeploy <project> <service>
 
 | Change                         | Effect                                           |
 | ------------------------------ | ------------------------------------------------ |
-| `env set KEY=...`              | Rolls a new pod (envVars are part of pod spec).  |
+| `env set KEY=...`              | Rolls a new pod (spec literal or managed-Secret change). |
 | `env set --env <n> KEY=...`    | Rolls only that one env's pod.                   |
 | `env share/unshare KEY`        | Rolls the service's pod(s) (changes mounted secrets). |
 | `shared-secret set KEY=...`    | Rolls every SUBSCRIBED service in the project.   |
@@ -1313,9 +1335,9 @@ nothing else in this skill, read this.
   (`kuso project addon subscribe/unsubscribe`). A new service mounts every
   addon until its list is set (see "Subscriptions"), which puts `DATABASE_URL`
   in your public frontend.
-- **Use `env set` for most values** so they show in the Variables tab and the
-  audit trail; reserve `secret set` for values that must stay out of the
-  rendered spec.
+- **Use `env set` for most values** — the server keeps secrets off the spec on
+  its own; reserve `secret set` for per-env values, stdin input, or when a
+  project's CLAUDE.md requires it.
 
 **Changing things safely**
 - **Check blast radius before editing a running service.** The "Editing safely"
@@ -1429,15 +1451,15 @@ build cancel <p> <s> <id>     kill an in-flight build
 redeploy <p> <s>              same as build trigger; --branch / --ref for other refs
 run <p> <s> -- cmd…           one-shot Job (NOTE: -- separator); run cancel to kill
 shell <p> <s>                 exec into a pod
-env list/set/unset            plain vars (K=V; --env <n> per-env). DEFAULT for most vars.
+env list/set/unset            service vars (K=V; --env <n> per-env). DEFAULT for most vars.
 env share/unshare <p> <s> K   subscribe/unsubscribe service to shared-secret keys
-secret list/set/unset         K8s-Secret-backed (KEY VALUE positional) — provider secrets only
+secret list/set/unset         same managed Secret (KEY [VALUE|-] positional) — per-env / stdin values
 shared-secret list/set/unset  project-level vars (ONE K=V/set; subscribed services inherit)
 project addon subscribe/unsubscribe/list   per-service addon mounts (least privilege)
 domains add/remove/list/status   custom hostnames (--env <n> to scope; else mirrors to production); status = DNS/TLS
 get addons <p>                addons + their conn-secret names
 environment add <p> <s> <n> --branch <b>   long-lived env tracking a branch
-addon-backup download|list|restore|run|schedule    addon data backups (download --key = a stored one)
+addon-backup download|list|restore|run|schedule|unschedule    addon data backups (download --key = a stored one)
 cron list/get/add/add-http/add-command/sync/edit/edit-service/delete[-project]
 marketplace list/info/deploy  one-click apps (gitea, n8n, obsidian-livesync, uptime-kuma, ...)
 import compose <file>         convert docker-compose (dry-run by default)

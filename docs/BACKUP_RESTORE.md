@@ -8,8 +8,8 @@ kuso has three distinct kinds of state. They have different recovery stories.
 
 | State | Lives in | Lost if you lose it |
 | --- | --- | --- |
-| Control-plane data | Postgres (`kuso-postgres` StatefulSet, or external managed Postgres pointed at by `kuso-postgres-conn`) | Users, sessions, audit log, webhooks, invites, SSH keys, node metrics, notifications, GitHub App config, instance secrets, log_lines |
-| Kubernetes-native state | etcd / k3s | All `KusoProject` / `KusoService` / `KusoEnvironment` / `KusoAddon` / `KusoBuild` / `KusoCron` CRs, plus every Deployment / Service / Ingress / Secret kuso ever created |
+| Control-plane data | Postgres (`kuso-postgres` CloudNativePG Cluster, or external managed Postgres pointed at by `kuso-postgres-conn`) | Users, sessions, audit log, webhooks, invites, SSH keys, node metrics, notifications, GitHub App config, instance secrets, `LogLine` |
+| Kubernetes-native state | etcd / k3s | All `KusoProject` / `KusoService` / `KusoEnvironment` / `KusoAddon` / `KusoBuild` / `KusoCron` / `KusoRun` CRs, plus every Deployment / Service / Ingress / Secret kuso ever created |
 | Addon data | Per-addon PVC inside the addon's own StatefulSet (or CNPG cluster volumes for HA Postgres) | Postgres / MySQL / Redis / Mongo data |
 
 **The Postgres metadata DB is the highest-leverage thing to back up.** The CRDs are recreatable from your repo + GitHub App config (which itself is in Postgres). The addon PVCs need their own backup story (see `kuso addon-backup` below).
@@ -23,6 +23,8 @@ kuso backup --file /backups/kuso-$(date -u +%Y%m%d).sql.gz
 ```
 
 The backup and restore routes (`GET /api/admin/backup`, `POST /api/admin/restore`) are always mounted and require an admin. There is no switch to turn them off, so anyone holding an admin token can download a full `pg_dump`. If your compliance rules forbid a network-reachable dump endpoint, block `/api/admin/backup` and `/api/admin/restore` at your ingress or proxy and keep admin accounts to a minimum.
+
+For a scheduled off-cluster copy without a workstation cron, kuso also ships the `kuso-postgres-backup` CronJob (`deploy/postgres-backup.yaml`, 23:00 UTC daily). It is opt-in: create the `kuso-postgres-backup` Secret in `kuso` with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `KUSO_BACKUP_BUCKET`, `KUSO_BACKUP_ENDPOINT` (optional `KUSO_BACKUP_PREFIX`, `AWS_DEFAULT_REGION`). It writes rotating `daily/<DD>`, `weekly/<weekday>` and `monthly/<MM>` slots under the prefix. `kuso backup health` reports whether it is actually landing. This is a separate Secret from `kuso-backup-s3`, which only feeds addon backups.
 
 Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Concrete cron example:
 
@@ -46,7 +48,7 @@ shred -u /tmp/kuso.sql.gz
 
 ### Why go through the CLI instead of `pg_dump`?
 
-You can run `pg_dump` directly — see "manual fallback" below. The CLI path is preferred because it goes through the running server, which knows the canonical DSN and applies the right flags for a logically-consistent dump (`--no-owner --no-privileges --clean --if-exists`).
+You can run `pg_dump` directly — see "manual fallback" below. The CLI path is preferred because it goes through the running server, which knows the canonical DSN and applies the right flags for a logically-consistent dump (`--no-owner --no-acl --clean --if-exists`).
 
 ## Recovery paths
 
@@ -56,9 +58,7 @@ You can run `pg_dump` directly — see "manual fallback" below. The CLI path is 
 kuso restore /backups/kuso-20260504.sql.gz
 ```
 
-`kuso restore` streams the dump to the server which applies it inside a single Postgres connection. Existing connections from `kuso-server` replicas survive — the schema's `--clean --if-exists` shape drops + recreates tables; the next request hits fresh data.
-
-A `kubectl -n kuso rollout restart deployment/kuso-server` afterwards is a good belt-and-braces step if you want to drop any in-memory caches that pre-date the restore.
+`kuso restore` uploads the dump to the server, which runs a one-shot Job that pipes it through `psql -v ON_ERROR_STOP=1`; the dump's `--clean --if-exists` shape drops + recreates tables. The CLI polls the Job (`--wait`, default 10m) and, once it succeeds, the server triggers a rolling restart of `kuso-server` so every replica drops stale connection state and caches. With `--no-wait`, the restart fires the first time `kuso restore status <job>` sees the Job succeed. Restores are rate-limited to a burst of 5, refilling one per hour.
 
 ### Path B — the DB is corrupted
 
@@ -70,8 +70,9 @@ Symptom: `kuso-server` pod failing with Postgres errors that don't match the sch
    ```
 2. Investigate the Postgres pod:
    ```bash
-   kubectl -n kuso logs sts/kuso-postgres
-   kubectl -n kuso exec -it sts/kuso-postgres -- psql -U kuso -d kuso \
+   # CNPG pods are kuso-postgres-1, -2, …; `kubectl -n kuso get cluster kuso-postgres` names the primary.
+   kubectl -n kuso logs kuso-postgres-1
+   kubectl -n kuso exec -it kuso-postgres-1 -- psql -U postgres -d kuso \
      -c "SELECT datname, pg_database_size(datname) FROM pg_database;"
    ```
    If it's a recoverable error (e.g. a single index needs `REINDEX`), do that. If the data files are bad, restore.
@@ -101,9 +102,9 @@ For warm-spare DR (faster than re-running install), point `kuso-postgres-conn` a
 
 ## Addon data
 
-`kuso addon-backup` is the addon-data surface: `schedule` sets a recurring dump to the cluster-wide S3 bucket (`kuso backup settings set` configures the bucket; `kuso backup health` reports whether backups are actually landing), `list` shows stored dumps, `restore` replays one, and `download` streams an on-demand dump straight to disk (postgres → `.sql.gz`, s3 → `.tar.gz`) with no S3 config needed. See `kuso addon-backup --help`. Snapshot the metadata DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
+`kuso addon-backup` is the addon-data surface: `schedule` / `unschedule` set or drop a recurring dump to the cluster-wide S3 bucket (`kuso backup settings set` configures the bucket, i.e. the `kuso-backup-s3` Secret), `run` fires the scheduled backup now, `list` shows stored dumps, `restore` replays one, and `download` streams an on-demand dump straight to disk (postgres → `.sql.gz`, s3 → `.tar.gz`) with no S3 config needed. Scheduled dumps are encrypted with a per-addon key in the `<addon>-backup-key` Secret — back that Secret up with the metadata DB, or the dumps can't be decrypted. See `kuso addon-backup --help`. Snapshot the metadata DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
 
-For HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`), CNPG-native backups are the right path — see `docs/ADDON_HA.md`. The `pg_dump` cron is suppressed in HA mode.
+HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`) get the same scheduled `pg_dump` job, pointed at the `<addon>-rw` primary Service. No CNPG/barman backup is configured for them; see `docs/ADDON_HA.md`.
 
 ## Manual fallback (no CLI access)
 

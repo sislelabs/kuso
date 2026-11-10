@@ -46,7 +46,7 @@ rm -rf .claude/skills/kuso
 - **Env vars & secrets** — the `env set` vs `secret set` rule, shared secrets, addon subscriptions (least privilege), `${{ ... }}` reference syntax
 - **How a deploy actually flows** — push → build CR → buildkit → release hook → image promote → kube roll
 - **Failure modes** ranked by frequency: GH App not installed, build OOM (fixed with NODE_OPTIONS in the Dockerfile), wrong port, release-failed, exit-127 capability drops
-- **Debugging playbook** — the standard order, starting with `kuso build why`
+- **Debugging playbook** — the standard order, starting with `kuso status`
 - **Edit safety** — what's hot-swappable vs. what triggers a rollout
 - **Addons** — kinds, conn-secret keys, TLS, public TCP, backups, the SQL browser
 - **`kuso.yml` shape** for config-as-code, docker-compose import, marketplace apps
@@ -55,7 +55,7 @@ The skill content is in [`SKILL.md`](./SKILL.md). It's a single file by design �
 
 ## Requirements
 
-- The `kuso` CLI on PATH (`brew install` / `kuso` releases on GitHub).
+- The `kuso` CLI on PATH (`curl -fsSL https://kuso.<your-domain>/install-cli.sh | sh`, or a `kuso-<os>-<arch>` binary from the GitHub releases).
 - A logged-in session: `kuso login --api https://kuso.<your-domain> --token <pat>`.
 - Verify both with: `kuso doctor`.
 

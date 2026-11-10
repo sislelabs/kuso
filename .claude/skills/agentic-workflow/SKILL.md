@@ -1,6 +1,6 @@
 ---
 name: agentic-workflow
-description: Use when you (the agent) are about to make changes to kuso. Sets ground rules for the agentic-first development model — what to do without asking, what to confirm, and how to keep work atomic.
+description: Use before making changes in the kuso repo or touching a live kuso instance. Sets what an agent may do without asking, what needs confirmation, and how to structure commits.
 ---
 
 # How agents should work in kuso
@@ -10,29 +10,32 @@ kuso is built **for** AI agents and **with** AI agents. Most operational and dev
 ## What you can do without asking
 
 - Read any file in the repo.
-- Run any non-destructive command: `git status`, `git log`, `git diff`, `go build ./...`, `pnpm lint` (in `web/`), `kubectl get`, `kubectl describe`, `kuso status`, `kuso logs`, `kuso get …`, `kuso service errors/pods`.
+- Run non-destructive local commands: `git status/log/diff`, `go build ./...`, `go test ./...`, `pnpm lint` / `pnpm typecheck` (in `web/`).
+- Read-only `kuso` CLI calls against the live instance: `kuso status`, `kuso logs`, `kuso get …`, `kuso service errors/pods/events/crash`, `kuso build list`, `kuso env list`. Inspect the cluster through the CLI; use raw `kubectl get/describe` (over ssh, see CLAUDE.md) only in the cases CLAUDE.md lists, such as non-kuso pods, operator CRD state or cluster-level objects.
 - Edit code in `server-go/`, `web/`, `operator/`, `cli/`, `mcp/`.
-- Create new branches, write commits on a branch, run tests.
+- Create branches and run tests. Commit only when the user asks.
 - Write to `.claude/skills/` to capture new conventions you've learned.
 - Update `docs/` as you go.
 
 ## What requires explicit confirmation
 
-- `git push`, `gh pr create`, anything that hits the network with state changes.
-- `kubectl apply`, `kubectl delete`, anything that mutates a real cluster.
-- `kuso build trigger` / `kuso redeploy` / `kuso project service stop|start` / `kuso apply`, anything that affects running production apps.
-- `git reset --hard`, `git checkout --`, `rm -rf` on tracked files — anything destructive to local state.
+The live instance runs real personal and client apps. Treat it as read-only unless the user says otherwise, and that includes disposable test projects on it.
+
+- Any mutation through the CLI or API: `kuso build trigger`, `kuso redeploy`, `kuso env set`, `kuso secret set`, `kuso service restart`, `kuso apply`, `kuso project service stop|start`, `kuso upgrade`, `kuso api POST/PUT/PATCH/DELETE …`.
+- Any `kubectl apply/delete/patch/edit` or other cluster mutation.
+- `git push`, `gh pr create`, or any other network call that changes state.
+- `git reset --hard`, `git checkout --`, `rm -rf` on tracked files, or anything else that destroys local state.
 - Adding new dependencies (pnpm/go modules).
 - Editing `LICENSE`, `NOTICE`, or the attribution paragraph in root `README.md`.
 
 ## Atomic commits
 
-The history is intentionally structured. Each commit should be one logical change with a clear message. Examples of good commits:
+The history is intentionally structured. Each commit should be one logical change with a clear message: an imperative, plain-English subject that says what changed for the user, no conventional-commit prefix, no trailing period. Examples from the log:
 
-- `feat(cli): add kuso logs --follow`
-- `feat(operator): support envFrom on KusoService`
-- `refactor: extract sleep policy into its own helm chart`
-- `fix(server): handle race in deploy webhook`
+- `Keep the shared instance server reachable from every project`
+- `Seed preview jobs from the image their build actually recorded`
+- `Default the helm history pruner to dryrun and tighten what it may delete`
+- `Pace helm history pruning`
 
 Bad commits to avoid:
 

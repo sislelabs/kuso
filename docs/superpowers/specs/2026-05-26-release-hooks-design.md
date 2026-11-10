@@ -1,5 +1,7 @@
 # Release hooks (gap 1)
 
+> **Current status (2026-11-10):** Shipped and now core. See `server-go/internal/releaserun`. The "not shipped" status and the `builds.go` line references below are stale.
+
 ## Status
 
 **Deferred to next session.** Schema field not yet shipped. Pre-shipping the field without the runtime would create a vapor surface (users author `spec.release.command`, deploys ignore it). Worse than not shipping.

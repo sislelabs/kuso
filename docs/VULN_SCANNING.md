@@ -112,10 +112,10 @@ Per service policy: `"inherit" | "enforce" | "report" | "off"` (DB table, no CRD
 
 ## Data model
 
-Migration `0016_vulnscan.sql` (additive only). Tables (quoted PascalCase, camelCase columns, like the rest of the schema):
+Migrations `0016_vulnscan.sql` and `0017_vulnfinding_pkgpath.sql` (additive only). Tables (quoted PascalCase, camelCase columns, like the rest of the schema):
 
 - `VulnScan` — id, digest, imageRef, status (`queued|running|succeeded|failed`), error, trivyVersion, dbUpdatedAt, createdAt, startedAt, finishedAt, counts (critical, high, medium, low, unknown), fixableCritical, fixableHigh, jobName, reason (`gate|nightly|manual`).
-- `VulnFinding` — scanId (FK cascade), vulnId, pkgName, pkgType, installedVersion, fixedVersion, severity, title, primaryURL, target. Index (scanId, severity).
+- `VulnFinding` — scanId (FK cascade), vulnId, pkgName, pkgType, installedVersion, fixedVersion, severity, title, primaryURL, target, pkgPath (0017). Index (scanId, severity).
 - `VulnImage` — digest, imageRef, ownerKind (`service|addon|platform`), project, service, env, addon, namespace, workload, firstSeenAt, lastSeenAt. Unique (digest, ownerKind, project, service, env, addon, namespace, workload).
 - `VulnPolicy` — project, service, mode. PK (project, service).
 - `VulnIgnore` — id, scope (`service|addon|platform`), project, service (or addon name), vulnId, reason, expiresAt NULL, createdBy, createdAt.
@@ -151,6 +151,8 @@ type VulnFinding = {
   installedVersion: string; fixedVersion?: string;
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
   title?: string; primaryURL?: string; target?: string;
+  pkgPath?: string;            // where a language package was found
+  origin?: "app" | "os" | "image"; // derived from pkgType + pkgPath
   ignored: boolean; ignoreId?: number;
 };
 
@@ -173,7 +175,7 @@ Endpoints:
 | `GET /api/projects/{p}/services/{s}/vulns` | viewer | `?env=` (default production), `?severity=CRITICAL,HIGH` (filter findings), `?includeIgnored=true` (default true) | `{ policy: Policy, effectiveMode: "enforce"\|"report"\|"off", image: VulnImageReport \| null, findings: VulnFinding[] }` |
 | `POST /api/projects/{p}/services/{s}/vulns/scan` | editor | `{ env?: string }` | `202 { scanId: number }` — forced rescan of the env's live image |
 | `GET /api/projects/{p}/services/{s}/vulns/policy` | viewer | — | `{ mode: "inherit"\|"enforce"\|"report"\|"off", effectiveMode: … }` |
-| `PUT /api/projects/{p}/services/{s}/vulns/policy` | editor | `{ mode }` | same as GET |
+| `PUT /api/projects/{p}/services/{s}/vulns/policy` | editor (project admin to set a mode looser than the instance mode) | `{ mode }` | same as GET |
 | `GET /api/projects/{p}/services/{s}/vulns/ignores` | viewer | — | `VulnIgnore[]` |
 | `POST /api/projects/{p}/services/{s}/vulns/ignores` | editor | `{ vulnId, reason, expiresInDays?: number }` | `201 VulnIgnore` |
 | `DELETE /api/projects/{p}/services/{s}/vulns/ignores/{id}` | editor | — | `204` |
@@ -198,12 +200,12 @@ New command group `kuso vulns` (alias `vuln`):
 
 ```
 kuso vulns list <project>                                   # per image: owner, image, status, C/H/M/L, fixable C/H, scanned
-kuso vulns show <project> <service> [--env E] [--severity CRITICAL,HIGH] [--fixable] [--hide-ignored]
+kuso vulns show <project> <service> [--env E] [--severity CRITICAL,HIGH] [--origin app,os,image] [--fixable] [--hide-ignored]
 kuso vulns show <project> --addon <addon> [...]
 kuso vulns scan <project> <service> [--env E] [--wait]      # --wait polls until done, then prints show
 kuso vulns scan <project> --addon <addon> [--wait]
 kuso vulns policy <project> <service> [inherit|enforce|report|off]   # no arg = print
-kuso vulns ignore add <project> <service|--addon a> <VULN-ID> --reason "..." [--expires 30d]
+kuso vulns ignore add <project> <service|--addon a> <VULN-ID>... --reason "..." [--expires 30d]
 kuso vulns ignore list <project> <service|--addon a>
 kuso vulns ignore rm <project> <service|--addon a> <id> [--yes]
 kuso vulns platform [--digest D]                            # admin

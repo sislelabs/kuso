@@ -23,13 +23,13 @@ kuso instance-addon register primary-pg \
   'postgres://kuso_super:secret@pg-shared.internal:5432/postgres'
 ```
 
-The DSN is stored in the cluster-scoped `kuso-instance-shared` Secret under the key `INSTANCE_ADDON_PRIMARY_PG_DSN_ADMIN`. Only kuso admins can read or modify it; the password never leaves the cluster.
+The DSN is stored in the `kuso-instance-shared` Secret (in the `kuso` namespace) under the key `INSTANCE_ADDON_PRIMARY_PG_DSN_ADMIN`. Only kuso admins can read or modify it; the password never leaves the cluster.
 
 After registration, every project's "Add addon" dialog shows a dropdown with `primary-pg` as an option. When a developer picks it for a new addon called `myapp-db`:
 
 1. kuso connects to `primary-pg` as the super user.
-2. Creates a fresh database (`<project>_<addon>`) and a dedicated role with a generated password.
-3. Grants the role full ownership of just that database.
+2. Creates a fresh database (`<project>_<addon>`, hyphens turned into underscores) and a dedicated role with a generated password.
+3. Revokes `CONNECT` from `PUBLIC` on that database, grants the role all privileges on it, and makes the role owner of its `public` schema.
 4. Writes the per-project DSN into the project's `<addon>-conn` Secret (e.g. `myapp-db-conn`), which `envFromSecrets` consumes the same way it does for native addons.
 
 The developer's services see `DATABASE_URL` exactly as if they had a native Postgres addon. No StatefulSet is rendered for the addon CR — the chart no-ops when `spec.useInstanceAddon` is set.
@@ -43,7 +43,7 @@ Native addons are great for isolation but expensive: every project that wants Po
 ### What gets stored where
 
 ```
-cluster-scope:
+kuso namespace:
   Secret/kuso-instance-shared
     INSTANCE_ADDON_PRIMARY_PG_DSN_ADMIN   # superuser DSN, admin-only
 
@@ -91,8 +91,8 @@ DIRECT_URL   = ${{ <addon>.DIRECT_URL }}
 | --- | --- |
 | Project creates `KusoAddon` with `useInstanceAddon: primary-pg` | `CREATE DATABASE`, `CREATE ROLE`, `GRANT`. Per-project conn-secret written. |
 | Project updates the addon's spec (e.g. backup schedule) | No-op against the shared server; only the conn-secret may rewrite. |
-| Project deletes the addon | **No automatic `DROP DATABASE`.** The kuso server clears `<addon>-conn` and the KusoAddon CR; the database on the shared server is left in place. **The admin must drop it manually** if they want to reclaim space. This is intentional — accidental cascading deletes lose data. |
-| Admin unregisters the shared server | Refused if any project's KusoAddon currently references it. The UI surfaces "in use by N projects." Force-unregistering an in-use shared server orphans the per-project DSNs. |
+| Project deletes the addon | **No automatic `DROP DATABASE`.** The kuso server deletes the KusoAddon CR and disables `LOGIN` on the role; the database and `<addon>-conn` are kept, and re-adding the same addon name reattaches them. **The admin must drop it manually** if they want to reclaim space. This is intentional — accidental cascading deletes lose data. Preview / env-clone addons are the exception: their database and role are dropped on delete. |
+| Admin unregisters the shared server | `kuso instance-addon unregister` does **not** check for users — it just discards the admin DSN. Existing per-project DSNs keep working, but provisioning, resync and clone/drop for addons that reference it fail until it's re-registered. (Disabling the kuso-managed cluster database under Settings → Database *is* refused while projects use it.) |
 | Shared server goes down | Every dependent project's database goes down with it. Same blast radius as a native StatefulSet failure, just shared. |
 
 ### Failure modes
@@ -100,14 +100,14 @@ DIRECT_URL   = ${{ <addon>.DIRECT_URL }}
 1. **Superuser DSN expires or rotates.** Re-run `kuso instance-addon register primary-pg '<new-dsn>'`. Existing per-project DSNs aren't affected — they use their own roles, not the super DSN.
 2. **Shared server out of disk.** Every project on it stops accepting writes. The shared model concentrates this risk; pick a host with monitoring + alerting before sharing.
 3. **Bad DSN at registration.** kuso parses the URL but doesn't dial the server until the first project tries to use it. A typo'd registration looks fine in the dropdown until someone picks it.
-4. **Project deletion leaves orphan DBs.** As above. We may add an admin-side "list orphan DBs on this server" verb in a future release; for now the shared-server admin is responsible for housekeeping.
-5. **Cross-project namespace collision.** kuso names per-project DBs `<project>_<addon>`. Two projects in different namespaces can't pick the same name pair, but they CAN pick names that resolve to identical DB names if the underlying server is case-insensitive. We normalize lowercase before sending — collisions are rare but not impossible. The CREATE DATABASE call is what ultimately fails; the addon creation surfaces a 400 with the Postgres error string.
+4. **Project deletion leaves orphan DBs.** As above. The Settings → Database overview (`GET /api/instance-addons/<name>/overview`) lists every database on the server and flags the retained ones ("kept after delete"); dropping them is still the shared-server admin's job.
+5. **Cross-project name collision.** kuso names per-project DBs `<project>_<addon>` with hyphens mapped to underscores, so `acme`/`api-db` and `acme-api`/`db` both resolve to `acme_api_db`. Each DB and role carries a `kuso-addon:<project>/<addon>` ownership comment; the second addon is refused with a 409 (`instance database … already belongs to …`) instead of adopting the other project's data.
 
 ### What's not supported (yet)
 
 - Only `kind: postgres`. MySQL/Mongo/Redis instance-sharing would each need their own `provisionInstanceAddonDB` implementation.
 - No automatic `DROP DATABASE` on addon delete. Deliberate.
-- No backup schedule per project — the shared server's backup is the admin's responsibility, not kuso's. Per-project pg_dump-shaped backup is on the table for a future release.
+- No backup schedule per project. When the kuso-managed cluster PG has a backup schedule, its CronJob also dumps each tenant database separately, and a tenant addon can list and restore its own dumps. A BYO registered server is not backed up by kuso at all.
 - Pooling depends on the instance: the kuso-managed cluster PG fronts per-project DBs with PgBouncer (that's where `POOLER_*` / the pooled `DATABASE_URL` come from), but a BYO registered server has whatever pooling you run yourself — kuso doesn't install one for you.
 
 ## When to pick which

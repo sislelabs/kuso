@@ -1,5 +1,7 @@
 # Cron onFailure watcher
 
+> **Current status (2026-11-10):** Shipped despite the "deferred" note below. See `server-go/internal/cronwatch`, which emits `cron.failed`.
+
 ## Status
 
 CRD field `KusoCron.spec.onFailure` shipped in v0.15.0. **Watcher implementation deferred** — schema is forward-compatible so users can author it now.

@@ -1,5 +1,7 @@
 # Postgres Point-in-Time Recovery (PITR) — Design
 
+> **Current status (2026-11-10):** Not implemented. There is no PITR/WAL archiving in the codebase.
+
 **Date:** 2026-05-21
 **Status:** Draft — for review before implementation
 

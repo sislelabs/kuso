@@ -1,5 +1,7 @@
 # mail-external addon (gap 7)
 
+> **Current status (2026-11-10):** Not implemented. There is no `mail-external` addon kind. Use an external addon (`spec.external`) instead.
+
 ## Status
 
 **Functionally available today** via `KusoAddon.spec.external.secretName`. Users can BYO Resend / SES / Postmark by creating a Secret with `SMTP_*` keys and pointing an addon at it. **Dedicated `kind=mail-external` UX is a follow-up.**

@@ -98,30 +98,45 @@ done
 exec node server.js
 ```
 
+If you list the names in the service's `publicEnv` (`kuso service set
+<project> <service> --public-env NEXT_PUBLIC_API_URL`, or `publicEnv:` in
+`kuso.yml`), kuso sets `KUSO_PUBLIC_ENV` on the pod to the
+space-separated list, so the script can use `VARS="$KUSO_PUBLIC_ENV"`
+instead of a hard-coded list.
+
+kuso also bakes the sentinels into the build for every `publicEnv` name:
+
+| Strategy | What the build sees |
+|----------|---------------------|
+| `dockerfile` | `--build-arg KEY=__KUSO_RUNTIME_KEY__`. Declare `ARG KEY` (or keep the `ENV` line above) before the build step. |
+| `nixpacks` | `ENV KEY="__KUSO_RUNTIME_KEY__"` in the generated Dockerfile. |
+| `static` | `KEY=__KUSO_RUNTIME_KEY__` in the build command's env. |
+| `buildpacks` | Nothing; keep the sentinel in your own build config. |
+
+The sentinel wins over a `buildArgs` entry or a runtime env value with the
+same name, so the real value never gets inlined at build time. Swapping
+the sentinels at startup is still your image's job. kuso doesn't ship a
+substitution script, so you need one like the one above for every strategy.
+
 ### Configure kuso env vars per environment
 
-`kuso env set` writes to the service spec and propagates to every
-env, so it can't differentiate prod from staging. For per-env
-overrides use `kuso secret set --env <name>` — the value is stored
-in a kube Secret scoped to that env only, and your container reads
-it via `process.env.NEXT_PUBLIC_API_URL` exactly the same way:
+`kuso env set` without `--env` writes to the service spec and
+propagates to every env. Add `--env <name>` to scope a value to one
+environment; your container reads it via `process.env.NEXT_PUBLIC_API_URL`
+exactly the same way:
 
 ```
 # baseline (applied to every env)
 kuso env set hello web NEXT_PUBLIC_API_URL=https://api.example.com
 
-# staging override (per-env secret, takes precedence)
-kuso secret set hello web NEXT_PUBLIC_API_URL https://api-staging.example.com --env staging
+# staging override (scoped to the staging env, takes precedence)
+kuso env set hello web NEXT_PUBLIC_API_URL=https://api-staging.example.com --env staging
 ```
 
-The "secret" label is a wire-format detail — there's nothing actually
-secret about a public URL. Treat per-env secrets as "per-env env
-vars" for the purposes of NEXT_PUBLIC_*. The pod env-merge order
-puts env-scoped Secret values after service-level env vars, so the
-override wins. The runtime substitute script doesn't care which
-source provided the value; it just reads `printenv`.
+The runtime substitute script doesn't care which source provided the
+value; it just reads `printenv`.
 
-No rebuild needed when values change — `kuso secret set --env …` and
+No rebuild needed when values change — `kuso env set --env …` and
 let the pod restart.
 
 ## Why not pass `--build-arg` per env?
@@ -138,11 +153,14 @@ The placeholder dance keeps both properties.
 
 ## Static-build frameworks (no server.js)
 
-For pure static builds (Vite, CRA, plain `next export`), use kuso's
-`strategy: static` and add a `kuso-static.dockerfile` step that runs
-the substitution on the static output before nginx ships it. The
-same script works — point `cd` and `find` at your build output
-directory (`dist/`, `build/`, `out/`) instead of `.next/`.
+For pure static builds (Vite, CRA, plain `next export`), kuso's
+`runtime: static` generates its own Dockerfile (output copied into
+`nginx:1.30-alpine`) with no hook for a startup script. To substitute
+at startup, use `runtime: dockerfile` with an nginx stage whose
+entrypoint runs the substitution on the static output before nginx
+starts (or point `static.runtimeImage` at such an image). The same
+script works — point `cd` and `find` at the served directory instead
+of `.next/`, and `exec nginx -g 'daemon off;'` instead of `node`.
 
 ## Secrets
 
@@ -205,9 +223,9 @@ services:
       SENTRY_RELEASE: v1.4.2
 ```
 
-`buildArgs` flows to `--build-arg` (dockerfile) and build-time `ENV`
-(nixpacks). It accepts **plain literals only** — a `secretKeyRef` can
-never be routed through it (the server drops any secret-shaped value),
+`buildArgs` flows to `--build-arg` (dockerfile), build-time `ENV`
+(nixpacks) and the build command's env (static). It accepts **plain
+literals only** — a `secretKeyRef` can never be routed through it (the server drops any secret-shaped value),
 so it's safe to persist in image layers by design. Don't put secrets
 here; use a release hook or a `--mount=type=secret` RUN for those.
 This is distinct from `env` (runtime) and from `publicEnv` (the

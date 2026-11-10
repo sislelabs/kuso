@@ -28,11 +28,13 @@ new release asset:
 
 ```sh
 CLI=dist/kuso-darwin-arm64
-$CLI doctor   # all five PASS expected
+$CLI doctor   # every check PASS expected
 $CLI upgrade --check    # CLI version should match server version
 ```
 
 Pick a test project name that doesn't collide. Convention: `smoke`.
+New projects run in their own namespace, `kuso-<project>` (here
+`kuso-smoke`); only the `KusoProject` CR itself lives in `kuso`.
 
 Test repo: any small public web service with one or two routes and a
 Postgres-friendly env (`DATABASE_URL` is the de-facto kuso convention).
@@ -65,7 +67,8 @@ lists smoke with the correct repo + branch.
 $CLI service add smoke api --port 8080 --runtime nixpacks
 ```
 
-**Pass**: stdout shows `service smoke/api added`.
+**Pass**: stdout shows `service smoke/api added` (adding the service
+also starts its first build).
 `$CLI project describe smoke` reports `services (1), environments (1), addons (0)`.
 
 ### 3. Add a Postgres addon
@@ -78,7 +81,7 @@ $CLI project addon add smoke db --kind postgres --version 16 --size small
 addon-conn Secret materialises within 60s:
 
 ```sh
-until kubectl -n kuso get secret smoke-db-conn 2>/dev/null; do sleep 5; done
+until kubectl -n kuso-smoke get secret smoke-db-conn 2>/dev/null; do sleep 5; done
 ```
 
 ### 4. Wire env-var ref + a plain marker
@@ -88,8 +91,26 @@ $CLI env set smoke api 'DATABASE_URL=${{ db.DATABASE_URL }}' 'SMOKE_TAG=baseline
 $CLI env list smoke api
 ```
 
-**Pass**: `DATABASE_URL` is rendered as type `secret` (the envref auto-
-translated to a `secretKeyRef`); `SMOKE_TAG` is rendered as type `plain`.
+**Pass**: `DATABASE_URL` is rendered as type `ref` (the envref auto-
+translated to a `secretKeyRef`); `SMOKE_TAG` is rendered as type `env`.
+
+### 4a. Parallel secret writes
+
+Six concurrent writes to distinct keys must all land. This guards the
+race-free Secret patch; a lost key here is a regression.
+
+```sh
+seq 1 6 | xargs -P 6 -I {} $CLI secret set smoke api K{} V{}
+$CLI secret list smoke api
+```
+
+**Pass**: all six commands succeed and the list shows `K1`..`K6`.
+Repeat with one key (`... secret set smoke api K1 V{}`): all six succeed
+and one value wins. Then remove them:
+
+```sh
+for i in 1 2 3 4 5 6; do $CLI secret unset smoke api K$i; done
+```
 
 ### 5. Trigger build + wait for terminal state
 
@@ -106,7 +127,7 @@ nixpacks builds.
 ### 6. Wait for deployment + verify the live API
 
 ```sh
-until kubectl -n kuso get deploy smoke-api-production \
+until kubectl -n kuso-smoke get deploy smoke-api-production \
     -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -q '^1'; do
   sleep 5
 done
@@ -116,7 +137,7 @@ curl -fsS https://api.smoke.sislelabs.com/healthz \
 
 **Pass**: HTTP 200 with `{"ok":true}` (or whatever the test service's
 healthz returns). If 502, the project's NetworkPolicy stack is wrong —
-look at `kubectl -n kuso get networkpolicy | grep smoke` and confirm
+look at `kubectl -n kuso-smoke get networkpolicy` and confirm
 `smoke-allow-platform` exists with traefik+cert-manager allowed.
 
 ### 7. Roundtrip the database
@@ -137,9 +158,9 @@ containing the row. This proves the addon→envref→pod chain.
 ```sh
 $CLI run smoke api --timeout-seconds 60 -- sh -c 'echo "from-run"; echo $SMOKE_TAG'
 # poll until terminal:
-RUN=$(kubectl -n kuso get kusoruns -l kuso.sislelabs.com/service=smoke-api \
+RUN=$(kubectl -n kuso-smoke get kusoruns -l kuso.sislelabs.com/service=smoke-api \
     -o jsonpath='{.items[-1:].metadata.name}')
-until kubectl -n kuso get kusorun "$RUN" \
+until kubectl -n kuso-smoke get kusorun "$RUN" \
     -o jsonpath='{.metadata.annotations.kuso\.sislelabs\.com/run-phase}' \
     2>/dev/null | grep -E 'succeeded|failed|cancelled'; do sleep 5; done
 ```
@@ -151,16 +172,16 @@ until kubectl -n kuso get kusorun "$RUN" \
 
 ```sh
 $CLI run smoke api --timeout-seconds 300 -- sleep 120
-RUN=$(kubectl -n kuso get kusoruns -l kuso.sislelabs.com/service=smoke-api \
+RUN=$(kubectl -n kuso-smoke get kusoruns -l kuso.sislelabs.com/service=smoke-api \
     -o jsonpath='{.items[-1:].metadata.name}')
 # wait for it to enter running:
-until kubectl -n kuso get kusorun "$RUN" \
+until kubectl -n kuso-smoke get kusorun "$RUN" \
     -o jsonpath='{.metadata.annotations.kuso\.sislelabs\.com/run-phase}' \
     2>/dev/null | grep -q running; do sleep 4; done
 # cancel via the CLI:
 $CLI run cancel smoke "$RUN"
 # verify:
-kubectl -n kuso get kusorun "$RUN" \
+kubectl -n kuso-smoke get kusorun "$RUN" \
     -o jsonpath='{.metadata.annotations.kuso\.sislelabs\.com/run-phase}{"\n"}'
 ```
 
@@ -170,22 +191,23 @@ kubectl -n kuso get kusorun "$RUN" \
 
 ```sh
 $CLI build trigger smoke api
-# wait for second build's terminal state, then rollback to FIRST build:
-FIRST=$(kubectl -n kuso get kusobuilds -l kuso.sislelabs.com/service=smoke-api \
-    -o jsonpath='{.items[0].metadata.name}')   # newest-first ordering
-curl -fsS -X POST -H "Authorization: Bearer $TOK" \
-    "https://HOST/api/projects/smoke/services/api/builds/$FIRST/rollback"
+# wait until the newest build (first row; the list is newest-first) is terminal:
+until $CLI build list smoke api --limit 1 | grep -E 'succeeded|failed'; do sleep 15; done
+$CLI build list smoke api        # note the LIVE column: production is on the new build
+$CLI build rollback smoke api --previous --yes
+$CLI build list smoke api
 ```
 
-**Pass**: response includes `promoted-build` annotation pointing at
-$FIRST. `kubectl -n kuso get kusoenvironment smoke-api-production
--o jsonpath='{.spec.image.tag}'` matches the FIRST build's tag.
+**Pass**: the second build succeeds, and after the rollback the
+`LIVE` column shows `production` on the first build again (`--previous`
+picks the newest succeeded build of the same branch older than the live
+one).
 
 ### 11. Schedule a cron
 
 ```sh
 $CLI cron add smoke api --name tick --schedule '*/5 * * * *' --cmd 'echo tick'
-kubectl -n kuso get cronjobs | grep smoke-api-tick
+kubectl -n kuso-smoke get cronjobs | grep smoke-api-tick
 ```
 
 **Pass**: kube CronJob exists with the schedule. Wait for the first
@@ -216,7 +238,9 @@ curl -fsS -X POST -H "Authorization: Bearer $TOK" \
     --data-binary $'project: smoke\nservices:\n  - name: api\n    repo: https://github.com/ivo9999/kuso-demo-todo-api\n    runtime: nixpacks\n    port: 8080\n  - name: api2\n    repo: https://github.com/ivo9999/kuso-demo-todo-api\n    runtime: nixpacks\n    port: 8080\naddons:\n  - name: db\n    kind: postgres\n'
 ```
 
-**Pass**: response is `{"servicesToCreate":["api2"], "servicesToUpdate":["api"], "addonsToUpdate":["db"], ...}`.
+**Pass**: response is `{"servicesToCreate":["api2"], "servicesToUpdate":["api"], "addonsToUpdate":[], ...}`.
+Apply never updates addons: `db` lands in `addonsUnchanged`, or in
+`changes` with `notApplied: true` if it drifted from the file.
 
 ### 14. Audit + notify integration
 
@@ -256,11 +280,12 @@ This step is a human-driven sub-test the agent flags as
 "please verify in the browser" rather than executes itself:
 
 - Open `https://HOST/projects/smoke` in a browser.
-- Confirm every overlay tab renders: Deployments, Variables, Metrics,
-  Logs, Errors, Crons, Runs, Settings.
+- Confirm every overlay tab renders: Deployments, Variables, Logs,
+  Metrics, Errors, Shell, Settings, plus Vulnerabilities, Crons and Runs
+  under More.
 - The Runs tab shows the runs fired in steps 8–9 with their phase
   pills. The composer (command + env overlay) accepts a fresh run.
-- Settings → Variables shows DATABASE_URL as `<secret>` and SMOKE_TAG.
+- The Variables tab shows DATABASE_URL as an addon reference and SMOKE_TAG.
 
 Skip the UI check on a headless-agent run; capture it for the human
 review.
@@ -274,7 +299,7 @@ until kubectl -n kuso get kusoproject smoke 2>&1 | grep -q NotFound; do
   sleep 5
 done
 # verify nothing left:
-kubectl -n kuso get kusoservices,kusoaddons,kusoruns,networkpolicies \
+kubectl -n kuso-smoke get kusoservices,kusoaddons,kusoruns,networkpolicies \
     -l kuso.sislelabs.com/project=smoke
 ```
 
@@ -282,6 +307,33 @@ kubectl -n kuso get kusoservices,kusoaddons,kusoruns,networkpolicies \
 returns "No resources found." If anything lingers past 5 minutes, the
 finalizer is stuck — `kubectl -n kuso describe kusoproject smoke` will
 show why.
+
+---
+
+## Resilience sweeps (optional)
+
+These restart control-plane components. On the live instance that
+interrupts real apps' builds and deploys: run them on a sandbox
+(`make sandbox-up`), or ask first. There is no CLI verb for restarting
+the platform itself, so use `kubectl` (over ssh on the live cluster).
+Run them while the `smoke` project still exists (before step 16).
+
+| Restart | Command | Pass |
+| --- | --- | --- |
+| kuso-server | `kubectl -n kuso rollout restart deploy/kuso-server` | `$CLI doctor` passes again within ~30s; a build running at the time still reaches `succeeded`/`failed` in `$CLI build list`. |
+| operator | `kubectl -n kuso-operator-system rollout restart deploy/kuso-operator-controller-manager` | API unaffected; `$CLI status smoke` stays healthy. |
+| registry | `kubectl -n kuso rollout restart deploy/kuso-registry` | A build pushing at that moment fails cleanly (status `failed`, push error in the reason). The next `$CLI build trigger` succeeds. |
+| app pods | `$CLI service restart smoke api` | Pods roll on the same image; no new build appears in `$CLI build list`. |
+
+Webhook signature check (no restart, safe anywhere):
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://HOST/api/webhooks/github \
+    -d '{}' -H 'X-GitHub-Event: push' -H 'X-Hub-Signature-256: sha256=deadbeef'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://HOST/api/webhooks/github -d '{}'
+```
+
+**Pass**: both return 400 (503 means the GitHub App isn't configured on that instance).
 
 ---
 
@@ -295,16 +347,16 @@ project-create → apply → cert → rollout end to end. Uptime Kuma is the
 zero-addon showcase (single `runtime: image` service + a volume), so it
 reaches Ready without waiting on a datastore.
 
-1. **Catalog lists.** `kuso marketplace list` → prints ≥8 apps
-   (uptime-kuma, umami, n8n, vaultwarden, gitea, metabase, plausible,
-   obsidian-livesync). `kuso marketplace info uptime-kuma` → shows its one
+1. **Catalog lists.** `kuso marketplace list` → prints the catalogue
+   (45 templates today, including uptime-kuma, umami, n8n, vaultwarden,
+   gitea, metabase, plausible and obsidian-livesync). `kuso marketplace info uptime-kuma` → shows its one
    required `host` (domain) prompt.
 
 2. **Dry-run render writes nothing.**
    `kuso marketplace deploy uptime-kuma --project mkt-smoke --set host=mkt-smoke.<baseDomain> --dry-run`
    → prints a kuso.yaml with `project: mkt-smoke` and the `host`
-   substituted into the service domain, plus a plan (`[service] …`,
-   `[domain] …`). `kuso get projects -o json` still shows no `mkt-smoke`.
+   substituted into the service domain, preceded by a `## Plan` list of
+   render notes (`- [<kind>] …`) on stderr. `kuso get projects -o json` still shows no `mkt-smoke`.
 
 3. **Real deploy.** Drop `--dry-run`. The command creates project
    `mkt-smoke` (409-tolerant), applies, and reports success. Watch the
@@ -341,11 +393,11 @@ Recording them here so future agents recognise the shape:
   Operation not permitted` (exit 127)** — the image starts as root and
   self-drops to its app user at runtime, which needs SETUID/SETGID caps.
   kuso drops ALL container capabilities + `allowPrivilegeEscalation:
-  false` unconditionally, and there is no per-service securityContext
-  knob in the KusoService CRD. Caught on the first live marketplace
-  smoke (v0.18.105, 2026-07-02). Same class as the named-user runAsNonRoot
-  fix (v0.13.1). Marketplace templates must use fixed non-root images or
-  rootless variants; a real fix is an opt-in caps/securityContext field.
+  false` by default. Caught on the first live marketplace smoke
+  (v0.18.105, 2026-07-02). Same class as the named-user runAsNonRoot fix
+  (v0.13.1). Fixed in v0.18.106 with an opt-in per-service
+  `securityContext` (`capabilities.add` + `allowPrivilegeEscalation`);
+  the uptime-kuma template now adds SETUID/SETGID.
 
 - **Build pod 503s waiting for buildkitd** → default-deny NetworkPolicy
   doesn't allow build-pod egress to `kuso-buildkitd:1234`. Fixed in

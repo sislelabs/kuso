@@ -13,8 +13,9 @@ build Jobs a node of their own.
 > runs inside the shared `kuso-buildkitd` daemon (`deploy/buildkitd.yaml`).
 > A build node pool moves the Jobs, which matters for `buildpacks` builds
 > (they compile in-pod) and for clone/cache steps. It does not move the
-> buildkitd load. buildkitd has its own placement: a required
-> anti-affinity keeps it off the control-plane node, and its
+> buildkitd load. buildkitd has its own placement: a preferred node
+> affinity steers it off the control-plane node (preferred, so a
+> single-node install still runs it), and its
 > `kuso-buildkitd-state` PVC is RWO on local-path, so it stays on
 > whichever node first bound that volume. Moving it means recreating the
 > PVC.
@@ -61,6 +62,10 @@ flip the label + taint by hand:
 kubectl label node <node-name> kuso.sislelabs.com/build=true
 kubectl taint node <node-name> kuso.sislelabs.com/build=true:NoSchedule
 ```
+
+(`kuso node label set <node-name> build=true` sets the same label —
+the prefix is added server-side — but the CLI only manages the
+`region` taint, so the build taint still needs `kubectl`.)
 
 Now every new build Job lands on that node. Existing in-flight builds
 finish where they were scheduled — kube doesn't evict them.

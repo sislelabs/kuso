@@ -8,17 +8,18 @@ StatefulSet" to a replicated, failover-capable variant. As of v0.10:
 | postgres | CloudNativePG Cluster | 3 | automatic, ~30s |
 | redis | Sentinel quorum (3 Redis + 3 Sentinel) | 3 + 3 | automatic, ~10s |
 | nats | Clustered JetStream | 3 | automatic; **streams must be created with `--replicas 3`** for HA writes |
-| others | (no-op — falls back to single-node) | — | — |
+| clickhouse, mailpit, meilisearch, s3 | (ignored — single-node) | — | — |
+| valkey, mongodb, mysql, rabbitmq, redpanda | (rejected — `ha: true` returns 400) | — | — |
 
 This page is about the **postgres** path. CNPG is a one-shot operator
-install. kuso doesn't manage CNPG itself because (a) it's a small
-prerequisite that admins typically already have, and (b) shipping
-yet-another-operator inside the kuso operator-of-operators is the
-kind of complexity we said up front we wouldn't do.
+install. `hack/install.sh` installs it (the bundled control-plane
+Postgres is itself a CNPG Cluster), but kuso doesn't manage or upgrade
+the CNPG operator after that.
 
 ## Prerequisites
 
-Install CNPG once per cluster:
+`hack/install.sh` installs CNPG for you (skipped if the CRD already
+exists). On a cluster set up another way, install it once:
 
 ```bash
 kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
@@ -39,8 +40,8 @@ Both should be present + Ready.
 
 ## Enabling HA on an addon
 
-Set `ha: true` on the KusoAddon spec — that's the entire user-side
-change:
+Set `ha: true` on the KusoAddon spec when you create it — that's the
+entire user-side change:
 
 ```yaml
 apiVersion: application.kuso.sislelabs.com/v1alpha1
@@ -51,11 +52,12 @@ spec:
   project: my-project
   kind: postgres
   size: medium
-  ha: true              # ← was false
+  ha: true
 ```
 
-Or via the UI: Addon settings → Replication → "High availability
-(3-replica)". From the operator's side what changes:
+Or `kuso project addon add <project> <name> --kind postgres --ha`, or
+the UI: Add addon → "High availability (multi-replica +
+anti-affinity)". From the operator's side what changes:
 
 - Single `StatefulSet` is replaced with a CNPG `Cluster` resource.
 - 3 Postgres pods spin up (~60s on warm caches, ~3 min on cold).
@@ -72,7 +74,7 @@ Or via the UI: Addon settings → Replication → "High availability
 **Single-node clusters.** CNPG defaults to pod anti-affinity per
 node — on a single-node cluster the 2nd and 3rd replicas will hang
 in `Pending`. For dev / staging accept the SPOF with
-`spec.singleNode: true`:
+`spec.singleNode: true` (CR field only — no CLI flag or UI toggle):
 
 ```yaml
 spec:
@@ -87,10 +89,10 @@ during the switchover. Use a driver retry policy
 disconnect") to ride through cleanly. Apps that already do per-
 request connection acquisition won't notice.
 
-**Backups.** CNPG ships its own `Backup` CRD that uses
-`barman-cloud-backup` to S3 / GCS / local PVC. The legacy kuso
-`pg_dump` cronjob is *suppressed* in HA mode. Configure CNPG-native
-backups out-of-band via:
+**Backups.** The normal kuso `pg_dump` cronjob runs in HA mode too
+(when `spec.backup.schedule` is set), dumping from the `<addon>-rw`
+Service. For physical backups / PITR, CNPG ships its own `Backup` CRD
+that uses `barman-cloud-backup` to S3 / GCS; configure it out-of-band:
 
 ```yaml
 apiVersion: postgresql.cnpg.io/v1
@@ -111,19 +113,21 @@ on the roadmap; not in v0.10.)
 `size: small|medium|large` mapping used by single-node addons (5/20/100
 GiB). With 3 replicas your storage cost triples — plan accordingly.
 
-**Switching from non-HA to HA on an existing addon.** This is **not
-seamless today**. The single-node StatefulSet uses different storage
-layout from CNPG's per-replica PVCs. Recommended flow:
+**Switching from non-HA to HA on an existing addon.** The server
+**refuses** flipping `ha` on a live addon (409): the single-node
+StatefulSet uses a different storage layout from CNPG's per-replica
+PVCs, so the flip would bootstrap an empty DB. Recommended flow:
 
-1. `kuso addon-backup download my-project my-project-pg` — manual snapshot
-   to disk (or `kuso addon-backup list` for the S3-scheduled dumps).
-2. Set `ha: true` on the addon (this triggers a helm uninstall of
-   the StatefulSet path + install of the CNPG Cluster path).
-3. Restore the snapshot into the new HA cluster:
-   `kuso addon-backup restore my-project my-project-pg <s3-key>` (or
-   replay a downloaded dump with `psql` via `kuso db connect`).
-4. Bounce dependent services so they pick up the new `-conn` Secret
-   (the host name changes from `<addon>` to `<addon>-rw`).
+1. `kuso addon-backup run my-project pg` (or `kuso addon-backup list`
+   for the S3-scheduled dumps; `download` for a local copy).
+2. Create a new addon with `--ha`, e.g.
+   `kuso project addon add my-project pg-ha --kind postgres --ha`.
+3. Restore into it:
+   `kuso addon-backup restore my-project pg <s3-key> --into pg-ha --confirm pg-ha`
+   (or replay a downloaded dump with `psql` via `kuso db connect`).
+4. Repoint dependent services at the new addon (`kuso project addon
+   subscribe` / update their `${{ }}` refs) and redeploy; the host is
+   now `<addon>-rw`.
 
 We'll automate this in a future kuso version. Until then, treat the
 choice as install-time.

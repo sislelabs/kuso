@@ -9,8 +9,8 @@
 
 Catalogue of the main endpoints the kuso-server exposes,
 the request/response shape, and the web-UI page or CLI command that
-triggers it. Read alongside `LIVE_TEST_PLAN.md` for the journey-derived
-walkthrough used to verify the Go rewrite against the live cluster.
+triggers it. `AGENT_SMOKE_TEST.md` is the end-to-end walkthrough
+against a live cluster.
 
 Conventions:
 
@@ -192,8 +192,10 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 ### `GET /api/notifications/{id}` ✅
 ### `POST /api/notifications` ✅
 - Body: `{ name, enabled, type, pipelines: [], events: [], config: {...} }`.
-- `type` ∈ {slack, webhook, discord}; `config.url` required;
-  slack also needs `config.channel`.
+- `type` ∈ {slack, webhook, discord, mattermost, telegram, pushover, email}.
+  URL channels (slack, webhook, discord, mattermost) need `config.url`;
+  telegram needs `config.botToken` + `config.chatId`, pushover
+  `config.token` + `config.user`, email `config.host`/`from`/`to`.
 ### `PUT /api/notifications/{id}` ✅
 ### `DELETE /api/notifications/{id}` ✅
 
@@ -252,8 +254,8 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
   addons but the web UI calls them via /addons anyway.)*
 
 ### `DELETE /api/projects/{project}` ✅
-- Cascade-deletes envs + services. Addon deletion happens via the
-  addons handler.
+- Cascade-deletes envs, services, addons and builds. Addon PVCs are kept
+  unless `?purgeData=true` is set (`kuso project delete --purge-data`).
 
 ### `GET /api/projects/{project}/services` ✅
 ### `POST /api/projects/{project}/services` ✅
@@ -279,8 +281,9 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 ### `GET /api/projects/{project}/addons` ✅
 ### `POST /api/projects/{project}/addons` ✅
 - Body: `{ name, kind, version?, size?, ha?, storageSize?, database? }`.
-- After create, every env in the project gets its `envFromSecrets`
-  patched to include the new addon's `<cr-name>-conn` secret.
+- After create, the project's envs get their `envFromSecrets` refreshed to
+  include the new addon's `<cr-name>-conn` secret (services with an addon
+  subscription list only get it once they subscribe).
 ### `DELETE /api/projects/{project}/addons/{addon}` ✅
 - Same envFromSecrets refresh after delete.
 
@@ -312,16 +315,17 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 
 ### `POST /api/projects/{project}/services/{service}/builds` ✅
 - Body: `{ branch?, ref? }`. Empty body is legal.
-- Image tag = first 12 chars of SHA, otherwise verbatim.
+- Image tag = the resolved commit SHA; manual rebuilds of an
+  already-built commit get `<first 12 chars of SHA>-<base36 ms timestamp>`.
 - Branch → SHA resolution via GitHub App requires `installationId` on
   the project's spec.github (Phase 6).
 
 ### Background poller
-- Every 30s by default (disable with `KUSO_BUILD_POLLER_DISABLED=true`).
+- Every 5s by default (disable with `KUSO_BUILD_POLLER_DISABLED=true`).
 - Reads the build Job for each build whose status.phase isn't
-  succeeded/failed. JobComplete=True → mark succeeded + patch the
-  production env's spec.image with the new tag. JobFailed=True →
-  mark failed.
+  succeeded/failed. JobComplete=True → run the release hook (if any),
+  then mark succeeded + patch the target env's spec.image with the new
+  tag. JobFailed=True → mark failed.
 
 ---
 
@@ -330,7 +334,8 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 ### `GET /api/projects/{project}/services/{service}/logs?env=X&lines=N` ✅
 - Returns `{ project, service, env, lines: [{pod, line}] }`.
 - Default 200 lines, capped 2000. env defaults to "production".
-- One-shot tail (no streaming yet).
+- One-shot tail. Live streaming is the WebSocket route
+  `GET /ws/projects/{project}/services/{service}/logs` (`kuso logs -f`).
 
 ---
 
@@ -447,5 +452,5 @@ None are load-bearing for the cutover.
 | `POST /api/config/setup/kubeconfig/validate`      | Same.                                                                                   |
 | `POST /api/config/setup/save`                     | Same.                                                                                   |
 | `GET /api/kubernetes/contexts`                    | Go server is single-context.                                                             |
-| WebSocket gateway (events.gateway.ts)             | Streaming logs / interactive console — replaced by the one-shot `/logs` route for now. |
+| WebSocket gateway (events.gateway.ts)             | Replaced by per-feature `/ws/...` routes (logs, shell, port-forward).                    |
 | Templates module                                  | Out of scope per project decision (you create from custom repos).                       |

@@ -1,5 +1,7 @@
 # Wildcard TLS via DNS-01 (gap 5)
 
+> **Current status (2026-11-10):** Shipped differently. Envs take `wildcardDomains` plus a pre-provisioned TLS secret. The per-project DNS-01 Issuer, `<project>-wildcard-tls` and `spec.wildcardCertSecret` described below were never built.
+
 ## Status
 
 **Deferred to next session.** Requires DNS provider credentials plumbing (Cloudflare token at minimum), a new Secret type, and cert-manager `ClusterIssuer` reconciliation per project. Not a YOLO.

@@ -30,8 +30,8 @@ The service is served at `web.shop.example.com`: each service gets `<service>.<p
 - **Deploy = push.** GitHub webhooks drive builds; a merge to `main` *is* the production deploy. Release hooks run your migrations as a gated Job before the new image is promoted — a failed migration never takes down running pods.
 - **Environments that match how teams work.** PR previews with cloned, seeded, isolated databases. Long-lived `staging`/`qa` envs that track their own branch and auto-deploy on push. Per-env config overrides that can't rewrite production.
 - **Sleep, wake, stop.** Idle services scale to zero and wake on the next request via the activator. Payment-webhook paths can pin a service warm. Or hard-stop a service (or a whole project) — deliberately off, with a clean "stopped" page, until you say otherwise.
-- **Managed addons with batteries.** Postgres (optionally HA via CloudNativePG — 3 replicas, ~30s failover), Redis/Valkey, MongoDB, RabbitMQ, ClickHouse, Redpanda (Kafka API), NATS, S3-compatible storage, Meilisearch, Mailpit. Connection secrets auto-inject; per-service subscriptions keep DB creds out of your public frontend; scheduled and on-demand backups included.
-- **A marketplace for the usual suspects.** `kuso marketplace deploy n8n` — Gitea, Metabase, n8n, Obsidian LiveSync, Plausible, Umami, Uptime Kuma, Vaultwarden, rendered into ordinary kuso services you manage like everything else.
+- **Managed addons with batteries.** Postgres (optionally HA via CloudNativePG — 3 replicas, ~30s failover), Redis/Valkey, MySQL, MongoDB, RabbitMQ, ClickHouse, Redpanda (Kafka API), NATS, S3-compatible storage, Meilisearch, Mailpit. Connection secrets auto-inject; per-service subscriptions keep DB creds out of your public frontend; scheduled and on-demand backups included.
+- **A marketplace for the usual suspects.** `kuso marketplace deploy n8n` — 45 apps including Gitea, Metabase, n8n, Obsidian LiveSync, Plausible, Umami, Uptime Kuma, Vaultwarden, rendered into ordinary kuso services you manage like everything else.
 - **Self-healing, not just self-hosting.** `kuso doctor` diagnoses first-run setup (DNS, TLS, webhook delivery). `kuso health` flags stuck helm releases and drift cluster-wide, with one-command remediation. Failed builds come back with a classified cause and a suggested fix (`kuso build why`), not a raw log dump.
 - **Zero-downtime self-update.** Each instance checks GitHub for new releases. When one is out, Settings → Updates shows an Update button, and `kuso upgrade` does the same from the CLI (it upgrades the server, not the CLI, and asks before starting): an in-cluster Job swaps the images, rolls the operator and applies CRDs. Nothing updates until you click or run it. No ssh from your laptop.
 - **Built to scale up.** Postgres-backed, stateless, multi-replica control plane. Multi-node clusters with token-based bootstrap (NAT-friendly), label-driven placement, auto-cordon on node failure. Point the control plane at managed Postgres when you outgrow the bundled one.
@@ -83,7 +83,7 @@ From any project repo deployed on kuso:
 curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/install.sh | bash
 ```
 
-That drops the [kuso Claude Code skill](./skills/kuso/) into `.claude/skills/`, teaching the agent the CLI surface, the deploy lifecycle, the `${{ ... }}` env-reference syntax, and the standard debugging playbook. Prefer MCP? `mcp/` ships a first-party [MCP server](./mcp/) with 16 intent-grouped tools and a `--read-only` mode.
+That drops the [kuso Claude Code skill](./skills/kuso/) into `.claude/skills/`, teaching the agent the CLI surface, the deploy lifecycle, the `${{ ... }}` env-reference syntax, and the standard debugging playbook. Prefer MCP? `mcp/` ships a first-party [MCP server](./mcp/) with 23 intent-grouped tools and a `--read-only` mode.
 
 ## A tour in ten commands
 

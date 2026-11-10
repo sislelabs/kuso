@@ -1,6 +1,6 @@
 ---
 name: mcp-development
-description: Use when adding tools to kuso-mcp, debugging MCP integration with Claude Code, or designing new tool shapes. Tells you where things live and the conventions for tool design.
+description: Use when touching mcp/ — adding or changing a kuso-mcp tool, designing tool shapes, or debugging the MCP integration with Claude Code.
 ---
 
 # kuso-mcp development
@@ -15,7 +15,7 @@ mcp/
 ├── go.mod                   # module: github.com/sislelabs/kuso/mcp
 ├── Makefile                 # build, test, vet, run, clean
 ├── internal/
-│   ├── config/              # KUSO_URL / KUSO_TOKEN / --read-only
+│   ├── config/              # KUSO_URL / KUSO_TOKEN (falls back to the kuso CLI login) / --read-only
 │   │   ├── config.go
 │   │   └── config_test.go
 │   ├── kusoclient/          # HTTP wrapper for kuso server REST API
@@ -23,15 +23,15 @@ mcp/
 │   ├── types/               # shared request/response types
 │   └── tools/               # one file per verb group: tools.go, projects.go,
 │       └── ...              #   build.go, env.go, observe.go, run.go, apply.go,
-│                            #   plan.go, health.go
+│                            #   plan.go, health.go, rollback.go, db.go, vulns.go
 └── README.md
 ```
 
-The SDK is [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) v1.6+. Requires Go 1.25 (auto-bumped via `toolchain` directive).
+The SDK is [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) v1.6+. Requires Go 1.25+ (`go 1.25.0` in `go.mod`).
 
 ## Tool design rules
 
-These come from `docs/PRD.md` Workstream B and Anthropic's MCP guidance. Don't ship a tool that violates them.
+These come from the original PRD (Workstream B, no longer in the repo) and Anthropic's MCP guidance. Don't ship a tool that violates them.
 
 1. **Intent-grouped, not REST-mirrored.** Wrong: `get_project`, `get_project_services`, `get_project_envs`. Right: `describe_project` returns all of that in one call. Wrong: `delete_addon`, `add_addon`, `update_addon`. Right: `manage_addon(project, action, …)` with one entrypoint per resource.
 
@@ -54,7 +54,7 @@ These come from `docs/PRD.md` Workstream B and Anthropic's MCP guidance. Don't s
 5. Call your `register<Name>` from `Register()` in `tools.go`.
 6. Write a test in the same package (table-driven, hits a stub HTTP server).
 
-Example from `tools.go`:
+Example from `health.go`:
 
 ```go
 type healthArgs struct{}

@@ -7,7 +7,9 @@ Next.js 16 frontend for kuso. Static export embedded into the Go server.
 ```bash
 # From the repo root.
 # Terminal 1: backend on :8080 (its default, :3000, collides with Next dev)
-cd server-go && JWT_SECRET=dev KUSO_HTTP_ADDR=:8080 go run ./cmd/kuso-server
+# (needs a local Postgres; a fresh DB also needs KUSO_ALLOW_INSECURE_JWT=1 for a short secret)
+cd server-go && KUSO_DB_DSN=postgres://kuso:dev@localhost:5432/kuso?sslmode=disable \
+  JWT_SECRET=dev KUSO_ALLOW_INSECURE_JWT=1 KUSO_HTTP_ADDR=:8080 go run ./cmd/kuso-server
 
 # Terminal 2: frontend
 cd web && pnpm install && pnpm dev
@@ -26,16 +28,16 @@ different backend.
 
 Output goes to `server-go/internal/web/dist/`. The Go server embeds it via
 `//go:embed` and serves it from `/` with an `index.html` fallback for SPA
-routes. The Dockerfile's `web-build` stage runs the same script.
+routes. The Dockerfile's `web-build` stage does the equivalent itself
+(`pnpm build` + copy `web/out`).
 
 ## Stack
 
 - Next.js 16 + React 19 (App Router, static export via `output: "export"`)
 - Tailwind 4 + shadcn/ui (`base-nova`) + Base UI primitives
 - TanStack Query for server state
-- next-themes, sonner, lucide-react, cmdk, zod
+- next-themes, sonner, lucide-react, cmdk
 - Visual reference: [biznesguys/robiv0](https://github.com/biznesguys/robiv0)
-- Spec: `docs/superpowers/specs/2026-05-02-frontend-rewrite-nextjs-design.md`
 
 ## Auth shim
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-20
 **Status:** Approved
-**Repo:** kuso (`/Users/sisle/code/work/kubero-setup/kuso`)
+**Repo:** kuso
 
 ## Problem
 

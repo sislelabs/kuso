@@ -1,5 +1,7 @@
 # Build-Time Vulnerability Scanning — Design
 
+> **Current status (2026-11-10):** Shipped differently. Scanning runs server-side (`server-go/internal/vulnscan`, trivy worker plus promotion gate), not as a scan container in the build Job. See `docs/VULN_SCANNING.md`.
+
 **Date:** 2026-05-21
 **Status:** Draft — for review before implementation
 

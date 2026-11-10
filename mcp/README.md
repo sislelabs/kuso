@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** v0.1.0 — pre-release, but functional: 23 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, image vulnerability findings, and config-as-code plan/apply.
+**Status:** pre-release and unversioned (`make ship` doesn't build it; unstamped binaries report their VCS revision), but functional: 23 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, image vulnerability findings, and config-as-code plan/apply.
 
 ## Run
 
@@ -16,7 +16,8 @@ make build
 ./bin/kuso-mcp --read-only     # disables mutating tools
 ```
 
-Env vars win when set. When either is missing, kuso-mcp falls back to
+Env vars win when set (`KUSO_API_URL`, the name the CLI reads, is
+accepted in place of `KUSO_URL`). When either is missing, kuso-mcp falls back to
 the kuso CLI's config: the URL comes from `~/.kuso/kuso.yaml` (the
 `currentInstance`, or the sole configured instance) and the token from
 `~/.kuso/credentials.yaml` (written by `kuso login`). So on a machine
@@ -68,16 +69,16 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `status`            | runtime rollup for a project/service |
 | `logs`              | fetch service logs |
 | `bootstrap_project` | create a project (mutating; `confirm: true`) |
-| `update_project`    | patch project fields (mutating) |
+| `update_project`    | patch project fields (mutating; `confirm: true`) |
 | `add_service`       | add a service (mutating; `confirm: true`) |
 | `manage_addon`      | add / delete addons (mutating; `confirm: true`; delete also needs `confirmName` equal to the addon name) |
 | `subscribe_addon`   | mount or unmount an addon's connection Secret on a service; services with a subscription list only get a new addon once subscribed (mutating; `confirm: true`) |
 | `get_env`           | a service's env vars, including addon `valueFrom` refs (read-only) |
 | `set_env`           | upsert / remove individual env vars, same storage rules as `kuso env set`; unnamed keys are untouched (mutating; `confirm: true`) |
-| `set_secret`        | set secret-backed vars (mutating) |
+| `set_secret`        | set secret-backed vars (mutating; `confirm: true`) |
 | `build`             | trigger a build, optionally for one `env` (mutating; `confirm: true`) |
 | `build_status`      | build state for a service, incl. promotion hold / not-promoted reason |
-| `run`               | one-shot Job in a service's context (mutating) |
+| `run`               | one-shot Job in a service's context (mutating; `confirm: true`) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
 | `apply`             | reconcile kuso.yaml (mutating; `confirm: true` only when the YAML sets `prune: true` — creates/updates apply without it, so `plan` first) |
 | `list_builds`       | recent builds for a service, newest first (read-only) |
@@ -98,6 +99,7 @@ mcp/
 ├── internal/
 │   ├── config/           # KUSO_URL / KUSO_TOKEN (+ ~/.kuso fallback) / --read-only
 │   ├── kusoclient/       # HTTP client for the kuso server REST API
+│   ├── types/            # read-side resource shapes decoded from the API
 │   └── tools/            # MCP tool implementations
 └── README.md
 ```

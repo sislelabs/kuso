@@ -1,5 +1,20 @@
 # Coolify → kuso migration — running log
 
+> **Status: historical log (2026-06).** It records the code as it was then.
+> Two descriptions here are now out of date:
+> - Build env: credential-looking keys (`builds.IsSensitiveBuildEnvKey`) are no
+>   longer injected into builds (since v0.23.3). Values that carry credentials,
+>   such as `DATABASE_URL`, reach the build as BuildKit secret mounts, not as
+>   `ENV`/build-arg layers. See `server-go/internal/builds/buildenv.go` and
+>   `server-go/internal/buildcontroller/render.go`. Builds run against the shared
+>   `kuso-buildkitd` daemon.
+> - The `propagate.go` line numbers and the `${{ }}` literal-shadowing bugs below
+>   were fixed in v0.18.24–v0.18.28 (`spec.envOverrides` marker).
+>
+> For a new migration, use `kuso migrate coolify` (the `coolify/` module). The
+> hand-written `migration/migrate-db.sh` mentioned below was a gitignored local
+> script and is not in the repo.
+
 Autonomous migration session started 2026-06-04. User away; working through all
 phases without check-ins. Domains excluded. Coolify untouched (read-only + dumps).
 

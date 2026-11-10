@@ -20,7 +20,8 @@ curl -fsSL https://kuso.example.com/install-cli.sh | sh
 ```
 
 The script picks a prebuilt binary from GitHub releases for your OS/arch,
-or falls back to `go install` if you have Go on PATH and no asset matches.
+verifies it against the release's `SHA256SUMS`, or falls back to building
+the same tag from source if git and Go are on PATH and no asset matches.
 It writes to `~/.local/bin/kuso` (no sudo) or `/usr/local/bin/kuso`
 (when run as root).
 
@@ -37,7 +38,7 @@ sudo mv kuso /usr/local/bin/kuso
 
 - macOS (amd64, arm64)
 - Linux (amd64, arm64)
-- Windows (amd64) — via WSL recommended
+- Windows (amd64, arm64) — via WSL recommended
 
 ---
 
@@ -59,7 +60,7 @@ kuso remote select prod    # switch to the prod instance
 
 ## Command overview
 
-The CLI has web-UI parity — roughly 50 top-level commands. The ones you'll
+The CLI has web-UI parity — roughly 60 top-level commands. The ones you'll
 reach for first, by theme:
 
 ```
@@ -119,7 +120,8 @@ kuso project service add my-app web \
   --runtime dockerfile --port 8080
 ```
 
-The first build kicks off automatically when you push to `main`. Open a
+The first build starts as soon as the service is added (`--no-build` skips
+it); every push to `main` redeploys. Open a
 PR and a preview env spawns at `https://web-pr-<n>.my-app.<your-domain>`.
 
 ### Manage env vars and secrets

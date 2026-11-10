@@ -8,15 +8,17 @@ The kuso control-plane HTTP API. Stateless above Postgres; multi-replica with `R
 server-go/
 ├── cmd/
 │   ├── kuso-server/    main.go: flag parsing, signal handling, http.Server
-│   └── kube-smoke/     workstation-only binary that lists KusoEnvironments
-│                       from a live cluster — not shipped in the image
+│   ├── kube-smoke/     workstation-only binary that lists KusoEnvironments
+│   │                   from a live cluster — not shipped in the image
+│   └── uipreview/      dev-only: serves a local web/out export and proxies
+│                       read-only API GETs to a live instance (UI review)
 ├── internal/
 │   ├── version/        embeds VERSION (source of truth for the image tag)
 │   ├── kube/           client-go config + typed wrappers + shared informer
 │   │                   cache over our CRDs (Project/Service/Environment/
 │   │                   Addon/Build/Cron/Run)
-│   ├── db/             Postgres connection (lib/pq), embedded schema.sql,
-│   │                   per-resource CRUD helpers
+│   ├── db/             Postgres connection (lib/pq), embedded schema.sql +
+│   │                   numbered migrations/, per-resource CRUD helpers
 │   ├── leader/         coordination.k8s.io/Lease-based election for
 │   │                   singleton background workers
 │   ├── http/           chi router, JWT middleware, handlers/
@@ -24,7 +26,7 @@ server-go/
 │   ├── addons/         polymorphic addon provisioning (Postgres, Redis, …)
 │   ├── builds/         build orchestration (shared buildkitd + buildpacks)
 │   ├── secrets/        env-var rewriting + K8s Secret-backed values
-│   ├── notify/         async event dispatcher (webhook fan-out + DB mirror)
+│   ├── notify/         event dispatcher (DB outbox → webhook fan-out + DB mirror)
 │   ├── nodewatch/      auto-cordon on NotReady
 │   ├── nodemetrics/    5-min sampler with rolling retention
 │   ├── github/         App auth + webhook receiver + repo browser
@@ -45,14 +47,14 @@ To run locally:
 
 ```sh
 KUSO_DB_DSN="postgres://kuso:dev@localhost:5432/kuso?sslmode=disable" \
-JWT_SECRET=dev \
+JWT_SECRET=dev KUSO_ALLOW_INSECURE_JWT=1 \
 go run ./cmd/kuso-server
 
 curl -s localhost:3000/healthz
 # {"status":"ok","version":"vX.Y.Z"}   (whatever internal/version/VERSION says)
 ```
 
-`KUSO_HTTP_ADDR` (or `--addr`) overrides the listen address.
+`KUSO_HTTP_ADDR` (or `--addr`) overrides the listen address (default `:3000`). A fresh install refuses to boot with a short `JWT_SECRET` unless `KUSO_ALLOW_INSECURE_JWT=1` is set — fine for a throwaway dev DB, never for a real one.
 
 ## Container image
 
@@ -73,8 +75,8 @@ The image is a `FROM scratch` static binary; no shell, no package manager, no CG
 ## Multi-replica notes
 
 - `kuso-server` runs as a Deployment with `RollingUpdate`. Replicas can be scaled freely.
-- Singleton background workers (build poller, alert engine, nodewatch, nodemetrics, daily cleanup) are leader-elected via `coordination.k8s.io/Lease`. The ClusterRole grants the lease verbs; without them the helper falls back to "always run" and replicas double-fire.
-- The notify dispatcher is per-pod (256-event buffered channel). The bell-icon feed is read from Postgres, so events survive even if a single pod's buffer drops.
-- Connection pool: `MaxOpenConns=25` per replica. With 3+ replicas plus operator + logship + addon pollers, the bundled Postgres `max_connections=100` is the next ceiling — PgBouncer or managed Postgres for serious deployments.
+- Singleton background workers (build poller, alert engine, nodewatch, nodemetrics, daily cleanup, …) are leader-elected via `coordination.k8s.io/Lease`. Lease writes are granted by the home-namespace Role; without them no replica ever wins and the singletons never run. `KUSO_DISABLE_LEADER_ELECTION=true` runs them unconditionally (single-replica only, or replicas double-fire).
+- The notify dispatcher enqueues every event into a Postgres outbox from any replica; delivery is a leader-gated drain (`FOR UPDATE SKIP LOCKED`, retries with backoff), so webhooks are at-least-once and not N-times. The bell-icon feed is read from Postgres too.
+- Connection pool: `MaxOpenConns=25` per replica (`KUSO_DB_MAX_CONNS` overrides). The bundled install routes the DSN through `kuso-pgbouncer` in front of the CNPG cluster (`max_connections=100`); with managed Postgres, point `KUSO_DB_DSN` at its pooler.
 
 See the repo-root `CLAUDE.md` for the full runtime shape.
