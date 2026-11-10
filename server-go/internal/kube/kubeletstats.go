@@ -33,6 +33,9 @@ var ErrKubeletForbidden = errors.New("kubelet stats forbidden")
 // permanent latch would have needed a restart to notice.
 const kubeletStatsForbiddenBackoff = 10 * time.Minute
 
+// summaryConcurrency bounds parallel kubelet /stats/summary fetches.
+const summaryConcurrency = 8
+
 type kubeletStats struct {
 	once      sync.Once
 	client    *http.Client
@@ -119,11 +122,24 @@ func (c *Client) eachSummary(ctx context.Context, nodes []*corev1.Node, fn func(
 		mu   sync.Mutex
 		errs []error
 		wg   sync.WaitGroup
+		// Bounded: on 20+ nodes an unbounded burst of 0.5–1 MB summaries
+		// from every replica made busy kubelets miss the deadline, which
+		// drops every env with a pod on that node from the sample.
+		sem = make(chan struct{}, summaryConcurrency)
 	)
 	for _, n := range nodes {
 		wg.Add(1)
 		go func(n *corev1.Node) {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("node %s: %w", n.Name, ctx.Err()))
+				mu.Unlock()
+				return
+			}
+			defer func() { <-sem }()
 			body, err := fetchSummary(ctx, st.client, n)
 			if err == nil {
 				err = fn(n, body)
