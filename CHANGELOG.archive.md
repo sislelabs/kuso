@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.2] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(addons): stop deletion leaking databases and conn secrets ([d86e609](https://github.com/sislelabs/kuso/commit/d86e60966c9edfa9b840ca7e28702c5d72c3934e))
+
 ## [0.26.1] — 2026-09-22
 
 ### 🐛 Bug Fixes

@@ -79,7 +79,7 @@ const (
 	defaultStaticBuilderImage = "node:20-alpine"
 	defaultStaticRuntimeImage = "nginx:1.30-alpine"
 	defaultBuildkitImage      = "moby/buildkit:v0.34.2"
-	defaultCloneImage         = "alpine/git:2.54.0"
+	defaultCloneImage         = "alpine/git:2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d"
 	defaultCacheInitImage     = "alpine:3.24"
 
 	defaultCPURequest   = "200m"
