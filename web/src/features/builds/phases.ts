@@ -311,7 +311,7 @@ function buildkitLabel(header: string): { title: string; detail?: string } {
   }
   const t = header.replace(/\s+/g, " ").trim();
   if (/^exporting to image/i.test(t)) return { title: "Export and push image" };
-  if (/^exporting cache/i.test(t)) return { title: "Export build cache" };
+  if (/^exporting cache/i.test(t)) return { title: "Export build cache", detail: "optional" };
   if (/^importing cache manifest/i.test(t)) return { title: "Import build cache" };
   if (/^resolve image config/i.test(t)) return { title: "Resolve image config", detail: t.replace(/^resolve image config for\s*/i, "") };
   return { title: sentence(t) };

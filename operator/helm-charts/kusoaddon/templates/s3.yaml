@@ -314,7 +314,9 @@ spec:
                 mc admin policy create local "$3" "/tmp/$4.json" >/dev/null || return 1
                 mc admin user add local "$1" "$2" >/dev/null || return 1
                 mc admin policy attach local "$3" --user "$1" >/dev/null 2>&1 || true
-                mc admin user info local "$1" | grep -qF "$3" || return 1
+                # pgsty/mc ships no grep/awk/sed: match with the shell.
+                info=$(mc admin user info local "$1") || return 1
+                case "$info" in *"$3"*) ;; *) return 1 ;; esac
               }
               if [ "${APP_KEY}" = "${ROOT_USER}" ]; then
                 # Pre-scoping addon: apps still hold root. Nothing they use
