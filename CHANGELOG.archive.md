@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.5] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(backups): stream s3 addon backups with rclone instead of staging on disk ([3162640](https://github.com/sislelabs/kuso/commit/3162640d9fdf445ecdd7931c5de2fa62dcb3ef31))
+
 ## [0.26.4] — 2026-09-23
 
 ### 🐛 Bug Fixes

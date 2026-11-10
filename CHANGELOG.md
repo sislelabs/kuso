@@ -19,11 +19,18 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.42.3] — 2026-11-10
+
+### Other
+- Make every notification card compact ([c5ab769](https://github.com/sislelabs/kuso/commit/c5ab769b524aae77f5db0c3ebfe538882a53c732))
+
 ## [0.42.2] — 2026-11-10
 
 ### Other
 - Check MinIO policy attachment without grep ([fbf1483](https://github.com/sislelabs/kuso/commit/fbf14839297311a6a91d789fb14808f97f6587e3))
 - Compress the build cache with zstd and mark its export optional ([18d2933](https://github.com/sislelabs/kuso/commit/18d2933ef994e05aafeeb0fcfbd4a0bca2e97dc3))
+- Bring docs and agent skills in line with the code ([654dc3c](https://github.com/sislelabs/kuso/commit/654dc3c766d38bd0e99864233dbeecff5f470a5d))
+- Restore publicEnv sentinel build-args and fix stale platform wiring ([7864ec7](https://github.com/sislelabs/kuso/commit/7864ec7f1deb83d8b4dd817de6901876abe76964))
 
 ## [0.42.1] — 2026-11-10
 
@@ -1165,11 +1172,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(backups): stop re-alerting on every restart, retry failed runs ([fc2e095](https://github.com/sislelabs/kuso/commit/fc2e0952042da9380ddcabffae840ae3f5ccc141))
-
-## [0.26.5] — 2026-09-23
-
-### 🐛 Bug Fixes
-- Fix(backups): stream s3 addon backups with rclone instead of staging on disk ([3162640](https://github.com/sislelabs/kuso/commit/3162640d9fdf445ecdd7931c5de2fa62dcb3ef31))
 
 
 ---
