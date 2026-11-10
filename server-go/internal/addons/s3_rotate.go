@@ -132,15 +132,7 @@ func (s *Service) RotateS3Credentials(ctx context.Context, project, name string)
 	if err != nil {
 		return nil, err
 	}
-	script := `set -eu
-i=0; until mc alias set local "http://${MINIO_HOST}:9000" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null 2>&1; do i=$((i+1)); [ "$i" -ge 30 ] && { echo "MinIO unreachable" >&2; exit 1; }; sleep 2; done
-printf '%s\n' "${RW_POLICY_JSON}" > /tmp/rw.json
-mc admin policy create local "kuso-rw-${BUCKET}" /tmp/rw.json >/dev/null
-mc admin user add local "${NEW_KEY}" "${NEW_SECRET}" >/dev/null
-mc admin policy attach local "kuso-rw-${BUCKET}" --user "${NEW_KEY}" >/dev/null 2>&1 || true
-mc admin user info local "${NEW_KEY}" | grep -qF "kuso-rw-${BUCKET}"
-echo "==> new app user ready"
-`
+	script := s3RotateScript
 	env := []corev1.EnvVar{
 		{Name: "MINIO_HOST", Value: a.Name},
 		{Name: "BUCKET", Value: bucket},
@@ -340,3 +332,16 @@ func (s *Service) runS3AdminJob(ctx context.Context, ns string, a *kube.KusoAddo
 		}
 	}
 }
+
+// s3RotateScript runs in s3AdminImage, which ships no grep/awk/sed.
+const s3RotateScript = `set -eu
+i=0; until mc alias set local "http://${MINIO_HOST}:9000" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null 2>&1; do i=$((i+1)); [ "$i" -ge 30 ] && { echo "MinIO unreachable" >&2; exit 1; }; sleep 2; done
+printf '%s\n' "${RW_POLICY_JSON}" > /tmp/rw.json
+mc admin policy create local "kuso-rw-${BUCKET}" /tmp/rw.json >/dev/null
+mc admin user add local "${NEW_KEY}" "${NEW_SECRET}" >/dev/null
+mc admin policy attach local "kuso-rw-${BUCKET}" --user "${NEW_KEY}" >/dev/null 2>&1 || true
+# pgsty/mc ships no grep/awk/sed: match with the shell.
+info=$(mc admin user info local "${NEW_KEY}")
+case "$info" in *"kuso-rw-${BUCKET}"*) ;; *) echo "policy kuso-rw-${BUCKET} not attached to the new user" >&2; exit 1 ;; esac
+echo "==> new app user ready"
+`
