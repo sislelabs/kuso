@@ -53,14 +53,8 @@ func (e *Engine) evalCrashloop(ctx context.Context, r *db.AlertRule, now time.Ti
 func (e *Engine) envPods(ctx context.Context, t envTarget) ([]*corev1.Pod, error) {
 	sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": t.name})
 	if e.Kube.Cache != nil {
-		if cached, ok := e.Kube.Cache.ListPodsByLabel(sel); ok {
-			out := cached[:0:0]
-			for _, p := range cached {
-				if p.Namespace == t.namespace {
-					out = append(out, p)
-				}
-			}
-			return out, nil
+		if cached, ok := e.Kube.Cache.ListPodsByInstance(t.namespace, t.name); ok {
+			return cached, nil
 		}
 	}
 	if e.Kube.Clientset == nil {

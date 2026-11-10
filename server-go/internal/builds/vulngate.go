@@ -4,9 +4,11 @@ package builds
 // markSucceeded before the same-repo hold: while the image's scan runs
 // the build stays non-terminal on the existing promote-hold annotation;
 // a blocked image ends the build failed (classification vuln-blocked)
-// and the previous image keeps serving. The gate fails OPEN — a scanner
-// that errors or hasn't answered in vulnGateMaxWait never freezes
-// deploys.
+// and the previous image keeps serving. The gate fails OPEN by default —
+// a scanner that errors or hasn't answered in vulnGateMaxWait never
+// freezes deploys; the build is stamped vuln-gate=failed-open and a
+// "promoted unscanned" scan_failed notification goes out.
+// Poller.VulnGateBlockOnTimeout turns the timeout case into a block.
 
 import (
 	"context"
@@ -115,7 +117,13 @@ func (p *Poller) runVulnGate(ctx context.Context, ns string, b *kube.KusoBuild) 
 		v = VulnGateVerdict{Decision: VulnFailOpen, Message: "vulnerability gate error: " + cerr.Error()}
 	}
 	if v.Decision == VulnPending && now.Sub(since) >= vulnGateMaxWait {
-		v = VulnGateVerdict{Decision: VulnFailOpen, Message: fmt.Sprintf("scan not finished after %s", vulnGateMaxWait)}
+		if p.VulnGateBlockOnTimeout {
+			v = VulnGateVerdict{Decision: VulnBlock, Message: fmt.Sprintf(
+				"vulnerability scan not finished after %s; not deployed because the gate blocks on timeout (KUSO_VULN_GATE_ON_TIMEOUT=block). Redeploy to scan again.",
+				vulnGateMaxWait)}
+		} else {
+			v = VulnGateVerdict{Decision: VulnFailOpen, Message: fmt.Sprintf("scan not finished after %s", vulnGateMaxWait)}
+		}
 	}
 	switch v.Decision {
 	case VulnPending:

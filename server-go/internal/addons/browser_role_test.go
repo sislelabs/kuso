@@ -69,7 +69,7 @@ func make63() []byte {
 // privileged) that reaches node compromise from a project-editor role.
 func TestValidateStorageSize(t *testing.T) {
 	valid := []string{
-		"",       // optional — the chart derives it from the t-shirt size
+		"", // optional — the chart derives it from the t-shirt size
 		"10Gi",
 		"500Mi",
 		"1Ti",

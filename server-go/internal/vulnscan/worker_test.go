@@ -45,6 +45,24 @@ func (m *memStore) ClaimNextVulnScan(context.Context) (*db.VulnScan, error) {
 	return nil, nil
 }
 
+func (m *memStore) HasQueuedVulnScan(_ context.Context, reason string) (bool, error) {
+	for _, s := range m.scans {
+		if s.Status == db.VulnStatusQueued && s.Reason == reason {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memStore) RequeueVulnScan(_ context.Context, id int64) error {
+	m.set(id, func(s *db.VulnScan) {
+		if s.Status == db.VulnStatusRunning {
+			s.Status, s.JobName, s.StartedAt = db.VulnStatusQueued, "", time.Time{}
+		}
+	})
+	return nil
+}
+
 func (m *memStore) set(id int64, f func(*db.VulnScan)) {
 	for i := range m.scans {
 		if m.scans[i].ID == id {

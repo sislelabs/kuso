@@ -120,9 +120,13 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 			t.Errorf("%s -> %s: connect=%v, want %v", c.role, c.db, got, c.want)
 		}
 	}
-	if !canConnect(mustUser(t, dsn), "postgres") {
-		t.Error("admin lost CONNECT on postgres")
+	adminURL, _ := url.Parse(dsn)
+	adminURL.Path = "/postgres"
+	adminPG, _ := sql.Open("postgres", adminURL.String())
+	if err := adminPG.PingContext(ctx); err != nil {
+		t.Errorf("admin lost CONNECT on postgres: %v", err)
 	}
+	_ = adminPG.Close()
 
 	var limit int
 	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, a).Scan(&limit); err != nil {
@@ -152,15 +156,6 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, b).Scan(&limit); err != nil || limit != 12 {
 		t.Errorf("override limit = %d (%v), want 12", limit, err)
 	}
-}
-
-func mustUser(t *testing.T, dsn string) string {
-	t.Helper()
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.User.Username()
 }
 
 func TestDefaultInstanceConnLimit(t *testing.T) {

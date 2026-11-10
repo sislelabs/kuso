@@ -87,6 +87,34 @@ var (
 	}, []string{"outcome"})
 )
 
+// errorscan progress. The lag gauge is set by the scanner after every
+// tick; the counter grows each time the scanner gives up on a backlog and
+// jumps its watermark ahead (those lines are never scanned for errors).
+var (
+	errorScanLag = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "kuso",
+		Subsystem: "errorscan",
+		Name:      "lag_rows",
+		Help:      "LogLine rows the error scanner trails max(id) by after its last tick.",
+	})
+	errorScanSkipped = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "kuso",
+		Subsystem: "errorscan",
+		Name:      "skipped_rows_total",
+		Help:      "LogLine rows the error scanner skipped unscanned because its backlog exceeded MaxLag.",
+	})
+)
+
+// SetErrorScanLag records the error scanner's lag in rows.
+func SetErrorScanLag(rows int64) { errorScanLag.Set(float64(rows)) }
+
+// AddErrorScanSkipped counts rows the error scanner skipped.
+func AddErrorScanSkipped(rows int64) {
+	if rows > 0 {
+		errorScanSkipped.Add(float64(rows))
+	}
+}
+
 // outcome maps an error to the histogram label so call sites can pass
 // the raw error: ObserveBuildCreate(start, err).
 func outcome(err error) string {

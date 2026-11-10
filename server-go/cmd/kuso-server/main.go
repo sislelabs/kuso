@@ -19,9 +19,12 @@ import (
 	"syscall"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/metadata"
 
 	"kuso/server/internal/activator"
 	"kuso/server/internal/addons"
@@ -30,6 +33,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/backuphealth"
 	"kuso/server/internal/buildcontroller"
+	"kuso/server/internal/buildkit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
@@ -40,6 +44,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/gitremote"
 	"kuso/server/internal/health"
+	"kuso/server/internal/helmhistory"
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/incidents"
@@ -687,11 +692,7 @@ func main() {
 		// so an admin who tuned /settings stays tuned; this only
 		// changes what a fresh install sees on first boot.
 		//
-		// Heuristic: max(2, allocatableCPU / 4). Each kaniko build
-		// requests 200m + bursts to 1500m (operator/helm-charts/
-		// kusobuild/values.yaml). Dividing allocatable by 4 leaves
-		// half the cluster for user workloads even if every build
-		// hits its limit.
+		// Sized to buildkitd capacity, see adaptiveBuildCap.
 		defaultBuildCap := adaptiveBuildCap(ctx, kc, logger)
 		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", defaultBuildCap)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
@@ -1051,6 +1052,7 @@ func main() {
 				// *Gate there would read as "gate present" and panic.
 				if vulnGate != nil {
 					buildPoller.VulnGate = vulnGate
+					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block"
 				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
@@ -1084,6 +1086,32 @@ func main() {
 					return buildSvc.ScanNamespaces(c)
 				}
 				goSafe(logger, "finalizer-sweep", func() { runFinalizerSweep(workCtx, kc, sweepNamespaces, logger) })
+			}
+			// helm-operator v1.42 keeps unlimited release history (no
+			// max-history flag exists), so prune old revision Secrets
+			// here (SCL-16). Keeps the newest KUSO_HELM_HISTORY_MAX
+			// (default 10) per release plus any deployed/pending one.
+			// KUSO_HELM_HISTORY_PRUNE=off|dryrun|on, default dryrun:
+			// it only logs what it would delete until an operator has
+			// reviewed a cycle and set it to on.
+			if pruneMode := helmhistory.ParseMode(os.Getenv("KUSO_HELM_HISTORY_PRUNE")); pruneMode != helmhistory.ModeOff && kc.Config != nil {
+				if md, err := metadata.NewForConfig(kc.Config); err != nil {
+					logger.Warn("helm history prune: metadata client", "err", err)
+				} else {
+					pruner := &helmhistory.Pruner{
+						Meta: md,
+						Mode: pruneMode,
+						Keep: envInt("KUSO_HELM_HISTORY_MAX", helmhistory.DefaultKeep),
+						Namespaces: func(c context.Context) []string {
+							if buildSvc == nil {
+								return []string{*namespace}
+							}
+							return buildSvc.ScanNamespaces(c)
+						},
+						Logger: logger.With("component", "helm-history"),
+					}
+					goSafe(logger, "helm-history", func() { pruner.Run(workCtx) })
+				}
 			}
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 				// Maintenance(): the janitor's bulk deletes run without the
@@ -1150,7 +1178,12 @@ func main() {
 						Logger:    logger,
 						Interval:  errorscan.HeartbeatInterval,
 						BatchSize: 500,
-						Pods:      podKinds,
+						// Batches grow with the backlog so one tick can
+						// drain up to MaxLag (SCL-5).
+						MaxBatchSize: 5000,
+						TickBudget:   25 * time.Second,
+						Pods:         podKinds,
+						OnSkip:       errorScanSkipNotifier(notifyDisp),
 					}).Run(workCtx)
 				})
 			}
@@ -1192,7 +1225,7 @@ func main() {
 				Namespace: *namespace,
 				LockName:  "kuso-server-singletons",
 				Identity:  os.Getenv("HOSTNAME"),
-				Client:    kc.Clientset,
+				Client:    kc.LeaseClient(),
 				Logger:    logger,
 				Run:       startSingletons,
 			})
@@ -1763,9 +1796,13 @@ func main() {
 				Namespace: *namespace,
 				LockName:  "kuso-server-cluster-singletons",
 				Identity:  os.Getenv("HOSTNAME"),
-				Client:    kubeClient.Clientset,
+				Client:    kubeClient.LeaseClient(),
 				Logger:    logger,
 				Run:       startKubeSingletons,
+				// Spread the two singleton groups across replicas so
+				// adding a replica adds loop capacity (SCL-6).
+				PreferNotHolding: "kuso-server-singletons",
+				HasPeers:         func() bool { return kusoServerPeers(kubeClient, *namespace) > 1 },
 			})
 		}
 	}
@@ -2124,85 +2161,55 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 
 // envInt reads an env var as int with a fallback. Used for tunables
 // that are days/hours/seconds with a sane default.
-// adaptiveBuildCap returns a sensible default for the cluster-wide
-// concurrent-build cap based on the sum of allocatable CPU across
-// Ready nodes. Heuristic: max(2, totalAllocatableMillicores / 4000).
+// adaptiveBuildCap returns the automatic cluster-wide concurrent-build
+// cap: buildkit.DefaultBuildCap over the Ready nodes' allocatable CPU
+// and the configured buildkitd topology. Every build runs inside the
+// shared daemon(s), so daemon capacity (daemons × max-parallelism × 2)
+// is the ceiling; cluster CPU only lowers it on small boxes. The old
+// CPU-only formula admitted up to 8 (unclamped: 40 on 20 nodes) builds
+// into one 4-CPU daemon with 3 vertex slots.
 //
-//	2-core box  →  cap = 2  (matches the legacy default)
-//	4-core box  →  cap = 2
-//	8-core box  →  cap = 2  (still 2 — buildpacks can use the bigger box per build)
-//	16-core box →  cap = 4
-//	32-core box →  cap = 8
-//	3 × 8-core  →  cap = 6
-//
-// We divide by 4 (not 1 or 2) because a single kaniko build bursts
-// to 1500m and we want the cluster to stay responsive for user
-// workloads even when every build is at its limit. Operators who
-// want more aggressive parallelism set KUSO_BUILD_MAX_CONCURRENT or
-// raise build.maxConcurrent in /settings.
-//
-// Best-effort: kube list errors → fall back to 2 (the historical
-// hard-coded default). Logs the chosen value so operators can audit.
+// Best-effort: a node list error falls back to the daemon-capacity cap.
+// An admin's explicit build.maxConcurrent / KUSO_BUILD_MAX_CONCURRENT
+// still wins.
 func adaptiveBuildCap(ctx context.Context, kc *kube.Client, logger *slog.Logger) int {
-	const safeDefault = 2
-	if kc == nil || kc.Clientset == nil {
-		return safeDefault
-	}
-	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})
-	if err != nil {
-		logger.Warn("adaptive build cap: list nodes", "err", err, "fallback", safeDefault)
-		return safeDefault
-	}
+	daemons, par := buildkit.Daemons(), buildkit.MaxParallelism()
 	totalMilli := int64(0)
 	readyCount := 0
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
-		// Skip NotReady nodes — counting them inflates the cap when
-		// the cluster is degraded, which is exactly when we want to
-		// be conservative.
-		ready := false
-		for _, c := range n.Status.Conditions {
-			if c.Type == "Ready" && string(c.Status) == "True" {
-				ready = true
-				break
+	if kc != nil && kc.Clientset != nil {
+		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})
+		cancel()
+		if err != nil {
+			logger.Warn("adaptive build cap: list nodes", "err", err)
+		} else {
+			for i := range nodes.Items {
+				n := &nodes.Items[i]
+				// NotReady nodes would inflate the cap exactly when the
+				// cluster is degraded.
+				ready := false
+				for _, c := range n.Status.Conditions {
+					if c.Type == "Ready" && string(c.Status) == "True" {
+						ready = true
+						break
+					}
+				}
+				if !ready {
+					continue
+				}
+				readyCount++
+				if cpu, ok := n.Status.Allocatable["cpu"]; ok {
+					totalMilli += cpu.MilliValue()
+				}
 			}
 		}
-		if !ready {
-			continue
-		}
-		readyCount++
-		if cpu, ok := n.Status.Allocatable["cpu"]; ok {
-			totalMilli += cpu.MilliValue()
-		}
 	}
-	if readyCount == 0 || totalMilli == 0 {
-		logger.Warn("adaptive build cap: no Ready nodes / no CPU info", "fallback", safeDefault)
-		return safeDefault
-	}
-	chosen := int(totalMilli / 4000)
-	if chosen < safeDefault {
-		chosen = safeDefault
-	}
-	// Clamp to what the build backend can actually absorb. Every build
-	// Job is a thin buildctl client against ONE shared buildkitd replica
-	// (deploy/buildkitd.yaml: replicas 1, RWO snapshot PVC, limit 4 CPU).
-	// Past roughly that width the extra Jobs don't build faster — they
-	// sit blocked inside the daemon while still holding pod slots and
-	// cluster memory. On a 20-node cluster the unclamped formula would
-	// admit 40 concurrent builds into a 4-CPU daemon. An admin who
-	// genuinely wants more can still set build.maxConcurrent explicitly;
-	// this only bounds the AUTOMATIC default.
-	const adaptiveCeiling = 8
-	if chosen > adaptiveCeiling {
-		logger.Info("adaptive build cap clamped to the shared buildkitd ceiling",
-			"computed", chosen, "clamped", adaptiveCeiling)
-		chosen = adaptiveCeiling
-	}
+	chosen := buildkit.DefaultBuildCap(totalMilli, daemons, par)
 	logger.Info("adaptive build cap",
 		"readyNodes", readyCount,
 		"allocatableMilliCPU", totalMilli,
+		"buildkitDaemons", daemons,
+		"buildkitMaxParallelism", par,
 		"cap", chosen)
 	return chosen
 }
@@ -2542,5 +2549,58 @@ func runActivator(addr string, logger *slog.Logger) {
 	if err := act.Serve(ctx, srv, activator.ResolveDrainConfig(), logger); err != nil && err != http.ErrServerClosed {
 		logger.Error("activator: serve", "err", err)
 		os.Exit(1)
+	}
+}
+
+// kusoServerPeers counts Running kuso-server pods in ns from the pod
+// informer. Returns 0 when the cache is cold, which callers treat as
+// "no peers" (contest immediately).
+func kusoServerPeers(kc *kube.Client, ns string) int {
+	if kc == nil || kc.Cache == nil {
+		return 0
+	}
+	pods, ok := kc.Cache.ListPodsByLabel(labels.SelectorFromSet(labels.Set{"app.kubernetes.io/name": "kuso-server"}))
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, p := range pods {
+		if p.Namespace == ns && p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// errorScanSkipNotifier turns an error-scanner skip-ahead into a
+// notification, at most once an hour: skipped lines are never scanned,
+// so the Errors tab and error alerts under-report until log volume
+// drops.
+func errorScanSkipNotifier(d *notify.Dispatcher) func(context.Context, int64) {
+	var (
+		mu   sync.Mutex
+		last time.Time
+		acc  int64
+	)
+	return func(_ context.Context, skipped int64) {
+		mu.Lock()
+		acc += skipped
+		if !last.IsZero() && time.Since(last) < time.Hour {
+			mu.Unlock()
+			return
+		}
+		total := acc
+		acc, last = 0, time.Now()
+		mu.Unlock()
+		msg := fmt.Sprintf("Log volume outran the error scanner, so %d log lines were skipped without being checked for errors. "+
+			"The Errors tab and error alerts under-report while this lasts. Watch kuso_errorscan_lag_rows.", total)
+		d.Emit(notify.Event{
+			Type:        notify.EventAlertFired,
+			Title:       "⚠ Error scanner fell behind",
+			Description: msg,
+			Body:        msg,
+			Severity:    "warn",
+			Fields:      []notify.EventField{{Name: "Skipped lines", Value: strconv.FormatInt(total, 10), Inline: true}},
+		})
 	}
 }

@@ -2709,6 +2709,8 @@ type PatchServiceRequest struct {
 	// WaitForCI toggles the wait-for-GitHub-CI build gate. Service-level
 	// only (builds read it off the service CR), so no env propagation.
 	WaitForCI *bool `json:"waitForCI,omitempty"`
+	// StrictBuildSecrets: see kube.KusoServiceSpec. Service-level only.
+	StrictBuildSecrets *bool `json:"strictBuildSecrets,omitempty"`
 	// AutoDeployPaused pauses push-triggered builds. Pointer so omitting
 	// leaves it as-is.
 	AutoDeployPaused *bool `json:"autoDeployPaused,omitempty"`
@@ -3364,6 +3366,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.SnapshotBeforeDeploy != nil && svc.Spec.SnapshotBeforeDeploy != *req.SnapshotBeforeDeploy {
 			svc.Spec.SnapshotBeforeDeploy = *req.SnapshotBeforeDeploy
 			snapshotChanged = true
+		}
+		if req.StrictBuildSecrets != nil {
+			svc.Spec.StrictBuildSecrets = *req.StrictBuildSecrets
 		}
 		if req.WaitForCI != nil {
 			svc.Spec.WaitForCI = *req.WaitForCI

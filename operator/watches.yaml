@@ -19,8 +19,19 @@
 #
 # NOTE: helm-operator v1.42's Watch struct has no maxConcurrentReconciles
 # field — the per-watch keys below are silently ignored. Concurrency comes
-# from the global --max-concurrent-reconciles flag, which defaults to the
-# operator pod's NumCPU (deploy/operator.yaml doesn't set it).
+# from the global --max-concurrent-reconciles flag, set explicitly in
+# deploy/operator.yaml (4, matched to its 2-CPU limit).
+#
+# Restart replay: helm-operator reconciles every watched CR once when it
+# starts (initial informer list), so every operator restart, including
+# every `kuso upgrade`, re-renders the whole fleet. There is no flag to
+# skip it. What keeps it bounded is the worker count and CPU above, plus
+# periods long enough that steady-state resync isn't already saturating
+# the operator when a replay lands on top of it.
+#
+# Helm release history: v1.42 has no max-history option and keeps every
+# revision; kuso-server prunes old revision Secrets instead
+# (server-go/internal/helmhistory).
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoProject
@@ -40,9 +51,10 @@
   # resync means ~600 full helm renders every 3 minutes — reconcile lag
   # grows unboundedly somewhere past ~300 CRs. Spec edits still reconcile
   # immediately via the watch, so the periodic resync only self-heals
-  # drift; a 30m cadence is plenty and 8 workers clears a restart backlog
-  # faster. Same rationale the KusoAddon 30m period already relies on.
-  reconcilePeriod: 30m
+  # drift. The service chart renders no workload (the env chart does), so
+  # its drift self-heal can be slow: 1h halves this kind's share of the
+  # steady-state load at ~500 services.
+  reconcilePeriod: 1h
   maxConcurrentReconciles: 8
 - group: application.kuso.sislelabs.com
   version: v1alpha1
@@ -97,7 +109,9 @@
   version: v1alpha1
   kind: KusoCron
   chart: helm-charts/kusocron
-  reconcilePeriod: 10m
+  # Schedule/command edits arrive through the watch; the period only
+  # self-heals the rendered CronJob. 30m, like the other kinds.
+  reconcilePeriod: 30m
   maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1

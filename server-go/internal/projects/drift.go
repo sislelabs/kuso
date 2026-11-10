@@ -11,7 +11,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/scaledown"
@@ -33,8 +32,7 @@ func (s *Service) driftGetDeployment(ctx context.Context, ns, name string) (*app
 // preferring the Pod informer cache (returns []*Pod) and falling back to a
 // live List. Normalises both to []corev1.Pod so callers are source-agnostic.
 func (s *Service) driftListPods(ctx context.Context, ns, instance string) ([]corev1.Pod, error) {
-	sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": instance})
-	if ptrs, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
+	if ptrs, ok := s.Kube.Cache.ListPodsByInstance(ns, instance); ok {
 		out := make([]corev1.Pod, 0, len(ptrs))
 		for _, p := range ptrs {
 			if p != nil {

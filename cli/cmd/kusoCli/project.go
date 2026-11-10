@@ -803,21 +803,22 @@ resource names are immutable, so the operation has real cost:
 // ---------------- project service set ----------------
 
 var (
-	serviceSetDisplayName       string
-	serviceSetPort              int32
-	serviceSetRuntime           string
-	serviceSetDomains           string // comma- or newline-separated host list
-	serviceSetInternal          string // "on" | "off" | "" (leave alone)
-	serviceSetPrivateEgress     string // "on" | "off" | "" (leave alone)
-	serviceSetPlatformAPIEgress string // "on" | "off" | "" (leave alone)
-	serviceSetWaitForCI         string // "on" | "off" | "" (leave alone)
-	serviceSetAutoDeploy        string // "on" | "off" | "" (leave alone)
-	serviceSetMinReplicas       int
-	serviceSetMaxReplicas       int
-	serviceSetScaleUpWindow     int
-	serviceSetScaleUpPods       int
-	serviceSetScaleUpPercent    int
-	serviceSetScaleDownWindow   int
+	serviceSetDisplayName        string
+	serviceSetPort               int32
+	serviceSetRuntime            string
+	serviceSetDomains            string // comma- or newline-separated host list
+	serviceSetInternal           string // "on" | "off" | "" (leave alone)
+	serviceSetPrivateEgress      string // "on" | "off" | "" (leave alone)
+	serviceSetPlatformAPIEgress  string // "on" | "off" | "" (leave alone)
+	serviceSetWaitForCI          string // "on" | "off" | "" (leave alone)
+	serviceSetStrictBuildSecrets string // "on" | "off" | "" (leave alone)
+	serviceSetAutoDeploy         string // "on" | "off" | "" (leave alone)
+	serviceSetMinReplicas        int
+	serviceSetMaxReplicas        int
+	serviceSetScaleUpWindow      int
+	serviceSetScaleUpPods        int
+	serviceSetScaleUpPercent     int
+	serviceSetScaleDownWindow    int
 	// Shared by `service set` and `project update`: the two commands
 	// never run in one process.
 	limitMaxConcurrent         int
@@ -1008,6 +1009,16 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 				req.PlatformAPIEgress = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--platform-api-egress must be on|off (got %q)", serviceSetPlatformAPIEgress)
+			}
+		}
+		if cmd.Flags().Changed("strict-build-secrets") {
+			switch serviceSetStrictBuildSecrets {
+			case "on", "true", "yes":
+				req.StrictBuildSecrets = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.StrictBuildSecrets = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--strict-build-secrets must be on|off (got %q)", serviceSetStrictBuildSecrets)
 			}
 		}
 		if cmd.Flags().Changed("wait-for-ci") {
@@ -1963,6 +1974,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetStrictBuildSecrets, "strict-build-secrets", "", strictBuildSecretsHelp)
 	serviceSetCmd.Flags().StringVar(&serviceSetAutoDeploy, "auto-deploy", "", "build on GitHub pushes (on|off); off pauses push deploys, manual deploys still work")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
@@ -2063,6 +2075,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetStrictBuildSecrets, "strict-build-secrets", "", strictBuildSecretsHelp)
 	serviceSetTopCmd.Flags().StringVar(&serviceSetAutoDeploy, "auto-deploy", "", "build on GitHub pushes (on|off); off pauses push deploys, manual deploys still work")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
@@ -2097,3 +2110,5 @@ var serviceSetTopCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE:  func(cmd *cobra.Command, args []string) error { return serviceSetCmd.RunE(cmd, args) },
 }
+
+const strictBuildSecretsHelp = "Dockerfile builds: pass credential-bearing build env (URLs with a password, *_PASS, webhook URLs) only as BuildKit secrets, not build-args (on|off)"

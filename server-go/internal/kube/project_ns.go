@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // ProjectNamespaceResolver maps a kuso project name to the execution
@@ -40,11 +42,16 @@ func NewProjectNamespaceResolver(c *Client, homeNS string) *ProjectNamespaceReso
 	}
 }
 
-// NamespaceFor returns the execution namespace for project. If the
-// project doesn't exist or its lookup fails, returns the home namespace
-// — this matches what the legacy single-tenant code path already did
-// (every project resolves to the home ns) so existing tests and a
-// freshly-installed cluster keep working.
+// NamespaceFor returns the execution namespace for project. A project
+// that doesn't exist resolves to the home namespace (the legacy
+// single-tenant behaviour, which tests and fresh clusters rely on).
+//
+// Only a definitive answer (success or NotFound) is cached. A transient
+// lookup error (timeout, rate-limiter ctx expiry, apiserver 5xx) used to
+// cache the home namespace for the full TTL, sending every read and
+// write for a custom-namespace project to the wrong namespace. On such
+// an error the last known value is reused, then the informer's copy of
+// the project; the home namespace is only the uncached last resort.
 func (r *ProjectNamespaceResolver) NamespaceFor(ctx context.Context, project string) string {
 	if r == nil || project == "" {
 		if r == nil {
@@ -53,18 +60,34 @@ func (r *ProjectNamespaceResolver) NamespaceFor(ctx context.Context, project str
 		return r.HomeNS
 	}
 	r.mu.RLock()
-	if e, ok := r.cache[project]; ok && time.Now().Before(e.expires) {
-		r.mu.RUnlock()
-		return e.ns
-	}
+	prev, hadPrev := r.cache[project]
 	r.mu.RUnlock()
+	if hadPrev && time.Now().Before(prev.expires) {
+		return prev.ns
+	}
 
+	if r.Client == nil {
+		return r.HomeNS
+	}
 	ns := r.HomeNS
-	if r.Client != nil {
-		p, err := r.Client.GetKusoProject(ctx, r.HomeNS, project)
-		if err == nil && p != nil && p.Spec.Namespace != "" {
+	p, err := r.Client.GetKusoProject(ctx, r.HomeNS, project)
+	switch {
+	case err == nil:
+		if p != nil && p.Spec.Namespace != "" {
 			ns = p.Spec.Namespace
 		}
+	case apierrors.IsNotFound(err):
+	default:
+		if hadPrev {
+			return prev.ns
+		}
+		if cached, ok := r.Client.Cache.GetKusoProject(r.HomeNS, project); ok {
+			if cached.Spec.Namespace != "" {
+				return cached.Spec.Namespace
+			}
+			return r.HomeNS
+		}
+		return r.HomeNS
 	}
 	r.mu.Lock()
 	r.cache[project] = nsEntry{ns: ns, expires: time.Now().Add(r.TTL)}

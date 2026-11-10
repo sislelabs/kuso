@@ -183,6 +183,15 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "--leader-election-id=kuso-operator"
+            # Explicit worker count matched to the CPU limit below. Unset,
+            # it defaulted to the NODE's NumCPU (8+ workers) on a 0.5-core
+            # quota, so every reconcile burst was CFS-throttled and a
+            # restart's full replay of ~1-2k CRs took 20-60 minutes.
+            # Reconciles are mostly helm rendering (CPU) plus apiserver
+            # round trips, so 2x the CPU limit keeps the cores busy.
+            # This flag covers every kind; the per-watch
+            # maxConcurrentReconciles keys in watches.yaml are ignored.
+            - "--max-concurrent-reconciles=4"
           env:
             # Turns on per-service ingress limits in the kusoenvironment
             # chart (watches.yaml overrideValues). Needs the traefik.io
@@ -209,7 +218,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              cpu: 500m
+              # 2 cores (was 500m): at ~1,900 CRs steady-state resync
+              # alone needs ~0.5-1 core, and every operator restart
+              # (each `kuso upgrade`) replays every CR.
+              cpu: "2"
               # Helm template rendering + Secret lookups (e.g.
               # kusoaddon/s3.yaml's existing-secret lookup) push the
               # operator past 256Mi under reconcile bursts after a
@@ -218,5 +230,5 @@ spec:
               # without taxing single-node 4GB hosts.
               memory: 512Mi
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: 200m
+              memory: 128Mi
