@@ -19,7 +19,7 @@ type recordingPreviewDB struct {
 	deleted []int
 }
 
-func (*recordingPreviewDB) EnsurePRAddons(context.Context, string, int) ([]string, map[string]string, error) {
+func (*recordingPreviewDB) EnsurePRAddons(context.Context, string, int, string) ([]string, map[string]string, error) {
 	return nil, nil, nil
 }
 

@@ -1130,12 +1130,29 @@ func TestGetEnvironment_RejectsCrossProject(t *testing.T) {
 	}
 }
 
+// Previews copy a staging env's config, so turning them on needs one.
+func TestUpdate_EnablingPreviewsNeedsStagingEnv(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{Previews: &kube.KusoPreviewsSpec{TTLDays: 7}}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview-pr-3", "feat", "alpha-web-pr-3"),
+	)
+	enable := true
+	_, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		Previews: &UpdateProjectPreviewsSpec{Enabled: &enable},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "staging environment") {
+		t.Fatalf("enabling previews without staging: err = %v, want ErrInvalid naming staging", err)
+	}
+}
+
 func TestUpdate_TogglesPreviews(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
 		DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
 		Previews:    &kube.KusoPreviewsSpec{Enabled: false, TTLDays: 7},
-	}))
+	}), seedEnv("alpha", "web", "staging", "staging", "alpha-web-staging"))
 	enable := true
 	got, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
 		Previews: &UpdateProjectPreviewsSpec{Enabled: &enable},

@@ -6,8 +6,24 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
+
+func TestRenderBuildkit_PreviewBuildNeverExportsCache(t *testing.T) {
+	b := baseBuild()
+	if got := buildkitEnv(b)["CACHE_EXPORT"]; got != "1" {
+		t.Errorf("production CACHE_EXPORT = %q, want 1", got)
+	}
+	b.Annotations = map[string]string{builds.AnnPreviewEnv: "alpha-api-pr-3"}
+	if got := buildkitEnv(b)["CACHE_EXPORT"]; got != "0" {
+		t.Errorf("preview CACHE_EXPORT = %q, want 0", got)
+	}
+	script := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	if strings.Count(script, "--export-cache") != 1 || !strings.Contains(script, `if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]`) {
+		t.Error("export-cache must only be emitted behind the CACHE_EXPORT gate")
+	}
+}
 
 func buildkitEnv(b *kube.KusoBuild) map[string]string {
 	out := map[string]string{}

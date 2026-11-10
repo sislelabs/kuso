@@ -87,13 +87,17 @@ type Dispatcher struct {
 	// droppedNotifiedAt rate-limits NotifyDroppedDelivery per installation.
 	// Guarded by closedMu.
 	droppedNotifiedAt map[int64]time.Time
+	// skipReported dedupes the notification + PR comment for a preview
+	// refused for lack of a staging env, per project/repo#PR. Guarded by
+	// closedMu.
+	skipReported map[string]bool
 }
 
 // PreviewDB is the surface dispatcher needs from previewdb.Cloner.
 // Kept as an interface so the github package doesn't import
 // previewdb directly (and so tests can stub it).
 type PreviewDB interface {
-	EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, map[string]string, error)
+	EnsurePRAddons(ctx context.Context, project string, prNumber int, seedFrom string) ([]string, map[string]string, error)
 	DeletePRAddons(ctx context.Context, project string, prNumber int) error
 }
 
@@ -594,24 +598,16 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		// entries; the matched baseEnv tells us which existing env to
 		// clone vars + addon subscriptions from.
 		//
-		// When triggers[] is empty the project is in "legacy" preview
-		// mode (spawn on every PR, no explicit base mapping). v0.17.1
-		// onwards default that case to `production` instead of leaving
-		// baseEnv empty — the empty path caused ensurePreviewEnv to
-		// skip the env-var inheritance block entirely, which left
-		// previews with envVars=nil. Preview pods then ran with only
-		// envFrom-mounted shared/instance/addon secrets, missing the
-		// per-env valueFrom-expanded keys that the parent service's
-		// SetEnv path stamped onto production. Crashlooped at startup
-		// when the app asserted on missing env entries
-		// (B1 from v0.17.1 PR-env audit).
-		baseEnv := "production"
+		// The base is always a non-production env: "staging" unless a
+		// trigger names another one (a trigger naming production falls
+		// back to staging). A service without one gets no preview — see
+		// resolvePreviewBase.
+		requestedBase := ""
 		if len(proj.Spec.Previews.Triggers) > 0 {
-			baseEnv = ""
 			matched := false
 			for _, t := range proj.Spec.Previews.Triggers {
 				if t.Branch == pr.PullRequest.Base.Ref {
-					baseEnv = t.BaseEnv
+					requestedBase = t.BaseEnv
 					matched = true
 					break
 				}
@@ -645,6 +641,8 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				continue
 			}
 			previewDeployed := 0
+			var noBase []string
+			ns := d.nsFor(ctx, proj.Name)
 			for i := range svcItems {
 				// Per-service repo gate: only preview services that track
 				// the PR's repo. A multi-repo project's PR on repo X
@@ -665,11 +663,25 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				if isEnvGroupCloneService(&svcItems[i]) {
 					continue
 				}
-				if err := d.ensurePreviewEnv(ctx, &proj, svcItems[i].GetName(), pr, baseEnv); err != nil {
+				base, err := d.resolvePreviewBase(ctx, ns, proj.Name, svcItems[i].GetName(), pr.PullRequest.Base.Ref, requestedBase)
+				if errors.Is(err, errNoStagingEnv) {
+					// An existing preview is left running untouched; only
+					// new spawns and resyncs are refused.
+					noBase = append(noBase, strings.TrimPrefix(svcItems[i].GetName(), proj.Name+"-"))
+					continue
+				}
+				if err != nil {
+					d.Logger.Warn("resolve preview base env", "service", svcItems[i].GetName(), "pr", pr.Number, "err", err)
+					continue
+				}
+				if err := d.ensurePreviewEnv(ctx, &proj, svcItems[i].GetName(), pr, base); err != nil {
 					d.Logger.Warn("ensure preview env", "service", svcItems[i].GetName(), "pr", pr.Number, "err", err)
 					continue
 				}
 				previewDeployed++
+			}
+			if len(noBase) > 0 {
+				d.reportPreviewSkipped(ctx, &proj, pr, previewBaseName(requestedBase), noBase, previewDeployed == 0)
 			}
 			// Reviewer page (v0.17.0 Phase 2). Only fires on `opened`
 			// — we don't re-post the URL on every push to the same PR
@@ -966,8 +978,10 @@ func (d *Dispatcher) envBranchesByService(ctx context.Context, project string) m
 }
 
 // ensurePreviewEnv creates (or recreates) the preview KusoEnvironment
-// for service+PR and triggers a build off the PR head ref.
-func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProject, serviceFQN string, pr prEvent, baseEnvName string) error {
+// for service+PR and triggers a build off the PR head ref. Env vars,
+// per-env secrets, addon subscriptions and the DB seed come from base (the
+// service's staging env), never from production.
+func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProject, serviceFQN string, pr prEvent, base *previewBase) error {
 	envName := fmt.Sprintf("%s-pr-%d", serviceFQN, pr.Number)
 	short := strings.TrimPrefix(serviceFQN, proj.Name+"-")
 	if short == "" {
@@ -1025,9 +1039,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// this, preview envs blanket-mount every addon's conn regardless of
 	// subscription — leaking db/redis/nats creds into a public frontend
 	// preview pod (frontend subscribes to none; backoffice to storage
-	// only). nil subscription = legacy mount-all (unchanged).
-	if subs := previewSubscribedAddons(ctx, d, ns, serviceFQN); subs != nil {
-		envFromSecrets = filterConnsBySubscription(envFromSecrets, subs, projectAddonConns, proj.Name)
+	// only). nil subscription = legacy mount-all (unchanged). The staging
+	// base's subscription wins; the service's is the fallback.
+	baseSubs := base.Env.Spec.SubscribedAddons
+	if baseSubs == nil {
+		baseSubs = previewSubscribedAddons(ctx, d, ns, serviceFQN)
+	}
+	if baseSubs != nil {
+		envFromSecrets = filterConnsBySubscription(envFromSecrets, baseSubs, projectAddonConns, proj.Name)
 	}
 	// Per-PR clones of every postgres and redis addon (see
 	// previewdb.EnsurePRAddons). The clone's conn secrets REPLACE the
@@ -1045,7 +1064,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// cloneByOrigin comes from the cloner, which held the source addon
 		// while creating the clone. Do NOT re-derive it from the clone's
 		// name — see EnsureEnvAddonsMapped for why that fails open.
-		_, cloneByOrigin, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number)
+		_, cloneByOrigin, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number, base.Scope)
 		if err != nil {
 			// Fail closed. Without its clone the preview would mount the
 			// production conn, and its seed command and release hook would
@@ -1055,8 +1074,25 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			return fmt.Errorf("preview db clone for PR #%d: %w", pr.Number, err)
 		}
 		pgCloneMap = cloneByOrigin
-		envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	}
+	// The base env's own clones: its databases map onto the per-PR clones,
+	// its other datastores (s3) replace the production conns they shadow.
+	// Fail closed when they can't be read.
+	baseClones, err := d.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{kube.LabelProject: proj.Name, kube.LabelEnv: base.Scope})
+	if err != nil {
+		d.notifyPreviewRefused(proj.Name, short, pr.Number, err)
+		return fmt.Errorf("preview base addons for PR #%d: %w", pr.Number, err)
+	}
+	baseSwap, baseWithheld := stagingConnSwaps(baseClones, proj.Name, pgCloneMap)
+	connSwap := make(map[string]string, len(pgCloneMap)+len(baseSwap))
+	for k, v := range pgCloneMap {
+		connSwap[k] = v
+	}
+	for k, v := range baseSwap {
+		connSwap[k] = v
+	}
+	pgCloneMap = connSwap
+	envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	// Production conns the preview has no clone of (external DBs, mongodb,
 	// brokers, …) are withheld, not shared: the preview app runs PR code,
 	// including boot-time migrators, against whatever it mounts. Fail closed
@@ -1066,7 +1102,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		d.notifyPreviewRefused(proj.Name, short, pr.Number, err)
 		return fmt.Errorf("preview addon isolation for PR #%d: %w", pr.Number, err)
 	}
-	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(proj.Name)...)
+	for _, c := range baseWithheld {
+		unclonedProd[c] = true
+	}
+	// The project- and instance-shared Secrets are never mounted whole on a
+	// preview (ISO-2); keys it needs arrive through the base env's own
+	// Secret or the service's previewEnvVars.
 	port := int32(8080)
 	var svcRuntime string
 	var svcCommand []string
@@ -1136,37 +1177,29 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var baseEnvVars []kube.KusoEnvVar
 	var baseEnvFromSecrets []string
 	var baseEnvOverrides []string
-	if baseEnvName != "" {
-		baseEnvCRName := fmt.Sprintf("%s-%s", serviceFQN, baseEnvName)
-		if baseEnv, err := d.Kube.GetKusoEnvironment(ctx, ns, baseEnvCRName); err == nil && baseEnv != nil {
-			baseEnvVars = append(baseEnvVars, baseEnv.Spec.EnvVars...)
-			// Carry the base env's deliberate per-env overrides forward
-			// so the preview inherits the same pinned set.
-			baseEnvOverrides = append([]string(nil), baseEnv.Spec.EnvOverrides...)
-			// Also clone EnvFromSecrets so per-env secret mounts come
-			// across. The per-env Secret names get swapped to per-PR
-			// names by clonePerEnvSecretsForPreview below; shared
-			// addon-conn / project-shared secret references are
-			// preserved as-is (they live above env scope).
-			baseEnvFromSecrets = append([]string(nil), baseEnv.Spec.EnvFromSecrets...)
-			// If the service has nil SharedEnvKeys (legacy mount-all),
-			// fall back to whatever the baseEnv carries explicitly so
-			// the preview matches what the reviewer sees on the base
-			// env URL. Same for SubscribedAddons.
-			if svcSharedEnvKeys == nil && baseEnv.Spec.SharedEnvKeys != nil {
-				svcSharedEnvKeys = baseEnv.Spec.SharedEnvKeys
-			}
-			if svcSubscribedAddons == nil && baseEnv.Spec.SubscribedAddons != nil {
-				svcSubscribedAddons = baseEnv.Spec.SubscribedAddons
-			}
-			// Fall back to the baseEnv's release hook when the service
-			// itself carries none, so a preview inherits whatever the
-			// reviewer's base env (typically production) runs at promote.
-			if svcRelease == nil && baseEnv.Spec.Release != nil {
-				svcRelease = baseEnv.Spec.Release
-			}
-		} else if err != nil && !apierrors.IsNotFound(err) {
-			d.Logger.Warn("preview baseEnv fetch", "baseEnv", baseEnvName, "err", err)
+	{
+		baseEnv := base.Env
+		baseEnvVars = append(baseEnvVars, baseEnv.Spec.EnvVars...)
+		// Carry the base env's deliberate per-env overrides forward
+		// so the preview inherits the same pinned set.
+		baseEnvOverrides = append([]string(nil), baseEnv.Spec.EnvOverrides...)
+		// Also clone EnvFromSecrets so per-env secret mounts come
+		// across. The base env's own Secrets get swapped to the per-PR
+		// name by clonePerEnvSecretsForPreview below; its addon clones
+		// were mapped by stagingConnSwaps.
+		baseEnvFromSecrets = append([]string(nil), baseEnv.Spec.EnvFromSecrets...)
+		// The base env's subscriptions win; the service's are the
+		// fallback for a legacy (nil) base.
+		if baseEnv.Spec.SharedEnvKeys != nil {
+			svcSharedEnvKeys = baseEnv.Spec.SharedEnvKeys
+		}
+		if baseEnv.Spec.SubscribedAddons != nil {
+			svcSubscribedAddons = baseEnv.Spec.SubscribedAddons
+		}
+		// Fall back to the baseEnv's release hook when the service
+		// itself carries none.
+		if svcRelease == nil && baseEnv.Spec.Release != nil {
+			svcRelease = baseEnv.Spec.Release
 		}
 	}
 	// Union the cloned baseEnv envFromSecrets with the addon-conn +
@@ -1179,11 +1212,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// appearing in both lists.
 	envFromSecrets = dedupePreserveOrder(append(baseEnvFromSecrets, envFromSecrets...))
 	// baseEnvFromSecrets is the base env's list verbatim, so it still names
-	// the SOURCE addon conns. The shared mounts appended above are for
-	// legacy mount-all (nil sharedEnvKeys); a per-key subscription reaches
-	// the pod as the secretKeyRefs inherited from the base env, exactly as
-	// production, so the scrub removes the blanket mounts in that case.
-	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+	// the base's addon conns and may carry blanket shared mounts; the scrub
+	// swaps the first and drops the second.
+	envFromSecrets = scrubPreviewEnvFrom(envFromSecrets, proj.Name, short, projectAddonConns, svcSubscribedAddons, pgCloneMap)
 	var withheldConns []string
 	envFromSecrets = slices.DeleteFunc(envFromSecrets, func(n string) bool {
 		if unclonedProd[n] {
@@ -1196,8 +1227,11 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// the baseEnv copy. Empty list = no overrides (most common).
 	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
 	// Same rule as the envFrom scrub: no per-key path into the production
-	// service secret either.
+	// service or env secret, nor into the shared Secrets beyond what
+	// previewEnvVars opts in.
 	mergedEnvVars = dropSecretKeyRefsTo(mergedEnvVars, kube.ServiceSecretName(proj.Name, short))
+	mergedEnvVars = dropSecretKeyRefsTo(mergedEnvVars, kube.EnvSecretName(proj.Name, short, "production"))
+	mergedEnvVars = addons.DropPreviewSharedRefs(mergedEnvVars, proj.Name, svcPreviewEnvVars)
 
 	// Per-preview URL rewrite (v0.17.4). The cloned envVars carry
 	// production URLs (NEXT_PUBLIC_API_URL=https://api.tickero.bg) —
@@ -1246,14 +1280,20 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// reference to the source Secret name (in envFromSecrets and in
 	// envVars[].valueFrom.secretKeyRef.name) to point at the new
 	// per-PR Secret.
-	if baseEnvName != "" {
+	{
 		swapped, err := d.clonePerEnvSecretsForPreview(
-			ctx, ns, proj.Name, short, baseEnvName, pr.Number,
+			ctx, ns, proj.Name, short, base, pr.Number,
 			envFromSecrets, mergedEnvVars, hostRewrite,
 		)
 		if err != nil {
+			// Never mount the base's Secrets directly: they skip the host
+			// rewrite and are staging's live config.
 			d.Logger.Warn("preview per-env secret clone",
 				"service", short, "pr", pr.Number, "err", err)
+			for _, n := range base.Secrets {
+				envFromSecrets = slices.DeleteFunc(envFromSecrets, func(s string) bool { return s == n })
+				mergedEnvVars = dropSecretKeyRefsTo(mergedEnvVars, n)
+			}
 		} else {
 			envFromSecrets = swapped.envFromSecrets
 			mergedEnvVars = swapped.envVars
@@ -1396,8 +1436,11 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// The carried list is scrubbed like a fresh one: a preview created
 		// before a mount fix (or before a new addon clone) would otherwise
 		// keep mounting production conns on every resync.
+		// The fresh list is unioned in so a mount the base gained since
+		// (its per-env Secret, a staging bucket) reaches the preview too.
+		fresh := envFromSecrets
 		scrub := func(in []string) []string {
-			out := scrubPreviewEnvFrom(in, proj.Name, kube.ServiceSecretName(proj.Name, short), projectAddonConns, svcSubscribedAddons, pgCloneMap, svcSharedEnvKeys)
+			out := scrubPreviewEnvFrom(dedupePreserveOrder(append(slices.Clone(in), fresh...)), proj.Name, short, projectAddonConns, svcSubscribedAddons, pgCloneMap)
 			return slices.DeleteFunc(out, func(n string) bool { return unclonedProd[n] })
 		}
 		envFromSecrets = scrub(existing.Spec.EnvFromSecrets)
@@ -1922,14 +1965,16 @@ func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonCon
 //   - A source addon conn that has a per-PR clone is REPLACED by the clone,
 //     never mounted next to it. envFrom is last-wins per key, so a key only
 //     the source carries (POOLER_URL, DIRECT_URL) would reach the preview.
-//   - With a per-key sharedEnvKeys subscription (non-nil) the blanket shared
-//     mounts go; the subscribed keys arrive as per-key secretKeyRefs.
+//   - The project- and instance-shared Secrets are never mounted whole
+//     (ISO-2).
 //   - The service secret (<project>-<service>-secrets, the `kuso env set`
-//     values production mounts) never reaches a preview: it holds live
-//     payment keys, admin tokens and external DSNs. The base env carries it,
-//     so it arrives through the copied list unless removed here.
-func scrubPreviewEnvFrom(in []string, project, serviceSecret string, projectAddonConns, subscribedAddons []string, cloneByOrigin map[string]string, sharedEnvKeys []string) []string {
-	out := slices.DeleteFunc(append([]string(nil), in...), func(s string) bool { return s == serviceSecret })
+//     values production mounts) and production's per-env Secret never
+//     reach a preview: they hold live payment keys, admin tokens and
+//     external DSNs. A base env can carry the first, so it arrives through
+//     the copied list unless removed here.
+func scrubPreviewEnvFrom(in []string, project, service string, projectAddonConns, subscribedAddons []string, cloneByOrigin map[string]string) []string {
+	prodOnly := []string{kube.ServiceSecretName(project, service), kube.EnvSecretName(project, service, "production")}
+	out := slices.DeleteFunc(append([]string(nil), in...), func(s string) bool { return slices.Contains(prodOnly, s) })
 	if subscribedAddons != nil {
 		kept := filterConnsBySubscription(projectAddonConns, subscribedAddons, projectAddonConns, project)
 		unsubscribedClone := map[string]bool{}
@@ -1942,10 +1987,7 @@ func scrubPreviewEnvFrom(in []string, project, serviceSecret string, projectAddo
 		out = slices.DeleteFunc(out, func(s string) bool { return unsubscribedClone[s] })
 	}
 	out = swapPGCloneSecrets(out, cloneByOrigin)
-	if sharedEnvKeys != nil {
-		shared := kube.SharedSecretNames(project)
-		out = slices.DeleteFunc(out, func(s string) bool { return slices.Contains(shared, s) })
-	}
+	out = addons.ScrubPreviewSharedMounts(out, project)
 	return dedupePreserveOrder(out)
 }
 
@@ -2193,6 +2235,11 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		return out
 	}
 	prefix := proj.Name + "-"
+	// Previews inherit from a staging env, so staging's hosts must map to
+	// the preview too: an env-group clone's hosts and in-cluster names go
+	// to its source service's preview, and so does every non-preview env's
+	// public host.
+	targetByFQN := map[string]string{}
 	for i := range services {
 		u := &services[i]
 		fqn := u.GetName()
@@ -2200,6 +2247,18 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		if short == "" {
 			short = fqn
 		}
+		target := short
+		if src := u.GetAnnotations()["kuso.sislelabs.com/env-group-source-service"]; isEnvGroupCloneService(u) && src != "" {
+			target = strings.TrimPrefix(src, prefix)
+			previewSvc := fmt.Sprintf("%s%s-pr-%d", prefix, target, prNumber)
+			for _, suf := range []string{fmt.Sprintf(".%s.svc.cluster.local", ns), fmt.Sprintf(".%s.svc", ns), ""} {
+				out[fqn+"-production"+suf] = previewSvc + suf
+				out[fqn+suf] = previewSvc + suf
+			}
+			targetByFQN[fqn] = target
+			continue
+		}
+		targetByFQN[fqn] = target
 		var customDomains []string
 		if domains, found, _ := unstructured.NestedSlice(u.Object, "spec", "domains"); found {
 			for _, dRaw := range domains {
@@ -2212,6 +2271,18 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		}
 		for from, to := range previewRewriteEntries(proj.Name, short, prNumber, ns, baseDomain, customDomains) {
 			out[from] = to
+		}
+	}
+	if envs, err := d.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: proj.Name}); err == nil {
+		for i := range envs {
+			e := &envs[i]
+			target, ok := targetByFQN[e.Spec.Service]
+			if !ok || e.Spec.Host == "" || addons.IsPreviewEnv(e) {
+				continue
+			}
+			if _, set := out[e.Spec.Host]; !set {
+				out[e.Spec.Host] = fmt.Sprintf("%s-pr-%d.%s", target, prNumber, baseDomain)
+			}
 		}
 	}
 	return out
@@ -2383,24 +2454,19 @@ type secretSwapResult struct {
 	envVars        []kube.KusoEnvVar
 }
 
-// clonePerEnvSecretsForPreview reads every per-env Secret that's
-// scoped to the baseEnv (name pattern "<project>-<service>-<baseEnv>-secrets"),
-// copies its contents to a per-PR Secret with URL rewrites applied,
-// and swaps every reference to the source Secret name (in
-// envFromSecrets and in envVars[].valueFrom.secretKeyRef.name) to
-// point at the new per-PR Secret.
+// clonePerEnvSecretsForPreview merges the base (staging) env's own Secrets
+// (base.Secrets, later wins) into the per-PR Secret with URL rewrites
+// applied, and swaps every reference to a base Secret (in envFromSecrets
+// and in envVars[].valueFrom.secretKeyRef.name) to the per-PR Secret.
+// Production's per-env Secret is never a source (ISO-1).
 //
-// Secrets that aren't per-env-scoped (project-shared, addon-conn,
-// instance-shared) pass through untouched — they live above the env
-// scope and don't carry env-specific URL values.
-//
-// Best-effort: a single Secret clone failure doesn't abort the whole
-// preview spawn. The preview pod boots with whatever Secrets did
-// clone successfully; missing ones surface as missing-env errors at
-// app startup, which the user can fix via redeploy.
+// When none of the base Secrets exists, nothing is written: a new preview
+// gets no per-PR Secret, and an existing one keeps the per-PR Secret it
+// already has rather than being left with none.
 func (d *Dispatcher) clonePerEnvSecretsForPreview(
 	ctx context.Context,
-	ns, project, serviceShort, baseEnv string,
+	ns, project, serviceShort string,
+	base *previewBase,
 	prNumber int,
 	envFromSecrets []string,
 	envVars []kube.KusoEnvVar,
@@ -2409,29 +2475,36 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 	if d.Kube == nil || d.Kube.Clientset == nil {
 		return &secretSwapResult{envFromSecrets: envFromSecrets, envVars: envVars}, nil
 	}
-	baseSecretName := fmt.Sprintf("%s-%s-%s-secrets", project, serviceShort, baseEnv)
-	prSecretName := fmt.Sprintf("%s-%s-pr-%d-secrets", project, serviceShort, prNumber)
-
-	src, err := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, baseSecretName, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			// No per-env Secret on baseEnv = nothing to clone, but
-			// still swap any stale envFromSecrets references in case
-			// a previous spawn attempt left them dangling.
-			return &secretSwapResult{
-				envFromSecrets: swapSecretNameInList(envFromSecrets, baseSecretName, prSecretName),
-				envVars:        swapSecretNameInEnvVars(envVars, baseSecretName, prSecretName),
-			}, nil
+	prSecretName := kube.EnvSecretName(project, serviceShort, fmt.Sprintf("pr-%d", prNumber))
+	swapAll := func() *secretSwapResult {
+		out := &secretSwapResult{envFromSecrets: envFromSecrets, envVars: envVars}
+		for _, n := range base.Secrets {
+			out.envFromSecrets = swapSecretNameInList(out.envFromSecrets, n, prSecretName)
+			out.envVars = swapSecretNameInEnvVars(out.envVars, n, prSecretName)
 		}
-		return nil, fmt.Errorf("get source secret %s: %w", baseSecretName, err)
+		out.envFromSecrets = dedupePreserveOrder(out.envFromSecrets)
+		return out
 	}
 
-	// Build the per-PR Secret with rewritten values. Iterating .Data
-	// gives base64-decoded bytes already (k8s decodes on Get).
-	prData := make(map[string][]byte, len(src.Data))
-	for k, v := range src.Data {
-		rewritten := rewriteHostInValue(string(v), hostRewrite)
-		prData[k] = []byte(rewritten)
+	// Iterating .Data gives decoded bytes already (k8s decodes on Get).
+	var prData map[string][]byte
+	for _, n := range base.Secrets {
+		src, err := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, n, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get source secret %s: %w", n, err)
+		}
+		if prData == nil {
+			prData = map[string][]byte{}
+		}
+		for k, v := range src.Data {
+			prData[k] = []byte(rewriteHostInValue(string(v), hostRewrite))
+		}
+	}
+	if prData == nil {
+		return swapAll(), nil
 	}
 	prSec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2441,7 +2514,7 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 				kube.LabelProject:               project,
 				"kuso.sislelabs.com/service":    serviceShort,
 				"kuso.sislelabs.com/env":        fmt.Sprintf("preview-pr-%d", prNumber),
-				"kuso.sislelabs.com/source-env": baseEnv,
+				"kuso.sislelabs.com/source-env": base.Scope,
 			},
 		},
 		Type: corev1.SecretTypeOpaque,
@@ -2458,15 +2531,20 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 		return nil, fmt.Errorf("get existing pr secret %s: %w", prSecretName, gerr)
 	default:
 		existing.Data = prData
+		if existing.Labels == nil {
+			existing.Labels = map[string]string{}
+		}
+		existing.Labels["kuso.sislelabs.com/source-env"] = base.Scope
 		if _, err := d.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 			return nil, fmt.Errorf("update pr secret %s: %w", prSecretName, err)
 		}
 	}
 
-	return &secretSwapResult{
-		envFromSecrets: swapSecretNameInList(envFromSecrets, baseSecretName, prSecretName),
-		envVars:        swapSecretNameInEnvVars(envVars, baseSecretName, prSecretName),
-	}, nil
+	out := swapAll()
+	if !slices.Contains(out.envFromSecrets, prSecretName) {
+		out.envFromSecrets = append(out.envFromSecrets, prSecretName)
+	}
+	return out, nil
 }
 
 // swapSecretNameInList replaces every occurrence of from with to in

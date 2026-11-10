@@ -69,6 +69,9 @@ var projectCreateCmd = &cobra.Command{
 			return fmt.Errorf("create: %w", err)
 		}
 		fmt.Printf("project %s created\n", args[0])
+		if projectCreatePreviews {
+			fmt.Println("note: PR previews copy a staging environment's config and secrets; PRs are skipped until the project has a staging environment")
+		}
 		return nil
 	},
 }
@@ -96,7 +99,9 @@ var projectUpdateCmd = &cobra.Command{
 	Short: "Patch a project's spec (defaults left alone unless flagged)",
 	Long: `Update specific fields on a project. Only the flags you pass are
 changed; everything else is left as-is. To explicitly disable previews
-use --previews=off; to enable, --previews=on. To detach a GitHub App
+use --previews=off; to enable, --previews=on (the project needs a staging
+environment first: previews copy its config and secrets, never
+production's). To detach a GitHub App
 installation use --github-installation-clear (sets installationId to 0).`,
 	Args: cobra.ExactArgs(1),
 	Example: `  kuso project update analiz --previews=on

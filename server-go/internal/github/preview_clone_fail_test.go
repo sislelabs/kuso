@@ -47,7 +47,7 @@ func TestDispatch_PROpened_ServiceGetFailureFailsClosed(t *testing.T) {
 
 type failingPreviewDB struct{}
 
-func (failingPreviewDB) EnsurePRAddons(context.Context, string, int) ([]string, map[string]string, error) {
+func (failingPreviewDB) EnsurePRAddons(context.Context, string, int, string) ([]string, map[string]string, error) {
 	return nil, nil, errors.New("provision db-pr-42 for env preview-pr-42: admission webhook timeout")
 }
 

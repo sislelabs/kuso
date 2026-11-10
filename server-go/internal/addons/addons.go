@@ -1863,7 +1863,8 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			// admin DSN) to the pod anyway — which is exactly what this
 			// refresh did on every addon event until the tickero leak.
 			// nil = legacy mount-all, unchanged.
-			if live.Spec.SharedEnvKeys != nil {
+			// Previews never mount them whole either (ISO-2).
+			if live.Spec.SharedEnvKeys != nil || preview {
 				withoutShared := perEnv[:0]
 				for _, name := range perEnv {
 					if !slices.Contains(kube.SharedSecretNames(project), name) {

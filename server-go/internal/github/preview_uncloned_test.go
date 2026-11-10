@@ -31,11 +31,11 @@ func TestDispatch_PROpened_DropsUnclonedProductionConns(t *testing.T) {
 	t.Parallel()
 	prod := typedSeed(kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "alpha-api-production", Namespace: "kuso",
-			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelService: "api", kube.LabelEnv: "production"},
+			Name: "alpha-api-staging", Namespace: "kuso",
+			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelService: "api", kube.LabelEnv: "staging"},
 		},
 		Spec: kube.KusoEnvironmentSpec{
-			Project: "alpha", Service: "alpha-api", Kind: "production",
+			Project: "alpha", Service: "alpha-api", Kind: "custom",
 			EnvFromSecrets: []string{"alpha-db-conn", "alpha-psdb-conn", "alpha-mongo-conn", "alpha-storage-conn"},
 			EnvVars: []kube.KusoEnvVar{{
 				Name:      "DIRECT_URL",

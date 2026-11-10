@@ -19,6 +19,7 @@ func TestPropagate_RestoresEnvCloneConn(t *testing.T) {
 		seedProject("tickero", kube.KusoProjectSpec{}),
 		seedService("tickero", "api", kube.KusoServiceSpec{SubscribedAddons: []string{"db"}}),
 		seedEnv("tickero", "api", "preview-pr-52", "flow/x", "tickero-api-pr-52"),
+		seedGroupAddon("tickero", "db-pr-52", "postgres", "preview-pr-52", "db"),
 	)
 	s.AddonConnSecrets = func(context.Context, string) ([]string, error) {
 		return []string{"tickero-cache-conn", "tickero-db-conn", "tickero-psdb-conn"}, nil
@@ -56,5 +57,67 @@ func TestPropagate_RestoresEnvCloneConn(t *testing.T) {
 	}
 	if ci, pi := slices.Index(got, "tickero-db-pr-52-conn"), slices.Index(got, "tickero-psdb-conn"); ci >= 0 && pi >= 0 && ci < pi {
 		t.Errorf("clone must be ordered after project-level conns: %v", got)
+	}
+}
+
+// D1/ISO-6: a service save on a named env mounted every env-scoped conn by
+// name, so tickero-frontend-staging (subscribed to nothing) gained the
+// staging DB clone. A clone is now only ADDED when its recorded source is
+// subscribed. One a named env already mounts is kept (a running staging app
+// may depend on it); a preview drops it.
+func TestPropagate_EnvClonesFollowSubscription(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("tickero", kube.KusoProjectSpec{}),
+		seedService("tickero", "frontend", kube.KusoServiceSpec{SubscribedAddons: []string{}}),
+		seedEnv("tickero", "frontend", "staging", "dev", "tickero-frontend-staging"),
+		seedEnv("tickero", "frontend", "preview-pr-5", "feat", "tickero-frontend-pr-5"),
+		seedGroupAddon("tickero", "db-staging", "postgres", "staging", "db"),
+		seedGroupAddon("tickero", "queue-staging", "redis", "staging", "queue"),
+		seedGroupAddon("tickero", "cache-staging", "redis", "staging", "cache"),
+		seedGroupAddon("tickero", "db-pr-5", "postgres", "preview-pr-5", "db"),
+	)
+	prev, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "tickero-frontend-pr-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev.Spec.EnvFromSecrets = []string{"tickero-db-pr-5-conn"}
+	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", prev); err != nil {
+		t.Fatal(err)
+	}
+	s.AddonConnSecrets = func(context.Context, string) ([]string, error) {
+		return []string{"tickero-cache-conn", "tickero-db-conn"}, nil
+	}
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "tickero-frontend-staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envCR.Spec.EnvFromSecrets = []string{"tickero-db-staging-conn", "tickero-frontend-secrets"}
+	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "frontend", []string{"cache"}, nil); err != nil {
+		t.Fatalf("SetSubscribedAddons: %v", err)
+	}
+	after, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "tickero-frontend-staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := after.Spec.EnvFromSecrets
+	if !slices.Contains(got, "tickero-db-staging-conn") {
+		t.Errorf("a save unmounted the staging DB clone the env already used: %v", got)
+	}
+	if slices.Contains(got, "tickero-queue-staging-conn") {
+		t.Errorf("unsubscribed clone was added: %v", got)
+	}
+	if !slices.Contains(got, "tickero-cache-staging-conn") || slices.Contains(got, "tickero-cache-conn") {
+		t.Errorf("subscribed clone must replace its source: %v", got)
+	}
+	pv, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "tickero-frontend-pr-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(pv.Spec.EnvFromSecrets, "tickero-db-pr-5-conn") {
+		t.Errorf("preview kept an unsubscribed clone: %v", pv.Spec.EnvFromSecrets)
 	}
 }

@@ -88,7 +88,7 @@ export default function NewProjectPage() {
 
   // Shared by both create paths (only one is ever submitted).
   const [baseDomain, setBaseDomain] = useState("");
-  const [previewsEnabled, setPreviewsEnabled] = useState(true);
+  const [previewsEnabled, setPreviewsEnabled] = useState(false);
   const [previewsTTLDays, setPreviewsTTLDays] = useState("");
   const [namespace, setNamespace] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -1065,7 +1065,7 @@ function AdvancedFields({
           />
         </FormField>
 
-        <FormField label="Preview environments" hint="Each pull request gets its own deploy and URL.">
+        <FormField label="Preview environments" hint="Each pull request gets its own deploy and URL, copied from a staging environment. PRs are skipped until the project has one.">
           <label className="flex items-center gap-2 text-[13px]">
             <input
               type="checkbox"

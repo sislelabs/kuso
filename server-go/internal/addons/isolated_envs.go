@@ -8,9 +8,10 @@ import (
 )
 
 // SharedWithPreviews reports whether a project addon's PRODUCTION conn may be
-// mounted on a preview env that has no clone of it. Only s3 (preview DBs are
-// seeded from production and reference its objects) and mailpit (a dev mail
-// catcher holding no customer data) are shared by design. Everything else —
+// mounted on a preview env that has no clone of it. Only s3 (the preview
+// follows its staging base, which shares the bucket unless it has its own
+// clone; the dispatcher swaps in staging's clone when there is one) and
+// mailpit (a dev mail catcher holding no customer data) are shared. Everything else —
 // external databases, mongodb, mysql, brokers, valkey, clickhouse, … — would
 // hand PR code a live production datastore.
 func SharedWithPreviews(a *kube.KusoAddon) bool {
@@ -82,6 +83,37 @@ func WithholdProductionConns(next, prev []string, all []kube.KusoAddon, envScope
 		kept = append(kept, n)
 	}
 	return kept, withheld
+}
+
+// ScrubPreviewSharedMounts removes the project- and instance-shared Secrets
+// from a preview's envFrom list. Mounted whole they hand PR code every
+// shared key, including the instance-PG admin DSN (ISO-2).
+func ScrubPreviewSharedMounts(list []string, project string) []string {
+	shared := kube.SharedSecretNames(project)
+	return slices.DeleteFunc(slices.Clone(list), func(n string) bool { return slices.Contains(shared, n) })
+}
+
+// DropPreviewSharedRefs removes a preview's env vars that read a shared
+// Secret through secretKeyRef (the per-key sharedEnvKeys subscription it
+// would otherwise inherit, ISO-2). A var the service lists in its
+// previews.previewEnvVars as a shared-secret ref is the explicit opt-in and
+// stays.
+func DropPreviewSharedRefs(vars []kube.KusoEnvVar, project string, optIn []kube.KusoEnvVar) []kube.KusoEnvVar {
+	shared := kube.SharedSecretNames(project)
+	refName := func(v kube.KusoEnvVar) string {
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := ref["name"].(string)
+		return name
+	}
+	allowed := map[string]bool{}
+	for _, v := range optIn {
+		if slices.Contains(shared, refName(v)) {
+			allowed[v.Name] = true
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(vars), func(v kube.KusoEnvVar) bool {
+		return slices.Contains(shared, refName(v)) && !allowed[v.Name]
+	})
 }
 
 // IsPreviewEnv reports whether an env CR is a PR preview.

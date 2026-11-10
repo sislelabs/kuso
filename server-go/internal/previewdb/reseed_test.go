@@ -18,13 +18,43 @@ func existingPRClone() *kube.KusoAddon {
 	return a
 }
 
-var prOpts = EnvAddonOpts{Kinds: []string{"postgres"}, SeedAll: true, NameSuffix: "-pr-7", PreviewPR: "7"}
+func stagingPGClone() *kube.KusoAddon {
+	a := addonCR("alpha", "pg-staging", "postgres")
+	a.Labels[kube.LabelEnv] = "staging"
+	a.Annotations = map[string]string{envGroupSourceAddonAnnotation: "alpha-pg"}
+	return a
+}
+
+var prOpts = EnvAddonOpts{Kinds: []string{"postgres"}, SeedAll: true, SeedFromScope: "staging", NameSuffix: "-pr-7", PreviewPR: "7"}
+
+// ISO-4: a preview's postgres clone is never a dump of production. With no
+// seed-from env, or one without a clone of the source, it starts empty.
+func TestEnsureEnvAddons_PreviewNeverSeedsFromProduction(t *testing.T) {
+	for _, seedFrom := range []string{"", "production", "staging"} {
+		c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"))
+		c.Namespace = "kuso"
+		c.Kube.Clientset = kubefake.NewSimpleClientset()
+		c.BaseCtx = cancelledCtx()
+		opts := prOpts
+		opts.SeedFromScope = seedFrom
+		if _, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-7", opts); err != nil {
+			t.Fatalf("seedFrom=%q: %v", seedFrom, err)
+		}
+		clone := getAddon(t, dyn, "alpha-pg-pr-7")
+		if clone == nil {
+			t.Fatalf("seedFrom=%q: clone not created", seedFrom)
+		}
+		if got := clone.Annotations[seedPendingAnnotation]; got != "" {
+			t.Fatalf("seedFrom=%q: preview clone seeded from %q, want empty", seedFrom, got)
+		}
+	}
+}
 
 // A PR push re-runs EnsurePRAddons against the clone that already exists.
-// It must not re-seed it: that pg_dump --clean'd production over whatever
+// It must not re-seed it: that pg_dump --clean'd the source over whatever
 // the reviewers had in the preview, once per push.
 func TestEnsureEnvAddons_ExistingCloneIsNotReseeded(t *testing.T) {
-	c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"), existingPRClone())
+	c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"), existingPRClone(), stagingPGClone())
 	c.Namespace = "kuso"
 	c.Kube.Clientset = kubefake.NewSimpleClientset()
 	c.BaseCtx = cancelledCtx()
@@ -41,8 +71,8 @@ func TestEnsureEnvAddons_ExistingCloneIsNotReseeded(t *testing.T) {
 	if _, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-7", resync); err != nil {
 		t.Fatalf("EnsureEnvAddons resync: %v", err)
 	}
-	if got := getAddon(t, dyn, "alpha-pg-pr-7").Annotations[seedPendingAnnotation]; got != "alpha-pg" {
-		t.Fatalf("explicit resync: seed-pending=%q, want alpha-pg", got)
+	if got := getAddon(t, dyn, "alpha-pg-pr-7").Annotations[seedPendingAnnotation]; got != "alpha-pg-staging" {
+		t.Fatalf("explicit resync: seed-pending=%q, want alpha-pg-staging", got)
 	}
 }
 

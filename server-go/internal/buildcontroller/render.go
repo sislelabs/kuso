@@ -1099,6 +1099,15 @@ func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.R
 	}
 }
 
+// cacheExport is "0" for preview builds: they import the service's registry
+// cache but must not export to it (ISO-8).
+func cacheExport(b *kube.KusoBuild) string {
+	if b.Annotations[builds.AnnPreviewEnv] != "" {
+		return "0"
+	}
+	return "1"
+}
+
 // renderBuildkitContainer is the buildkit thin-client. Talks to the
 // long-lived kuso-buildkitd Deployment over TCP. The actual build
 // happens in the daemon; this container just uploads the workspace
@@ -1216,6 +1225,14 @@ echo "==> buildkit: build-arg keys=${KUSO_BUILDENV_KEYS:-<none>}"
 echo "==> buildkit: explicit build-arg keys=${KUSO_BUILDARG_KEYS:-<none>}"
 echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 
+# Preview builds run PR code; they read the shared cache but never write it,
+# or a PR could plant layers the next production build imports.
+if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE
+elif [ "${CACHE_EXPORT:-1}" != "1" ]; then
+  echo "==> buildkit: preview build, cache is read-only"
+fi
+
 for i in $(seq 1 30); do
   if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
     break
@@ -1252,7 +1269,6 @@ exec buildctl \
   --opt filename="$DF" \
   "$@" \
   --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=$INSECURE \
-  --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE \
   --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
   --progress plain
 `
@@ -1270,6 +1286,7 @@ exec buildctl \
 		{Name: "REGISTRY_INSECURE", Value: registryInsecure(b)},
 		{Name: "BUILDKIT_ADDR", Value: defaultBuildkitHost},
 		{Name: "DRY_RUN", Value: dryRun},
+		{Name: "CACHE_EXPORT", Value: cacheExport(b)},
 	}
 	if hasAuthSecret(b) {
 		envs = append(envs, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/tmp/.docker"})

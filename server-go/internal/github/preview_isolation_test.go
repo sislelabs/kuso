@@ -7,6 +7,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/kube"
 )
@@ -15,7 +16,7 @@ import (
 // previewdb.Cloner.EnsurePRAddons hands the dispatcher.
 type stubPreviewDB struct{ pairs map[string]string }
 
-func (s stubPreviewDB) EnsurePRAddons(context.Context, string, int) ([]string, map[string]string, error) {
+func (s stubPreviewDB) EnsurePRAddons(context.Context, string, int, string) ([]string, map[string]string, error) {
 	var conns []string
 	for _, c := range s.pairs {
 		conns = append(conns, c)
@@ -53,17 +54,17 @@ func e2eShapedService(sharedEnvKeys []string) seed {
 	})
 }
 
-// e2eShapedProdEnv is what the production path renders for that service:
-// both source conns, the per-service secret, and SHARED_TOKEN as a per-key
-// secretKeyRef instead of a blanket shared mount.
-func e2eShapedProdEnv() seed {
+// e2eShapedBaseEnv is the preview's staging base as a shared-addon staging
+// env renders it: both source conns, the per-service secret, and
+// SHARED_TOKEN as a per-key secretKeyRef instead of a blanket shared mount.
+func e2eShapedBaseEnv() seed {
 	return typedSeed(kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "alpha-api-production", Namespace: "kuso",
-			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelService: "api", kube.LabelEnv: "production"},
+			Name: "alpha-api-staging", Namespace: "kuso",
+			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelService: "api", kube.LabelEnv: "staging"},
 		},
 		Spec: kube.KusoEnvironmentSpec{
-			Project: "alpha", Service: "alpha-api", Kind: "production",
+			Project: "alpha", Service: "alpha-api", Kind: "custom",
 			EnvFromSecrets: []string{"alpha-cache-conn", "alpha-db-conn", "alpha-api-secrets"},
 			EnvVars: []kube.KusoEnvVar{{
 				Name:      "SHARED_TOKEN",
@@ -80,7 +81,7 @@ func e2eShapedDispatcher(t *testing.T, sharedEnvKeys []string, extra ...seed) *D
 	seeds := append([]seed{
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
 		e2eShapedService(sharedEnvKeys),
-		e2eShapedProdEnv(),
+		e2eShapedBaseEnv(),
 	}, extra...)
 	d := newDispatcher(t, seeds...)
 	d.AddonConnSecrets = func(context.Context, string) ([]string, error) {
@@ -159,31 +160,36 @@ func TestDispatch_PRSynced_ScrubsSourceConnFromExistingPreview(t *testing.T) {
 	}
 }
 
-// F8b: with a per-key sharedEnvKeys subscription the preview must not
-// blanket-mount the shared secrets — production doesn't. The subscribed key
-// still arrives through the inherited per-key secretKeyRef.
-func TestDispatch_PROpened_HonoursSharedEnvKeys(t *testing.T) {
+// ISO-2: a preview inherits no shared-secret key, neither as a blanket
+// mount nor as the base env's per-key secretKeyRef, unless the service opts
+// it in through previews.previewEnvVars.
+func TestDispatch_PROpened_DropsInheritedSharedKeys(t *testing.T) {
 	t.Parallel()
 	env := dispatchPR7(t, e2eShapedDispatcher(t, []string{"SHARED_TOKEN"}))
 	for _, shared := range kube.SharedSecretNames("alpha") {
 		if slices.Contains(env.Spec.EnvFromSecrets, shared) {
-			t.Errorf("preview blanket-mounts %s although the service subscribes per key: %v", shared, env.Spec.EnvFromSecrets)
+			t.Errorf("preview blanket-mounts %s: %v", shared, env.Spec.EnvFromSecrets)
 		}
 	}
-	found := false
 	for _, v := range env.Spec.EnvVars {
-		if v.Name == "SHARED_TOKEN" && v.ValueFrom != nil {
-			found = true
+		if v.Name == "SHARED_TOKEN" {
+			t.Errorf("preview inherited the shared SHARED_TOKEN ref: %+v", v)
 		}
 	}
-	if !found {
-		t.Errorf("subscribed SHARED_TOKEN secretKeyRef not inherited: %+v", env.Spec.EnvVars)
+
+	optIn := e2eShapedService([]string{"SHARED_TOKEN"})
+	ref := map[string]any{"secretKeyRef": map[string]any{"name": "alpha-shared", "key": "SHARED_TOKEN"}}
+	_ = unstructured.SetNestedSlice(optIn.obj.Object, []any{map[string]any{"name": "SHARED_TOKEN", "valueFrom": ref}}, "spec", "previews", "previewEnvVars")
+	d := newDispatcher(t, seedProj("alpha", "https://github.com/example/alpha", "main", true, 5), optIn, e2eShapedBaseEnv())
+	env = dispatchPR7(t, d)
+	if !slices.ContainsFunc(env.Spec.EnvVars, func(v kube.KusoEnvVar) bool { return v.Name == "SHARED_TOKEN" && v.ValueFrom != nil }) {
+		t.Errorf("previewEnvVars opt-in for SHARED_TOKEN was dropped: %+v", env.Spec.EnvVars)
 	}
 }
 
-// F8b legacy: nil sharedEnvKeys means mount-all, so the blanket mount stays
-// (but only when the base env also has no explicit list).
-func TestDispatch_PROpened_NilSharedEnvKeysKeepsBlanketMount(t *testing.T) {
+// ISO-2 legacy: nil sharedEnvKeys used to mount both shared Secrets whole,
+// handing a preview kuso-instance-shared (the instance-PG admin DSN).
+func TestDispatch_PROpened_NilSharedEnvKeysNoBlanketMount(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t,
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
@@ -191,8 +197,8 @@ func TestDispatch_PROpened_NilSharedEnvKeysKeepsBlanketMount(t *testing.T) {
 	)
 	env := dispatchPR7(t, d)
 	for _, shared := range kube.SharedSecretNames("alpha") {
-		if !slices.Contains(env.Spec.EnvFromSecrets, shared) {
-			t.Errorf("legacy mount-all preview lost %s: %v", shared, env.Spec.EnvFromSecrets)
+		if slices.Contains(env.Spec.EnvFromSecrets, shared) {
+			t.Errorf("legacy preview blanket-mounts %s: %v", shared, env.Spec.EnvFromSecrets)
 		}
 	}
 }

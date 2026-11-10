@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
+  useEnvGroups,
   useProject,
   useUpdateProject,
   useDeleteProject,
@@ -98,6 +99,17 @@ export function ProjectSettingsView() {
 
   const spec = project.data?.project?.spec;
   const specKey = JSON.stringify(spec ?? null);
+  // Previews copy a staging env (or the env a trigger names), never
+  // production; the server refuses to turn them on without one.
+  const envGroups = useEnvGroups(projectName);
+  const hasPreviewBase = useMemo(() => {
+    if (!envGroups.data) return true; // unknown yet: don't block, the server checks
+    const bases = new Set(["staging"]);
+    for (const t of spec?.previews?.triggers ?? []) {
+      if (t.baseEnv && t.baseEnv !== "production") bases.add(t.baseEnv);
+    }
+    return envGroups.data.some((g) => g.kind !== "preview" && bases.has(g.name));
+  }, [envGroups.data, spec]);
   const [form, setForm] = useState<ProjectSettingsForm>(() => formFromSpec(undefined));
   // What the form was last seeded with; each card diffs against it.
   const [base, setBase] = useState<ProjectSettingsForm>(() => formFromSpec(undefined));
@@ -380,15 +392,23 @@ export function ProjectSettingsView() {
                 label="Spawn a preview environment on every PR"
                 on={form.previewsEnabled}
                 onChange={(v) => set("previewsEnabled", v)}
-                disabled={!canWrite}
+                disabled={!canWrite || (!base.previewsEnabled && !form.previewsEnabled && !hasPreviewBase)}
                 hint={
                   <>
-                    Needs the GitHub App on the repo and a default repository. Each preview clones every service at{" "}
-                    <Code>&lt;svc&gt;-pr-&lt;N&gt;.{form.previewsDomain.trim() || domainShown}</Code>. For a single-service
-                    backend, a named environment from the env switcher is usually the better fit.
+                    Needs the GitHub App on the repo, a default repository and a <Code>staging</Code> environment:
+                    each preview copies staging&apos;s config, secrets and database, never production&apos;s. Previews
+                    run at <Code>&lt;svc&gt;-pr-&lt;N&gt;.{form.previewsDomain.trim() || domainShown}</Code>. For a
+                    single-service backend, a named environment from the env switcher is usually the better fit.
                   </>
                 }
               />
+              {!hasPreviewBase && (
+                <Callout tone="warning">
+                  {base.previewsEnabled
+                    ? "This project has no staging environment, so new pull requests get no preview. Existing previews keep running."
+                    : "Create a staging environment from the env switcher before turning previews on."}
+                </Callout>
+              )}
               {form.previewsEnabled && (
                 <>
                   <FieldGrid>
@@ -426,9 +446,9 @@ export function ProjectSettingsView() {
                     </Field>
                   </FieldGrid>
                   <Callout>
-                    Each preview gets its own Postgres and Redis (Postgres starts as a copy of production data), so reviewers
-                    never write to production. A server started with <Code>KUSO_PREVIEW_DB_DISABLED=true</Code> skips the
-                    copies and previews share the production addons.
+                    Each preview gets its own Postgres and Redis. Postgres starts as a copy of staging&apos;s database, or
+                    empty when staging shares production&apos;s, so reviewers never touch production data. A server started
+                    with <Code>KUSO_PREVIEW_DB_DISABLED=true</Code> skips the copies.
                   </Callout>
                 </>
               )}
