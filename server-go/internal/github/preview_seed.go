@@ -119,6 +119,9 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 					Labels: map[string]string{
 						"kuso.sislelabs.com/preview-seed":          envCRName,
 						"kuso.sislelabs.com/project":               project,
+						// Env-isolation netpol scope: the pod is part of
+						// this preview, not of production.
+						"kuso.sislelabs.com/env": envCRName,
 						"kuso.sislelabs.com/network-egress-public": "true",
 					},
 				},

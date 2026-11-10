@@ -137,6 +137,7 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 					Labels: map[string]string{
 						"kuso.sislelabs.com/role":                  "preview-migrate",
 						"kuso.sislelabs.com/project":               project,
+						"kuso.sislelabs.com/env":                   env.Name,
 						"kuso.sislelabs.com/network-egress-public": "true",
 					},
 				},
