@@ -17,14 +17,25 @@ import (
 	"kuso/server/internal/kube"
 )
 
+const testDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+// releaseJSON is a release.json whose assets and updater are fully pinned.
+func releaseJSON(tag string) string {
+	return `{"version":"` + tag + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + tag + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + tag + `@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml","sha256":"ab"},"manifests":{"url":"https://example.test/m.yaml","sha256":"cd"}}`
+}
+
 // pinnedService returns a Service whose GH client serves a signed-off
-// (KUSO_REQUIRE_SIGNATURES=false) release.json for tag.
-func pinnedService(t *testing.T, current, tag string) (*Service, *fake.Clientset) {
+// (KUSO_REQUIRE_SIGNATURES=false) release.json for each tag in releases
+// (tag → release.json body); current and tag default to releaseJSON.
+func pinnedService(t *testing.T, current, tag string, releases ...map[string]string) (*Service, *fake.Clientset) {
 	t.Helper()
 	t.Setenv("KUSO_REQUIRE_SIGNATURES", "false")
-	const manifestURL = "https://example.test/release.json"
-	manifest := `{"version":"` + tag + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + tag + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + tag + `"}},"crds":{"url":"https://example.test/crds.yaml"}}`
-	ghRelease := `{"tag_name":"` + tag + `","assets":[{"name":"release.json","browser_download_url":"` + manifestURL + `"}]}`
+	rels := map[string]string{current: releaseJSON(current), tag: releaseJSON(tag)}
+	for _, r := range releases {
+		for k, v := range r {
+			rels[k] = v
+		}
+	}
 	cs := fake.NewSimpleClientset()
 	return &Service{
 		Kube:      &kube.Client{Clientset: cs},
@@ -33,14 +44,19 @@ func pinnedService(t *testing.T, current, tag string) (*Service, *fake.Clientset
 		Current:   current,
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			switch {
-			case strings.Contains(r.URL.Host, "api.github.com"):
-				return jsonResp(200, ghRelease), nil
-			case r.URL.String() == manifestURL:
-				return jsonResp(200, manifest), nil
-			default:
-				return jsonResp(404, `{}`), nil
+			u := r.URL.String()
+			if after, ok := strings.CutPrefix(u, "https://api.github.com/repos/sislelabs/kuso/releases/tags/"); ok {
+				if _, known := rels[after]; !known {
+					return jsonResp(404, `{}`), nil
+				}
+				return jsonResp(200, `{"tag_name":"`+after+`","assets":[{"name":"release.json","browser_download_url":"https://example.test/`+after+`/release.json"}]}`), nil
 			}
+			if after, ok := strings.CutPrefix(u, "https://example.test/"); ok {
+				if v, known := rels[strings.TrimSuffix(after, "/release.json")]; known {
+					return jsonResp(200, v), nil
+				}
+			}
+			return jsonResp(404, `{}`), nil
 		})},
 	}, cs
 }
@@ -77,8 +93,11 @@ func TestStartUpdate_DowngradeSkipsCRDs(t *testing.T) {
 	if env["KUSO_SKIP_CRDS"] != "1" {
 		t.Errorf("KUSO_SKIP_CRDS = %q, want 1 on a downgrade", env["KUSO_SKIP_CRDS"])
 	}
-	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.32.4" {
-		t.Errorf("updater image = %q, want the running version's updater", got)
+	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.32.4@"+testDigest {
+		t.Errorf("updater image = %q, want the running version's updater by digest", got)
+	}
+	if env["KUSO_SKIP_MANIFESTS"] != "1" {
+		t.Errorf("KUSO_SKIP_MANIFESTS = %q, want 1 on a downgrade", env["KUSO_SKIP_MANIFESTS"])
 	}
 	if env["KUSO_SERVER_IMAGE"] != "ghcr.io/sislelabs/kuso-server-go:v0.31.0" {
 		t.Errorf("server image = %q", env["KUSO_SERVER_IMAGE"])
@@ -95,8 +114,11 @@ func TestStartUpdate_UpgradeAppliesCRDs(t *testing.T) {
 	if v, ok := jobEnv(j)["KUSO_SKIP_CRDS"]; ok {
 		t.Errorf("KUSO_SKIP_CRDS = %q on an upgrade, want unset", v)
 	}
-	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.33.0" {
+	if got := j.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/sislelabs/kuso-updater:v0.33.0@"+testDigest {
 		t.Errorf("updater image = %q", got)
+	}
+	if _, ok := jobEnv(j)["KUSO_ALLOW_UNVERIFIED_ASSETS"]; ok {
+		t.Error("unverified assets allowed without the override")
 	}
 }
 
@@ -175,5 +197,45 @@ func TestApplyJob_HasDeadlineAndHardening(t *testing.T) {
 	}
 	if c.Resources.Limits.Memory().IsZero() {
 		t.Errorf("updater container has no memory limit")
+	}
+}
+
+// Releases shipped before release.json carried asset digests (or an
+// updater digest) are refused unless the caller explicitly overrides, and
+// the override travels to the Job so its sha check stands down too.
+func TestStartUpdate_UnverifiedReleaseNeedsOverride(t *testing.T) {
+	old := `{"version":"v0.33.0","components":{"updater":{"image":"ghcr.io/sislelabs/kuso-updater:v0.33.0"}},"crds":{"url":"https://example.test/crds.yaml"},"manifests":{"url":"https://example.test/m.yaml"}}`
+	s, cs := pinnedService(t, "v0.32.4", "v0.33.0", map[string]string{"v0.33.0": old})
+	_, err := s.StartUpdate(context.Background(), "v0.33.0")
+	if err == nil || !strings.Contains(err.Error(), "--allow-unverified") {
+		t.Fatalf("want a refusal naming --allow-unverified, got %v", err)
+	}
+	name, err := s.StartUpdateWith(context.Background(), "v0.33.0", UpdateOptions{AllowUnverified: true})
+	if err != nil {
+		t.Fatalf("with override: %v", err)
+	}
+	j := createdJob(t, cs, name)
+	if jobEnv(j)["KUSO_ALLOW_UNVERIFIED_ASSETS"] != "1" {
+		t.Error("override not passed to the Job")
+	}
+	if p := j.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != corev1.PullAlways {
+		t.Errorf("tag-only updater image pull policy = %q, want Always", p)
+	}
+}
+
+// A downgrade must not run the updater by tag: it reads the running
+// release's digest-pinned ref, and refuses (absent the override) when it
+// can't.
+func TestStartUpdate_DowngradeRefusesTagOnlyUpdater(t *testing.T) {
+	cur := `{"version":"v0.32.4","components":{"updater":{"image":"ghcr.io/sislelabs/kuso-updater:v0.32.4"}}}`
+	s, _ := pinnedService(t, "v0.32.4", "v0.31.0", map[string]string{"v0.32.4": cur})
+	if _, err := s.StartUpdate(context.Background(), "v0.31.0"); err == nil || !strings.Contains(err.Error(), "by digest") {
+		t.Fatalf("want refusal, got %v", err)
+	}
+	// A downgrade target without asset digests is fine: nothing of it is applied.
+	noSha := `{"version":"v0.31.0","crds":{"url":"https://example.test/crds.yaml"},"manifests":{"url":"https://example.test/m.yaml"}}`
+	s2, _ := pinnedService(t, "v0.32.4", "v0.31.0", map[string]string{"v0.31.0": noSha})
+	if _, err := s2.StartUpdate(context.Background(), "v0.31.0"); err != nil {
+		t.Fatalf("downgrade to a pre-sha release: %v", err)
 	}
 }

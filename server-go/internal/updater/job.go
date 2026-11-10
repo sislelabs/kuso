@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -74,7 +75,7 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 					Containers: []corev1.Container{{
 						Name:            "updater",
 						Image:           j.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: updaterPullPolicy(j.Image),
 						Env:             env,
 						// Stays root: the image has no non-root user, and a
 						// spec the image can't run under would brick
@@ -107,4 +108,14 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 // already; this lets it stay readable.
 func getenv(key string) string {
 	return os.Getenv(key)
+}
+
+// updaterPullPolicy: a digest ref is immutable, so a cached copy is the
+// same bytes. A tag (only under --allow-unverified) is re-pulled so a
+// node never runs a stale or swapped cached image under that tag.
+func updaterPullPolicy(image string) corev1.PullPolicy {
+	if strings.Contains(image, "@sha256:") {
+		return corev1.PullIfNotPresent
+	}
+	return corev1.PullAlways
 }

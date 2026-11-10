@@ -40,15 +40,22 @@ write_status() {
 # from the signed release.json (via the server), so a mismatch means the
 # release asset was replaced after signing. Refuse to apply it.
 #
-# An EMPTY expected digest is tolerated with a warning: a server older
-# than the release that introduced the digests (v0.31.0 and earlier)
-# doesn't know to pass them, and that server is the one launching the
-# first upgrade onto this updater image.
+# An EMPTY expected digest is a hard failure: either the release predates
+# release digests, or the launching server (v0.31.0 and earlier) doesn't
+# pass them. The server sets KUSO_ALLOW_UNVERIFIED_ASSETS=1 only when an
+# admin explicitly asked (kuso upgrade --allow-unverified). A server too
+# old to know that flag upgrades in two steps: first to a v0.32+ release,
+# then on to this one.
 UNVERIFIED=""
 verify_sha256() {
   local file="$1" want="$2" label="$3" got
   if [ -z "$want" ]; then
-    echo "==> WARNING: no sha256 for ${label} (server predates release digests); applying unverified"
+    if [ "${KUSO_ALLOW_UNVERIFIED_ASSETS:-}" != "1" ]; then
+      echo "==> no sha256 for ${label}; refusing to apply an unverified asset"
+      write_status "failed" "no sha256 for ${label} in the release digests, so it can't be verified — nothing applied. Re-run with 'kuso upgrade --allow-unverified' to accept it, or (server older than v0.32) upgrade to an intermediate release first"
+      exit 1
+    fi
+    echo "==> WARNING: no sha256 for ${label}; applying unverified (--allow-unverified)"
     UNVERIFIED="${UNVERIFIED:+${UNVERIFIED}, }${label}"
     return 0
   fi
@@ -123,7 +130,13 @@ fi
 # carried through to the final "done" status (MANIFESTS_WARNING) so the
 # UI and `kuso upgrade` show that a manual apply is still owed.
 MANIFESTS_WARNING=""
-if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
+# KUSO_SKIP_MANIFESTS=1 is set by the server on a downgrade, for the same
+# reason as KUSO_SKIP_CRDS: the older bundle carries older RBAC/policy
+# (and may predate the sha256 field), while the installed newer bundle
+# is a superset the older server runs fine under.
+if [ "${KUSO_SKIP_MANIFESTS:-}" = "1" ]; then
+  echo "==> downgrade: keeping the installed (newer) platform manifests"
+elif [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
   write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
   TMP_MANIFESTS=$(mktemp)
   if curl "${CURL_OPTS[@]}" "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"; then

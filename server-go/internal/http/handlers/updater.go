@@ -103,6 +103,9 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Version string `json:"version"`
+		// AllowUnverified accepts a release whose release.json lacks
+		// asset sha256s / an updater digest (see updater.UpdateOptions).
+		AllowUnverified bool `json:"allowUnverified"`
 	}
 	// An empty body means "latest"; unknown fields are tolerated. A body
 	// that is present but malformed is a 400: decoding only when
@@ -117,7 +120,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 	target := strings.TrimSpace(body.Version)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	jobName, err := h.Svc.StartUpdate(ctx, target)
+	jobName, err := h.Svc.StartUpdateWith(ctx, target, updater.UpdateOptions{AllowUnverified: body.AllowUnverified})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -131,7 +134,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		Severity: "critical",
 		Action:   "system.update",
 		Resource: "kuso",
-		Message:  "update to " + shown + " started (job " + jobName + ")",
+		Message:  "update to " + shown + " started (job " + jobName + ")" + unverifiedNote(body.AllowUnverified),
 	})
 	writeJSON(w, http.StatusAccepted, map[string]string{"job": jobName})
 }
@@ -149,4 +152,11 @@ func (h *UpdaterHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func unverifiedNote(allow bool) string {
+	if allow {
+		return " with --allow-unverified"
+	}
+	return ""
 }
