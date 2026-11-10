@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -95,6 +96,18 @@ func (s *Service) RetainedData(ctx context.Context, req CreateProjectRequest) ([
 			if secs.Items[i].Annotations["helm.sh/resource-policy"] == "keep" {
 				out = append(out, "Secret "+n+"/"+secs.Items[i].Name)
 			}
+		}
+	}
+	// Off-cluster backups outlive the project too (BLOB-3). The backup
+	// handler already hides a predecessor's dumps from a re-created
+	// project; this keeps the name itself admin-only until an admin
+	// purges them. Best-effort: an unreachable bucket must not block
+	// project creation, and the ownership rule still applies.
+	if s.RetainedBackups != nil {
+		if b, err := s.RetainedBackups(ctx, req.Name); err == nil {
+			out = append(out, b...)
+		} else {
+			slog.Default().Warn("project create: check retained backups", "project", req.Name, "err", err)
 		}
 	}
 	if ns != s.Namespace {

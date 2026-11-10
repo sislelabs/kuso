@@ -88,6 +88,8 @@ const backupSecretName = "kuso-backup-s3"
 func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/admin/backup-settings", h.GetSettings)
 	r.Put("/api/admin/backup-settings", h.PutSettings)
+	r.Get("/api/admin/backups/orphans", h.ListOrphanBackups)
+	r.Post("/api/admin/backups/orphans/purge", h.PurgeOrphanBackups)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
@@ -266,6 +268,12 @@ const backupListLimit = 200
 // Keys start with a YYYYMMDDTHHMMSSZ stamp, so descending key order is
 // newest first; S3 itself returns keys ascending, 1000 per page.
 func listNewestBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucket, prefix string, limit int) ([]BackupObject, int, error) {
+	return listOwnedBackups(ctx, cli, bucket, prefix, limit, nil)
+}
+
+// listOwnedBackups is listNewestBackups restricted to the objects keep
+// accepts (nil keeps all).
+func listOwnedBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucket, prefix string, limit int, keep func(BackupObject) bool) ([]BackupObject, int, error) {
 	var items []BackupObject
 	p := s3.NewListObjectsV2Paginator(cli, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -278,14 +286,18 @@ func listNewestBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucke
 		}
 		for _, o := range page.Contents {
 			key := aws.ToString(o.Key)
-			if isManifestKey(key) {
+			if isManifestKey(key) || isOwnerMarkerKey(key) {
 				continue // sidecar, not a restorable backup
 			}
 			when := time.Time{}
 			if o.LastModified != nil {
 				when = *o.LastModified
 			}
-			items = append(items, BackupObject{Key: key, Size: aws.ToInt64(o.Size), When: when})
+			obj := BackupObject{Key: key, Size: aws.ToInt64(o.Size), When: when}
+			if keep != nil && !keep(obj) {
+				continue
+			}
+			items = append(items, obj)
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key > items[j].Key })
@@ -306,6 +318,16 @@ type instanceTenantBackupLoc struct {
 	bucket string // the instance addon's bucket override, "" = instance-wide
 	prefix string
 	db     string
+	// since: dumps older than the tenant CR belong to a predecessor whose
+	// database mapped to the same name (BLOB-3).
+	since time.Time
+	// The instance addon's backup key Secret (home namespace).
+	keyNS, keyName string
+}
+
+// ownsAt is owns plus the predecessor cut-off.
+func (l *instanceTenantBackupLoc) ownsAt(key string, taken time.Time) bool {
+	return l.owns(key) && !taken.Before(l.since)
 }
 
 // owns reports whether key is one of this tenant's per-database dumps.
@@ -342,7 +364,11 @@ func (h *BackupsHandler) instanceTenantBackups(ctx context.Context, ns string, c
 	if proj == "" {
 		proj = backing.Labels[kube.LabelProject]
 	}
-	return &instanceTenantBackupLoc{bucket: backing.BackupBucket(""), prefix: proj + "/" + backing.Name + "/", db: dbName}, nil
+	return &instanceTenantBackupLoc{
+		bucket: backing.BackupBucket(""), prefix: proj + "/" + backing.Name + "/", db: dbName,
+		since: cr.CreationTimestamp.Add(-backupOwnerSkew),
+		keyNS: h.Namespace, keyName: backup.KeySecretName(backing.Name),
+	}, nil
 }
 
 func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -397,7 +423,7 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, it := range all {
-				if loc.owns(it.Key) {
+				if loc.ownsAt(it.Key, backupObjectTime(loc.prefix, it.Key, it.When)) {
 					items = append(items, it)
 				}
 			}
@@ -418,7 +444,10 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// where <addon-fqn> = the helm release name = the CR's metadata.name.
 	addonFQN := cr.Name
 	prefix := project + "/" + addonFQN + "/"
-	items, total, err := listNewestBackups(ctx, cli, bucket, prefix, backupListLimit)
+	own := h.addonBackupOwnership(ctx, cli, bucket, prefix, cr)
+	items, total, err := listOwnedBackups(ctx, cli, bucket, prefix, backupListLimit, func(o BackupObject) bool {
+		return own.owns(backupObjectTime(prefix, o.Key, o.When))
+	})
 	if err != nil {
 		h.Logger.Error("backup: list", "err", err)
 		writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
@@ -532,6 +561,12 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The key must belong to a LIVE addon of this project, and be one of
+	// its own dumps rather than a deleted same-name predecessor's (BLOB-3).
+	if code, msg := h.restoreKeyOwned(ctx, project, req.Key, tenantLoc); code != 0 {
+		writeErr(w, code, msg)
+		return
+	}
 	destCR := srcCR
 	if req.Into != "" {
 		if destCR, _, err = h.ownedAddon(ctx, project, destAddon); err != nil {
@@ -627,13 +662,27 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		restoreEnv = overrideEnv(restoreEnv, corev1.EnvVar{Name: "POSTGRES_DB", Value: siblingDB})
 	}
 
+	keyEnv, keyCopy, err := h.restoreKeyEnv(ctx, ns, jobName, project, req.Key, tenantLoc)
+	if err != nil {
+		h.Logger.Error("backup: resolve backup encryption key", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	restoreEnv = append(restoreEnv, keyEnv)
+
 	job := buildRestoreJob(ns, jobName, project, destAddon, addon, restoreShell,
 		append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...))
 	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
+		if keyCopy {
+			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, jobName+"-key", metav1.DeleteOptions{})
+		}
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
+	}
+	if keyCopy {
+		h.adoptRestoreKeyCopy(ctx, ns, created)
 	}
 	// Audit: destructive cross-DB write. Logged regardless of
 	// outcome so a half-completed restore (Job created but pod
