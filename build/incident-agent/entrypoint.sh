@@ -15,11 +15,15 @@
 #   INCIDENT_ID      incident id (inc-xxxx)           (required)
 #   KUSO_API_URL     base URL of the kuso server      (required)
 #                    e.g. http://kuso-server.kuso.svc.cluster.local
-#   INCIDENT_TOKEN   per-incident bearer (agent-facing endpoints)  (required)
+#   INCIDENT_TOKEN   per-incident bearer (agent-facing endpoints)  (required;
+#                    from the Job's own Secret via secretKeyRef. Used by this
+#                    script to post results, never exposed to the agent.)
 #   KUSO_TOKEN       project-scoped kuso CLI token (viewer + sql)  (OPTIONAL;
 #                    empty in v1 → agent uses kubectl via its read-only SA)
+#   LOG_NAMESPACE    the one namespace the agent may read pod logs in
 #   CONTEXT_PACK     incident context-pack JSON (the Incident.contextPack
-#                    blob). Provided inline OR via CONTEXT_PACK_FILE.    (required)
+#                    blob). Provided inline OR via CONTEXT_PACK_FILE.
+#                    Investigate phase only; fenced as untrusted data.
 #   CONTEXT_PACK_FILE  path to a mounted file holding the context pack
 #                    (a ConfigMap mount). Takes precedence over CONTEXT_PACK.
 #   EVENT_TYPE, PROJECT, SERVICE, SEVERITY, INCIDENT_TITLE   (required; for
@@ -31,8 +35,10 @@
 #
 #   implement phase only (repo wiring):
 #   REPO_OWNER, REPO_NAME, REPO_DEFAULT_BRANCH   (required for implement)
-#   GIT_TOKEN        short-lived, repo-scoped GitHub installation token used
-#                    to clone + push. NEVER logged. (required for implement)
+#   GIT_TOKEN        short-lived GitHub App token restricted to REPO_OWNER/
+#                    REPO_NAME (contents:write + pull_requests:write), from
+#                    the Job's Secret. Used by this script to clone, push and
+#                    open the PR; never logged, never in the agent's env.
 #   FIX_BRANCH       branch name to create for the fix (default:
 #                    kuso-incident-${INCIDENT_ID})
 #
@@ -76,7 +82,7 @@ if [ "${PHASE:-}" = "refresh" ]; then
   before="$(md5sum "${HOME}/.claude/.credentials.json" | cut -d' ' -f1)"
   log "refresh: triggering token refresh via claude"
   # A trivial prompt forces CC to validate + (if near expiry) refresh the token.
-  claude -p "reply with: ok" --dangerously-skip-permissions >/dev/null 2>&1 || true
+  claude -p "reply with: ok" >/dev/null 2>&1 || true
   after="$(md5sum "${HOME}/.claude/.credentials.json" | cut -d' ' -f1)"
   if [ "$before" = "$after" ]; then
     log "refresh: token unchanged (still valid) — nothing to write back"
@@ -119,11 +125,18 @@ else
   die "Claude Code credentials not found at ${CC_CREDS_SRC} (is the kuso-incident-agent-cc Secret mounted?)"
 fi
 
-# Point the kuso CLI + API at the in-cluster server. The CLI honours these.
+
+# Point the kuso CLI at the in-cluster server. The CLI honours these.
 export KUSO_API_URL
 export KUSO_TOKEN
-# Exported so the agent's curl calls in the prompts resolve them.
-export INCIDENT_ID INCIDENT_TOKEN
+export INCIDENT_ID
+
+# The agent writes its outputs here; the entrypoint (not the agent) posts
+# them back with INCIDENT_TOKEN, and pushes + opens the PR with GIT_TOKEN.
+# Neither credential is in the agent's environment.
+OUT_DIR="${OUT_DIR:-/tmp/kuso-out}"
+mkdir -p "$OUT_DIR"
+export OUT_DIR
 
 # --- 3. Resolve the context pack ----------------------------------------
 if [ -n "${CONTEXT_PACK_FILE:-}" ] && [ -f "${CONTEXT_PACK_FILE}" ]; then
@@ -142,30 +155,30 @@ if [ -n "${FINDINGS_FILE:-}" ] && [ -f "${FINDINGS_FILE}" ]; then
   FINDINGS="$(cat "${FINDINGS_FILE}")"
 fi
 FINDINGS="${FINDINGS:-}"
-# SECURITY NOTE: FEEDBACK (operator/Discord free-text) and CONTEXT_PACK (which
-# includes a crashing pod's log tail) are UNTRUSTED content rendered into the
-# claude -p prompt. This is a prompt-injection surface — a crafted log line or
-# feedback message could try to steer the agent. This is inherent to LLM agents
-# and partially mitigated: POST /feedback is admin-gated, the investigate SA is
-# read-only, and no write (PR/merge) happens without an explicit human "go".
-# The values are NOT a SHELL-injection vector: every {{TOKEN}} substitution goes
-# through sed_escape below and the final prompt is passed as ONE double-quoted
-# argument to claude -p (no word-splitting/glob/eval).
 FEEDBACK="${FEEDBACK:-(none)}"
 
+# CONTEXT_PACK carries a crashing pod's log tail and FINDINGS were written by
+# an agent that read it: both are attacker-influenced. They go into the
+# prompt capped and inside a fence with a per-run random tag the attacker
+# can't predict, so injected text can't close the fence early. The prompt
+# templates tell the agent the fenced block is data, never instructions.
+FENCE_TAG="untrusted-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fence() {
+  local body
+  body="$(printf '%s' "$1" | head -c "$2")"
+  body="${body//$FENCE_TAG/}"
+  printf '<%s>\n%s\n</%s>' "$FENCE_TAG" "$body" "$FENCE_TAG"
+}
+CONTEXT_PACK="$(fence "$CONTEXT_PACK" 16000)"
+FINDINGS="$(fence "$FINDINGS" 32000)"
+
 # --- 4. Render the phase prompt -----------------------------------------
-# Substitute {{TOKENS}} in the prompt template with env values. We use a
-# perl-free approach: build the prompt by reading the template and replacing
-# each known placeholder via bash parameter-less here-strings is awkward, so
-# use a small awk-free sed with a delimiter unlikely to appear. Values can
-# contain slashes/newlines, so we feed them through a function that escapes
-# for sed's replacement.
 TEMPLATE="${PROMPTS_DIR}/${PHASE}.txt"
 [ -f "$TEMPLATE" ] || die "prompt template not found: ${TEMPLATE}"
 
-# render replaces {{KEY}} with the value of the env-like arg pairs. To keep
-# multi-line / special-char values intact we do it in Python-free pure bash:
-# read the template once, then bash string-replace each token globally.
+# render replaces {{KEY}} with the value of the env-like arg pairs: read the
+# template once, then bash string-replace each token globally. The final
+# prompt is passed as ONE double-quoted argument (no word-splitting/eval).
 render() {
   local text
   text="$(cat "$TEMPLATE")"
@@ -173,27 +186,41 @@ render() {
   for kv in "$@"; do
     key="${kv%%=*}"
     val="${kv#*=}"
-    # Global literal replace of {{KEY}} → val using bash ${var//search/repl}.
     text="${text//\{\{$key\}\}/$val}"
   done
   printf '%s' "$text"
 }
 
 INCIDENT_TITLE="${INCIDENT_TITLE:-${TITLE:-incident ${INCIDENT_ID}}}"
+LOG_NAMESPACE="${LOG_NAMESPACE:-kuso}"
 
+# CONTEXT_PACK / FINDINGS are substituted LAST so tokens inside them are
+# never expanded.
 PROMPT="$(render \
   "EVENT_TYPE=${EVENT_TYPE:-}" \
   "PROJECT=${PROJECT:-}" \
   "SERVICE=${SERVICE:-}" \
   "SEVERITY=${SEVERITY:-}" \
   "TITLE=${INCIDENT_TITLE}" \
-  "CONTEXT_PACK=${CONTEXT_PACK}" \
-  "FINDINGS=${FINDINGS}" \
+  "NAMESPACE=${LOG_NAMESPACE}" \
+  "OUT_DIR=${OUT_DIR}" \
+  "FENCE_TAG=${FENCE_TAG}" \
   "FEEDBACK=${FEEDBACK}" \
   "REPO_OWNER=${REPO_OWNER:-}" \
   "REPO_NAME=${REPO_NAME:-}" \
   "REPO_DEFAULT_BRANCH=${REPO_DEFAULT_BRANCH:-main}" \
+  "FINDINGS=${FINDINGS}" \
+  "CONTEXT_PACK=${CONTEXT_PACK}" \
 )"
+
+post_pr() {
+  curl -fsS -X POST \
+    -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
+    --data "$1" "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr" >/dev/null 2>&1
+}
+post_note() {
+  post_pr "$(jq -n --arg u "$1" '{prUrl:"", prNumber:0, note:$u}')" || true
+}
 
 # --- 5. Implement phase: clone the repo on a fresh branch ----------------
 if [ "$PHASE" = "implement" ]; then
@@ -203,32 +230,38 @@ if [ "$PHASE" = "implement" ]; then
   # show as a Job crash with no explanation).
   if [ -z "${REPO_OWNER:-}" ] || [ -z "${REPO_NAME:-}" ] || [ -z "${GIT_TOKEN:-}" ]; then
     log "implement: no repo wired (owner='${REPO_OWNER:-}' name='${REPO_NAME:-}' token=$([ -n "${GIT_TOKEN:-}" ] && echo set || echo empty))"
-    note="⚠️ Cannot open a PR: this incident's project/service has no repo + GitHub App installation wired in kuso, so there's nothing to push to. Resolve the fix manually, or wire the repo (KusoService.spec.repo + project GitHub installation) and re-run."
-    curl -fsS -X POST \
-      -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
-      --data "$(jq -n --arg u "$note" '{prUrl:"", prNumber:0, note:$u}')" \
-      "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr" >/dev/null 2>&1 || true
+    post_note "⚠️ Cannot open a PR: this incident's project/service has no repo + GitHub App installation wired in kuso, so there's nothing to push to. Resolve the fix manually, or wire the repo (KusoService.spec.repo + project GitHub installation) and re-run."
     log "implement: reported no-repo to incident; exiting 0"
     exit 0
   fi
   REPO_DEFAULT_BRANCH="${REPO_DEFAULT_BRANCH:-main}"
   FIX_BRANCH="${FIX_BRANCH:-kuso-incident-${INCIDENT_ID}}"
   export FIX_BRANCH
+  CLONE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
 
-  # Clone over the short-lived, repo-scoped installation token. The
-  # x-access-token user is GitHub's convention for App installation tokens.
-  # Configure a credential helper that injects the token so it never lands
-  # in .git/config or process args (where it could leak to logs).
+  # GIT_TOKEN is a short-lived token scoped to this ONE repo
+  # (contents:write + pull_requests:write). The credential helper reads it
+  # from the environment at call time, so it never lands in .git/config or
+  # process args, and git run inside the agent (env without GIT_TOKEN) gets
+  # no credentials at all.
   git config --global user.name  "kuso-incident-agent"
   git config --global user.email "incident-agent@kuso.local"
   git config --global credential.helper \
-    '!f() { echo "username=x-access-token"; echo "password=${GIT_TOKEN}"; }; f'
+    '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=x-access-token"; echo "password=${GIT_TOKEN}"; }; f'
 
-  CLONE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
   log "cloning ${REPO_OWNER}/${REPO_NAME} (branch ${REPO_DEFAULT_BRANCH})"
-  git clone --depth 50 --branch "$REPO_DEFAULT_BRANCH" "$CLONE_URL" repo \
-    || die "git clone failed"
+  # Retried: a fresh pod's egress NetworkPolicy can take a few seconds to
+  # be programmed.
+  cloned=""
+  for attempt in 1 2 3 4 5; do
+    if git clone --depth 50 --branch "$REPO_DEFAULT_BRANCH" "$CLONE_URL" repo; then
+      cloned=1; break
+    fi
+    rm -rf repo; sleep $((attempt * 3))
+  done
+  [ -n "$cloned" ] || die "git clone failed"
   cd repo
+  BASE_SHA="$(git rev-parse HEAD)"
   git checkout -b "$FIX_BRANCH"
   log "on branch ${FIX_BRANCH}"
 
@@ -237,28 +270,119 @@ if [ "$PHASE" = "implement" ]; then
   if [ "${KUSO_INCIDENT_CLONE_ONLY:-}" = "true" ]; then
     head_sha="$(git rev-parse --short HEAD)"
     log "clone-only: cloned ${REPO_OWNER}/${REPO_NAME}@${head_sha}, branch ${FIX_BRANCH} ready — skipping PR"
-    note="✅ Plumbing test: successfully resolved repo ${REPO_OWNER}/${REPO_NAME}, minted a push token, cloned (${REPO_DEFAULT_BRANCH}@${head_sha}), and created branch ${FIX_BRANCH}. PR creation skipped (KUSO_INCIDENT_CLONE_ONLY)."
-    curl -fsS -X POST \
-      -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
-      --data "$(jq -n --arg u "$note" '{prUrl:"", prNumber:0, note:$u}')" \
-      "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr" >/dev/null 2>&1 || true
+    post_note "✅ Plumbing test: successfully resolved repo ${REPO_OWNER}/${REPO_NAME}, minted a push token, cloned (${REPO_DEFAULT_BRANCH}@${head_sha}), and created branch ${FIX_BRANCH}. PR creation skipped (KUSO_INCIDENT_CLONE_ONLY)."
     exit 0
   fi
 fi
 
 # --- 6. Run the agent ----------------------------------------------------
-# Head-less, non-interactive. --dangerously-skip-permissions because there is
-# no human at a TTY to approve each tool call; the SANDBOX is the read-only
-# RBAC SA (investigate) and the per-branch repo clone (implement), not CC's
-# interactive gate. The blast radius is bounded by RBAC + the PR-only flow,
-# per the design's safety section.
+# No --dangerously-skip-permissions: head-less `claude -p` denies any tool
+# not on the explicit allowlist below. Investigate gets read-only kubectl
+# verbs plus a Write confined to OUT_DIR; implement gets file edits, local
+# git (no push/remote/config), and the common build/test toolchains. Build
+# and test commands run repo code, so the implement allowlist is a speed
+# bump, not a sandbox: the real bounds are the repo-scoped token (which
+# the agent never sees), the egress NetworkPolicy and the PR review.
+if [ "$PHASE" = "investigate" ]; then
+  ALLOWED_TOOLS=(
+    "Read" "Glob" "Grep" "Write(/${OUT_DIR}/**)"
+    "Bash(kubectl get:*)" "Bash(kubectl describe:*)" "Bash(kubectl logs:*)"
+    "Bash(kubectl top:*)" "Bash(kubectl events:*)" "Bash(kuso:*)"
+    "Bash(jq:*)" "Bash(grep:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(sort:*)" "Bash(wc:*)"
+  )
+else
+  ALLOWED_TOOLS=(
+    "Read" "Glob" "Grep" "Edit" "MultiEdit" "Write"
+    "Bash(git add:*)" "Bash(git commit:*)" "Bash(git diff:*)" "Bash(git status:*)"
+    "Bash(git log:*)" "Bash(git show:*)" "Bash(ls:*)"
+    "Bash(go build:*)" "Bash(go test:*)" "Bash(go vet:*)"
+    "Bash(npm ci:*)" "Bash(npm install:*)" "Bash(npm run:*)" "Bash(npm test:*)"
+    "Bash(pnpm install:*)" "Bash(pnpm run:*)" "Bash(pnpm test:*)"
+    "Bash(yarn install:*)" "Bash(yarn run:*)" "Bash(yarn test:*)"
+    "Bash(pip install:*)" "Bash(pytest:*)" "Bash(python -m pytest:*)"
+    "Bash(make:*)" "Bash(cargo build:*)" "Bash(cargo test:*)"
+  )
+fi
+
 log "running claude (phase=${PHASE}, incident=${INCIDENT_ID})"
 set +e
-claude -p "$PROMPT" --dangerously-skip-permissions
+env -u INCIDENT_TOKEN -u GIT_TOKEN -u GH_TOKEN -u GITHUB_TOKEN claude -p "$PROMPT" --add-dir "$OUT_DIR" --allowedTools "${ALLOWED_TOOLS[@]}"
 rc=$?
 set -e
-
 if [ "$rc" -ne 0 ]; then
   log "claude exited non-zero (rc=${rc})"
 fi
-exit "$rc"
+
+# Anything the agent started (dev servers, test watchers) must be gone
+# before the entrypoint touches its credentials again.
+for d in /proc/[0-9]*; do
+  p="${d#/proc/}"
+  { [ "$p" = "$$" ] || [ "$p" = "$PPID" ]; } && continue
+  [ -O "$d" ] && kill -9 "$p" 2>/dev/null || true
+done
+
+# --- 7. Report back -------------------------------------------------------
+if [ "$PHASE" = "investigate" ]; then
+  if [ -s "$OUT_DIR/findings.md" ]; then
+    curl -fsS -X POST \
+      -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
+      --data "$(jq -n --rawfile f "$OUT_DIR/findings.md" '{findings:$f}')" \
+      "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/findings" >/dev/null \
+      && log "findings posted" || { log "posting findings failed"; exit 1; }
+  else
+    log "agent wrote no findings to ${OUT_DIR}/findings.md"
+    [ "$rc" -eq 0 ] && rc=1
+  fi
+  exit "$rc"
+fi
+
+# implement: validation blocked → report why, no push.
+if [ -s "$OUT_DIR/blocked.md" ]; then
+  post_note "Agent could not produce a validated fix: $(head -c 4000 "$OUT_DIR/blocked.md")"
+  exit 0
+fi
+
+# Never run git with the token inside the agent's checkout: its .git/config
+# and hooks are agent-writable (core.fsmonitor, url.insteadOf, pushurl …).
+# Export the new commits as a bundle with the token stripped from the
+# environment, then push them from a fresh clone under a clean HOME.
+ahead="$(env -u GIT_TOKEN -u INCIDENT_TOKEN git rev-list --count "${BASE_SHA}..${FIX_BRANCH}" 2>/dev/null || echo 0)"
+if [ "$ahead" = "0" ]; then
+  post_note "Agent finished without committing a fix (rc=${rc}); nothing to push."
+  exit 0
+fi
+env -u GIT_TOKEN -u INCIDENT_TOKEN git bundle create "$OUT_DIR/fix.bundle" "${BASE_SHA}..${FIX_BRANCH}" \
+  || { post_note "Could not bundle the agent's commits; no PR opened."; exit 1; }
+cd /
+PUSH_HOME="$(mktemp -d)"
+export HOME="$PUSH_HOME" GIT_CONFIG_NOSYSTEM=1
+git config --global credential.helper \
+  '!f() { echo "username=x-access-token"; echo "password=${GIT_TOKEN}"; }; f'
+git config --global user.name  "kuso-incident-agent"
+git config --global user.email "incident-agent@kuso.local"
+git init -q "$PUSH_HOME/push" && cd "$PUSH_HOME/push"
+git remote add origin "$CLONE_URL"
+git fetch -q --depth 50 origin "$BASE_SHA" \
+  || { post_note "Could not fetch the base commit to push from; no PR opened."; exit 1; }
+git fetch -q "$OUT_DIR/fix.bundle" "${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
+  || { post_note "The agent's commit bundle did not apply; no PR opened."; exit 1; }
+git push -q origin "refs/heads/${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
+  || { post_note "Pushing ${FIX_BRANCH} failed; no PR opened."; exit 1; }
+
+PR_TITLE="Fix for kuso incident ${INCIDENT_ID}"
+PR_BODY="Generated by kuso's incident agent for human review (incident ${INCIDENT_ID})."
+if [ -s "$OUT_DIR/pr.json" ] && jq -e . "$OUT_DIR/pr.json" >/dev/null 2>&1; then
+  PR_TITLE="$(jq -r '.title // empty' "$OUT_DIR/pr.json" | head -c 200)"
+  PR_BODY="$(jq -r '.body // empty' "$OUT_DIR/pr.json" | head -c 60000)"
+  [ -n "$PR_TITLE" ] || PR_TITLE="Fix for kuso incident ${INCIDENT_ID}"
+fi
+pr_url="$(printf '%s' "$PR_BODY" | GH_TOKEN="$GIT_TOKEN" gh pr create \
+  --repo "${REPO_OWNER}/${REPO_NAME}" --base "$REPO_DEFAULT_BRANCH" --head "$FIX_BRANCH" \
+  --title "$PR_TITLE" --body-file - 2>/dev/null | tail -n1)"
+case "$pr_url" in
+  https://github.com/*/pull/*) ;;
+  *) post_note "Pushed branch ${FIX_BRANCH} but opening the PR failed; open it by hand."; exit 1 ;;
+esac
+post_pr "$(jq -n --arg u "$pr_url" --argjson n "${pr_url##*/}" '{prUrl:$u, prNumber:$n}')" \
+  && log "PR reported: ${pr_url}" || { log "reporting PR failed"; exit 1; }
+exit 0

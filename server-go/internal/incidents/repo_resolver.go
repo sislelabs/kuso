@@ -9,11 +9,14 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// tokenMinter mints a short-lived GitHub App installation token. Satisfied
-// by *github.Client.MintInstallationToken (injected so the resolver is
-// testable without a real GitHub App).
+// tokenMinter mints a short-lived GitHub App token restricted to ONE repo
+// with contents:write + pull_requests:write. Satisfied by
+// *github.Client.MintRepoPushToken (injected so the resolver is testable
+// without a real GitHub App). Never the installation-wide minter: a
+// prompt-injected agent holding an installation token could push to every
+// repo the App is installed on, and kuso auto-deploys default branches.
 type tokenMinter interface {
-	MintInstallationToken(ctx context.Context, installationID int64) (string, error)
+	MintRepoPushToken(ctx context.Context, installationID int64, owner, repo string) (string, error)
 }
 
 // GithubRepoResolver resolves an incident's repo coordinates + a push token
@@ -69,7 +72,7 @@ func (g *GithubRepoResolver) Resolve(ctx context.Context, in db.Incident) (RepoI
 
 	info := RepoInfo{Owner: owner, Name: name, DefaultBranch: branch}
 	if g.Tokens != nil && instID > 0 {
-		tok, terr := g.Tokens.MintInstallationToken(ctx, instID)
+		tok, terr := g.Tokens.MintRepoPushToken(ctx, instID, owner, name)
 		if terr != nil {
 			return info, fmt.Errorf("mint git token (installation %d): %w", instID, terr)
 		}

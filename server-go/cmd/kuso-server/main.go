@@ -1321,8 +1321,11 @@ func main() {
 				AgentImage: envOr("KUSO_INCIDENT_AGENT_IMAGE", "ghcr.io/sislelabs/kuso-incident-agent:latest"),
 				Repos:      repoResolver,
 				Config:     incidentCfgProvider,
-				CloneOnly:  os.Getenv("KUSO_INCIDENT_CLONE_ONLY") == "true",
-				Logger:     logger.With("component", "incident-spawner"),
+				// Agent log access is granted in the incident project's
+				// namespace only.
+				ProjectNamespace: kube.NewProjectNamespaceResolver(kubeClient, *namespace).NamespaceFor,
+				CloneOnly:        os.Getenv("KUSO_INCIDENT_CLONE_ONLY") == "true",
+				Logger:           logger.With("component", "incident-spawner"),
 			},
 			Logger: logger.With("component", "incidents"),
 		}

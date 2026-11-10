@@ -34,10 +34,18 @@ metadata:
 ---
 # Read-only cluster inspection. Scoped to exactly the resources the
 # investigate prompt drives kubectl against:
-#   - pods + pods/log : pod state, restart reasons, current + previous logs
-#   - nodes           : node conditions for node.unreachable incidents
-#   - events          : kube events (CrashLoopBackOff / OOMKilled / scheduling)
+#   - pods   : pod state, restart reasons
+#   - nodes  : node conditions for node.unreachable incidents
+#   - events : kube events (CrashLoopBackOff / OOMKilled / scheduling)
 # get/list/watch only — no create/update/patch/delete, no exec/attach.
+# pods/log is NOT here: logs are attacker-influenced input and the agent
+# is prompt-injectable, so it may read logs only in the incident's own
+# namespace (kuso-incident-agent-logs below, bound per namespace by
+# kuso-server at spawn time and unbound by the incident reaper).
+#
+# This ClusterRole is excluded from the self-updater bundle (it grants
+# pods watch, which kuso-server lacks), so narrowing it on an existing
+# cluster needs a one-time: kubectl apply -f deploy/incident-agent-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -49,7 +57,6 @@ rules:
   - apiGroups: [""]
     resources:
       - pods
-      - pods/log
       - nodes
       - events
     verbs: [get, list, watch]
@@ -75,3 +82,20 @@ subjects:
   - kind: ServiceAccount
     name: kuso-incident-agent
     namespace: kuso
+---
+# Pod log read, granted ONLY through a RoleBinding (kuso-incident-agent-logs)
+# that kuso-server stamps into the incident's namespace when it spawns an
+# investigate Job. Verbs are a subset of kuso-server's own pods/log grant,
+# so the self-updater can create this role and kuso-server can bind it
+# without an escalation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-incident-agent-logs
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent-logs
+    app.kubernetes.io/part-of: kuso
+rules:
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get, list]

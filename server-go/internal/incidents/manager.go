@@ -13,8 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/lib/pq"
 
@@ -333,6 +337,40 @@ func severityOr(s, def string) string {
 	return s
 }
 
+// Caps on the event text copied into the context pack. The log tail is
+// whatever a (possibly attacker-fed) app printed, so it's bounded and
+// kept to the most recent bytes.
+const (
+	maxLogTailBytes = 4000
+	maxBodyBytes    = 2000
+	maxTitleBytes   = 300
+)
+
+// untrustedText strips ANSI escapes and control characters (except \n and
+// \t) and keeps at most max bytes from the END of s, on a rune boundary.
+func untrustedText(s string, max int) string {
+	s = ansiEscape.ReplaceAllString(s, "")
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if unicode.IsControl(r) || r == utf8.RuneError || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) <= max {
+		return s
+	}
+	cut := len(s) - max
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	return "[truncated]\n" + s[cut:]
+}
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)
+
 // contextPack serializes the event into the JSON blob handed to the agent.
 func contextPack(e notify.Event) json.RawMessage {
 	type pack struct {
@@ -347,9 +385,9 @@ func contextPack(e notify.Event) json.RawMessage {
 		Classification any               `json:"classification,omitempty"`
 	}
 	p := pack{
-		Type: string(e.Type), Title: e.Title, Body: e.Body,
+		Type: string(e.Type), Title: untrustedText(e.Title, maxTitleBytes), Body: untrustedText(e.Body, maxBodyBytes),
 		Project: e.Project, Service: e.Service, Severity: e.Severity,
-		LogTail: e.LogTail, Classification: e.Classification,
+		LogTail: untrustedText(e.LogTail, maxLogTailBytes), Classification: e.Classification,
 	}
 	if len(e.Fields) > 0 {
 		p.Fields = map[string]string{}
