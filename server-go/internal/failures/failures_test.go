@@ -571,3 +571,25 @@ func TestClassify_CloneUnreachable(t *testing.T) {
 		t.Error("want a remediation")
 	}
 }
+
+// scubatony 319fea9 (2026-11-10): a clean frozen install, the image
+// pushed, then buildkitd dropped the session while exporting the cache.
+// The RUN line's --frozen-lockfile used to classify this as lockfile drift.
+func TestClassify_FrozenLockfileCommandLineIsNotDrift(t *testing.T) {
+	got := Classify([]string{
+		"#15 [deps 4/4] RUN --mount=type=cache,target=/root/.local/share/pnpm/store     pnpm install --frozen-lockfile",
+		"#15 0.976 Lockfile is up to date, resolution step is skipped",
+		"#15 10.56 Progress: resolved 968, reused 968, downloaded 0, added 968, done",
+		"#33 pushing manifest for kuso-registry.kuso.svc.cluster.local:5000/s/s:319fea95d35e@sha256:81fd 0.0s done",
+		"#33 DONE 28.1s",
+		"#34 exporting cache to registry",
+		"error: failed to receive status: rpc error: code = Unavailable desc = error reading from server: connection reset by peer",
+	}, Signal{})
+	if got.Kind != KindBuildDaemonLost {
+		t.Errorf("Kind = %q, want %q", got.Kind, KindBuildDaemonLost)
+	}
+	yarn := Classify([]string{"error Your lockfile needs to be modified, but yarn was called with `--frozen-lockfile`."}, Signal{})
+	if yarn.Kind != KindLockfileDrift {
+		t.Errorf("yarn frozen-lockfile error: Kind = %q, want %q", yarn.Kind, KindLockfileDrift)
+	}
+}

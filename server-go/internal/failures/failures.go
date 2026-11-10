@@ -57,6 +57,7 @@ const (
 	KindDockerfileNotFound    Kind = "dockerfile_not_found"    // the configured Dockerfile path doesn't exist in the repo/subdir
 	KindBuildOOM              Kind = "build_oom"               // the build pod (not the app) ran out of memory
 	KindRegistryAuth          Kind = "registry_auth"           // pull/push to a registry denied (base image or cache)
+	KindBuildDaemonLost       Kind = "build_daemon_lost"       // buildkitd dropped the build session (overload/restart), not the user's code
 	// KindCloneRefMissing is the clone init container failing because the
 	// ref it was told to build no longer exists on the remote — the branch
 	// was deleted or force-pushed while the build sat queued. This is NOT a
@@ -517,7 +518,7 @@ var logDetectors = []logDetector{
 		kind:      KindLockfileDrift,
 		tab:       TabBuild,
 		buildTime: true,
-		re:        regexp.MustCompile(`(?i)ERR_PNPM_OUTDATED_LOCKFILE|lockfile.{0,40}(?:out of date|outdated|needs to be updated|not up to date)|npm ci.{0,80}out of sync|can only install packages when your package\.json and package-lock\.json.{0,20}in sync|frozen-lockfile`),
+		re:        regexp.MustCompile(`(?i)ERR_PNPM_OUTDATED_LOCKFILE|lockfile.{0,40}(?:out of date|outdated|needs to be updated|not up to date)|npm ci.{0,80}out of sync|can only install packages when your package\.json and package-lock\.json.{0,20}in sync|lockfile needs to be modified|lockfile would have been modified|Cannot install with "?frozen-lockfile"?`),
 		summarize: func(line string) string {
 			return "Lockfile is out of sync with package.json — a frozen/CI install can't reconcile it."
 		},
@@ -596,6 +597,26 @@ var logDetectors = []logDetector{
 				Title:      "Check the base image and registry credentials",
 				Detail:     "The build couldn't pull from a registry — usually a typo'd base image, a private base image without credentials, or a rate-limited Docker Hub pull. Verify the FROM line and, for private bases, add registry credentials.",
 				DocsAnchor: "build/registry",
+			}
+		},
+	},
+	// buildkitd dropped the client's session mid-build: an overloaded
+	// daemon missed its session healthcheck, or it restarted. Kept after
+	// every repo-caused detector so a real cause in the same log wins.
+	// The command line `pnpm install --frozen-lockfile` must never read as
+	// lockfile drift here; the lockfile detector only matches error text.
+	{
+		kind:      KindBuildDaemonLost,
+		tab:       TabLogs,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)failed to receive status: rpc error: code = (?:Unavailable|Canceled)|error reading from server: (?:connection reset by peer|EOF)|failed to solve: (?:rpc error: code = )?Canceled`),
+		summarize: func(line string) string {
+			return "The build daemon dropped the build (overloaded or restarted). Not a problem in your code."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:  "Retry the build",
+				Detail: "buildkitd lost the build session, usually because it was busy with other builds or restarted. Nothing in the repo needs to change; retrying the same commit normally succeeds.",
 			}
 		},
 	},

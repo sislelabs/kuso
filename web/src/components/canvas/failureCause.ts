@@ -14,6 +14,7 @@ const KIND_CAUSE: Record<string, string> = {
   build_oom: "Build ran out of memory",
   missing_build_arg: "Missing build variable",
   registry_auth: "Registry denied access",
+  build_daemon_lost: "Build daemon dropped the build",
   release_failed: "Release command failed",
   missing_env: "Missing environment variable",
   oom: "Out of memory",

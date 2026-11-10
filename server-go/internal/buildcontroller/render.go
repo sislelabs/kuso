@@ -1339,7 +1339,7 @@ echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 # Preview builds run PR code; they read the shared cache but never write it,
 # or a PR could plant layers the next production build imports.
 if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
-  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE
+  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=$INSECURE,ignore-error=true
 elif [ "${CACHE_EXPORT:-1}" != "1" ]; then
   echo "==> buildkit: preview build, cache is read-only"
 fi
@@ -1371,7 +1371,7 @@ fi
 # oci-mediatypes=false: buildkit >= v0.31 pushes OCI manifests by default, and
 # registry 2.8 answers the docker-v2-only HEAD in builds/registry_client.go
 # (image-retention sweep) with 404 for those, silently disabling the sweep.
-exec buildctl \
+{ buildctl \
   --addr "$BUILDKIT_HOST" \
   build \
   --frontend dockerfile.v0 \
@@ -1381,7 +1381,34 @@ exec buildctl \
   "$@" \
   --output type=image,name="$IMAGE",push=true,oci-mediatypes=false,registry.insecure=$INSECURE \
   --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
-  --progress plain
+  --progress plain; echo $? > /tmp/buildctl.rc; } 2>&1 | tee /tmp/buildctl.log
+RC=$(cat /tmp/buildctl.rc 2>/dev/null || echo 1)
+[ "$RC" = "0" ] && exit 0
+
+# buildkitd can drop the session (an overloaded daemon misses its session
+# healthcheck) after the image is already pushed, while it is still
+# exporting the optional build cache. The build then fails although the
+# image is complete. Accept it only when buildkit logged the manifest push
+# as done AND the registry serves that exact digest for the tag.
+PUSHED=$(sed -n "s|.*pushing manifest for ${IMAGE}@\(sha256:[0-9a-f]\{64\}\).* done.*|\1|p" /tmp/buildctl.log | tail -n 1)
+if [ -n "$PUSHED" ]; then
+  REG=${IMAGE%%/*}
+  REST=${IMAGE#*/}
+  REPO=${REST%:*}
+  TAG=${REST##*:}
+  SCHEME=https
+  [ "$INSECURE" = "true" ] && SCHEME=http
+  SERVED=$(wget -q -S -O /dev/null \
+    --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+    --header "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+    "${SCHEME}://${REG}/v2/${REPO}/manifests/${TAG}" 2>&1 \
+    | sed -n 's/.*[Dd]ocker-[Cc]ontent-[Dd]igest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -n 1)
+  if [ "$SERVED" = "$PUSHED" ]; then
+    echo "==> buildkit: WARNING build cache export failed after the image was pushed (${PUSHED}); the image is complete, continuing"
+    exit 0
+  fi
+fi
+exit "$RC"
 `
 
 	dryRun := "0"

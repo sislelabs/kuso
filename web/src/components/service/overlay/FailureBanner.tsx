@@ -27,6 +27,7 @@ export type FailureKind =
   | "dockerfile_not_found"
   | "build_oom"
   | "registry_auth"
+  | "build_daemon_lost"
   | "clone_ref_missing"
   | "clone_unreachable"
   | "release_failed"
@@ -106,6 +107,10 @@ const COPY: Record<FailureKind, CopyPair> = {
     headline: "Build failed: the branch no longer exists.",
     body: "The branch or commit was deleted or force-pushed away, so every retry fails the same way. Pick an existing branch and redeploy.",
     action: { label: "Open Settings → Source", tab: "settings", anchor: "source" },
+  },
+  build_daemon_lost: {
+    headline: "The build daemon dropped this build.",
+    body: "buildkitd lost the build session, usually because it was busy or restarted. Nothing in your code needs to change; retry the build.",
   },
   clone_unreachable: {
     headline: "kuso couldn't reach the git host.",
