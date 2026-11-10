@@ -49,7 +49,7 @@
   root key) holds, MinIO keeps reading root from the conn Secret (pod
   template unchanged, no restart) and nothing an app uses changes. It
   moves to a scoped app user only on an explicit
-  `kuso addon s3 rotate-credentials`.
+  `kuso project addon s3 rotate-credentials`.
 */ -}}
 {{- $rootName := include "kusoaddon.s3RootSecretName" . -}}
 {{- $existingRoot := lookup "v1" "Secret" .Release.Namespace $rootName -}}
@@ -321,7 +321,7 @@ spec:
                 # changes until an explicit rotate-credentials. The read-only
                 # user is best-effort here so an older MinIO without the
                 # policy-attach API can't fail the upgrade hook.
-                echo "==> conn Secret still carries root credentials (rotate with: kuso addon s3 rotate-credentials)"
+                echo "==> conn Secret still carries root credentials (rotate with: kuso project addon s3 rotate-credentials)"
                 ensure_user "${RO_KEY}" "${RO_SECRET}" "${RO_POLICY}" ro || echo "WARNING: could not set up the read-only user" >&2
               else
                 ensure_user "${APP_KEY}" "${APP_SECRET}" "${RW_POLICY}" rw
