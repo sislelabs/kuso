@@ -17,6 +17,7 @@ import (
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
+	"kuso/server/internal/registryauth"
 )
 
 const (
@@ -130,7 +131,16 @@ func (w *Worker) start(ctx context.Context, s db.VulnScan) {
 		return
 	}
 	host := ImageHost(s.ImageRef)
-	auth, err := w.credentials(ctx, s.PullSecret, host)
+	pullSecret := s.PullSecret
+	if pullSecret == "" && host == builds.RegistryHost {
+		// The kuso-registry credential, once minted, carries a
+		// .dockerconfigjson for the registry host; without it the scan
+		// stays anonymous exactly as before.
+		if _, gerr := w.Kube.CoreV1().Secrets(w.Namespace).Get(ctx, registryauth.SecretName, metav1.GetOptions{}); gerr == nil {
+			pullSecret = w.Namespace + "/" + registryauth.SecretName
+		}
+	}
+	auth, err := w.credentials(ctx, pullSecret, host)
 	if err != nil {
 		// Anonymous is still worth a try: public images need nothing.
 		w.log().Warn("vulnscan: pull credentials unavailable, scanning anonymously", "scan", s.ID, "err", err)

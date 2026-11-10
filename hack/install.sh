@@ -340,6 +340,24 @@ configs:
     tls:
       insecure_skip_verify: true
 EOF
+# Re-run on an existing install: keep the kuso-registry credential, or a
+# registry with auth enabled would refuse this node's pulls after the
+# restart below. Fresh installs have no Secret yet and skip this.
+if command -v kubectl >/dev/null 2>&1 && [ -f /etc/rancher/k3s/k3s.yaml ]; then
+  REG_USER=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n kuso get secret kuso-registry-auth -o jsonpath='{.data.username}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  REG_PASS=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n kuso get secret kuso-registry-auth -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [ -n "$REG_USER" ] && [ -n "$REG_PASS" ]; then
+    REG_MARKER=$(printf '%s' "$REG_USER:$REG_PASS" | sha256sum | cut -c1-16)
+    cat >> /etc/rancher/k3s/registries.yaml <<EOF
+    auth:
+      username: "$REG_USER"
+      password: "$REG_PASS"
+# kuso-registry-auth: $REG_MARKER
+EOF
+    log "kept the kuso-registry credential in registries.yaml"
+  fi
+fi
+chmod 600 /etc/rancher/k3s/registries.yaml
 
 ensure_registry_hosts_entry() {
   local ip="$1"

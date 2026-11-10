@@ -217,9 +217,10 @@ data:
 # to "an attacker who already controls a build pod" — which is the
 # same trust boundary as the build pipeline itself.
 #
-# We open the egress side too so the daemon can pull base images
-# and push to the in-cluster registry, but ingress is the dangerous
-# direction; egress stays default-allow for now.
+# Egress (what Dockerfile RUN steps can reach) is bounded by the opt-in
+# deploy/netpol/buildkitd-egress.yaml, kept out of this file so the
+# updater's upgrade-manifests bundle doesn't apply it cluster-wide before
+# it has been verified on a given install.
 #
 # Single-tenant: every build pod is ours, so labelling is the
 # correct boundary. A future multi-tenant deployment should also

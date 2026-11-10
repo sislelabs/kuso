@@ -69,7 +69,7 @@ func newRegistryClient(host string) *registryClient {
 	return &registryClient{
 		host:   host,
 		scheme: "http", // in-cluster registry is plaintext
-		http:   &http.Client{Timeout: 15 * time.Second},
+		http:   RegistryHTTPClient(15 * time.Second),
 	}
 }
 

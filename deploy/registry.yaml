@@ -3,8 +3,35 @@
 # Used by the build pipeline as the destination for kaniko builds. Each
 # KusoEnvironment then pulls FROM this registry. Internal-only: no
 # Ingress, no public DNS, no TLS. The k3s nodes need to trust the
-# registry as an unauthenticated insecure registry — handled in
+# registry as an insecure (plain-HTTP) registry — handled in
 # hack/install.sh by writing /etc/rancher/k3s/registries.yaml.
+#
+# AUTH (staged, off by default). The registry stays anonymous until the
+# kuso-registry-auth Secret says enabled=true. Distribution has no
+# "optional auth" mode, so every consumer must hold the credential before
+# it is switched on, or every pull on a node without it fails:
+#
+#   1. Mint the credential (enabled=false; nothing changes yet):
+#        kuso api POST admin/registry-auth/credentials
+#      kuso-server, builds (per-namespace kuso-registry-push Secret), the
+#      vuln scanner and nodes that join from now on pick it up by
+#      themselves. The registry ignores credentials while auth is off.
+#   2. Apply this file (registry restarts once, still anonymous).
+#   3. Put the credential on every EXISTING node, control plane included,
+#      one node at a time: run hack/registry-auth-node.sh as root on the
+#      node (password on stdin; it restarts k3s / k3s-agent).
+#   4. Verify:  kuso api POST admin/registry-auth/probe
+#               kuso api GET admin/registry-auth    -> readyToEnable: true
+#   5. Enable:  kubectl -n kuso patch secret kuso-registry-auth \
+#                 -p '{"stringData":{"enabled":"true"}}'
+#               kubectl -n kuso rollout restart deploy/kuso-registry
+#      Revert:  the same patch with "false", then the same restart.
+#
+# The credential is one htpasswd user. It stops tenant app pods, addon
+# pods and Dockerfile RUN steps (which never see it) from pushing,
+# overwriting or deleting images. Build pods hold it because they push,
+# so a buildpacks build running PR code can still use it; per-repository
+# scoping needs token auth (OPEN.md N6 option a).
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -36,9 +63,31 @@ spec:
       labels:
         app.kubernetes.io/name: kuso-registry
     spec:
+      # Every reschedule and wake pulls from here: let the kubelet evict
+      # tenant pods before the registry under node pressure (RUN-7).
+      priorityClassName: kuso-platform
+      automountServiceAccountToken: false
       containers:
         - name: registry
           image: registry:3.1.2
+          # Same as the image's entrypoint (registry serve <config>), plus
+          # the opt-in htpasswd switch read from kuso-registry-auth.
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              if [ "$(cat /auth/enabled 2>/dev/null)" = "true" ]; then
+                if [ ! -s /auth/htpasswd ]; then
+                  echo "[registry] kuso-registry-auth enabled=true but htpasswd is empty; refusing to start" >&2
+                  exit 1
+                fi
+                export REGISTRY_AUTH=htpasswd
+                export REGISTRY_AUTH_HTPASSWD_REALM=kuso-registry
+                export REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
+                echo "[registry] htpasswd auth required"
+              else
+                echo "[registry] anonymous access (kuso-registry-auth not enabled)"
+              fi
+              exec registry serve /etc/distribution/config.yml
           ports:
             - name: registry
               containerPort: 5000
@@ -59,23 +108,36 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry
+            - name: auth
+              mountPath: /auth
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /
               port: registry
             initialDelaySeconds: 5
             periodSeconds: 5
+          # SCL-14: one pod serves every cold pull; losing a node means
+          # dozens of concurrent pulls through it.
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "2"
+              memory: 1Gi
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: kuso-registry-data
+        # optional: without the Secret the registry starts anonymous.
+        - name: auth
+          secret:
+            secretName: kuso-registry-auth
+            optional: true
+            items:
+              - { key: htpasswd, path: htpasswd }
+              - { key: enabled, path: enabled }
 ---
 apiVersion: v1
 kind: Service
@@ -102,10 +164,12 @@ spec:
 #
 # `--delete-untagged=true` removes blobs no tag references — needed
 # because deleting a manifest without this flag leaves the layer
-# blobs orphaned forever. We pause the registry first because GC
-# isn't safe under concurrent writes (the registry README is explicit
-# about this); the build admission cap means a few-minute downtime
-# at midnight is harmless.
+# blobs orphaned forever. GC isn't safe under concurrent WRITES, so the
+# registry is switched to read-only maintenance mode for the duration
+# (SCL-14): pulls keep working, only pushes (builds) fail until GC ends.
+# The switch is an env var, so it costs two short Recreate restarts
+# instead of the old scale-to-zero, which took every cold pull, wake and
+# reschedule down for the whole GC run.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -135,33 +199,30 @@ spec:
         spec:
           restartPolicy: OnFailure
           serviceAccountName: kuso-registry-gc
-          # Single-pod design (replaces the v0.9.38 nested kubectl run
-          # which baked a 4-line JSON --overrides blob into bash and
-          # was a nightmare to maintain). The Pod has two phases:
+          # Single pod, three containers:
           #
-          #   initContainer scaler  — scales the registry Deployment
-          #     to 0 + waits for the pod to drain. Uses the bitnami/
-          #     kubectl image and the kuso-registry-gc ServiceAccount
-          #     (Role above grants the verbs).
+          #   initContainer readonly-on — sets the registry Deployment's
+          #     REGISTRY_STORAGE_MAINTENANCE_READONLY and waits for the
+          #     read-only pod to be the only one running.
           #
-          #   main container gc     — runs the registry binary against
-          #     the same PVC the live registry uses (RWO so it's safe
-          #     because the live registry is now scaled to 0).
+          #   gc         — runs the registry binary against the same PVC.
+          #     RWO is per node and the local-path PV pins this pod to the
+          #     registry's node, so both can mount it; the live registry
+          #     only reads while GC runs.
           #
-          # PostStop / scale-up runs in a `lifecycle.preStop` block on
-          # the gc container — it fires when the GC binary exits
-          # successfully OR the pod is killed, so the registry comes
-          # back up either way.
+          #   scaler-up  — waits for gc and switches read-only off again.
+          #     It also restores on pod termination and after a 10m
+          #     failure ceiling, so the registry can't stay read-only.
           initContainers:
-            - name: scaler-down
+            - name: readonly-on
               image: alpine/k8s:1.35.10
               command: [/bin/sh, -ec]
               args:
                 - |
                   set -e
-                  echo "[gc] scaling registry down (GC is not safe under concurrent writes)"
-                  kubectl -n kuso scale deployment kuso-registry --replicas=0
-                  kubectl -n kuso wait --for=delete pod -l app.kubernetes.io/name=kuso-registry --timeout=120s || true
+                  echo "[gc] switching registry to read-only (GC is not safe under concurrent writes)"
+                  kubectl -n kuso set env deployment/kuso-registry 'REGISTRY_STORAGE_MAINTENANCE_READONLY={"enabled":true}'
+                  kubectl -n kuso rollout status deployment/kuso-registry --timeout=180s
           containers:
             - name: gc
               image: registry:3.1.2
@@ -175,16 +236,16 @@ spec:
               volumeMounts:
                 - { name: data, mountPath: /var/lib/registry }
             - name: scaler-up
-              # Sidecar that waits for `gc` to finish and scales the
-              # registry back up. We can't rely on initContainer
-              # ordering for "post-main" work, so this sidecar pattern
-              # is the simplest correct shape.
+              # Sidecar that waits for `gc` to finish and switches the
+              # registry back to read-write. We can't rely on
+              # initContainer ordering for "post-main" work, so this
+              # sidecar pattern is the simplest correct shape.
               #
-              # CORRECTNESS: the registry must only come back once GC
-              # has genuinely finished (exit 0) or been abandoned.
+              # CORRECTNESS: writes must only resume once GC has
+              # genuinely finished (exit 0) or been abandoned.
               # Under restartPolicy=OnFailure a non-zero gc exit is
               # TRANSIENT — kubelet restarts the container in-pod — so
-              # scaling up on "terminated" alone would let a restarted
+              # restoring on "terminated" alone would let a restarted
               # GC run concurrently with live registry writes, which
               # the registry README explicitly calls unsafe. So:
               #   - terminated exitCode==0        → restore, exit 0
@@ -211,7 +272,10 @@ spec:
                   set -e
                   POD=$(hostname)
                   scale_up() {
-                    echo "[scaler-up] scaling registry back up"
+                    echo "[scaler-up] switching registry back to read-write"
+                    kubectl -n kuso set env deployment/kuso-registry REGISTRY_STORAGE_MAINTENANCE_READONLY-
+                    # Installs GC'd by the pre-read-only version of this job
+                    # may have been left at 0 replicas by an abandoned run.
                     kubectl -n kuso scale deployment kuso-registry --replicas=1
                     kubectl -n kuso rollout status deployment kuso-registry --timeout=120s || true
                   }
