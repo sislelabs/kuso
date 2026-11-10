@@ -1248,6 +1248,8 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// the build Job + env chart consume these.
 		BuildArgs: svcCR.Spec.BuildArgs,
 		PublicEnv: svcCR.Spec.PublicEnv,
+
+		StrictBuildSecrets: svcCR.Spec.StrictBuildSecrets,
 	}
 	// Build-time env: stamp env vars onto the CR so the build job can use
 	// them. Literals pass verbatim (baked as build args / ENV — apps that

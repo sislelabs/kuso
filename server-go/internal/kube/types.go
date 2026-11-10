@@ -431,6 +431,11 @@ type KusoServiceSpec struct {
 	// kuso/* contexts, are green. Read by builds.create + the poller's
 	// CI gate; service-level only (not mirrored onto envs).
 	WaitForCI bool `json:"waitForCI,omitempty"`
+	// StrictBuildSecrets stops Dockerfile builds from receiving
+	// credential-bearing build env (builds.IsBuildSecretLiteral) as
+	// build-args; they then arrive only as BuildKit secrets. Off keeps the
+	// legacy build-arg path so existing `ARG DATABASE_URL` Dockerfiles build.
+	StrictBuildSecrets bool `json:"strictBuildSecrets,omitempty"`
 	// AutoDeployPaused stops GitHub pushes from building this service.
 	// Manual deploys, deploy hooks and PR previews still run.
 	AutoDeployPaused bool `json:"autoDeployPaused,omitempty"`
@@ -1249,6 +1254,8 @@ type KusoBuildSpec struct {
 	// image tag stamp on the env CR. Failed dry-runs surface the
 	// failure reason the same as a regular failed build.
 	DryRun bool `json:"dryRun,omitempty"`
+	// StrictBuildSecrets mirrors KusoServiceSpec.StrictBuildSecrets.
+	StrictBuildSecrets bool `json:"strictBuildSecrets,omitempty"`
 }
 
 // KusoBuildAuth points the build pod at registry credentials. The

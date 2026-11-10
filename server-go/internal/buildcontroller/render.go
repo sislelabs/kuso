@@ -3,6 +3,7 @@ package buildcontroller
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -964,6 +965,43 @@ func buildEnvSecretContainerVars(b *kube.KusoBuild, includeRefs bool) []corev1.E
 	return out
 }
 
+// secretOnlyKeyNames lists the BuildKit-secret keys that are NOT also
+// passed as build-args: the ones a Dockerfile `ARG <KEY>` now sees empty.
+func secretOnlyKeyNames(envs []corev1.EnvVar) string {
+	var secret, args []string
+	for _, e := range envs {
+		switch e.Name {
+		case "KUSO_BUILDENV_SECRET_KEYS":
+			secret = strings.Fields(e.Value)
+		case "KUSO_BUILDENV_KEYS":
+			args = strings.Fields(e.Value)
+		}
+	}
+	var out []string
+	for _, k := range secret {
+		if !slices.Contains(args, k) {
+			out = append(out, k)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// dedupeEnvByName keeps the first entry per name: a legacy build-arg
+// literal and its BuildKit-secret twin both emit KUSO_BE_<KEY> with the
+// same value.
+func dedupeEnvByName(in []corev1.EnvVar) []corev1.EnvVar {
+	seen := make(map[string]bool, len(in))
+	out := in[:0]
+	for _, e := range in {
+		if seen[e.Name] {
+			continue
+		}
+		seen[e.Name] = true
+		out = append(out, e)
+	}
+	return out
+}
+
 // buildSecretLiteralKeyNames returns the space-joined, sorted names of
 // credential-bearing literal buildEnv keys (see builds.IsBuildSecretLiteral).
 func buildSecretLiteralKeyNames(b *kube.KusoBuild) string {
@@ -1226,10 +1264,14 @@ RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_
 # in registry-readable image layers). Without this, a Dockerfile still using
 # 'ARG DATABASE_URL' builds "successfully" with an empty value and nothing in
 # the log points at the cause. Key NAMES only — never values.
-if [ -n "${KUSO_BUILDENV_SECRET_KEYS:-}" ]; then
-  echo "WARNING: secret-sourced build env vars are no longer passed as build-args: ${KUSO_BUILDENV_SECRET_KEYS}"
+if [ -n "${KUSO_BUILDENV_NOARG_SECRET_KEYS:-}" ]; then
+  echo "WARNING: secret-sourced build env vars are no longer passed as build-args: ${KUSO_BUILDENV_NOARG_SECRET_KEYS}"
   echo "WARNING: a Dockerfile 'ARG <KEY>' for any of these keys now receives an EMPTY value."
   echo "WARNING: migrate to a BuildKit secret mount instead: RUN --mount=type=secret,id=<KEY> ... (value readable at /run/secrets/<KEY> for that RUN only)."
+fi
+if [ -n "${KUSO_BUILDENV_LEGACY_ARG_KEYS:-}" ]; then
+  echo "WARNING: these build env values carry credentials and are still passed as build-args, which buildkit records in the pushed image's history: ${KUSO_BUILDENV_LEGACY_ARG_KEYS}"
+  echo "WARNING: read them with RUN --mount=type=secret,id=<KEY>,env=<KEY> (already offered), then run: kuso service set <project> <service> --strict-build-secrets on"
 fi
 if [ -n "${KUSO_BUILDENV_WITHHELD_KEYS:-}" ]; then
   echo "WARNING: secret-sourced build env vars are WITHHELD from this build: ${KUSO_BUILDENV_WITHHELD_KEYS}"
@@ -1367,7 +1409,16 @@ exec buildctl \
 	// passing all keys is safe. Values arrive as KUSO_BE_<KEY> container
 	// env (kubelet-escaped; never shell-parsed) with the key list in
 	// KUSO_BUILDENV_KEYS — same mechanism as the nixpacks-plan container.
-	envs = append(envs, buildEnvContainerVars(b, false)...)
+	// Credential-bearing literals (builds.IsBuildSecretLiteral) stay on the
+	// build-arg path for Dockerfile builds unless the service opted into
+	// strictBuildSecrets: existing `ARG DATABASE_URL` Dockerfiles must keep
+	// building after an upgrade. They are offered as BuildKit secrets too,
+	// and the script logs a warning recommending the secret mount.
+	legacyArgs := strategy == "dockerfile" && !b.Spec.StrictBuildSecrets
+	envs = append(envs, buildEnvContainerVars(b, legacyArgs)...)
+	if names := buildSecretLiteralKeyNames(b); legacyArgs && names != "" {
+		envs = append(envs, corev1.EnvVar{Name: "KUSO_BUILDENV_LEGACY_ARG_KEYS", Value: names})
+	}
 	// BuildArgs: the explicit non-secret build-time value channel. Forwarded
 	// as KUSO_BA_<KEY> container env for ALL buildkit strategies (dockerfile,
 	// nixpacks, static). For dockerfile the script turns each into a `--opt
@@ -1398,6 +1449,12 @@ exec buildctl \
 		// Only credential-bearing literals: the plan container rewrote the
 		// generated RUN lines to mount them. Secret refs stay withheld.
 		envs = append(envs, buildEnvSecretContainerVars(b, false)...)
+	}
+	envs = dedupeEnvByName(envs)
+	if strategy == "dockerfile" {
+		if names := secretOnlyKeyNames(envs); names != "" {
+			envs = append(envs, corev1.EnvVar{Name: "KUSO_BUILDENV_NOARG_SECRET_KEYS", Value: names})
+		}
 	}
 	if withheld := buildEnvWithheldKeyNames(b); strategy != "dockerfile" && withheld != "" {
 		// nixpacks/static withhold secret-sourced vars from the pod
