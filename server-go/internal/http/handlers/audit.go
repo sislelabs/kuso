@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -74,7 +75,13 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		err   error
 	)
 	if project != "" {
-		rows, count, more, err = h.Svc.GetForProject(ctx, project, after, limit)
+		// Instance admins keep the full history; everyone else only
+		// sees rows from the current project's lifetime.
+		var born time.Time
+		if !isInstanceAdmin(ctx) {
+			born = projectBornAt(ctx, h.Kube, h.Namespace, project)
+		}
+		rows, count, more, err = h.Svc.GetForProjectSince(ctx, project, born, after, limit)
 	} else {
 		rows, count, more, err = h.Svc.Get(ctx, after, limit)
 	}
@@ -121,6 +128,24 @@ func (h *AuditHandler) ListForApp(w http.ResponseWriter, r *http.Request) {
 		setTruncationHeaders(w, headerNextAfter, strconv.FormatInt(rows[len(rows)-1].ID, 10))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": rows, "count": count, "limit": effectiveLimit(limit)})
+}
+
+func isInstanceAdmin(ctx context.Context) bool {
+	c, ok := auth.ClaimsFromContext(ctx)
+	return ok && c != nil && auth.Has(c.Permissions, auth.PermSettingsAdmin)
+}
+
+// projectBornAt is the project CR's creation time; zero when it can't
+// be read (no filter, the pre-fix behaviour).
+func projectBornAt(ctx context.Context, kc *kube.Client, homeNS, project string) time.Time {
+	if kc == nil || kc.Dynamic == nil {
+		return time.Time{}
+	}
+	u, err := lookupCR(ctx, kc, kube.GVRProjects, homeNS, project)
+	if err != nil {
+		return time.Time{}
+	}
+	return u.GetCreationTimestamp().Time
 }
 
 func effectiveLimit(in int) int {

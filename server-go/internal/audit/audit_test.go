@@ -125,6 +125,14 @@ func TestAuditLogAndReadbacks(t *testing.T) {
 	if page2More {
 		t.Error("GetForProject final page claimed more=true")
 	}
+	// SEC-5: a re-created project must not see its predecessor's rows.
+	reborn, rebornTotal, _, err := s.GetForProjectSince(ctx, "proj-a", time.Now().Add(time.Hour), 0, 100)
+	if err != nil {
+		t.Fatalf("GetForProjectSince: %v", err)
+	}
+	if len(reborn) != 0 || rebornTotal != 0 {
+		t.Errorf("GetForProjectSince(future) len=%d total=%d, want 0/0", len(reborn), rebornTotal)
+	}
 
 	// GetForApp — pipeline+phase+app.
 	web, webTotal, webMore, err := s.GetForApp(ctx, "proj-a", "production", "web", time.Time{}, 100)
