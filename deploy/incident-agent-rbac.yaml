@@ -34,14 +34,14 @@ metadata:
 ---
 # Read-only cluster inspection. Scoped to exactly the resources the
 # investigate prompt drives kubectl against:
-#   - pods   : pod state, restart reasons
 #   - nodes  : node conditions for node.unreachable incidents
 #   - events : kube events (CrashLoopBackOff / OOMKilled / scheduling)
 # get/list/watch only — no create/update/patch/delete, no exec/attach.
-# pods/log is NOT here: logs are attacker-influenced input and the agent
-# is prompt-injectable, so it may read logs only in the incident's own
-# namespace (kuso-incident-agent-logs below, bound per namespace by
-# kuso-server at spawn time and unbound by the incident reaper).
+# pods and pods/log are NOT here: the agent is prompt-injectable, pod
+# specs carry inline env literals, and logs are attacker-influenced, so
+# it may read pods and their logs only in the incident's own namespace
+# (kuso-incident-agent-logs below, bound per namespace by kuso-server at
+# spawn time and unbound by the incident reaper).
 #
 # This ClusterRole is excluded from the self-updater bundle (it grants
 # pods watch, which kuso-server lacks), so narrowing it on an existing
@@ -56,7 +56,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources:
-      - pods
       - nodes
       - events
     verbs: [get, list, watch]
@@ -83,11 +82,11 @@ subjects:
     name: kuso-incident-agent
     namespace: kuso
 ---
-# Pod log read, granted ONLY through a RoleBinding (kuso-incident-agent-logs)
-# that kuso-server stamps into the incident's namespace when it spawns an
-# investigate Job. Verbs are a subset of kuso-server's own pods/log grant,
-# so the self-updater can create this role and kuso-server can bind it
-# without an escalation.
+# Pod and pod-log read, granted ONLY through a RoleBinding
+# (kuso-incident-agent-logs) that kuso-server stamps into the incident's
+# namespace when it spawns an investigate Job. Verbs are a subset of
+# kuso-server's own pods + pods/log grants, so the self-updater can apply
+# this role and kuso-server can bind it without an escalation.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -99,3 +98,6 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]

@@ -461,6 +461,32 @@ else
   log "clone image pinned: ${CLONE_IMAGE_PINNED}"
 fi
 
+# ---- 2a'. pin the incident-agent image by digest -------------------
+#
+# The incident agent runs with the operator's Claude credentials and
+# reads cluster state; its default image must not follow a mutable tag.
+# Same scheme as the clone image: the tag stays in the source, the
+# digest is re-resolved and baked in on every ship.
+AGENT_IMAGE_GO=server-go/internal/incidents/jobs.go
+AGENT_IMAGE_REFRESHER=deploy/incident-agent-refresher.yaml
+AGENT_IMAGE_TAG="$(sed -nE 's|^const DefaultAgentImage = "([^"@]+)(@sha256:[0-9a-f]{64})?"|\1|p' "$AGENT_IMAGE_GO")"
+[[ -n "$AGENT_IMAGE_TAG" ]] || fail "could not read DefaultAgentImage from ${AGENT_IMAGE_GO}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin ${AGENT_IMAGE_TAG} to its registry digest in ${AGENT_IMAGE_GO} + ${AGENT_IMAGE_REFRESHER}"
+else
+  AGENT_IMAGE_DIGEST="$(docker buildx imagetools inspect "$AGENT_IMAGE_TAG" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+  [[ "$AGENT_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "could not resolve the registry digest of ${AGENT_IMAGE_TAG} (got '${AGENT_IMAGE_DIGEST}')"
+  AGENT_IMAGE_PINNED="${AGENT_IMAGE_TAG}@${AGENT_IMAGE_DIGEST}"
+  sed -i.bak -E "s|^(const DefaultAgentImage = )\"[^\"]+\"|\\1\"${AGENT_IMAGE_PINNED}\"|" "$AGENT_IMAGE_GO"
+  rm "${AGENT_IMAGE_GO}.bak"
+  sed -i.bak -E "s|image: ghcr.io/sislelabs/kuso-incident-agent:[^[:space:]]+|image: ${AGENT_IMAGE_PINNED}|" "$AGENT_IMAGE_REFRESHER"
+  rm "${AGENT_IMAGE_REFRESHER}.bak"
+  grep -q "\"${AGENT_IMAGE_PINNED}\"" "$AGENT_IMAGE_GO" || fail "incident-agent image pin did not land in ${AGENT_IMAGE_GO}"
+  log "incident-agent image pinned: ${AGENT_IMAGE_PINNED}"
+fi
+
 # ---- 2b. CHANGELOG -------------------------------------------------
 #
 # git-cliff regenerates the full release history from commit messages.
@@ -1607,6 +1633,9 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     # The clone-image digest pin from step 2a.
     server-go/internal/buildcontroller/buildcontroller.go
     operator/helm-charts/kusobuild/templates/job.yaml
+    # The incident-agent digest pin from step 2a'.
+    server-go/internal/incidents/jobs.go
+    deploy/incident-agent-refresher.yaml
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)
