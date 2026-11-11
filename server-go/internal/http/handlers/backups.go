@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
@@ -642,7 +643,9 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	//
 	// A project with its own (scoped) key restores through it and gets no
 	// copy of the bucket-wide key (BLOB-R1).
-	credSecret, err := h.restoreCredentialSecret(ctx, ns, project)
+	releaseName := destCR.Name
+	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
+	credSecret, credCopy, err := h.restoreCredentialSecret(ctx, ns, project, jobName, tenantLoc != nil)
 	if err != nil {
 		if errors.Is(err, addons.ErrNotFound) {
 			writeErr(w, http.StatusPreconditionFailed, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)")
@@ -652,8 +655,6 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	releaseName := destCR.Name
-	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 	// Bucket from the SOURCE addon — the artifact being restored lives
 	// where its own CronJob wrote it, which may not be the destination's
 	// bucket when restoring into a sibling.
@@ -708,11 +709,17 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		if keyCopy {
 			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, jobName+"-key", metav1.DeleteOptions{})
 		}
+		if credCopy {
+			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, credSecret, metav1.DeleteOptions{})
+		}
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if keyCopy {
 		h.adoptRestoreKeyCopy(ctx, ns, created)
+	}
+	if credCopy {
+		h.adoptJobSecret(ctx, ns, created, credSecret)
 	}
 	// Audit: destructive cross-DB write. Logged regardless of
 	// outcome so a half-completed restore (Job created but pod
@@ -875,20 +882,61 @@ func restoreS3EnvFrom(secret, bucketOverride string) []corev1.EnvVar {
 // when present, else the shared Secret, mirrored into a project
 // namespace first. That mirror is the same persistent copy the heal sweep
 // keeps for unscoped projects' CronJobs, so it is not tied to the Job.
-func (h *BackupsHandler) restoreCredentialSecret(ctx context.Context, ns, project string) (string, error) {
+//
+// A scoped key reaches only <project>/, so an instance tenant's dump (under
+// the instance addon's prefix) needs the bucket-wide key: that copy is
+// named after the Job and reported as owned (ownedCopy) so the caller ties
+// it to the Job, and it goes when the Job's TTL reaps it.
+func (h *BackupsHandler) restoreCredentialSecret(ctx context.Context, ns, project, jobName string, needsSharedKey bool) (name string, ownedCopy bool, err error) {
 	scoped, err := h.Kube.ProjectBackupSecretIn(ctx, ns, project)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	if scoped != "" && !needsSharedKey {
+		return scoped, false, nil
 	}
 	if scoped != "" {
-		return scoped, nil
+		name = jobName + "-s3"
+		if err := h.copyBackupSecret(ctx, ns, name); err != nil {
+			return "", false, err
+		}
+		return name, true, nil
 	}
 	if ns != h.Namespace {
 		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
-	return backupSecretName, nil
+	return backupSecretName, false, nil
+}
+
+// copyBackupSecret writes the shared backup Secret's data into ns as name.
+func (h *BackupsHandler) copyBackupSecret(ctx context.Context, ns, name string) error {
+	src, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %s not found in %s", addons.ErrNotFound, backupSecretName, h.Namespace)
+	}
+	if err != nil {
+		return fmt.Errorf("read source secret: %w", err)
+	}
+	dst := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "kuso-server"}},
+		Type: src.Type,
+		Data: src.Data,
+	}
+	if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, dst, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("copy backup secret: %w", err)
+	}
+	return nil
+}
+
+// adoptJobSecret makes a per-Job Secret cascade-delete with the Job.
+func (h *BackupsHandler) adoptJobSecret(ctx context.Context, ns string, job *batchv1.Job, name string) {
+	patch := fmt.Sprintf(`{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":%q,"uid":%q}]}}`, job.Name, job.UID)
+	if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		h.Logger.Warn("backup: adopt restore credential copy", "job", job.Name, "err", err)
+	}
 }
 
 // mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret
