@@ -110,8 +110,13 @@ spec:
                   # so the upload container no-ops and the prior good
                   # backup in the slot survives.
                   echo "dumping kuso DB → $DUMP"
+                  # LogLine keeps its schema and id sequence but no rows:
+                  # it is budget-pruned throwaway data, and at its byte
+                  # budget it was GBs of text per night. -and-children
+                  # also covers the daily partitions (pg_dump 16+).
                   pg_dump --format=plain --no-owner --no-privileges \
                     --quote-all-identifiers \
+                    --exclude-table-data-and-children='"LogLine"' \
                     "$KUSO_DB_DSN" > "$RAW"
                   gzip -9 "$RAW" # produces $DUMP, removes $RAW
 
