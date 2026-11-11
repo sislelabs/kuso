@@ -1055,8 +1055,39 @@ MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/upgrade-manifests.yaml")"
 # instead of trusting raw files under a git tag anyone with push can move.
 INSTALL_TAR_FLAGS=()
 [[ "$(uname -s)" == "Darwin" ]] && INSTALL_TAR_FLAGS+=(--no-mac-metadata)
+# Third-party images in the bundle are rewritten to tag@digest in a staged
+# copy, so the signature covers the bytes a fresh install runs. kuso's own
+# images stay tags here: install.sh rewrites them from the signed
+# release.json's tag@digest. The repo's deploy/ is left untouched.
+INSTALL_STAGE="$(mktemp -d)"
+mkdir -p "$INSTALL_STAGE/operator/config/crd"
+cp -R deploy "$INSTALL_STAGE/deploy"
+cp -R operator/config/crd/bases "$INSTALL_STAGE/operator/config/crd/bases"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin third-party images in the install bundle to their registry digests"
+else
+  while IFS= read -r img; do
+    [[ -n "$img" ]] || continue
+    dg="$(docker buildx imagetools inspect "$img" --format '{{json .Manifest}}' 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+    [[ "$dg" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || fail "could not resolve the registry digest of ${img} for the install bundle (got '${dg}')"
+    grep -rlF "image: ${img}" "$INSTALL_STAGE/deploy" | while IFS= read -r f; do
+      IMG="$img" PIN="${img}@${dg}" python3 -c '
+import os, re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"(image:\s*)" + re.escape(os.environ["IMG"]) + r"(?=\s|$)", lambda m: m.group(1) + os.environ["PIN"], s)
+open(p, "w").write(s)' "$f"
+    done
+    log "install bundle: ${img} -> @${dg}"
+  done < <(grep -rhoE '^[[:space:]]*(- )?image:[[:space:]]*[^[:space:]#"]+' "$INSTALL_STAGE/deploy" \
+    | sed -E 's/^[[:space:]]*(- )?image:[[:space:]]*//' \
+    | grep -v '^ghcr\.io/sislelabs/' | grep -v '@sha256:' | sort -u)
+fi
 COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/install-manifests.tar.gz" "${INSTALL_TAR_FLAGS[@]}" \
-  deploy operator/config/crd/bases
+  -C "$INSTALL_STAGE" deploy operator/config/crd/bases
+rm -rf "$INSTALL_STAGE"
 INSTALL_MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/install-manifests.tar.gz")"
 [[ "$INSTALL_MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/install-manifests.tar.gz (got '${INSTALL_MANIFESTS_SHA256}')"
 
