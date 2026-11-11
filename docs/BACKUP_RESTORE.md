@@ -106,6 +106,21 @@ For warm-spare DR (faster than re-running install), point `kuso-postgres-conn` a
 
 HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`) get the same scheduled `pg_dump` job, pointed at the `<addon>-rw` primary Service. No CNPG/barman backup is configured for them; see `docs/ADDON_HA.md`.
 
+### S3 addon snapshots are full copies
+
+Each scheduled run of an s3 addon copies the whole bucket into a new `<project>/<addon>/<timestamp>/` prefix. Nothing is shared between snapshots, so the backup bucket holds about bucket size × number of kept snapshots, and every run transfers the whole bucket again. A 50 GiB upload bucket with the default 14-day retention takes roughly 700 GiB, and `retentionDays: 0` (keep forever) grows without limit. Size retention to the bucket, or use a backup provider whose bucket versioning or lifecycle rules you already pay for. Incremental snapshots would need a new snapshot layout that restore understands, which kuso does not have yet.
+
+## Image registry
+
+Built images live on one volume (`kuso-registry-data`) with no backup. If it is lost, running pods keep going, but any restart, reschedule or wake from sleep fails with ImagePullBackOff. Rebuild everything that runs from the in-cluster registry:
+
+```bash
+kuso registry rebuild --all --only-missing --dry-run   # review the plan
+kuso registry rebuild --all --only-missing -y
+```
+
+Each env is rebuilt from the commit it was deployed from. When kuso no longer has that build's record it uses the env's branch head and says so. Release hooks run again on promotion. To keep images off the node altogether, see the header of `deploy/registry.yaml` for the S3 storage settings.
+
 ## Manual fallback (no CLI access)
 
 If `kuso` itself is broken and you need to grab the metadata DB by hand:

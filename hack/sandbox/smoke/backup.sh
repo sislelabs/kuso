@@ -93,6 +93,30 @@ backup_main() {
   job="$("$K" addon-backup restore "$BK_PROJECT" files "$key" --confirm files | awk '{print $3}')"
   check "s3 restore job ${job} succeeded" eventually 300 bk_job_succeeded "$job"
   check "the deleted object is back" eventually 60 bk_s3_mc stat "l/${bucket}/smoke/o.txt"
+
+  step "s3 addon: no public TCP port (MinIO is plain HTTP)"
+  local out
+  if out="$("$K" project addon public-tcp enable "$BK_PROJECT" files 2>&1)"; then
+    fail "public TCP on an s3 addon was refused (it was enabled: ${out})"
+    "$K" project addon public-tcp disable "$BK_PROJECT" files --yes >/dev/null 2>&1 || true
+  elif grep -q 'not configured' <<<"$out"; then
+    echo "  (public TCP pool not configured on this sandbox; refusal not exercised)"
+  else
+    check "public TCP on an s3 addon was refused" grep -q 'plain HTTP' <<<"$out"
+  fi
+
+  step "a plain addon delete keeps data; --purge-data clears it afterwards"
+  "$K" project addon delete "$BK_PROJECT" db2 -y >/dev/null
+  require "db2 addon CR is gone" eventually 120 bk_addon_gone db2
+  check "db2 data volume kept" bk_has_pvc db2
+  out="$("$K" project addon add "$BK_PROJECT" db2 --kind postgres --version 16 --size small 2>&1 || true)"
+  check "re-add is refused and names the purge command" grep -qF "kuso project addon delete ${BK_PROJECT} db2 --purge-data" <<<"$out"
+  check "--purge-data after the CR is gone succeeds" "$K" project addon delete "$BK_PROJECT" db2 --purge-data -y
+  check "db2 data volume removed" eventually 180 bk_no_pvc db2
 }
+
+bk_has_pvc() { [[ -n "$(node_kubectl -n "$BK_NS" get pvc -l "app.kubernetes.io/instance=${BK_PROJECT}-$1" -o name 2>/dev/null)" ]]; }
+bk_no_pvc() { ! bk_has_pvc "$1"; }
+bk_addon_gone() { ! node_kubectl -n "$BK_NS" get kusoaddon "${BK_PROJECT}-$1" >/dev/null 2>&1; }
 
 backup_cleanup() { delete_project "$BK_PROJECT"; }
