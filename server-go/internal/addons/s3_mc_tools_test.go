@@ -11,8 +11,10 @@ import (
 var mcMissingTool = regexp.MustCompile(`\|\s*(grep|awk|sed)\b`)
 
 func TestS3AdminScriptsUseOnlyShellBuiltins(t *testing.T) {
-	if mcMissingTool.MatchString(s3RotateScript) {
-		t.Error("rotate script pipes into grep/awk/sed, which pgsty/mc lacks")
+	for name, script := range map[string]string{"rotate": s3RotateScript, "root check": s3RootCheckScript} {
+		if mcMissingTool.MatchString(script) {
+			t.Errorf("%s script pipes into grep/awk/sed, which pgsty/mc lacks", name)
+		}
 	}
 	chart, err := os.ReadFile("../../../operator/helm-charts/kusoaddon/templates/s3.yaml")
 	if err != nil {

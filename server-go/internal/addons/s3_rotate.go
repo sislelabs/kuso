@@ -30,6 +30,12 @@ import (
 //     Apps pick the new key up on their next restart.
 //  2. RevokePreviousS3Credentials, run after those restarts, removes the
 //     old user. It refuses to touch the root user.
+//
+// MinIO root cannot be revoked through its API, only replaced: with
+// RotateRoot the root Secret gets a new password and MinIO restarts to
+// read it (BLOB-3), so a root key that leaked while apps held it stops
+// working. Nothing else reads root except the chart's init Job, the
+// backup CronJob and these admin Jobs, which all read the Secret at start.
 
 const (
 	annS3PreviousKey = "kuso.sislelabs.com/s3-previous-access-key"
@@ -55,9 +61,22 @@ type S3RotateResult struct {
 	// PreviousWasRoot: the addon predates scoped credentials; the old key
 	// is MinIO root, which stays (it is not revocable) but no app holds
 	// it any more once they restart.
-	PreviousWasRoot bool   `json:"previousWasRoot"`
-	Message         string `json:"message"`
+	PreviousWasRoot bool `json:"previousWasRoot"`
+	// RootRotated: MinIO now runs with a new root password; the old one
+	// is dead.
+	RootRotated bool   `json:"rootRotated"`
+	Message     string `json:"message"`
 }
+
+// S3RotateOptions tunes a rotation.
+type S3RotateOptions struct {
+	// RotateRoot also replaces the MinIO root password (one restart).
+	RotateRoot bool `json:"rotateRoot,omitempty"`
+}
+
+// annS3RootRotatedAt on the MinIO pod template forces the restart that
+// makes MinIO read a rotated root password.
+const annS3RootRotatedAt = "kuso.sislelabs.com/s3-root-rotated-at"
 
 func randString(n int) (string, error) {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -85,7 +104,7 @@ func (s *Service) ownedS3Addon(ctx context.Context, project, name string) (*kube
 
 // RotateS3Credentials mints a new bucket-scoped app user and swaps it
 // into the addon's conn Secret. See the file comment.
-func (s *Service) RotateS3Credentials(ctx context.Context, project, name string) (*S3RotateResult, error) {
+func (s *Service) RotateS3Credentials(ctx context.Context, project, name string, opts S3RotateOptions) (*S3RotateResult, error) {
 	a, ns, err := s.ownedS3Addon(ctx, project, name)
 	if err != nil {
 		return nil, err
@@ -169,7 +188,73 @@ func (s *Service) RotateS3Credentials(ctx context.Context, project, name string)
 		res.PreviousAccessKeyID = oldKey
 		res.Message = "restart the services that use " + conn.Name + ", then revoke the previous key"
 	}
+	if opts.RotateRoot {
+		if err := s.rotateS3RootPassword(ctx, ns, a, root.Name); err != nil {
+			return nil, fmt.Errorf("the app key was rotated (%s now holds %s) but the root password was not: %w", conn.Name, newKey, err)
+		}
+		res.RootRotated = true
+		res.Message += " The MinIO root password was replaced and MinIO restarted: anything still using the old root key"
+		if wasRoot {
+			res.Message += " (on this addon, every service not yet restarted)"
+		}
+		res.Message += " is now refused."
+	}
 	return res, nil
+}
+
+// rotateS3RootPassword writes a new root password into the root Secret,
+// restarts MinIO onto it, and proves the new password works. A failed
+// restart patch puts the old password back so the Secret never disagrees
+// with a running MinIO.
+func (s *Service) rotateS3RootPassword(ctx context.Context, ns string, a *kube.KusoAddon, rootName string) error {
+	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
+	cur, err := secrets.Get(ctx, rootName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read root secret: %w", err)
+	}
+	oldPass := append([]byte(nil), cur.Data["MINIO_ROOT_PASSWORD"]...)
+	newPass, err := randString(40)
+	if err != nil {
+		return err
+	}
+	upd := cur.DeepCopy()
+	upd.Data["MINIO_ROOT_PASSWORD"] = []byte(newPass)
+	written, err := secrets.Update(ctx, upd, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("write new root password: %w", err)
+	}
+	if err := s.restartMinIOOnRootSecret(ctx, ns, a.Name, rootName); err != nil {
+		back := written.DeepCopy()
+		back.Data["MINIO_ROOT_PASSWORD"] = oldPass
+		if _, rerr := secrets.Update(ctx, back, metav1.UpdateOptions{}); rerr != nil {
+			return fmt.Errorf("%w; putting the old root password back into %s also failed (%v): restart MinIO by hand so it reads the new one", err, rootName, rerr)
+		}
+		return err
+	}
+	if err := s.runS3AdminJob(ctx, ns, a, "rootcheck", s3RootCheckScript, rootName, []corev1.EnvVar{{Name: "MINIO_HOST", Value: a.Name}}, nil); err != nil {
+		return fmt.Errorf("MinIO was restarted onto the new root password in %s but has not confirmed it (it may still be starting; check its pod): %w", rootName, err)
+	}
+	return nil
+}
+
+// restartMinIOOnRootSecret points MinIO's root env at the root Secret and
+// stamps the pod template so the single pod restarts and re-reads it.
+func (s *Service) restartMinIOOnRootSecret(ctx context.Context, ns, sts, rootSecret string) error {
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{annS3RootRotatedAt: time.Now().UTC().Format(time.RFC3339)}},
+		"spec":     minIORootEnvPatch(rootSecret),
+	}}})
+	if _, err := s.Kube.Clientset.AppsV1().StatefulSets(ns).Patch(ctx, sts, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("restart MinIO: %w", err)
+	}
+	return nil
+}
+
+func minIORootEnvPatch(rootSecret string) map[string]any {
+	ref := func(key string) map[string]any {
+		return map[string]any{"name": key, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": rootSecret, "key": key}}}
+	}
+	return map[string]any{"containers": []any{map[string]any{"name": "minio", "env": []any{ref("MINIO_ROOT_USER"), ref("MINIO_ROOT_PASSWORD")}}}}
 }
 
 // RevokePreviousS3Credentials removes the app user a rotation replaced.
@@ -216,12 +301,7 @@ echo "==> previous app user removed"
 // pointMinIOAtRootSecret patches the MinIO StatefulSet's root env to
 // read from the root Secret (a rolling restart of the single pod).
 func (s *Service) pointMinIOAtRootSecret(ctx context.Context, ns, sts, rootSecret string) error {
-	ref := func(key string) map[string]any {
-		return map[string]any{"name": key, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": rootSecret, "key": key}}}
-	}
-	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
-		"containers": []any{map[string]any{"name": "minio", "env": []any{ref("MINIO_ROOT_USER"), ref("MINIO_ROOT_PASSWORD")}}},
-	}}}})
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": minIORootEnvPatch(rootSecret)}}})
 	if _, err := s.Kube.Clientset.AppsV1().StatefulSets(ns).Patch(ctx, sts, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("point MinIO at %s: %w", rootSecret, err)
 	}
@@ -334,6 +414,14 @@ func (s *Service) runS3AdminJob(ctx context.Context, ns string, a *kube.KusoAddo
 		}
 	}
 }
+
+// s3RootCheckScript waits out the MinIO restart and proves the root
+// Secret's password is the one MinIO now runs with.
+const s3RootCheckScript = `set -eu
+i=0; until mc alias set local "http://${MINIO_HOST}:9000" "${ROOT_USER}" "${ROOT_PASSWORD}" >/dev/null 2>&1; do i=$((i+1)); [ "$i" -ge 50 ] && { echo "MinIO does not accept the new root password" >&2; exit 1; }; sleep 2; done
+mc admin info local >/dev/null
+echo "==> MinIO runs with the new root password"
+`
 
 // s3RotateScript runs in s3AdminImage, which ships no grep/awk/sed.
 const s3RotateScript = `set -eu

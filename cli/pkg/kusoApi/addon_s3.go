@@ -8,7 +8,12 @@ package kusoApi
 
 import "github.com/go-resty/resty/v2"
 
-func (k *KusoClient) RotateS3Credentials(project, addon string) (*resty.Response, error) {
+type RotateS3CredentialsRequest struct {
+	RotateRoot bool `json:"rotateRoot,omitempty"`
+}
+
+func (k *KusoClient) RotateS3Credentials(project, addon string, req RotateS3CredentialsRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/s3/rotate-credentials")
 }
 

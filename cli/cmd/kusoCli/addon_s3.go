@@ -19,6 +19,8 @@ var addonS3Cmd = &cobra.Command{
 	Short: "S3 (MinIO) addon credentials",
 }
 
+var addonS3RotateRoot bool
+
 var addonS3RotateCmd = &cobra.Command{
 	Use:   "rotate-credentials <project> <addon>",
 	Short: "Give the addon's conn Secret a new bucket-scoped key",
@@ -30,13 +32,19 @@ every subscribed service; rotating once moves them to a scoped user (MinIO
 restarts once to read root from <addon>-root).
 
 Otherwise the old key keeps working until you run revoke-previous, so
-restart the services that use the addon first.`,
+restart the services that use the addon first.
+
+--root also replaces the MinIO root password (MinIO restarts once), so
+root keys that leaked while apps held them stop working. On an addon that
+still hands out root, every subscribed service loses access until it is
+restarted onto the new scoped key. Apps that use buckets other than the
+addon's own need root and break under a scoped key: don't rotate those.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.RotateS3Credentials(args[0], args[1])
+		resp, err := api.RotateS3Credentials(args[0], args[1], kusoApi.RotateS3CredentialsRequest{RotateRoot: addonS3RotateRoot})
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("rotate: %w", err)
 		}
@@ -150,6 +158,7 @@ never touched. This cannot be undone.`,
 func init() {
 	projectAddonCmd.AddCommand(addonS3Cmd)
 	addonS3Cmd.AddCommand(addonS3RotateCmd, addonS3RevokeCmd)
+	addonS3RotateCmd.Flags().BoolVar(&addonS3RotateRoot, "root", false, "also replace the MinIO root password (restarts MinIO)")
 	backupCmd.AddCommand(backupOrphansCmd, backupPurgeCmd)
 	backupOrphansCmd.Flags().StringVarP(&backupOrphansOutput, "output", "o", "table", "output format: table|json")
 	backupPurgeCmd.Flags().BoolVarP(&backupPurgeYes, "yes", "y", false, "skip the typed confirmation")
