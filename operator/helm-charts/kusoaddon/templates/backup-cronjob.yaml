@@ -189,11 +189,19 @@ spec:
                   # artifact is untouched -- it stays the restore contract,
                   # and Manifest.ArtifactFor looks up by key, so an older
                   # binary still resolves it.
-                  OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" "${PSQL}" \
+                  # A failed listing must fail the run: swallowing it left
+                  # every tenant DB undumped behind an exit-0 Job. Prune
+                  # still runs; the exit happens at the end with the rest.
+                  # DBLIST_OK=0 means ALL_DBS is unknown, not empty: nothing
+                  # may treat a series as belonging to a dropped DB then.
+                  FAILED_DBS=""; DBLIST_OK=1
+                  if ! ALL_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" "${PSQL}" \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-                    -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
-                    2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
-                  FAILED_DBS=""
+                    -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')"); then
+                    echo "ERROR: could not list the logical DBs on ${ADDON}; no tenant DB was dumped" >&2
+                    FAILED_DBS=" (database listing)"; ALL_DBS=""; DBLIST_OK=0
+                  fi
+                  OTHER_DBS=$(printf '%s\n' "${ALL_DBS}" | grep -vxF "${POSTGRES_DB}" || true)
                   if [ -n "${OTHER_DBS}" ]; then
                     N=$(printf '%s\n' "${OTHER_DBS}" | grep -c . || true)
                     echo "==> addon hosts ${N} additional logical DB(s); dumping each"
@@ -239,7 +247,7 @@ spec:
                   # support lifecycle rules consistently. It keeps the
                   # newest copies per database, so it runs even when a
                   # tenant's dump failed; the Job still fails afterwards.
-                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files" "dbSeries" true) | nindent 18 }}
                   if [ -n "${FAILED_DBS}" ]; then
                     echo "ERROR: logical DB dump failed for:${FAILED_DBS}" >&2
                     exit 1

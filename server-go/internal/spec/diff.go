@@ -609,7 +609,11 @@ func diffAddon(live, desired AddonSpec) []FieldChange {
 		b.RetentionDays = live.Backup.RetentionDays
 		desiredBackup = &b
 	}
-	cmp("backup", renderJSON(normBackup(live.Backup)), renderJSON(normBackup(desiredBackup)))
+	// No backup block leaves the live schedule alone: new database addons
+	// get a default one at create, which must not read as drift.
+	if desiredBackup != nil {
+		cmp("backup", renderJSON(normBackup(live.Backup)), renderJSON(normBackup(desiredBackup)))
+	}
 	cmp("placement", renderPlacementSpec(live.Placement), renderPlacementSpec(desired.Placement))
 	cmp("external", renderJSON(live.External), renderJSON(desired.External))
 	return out

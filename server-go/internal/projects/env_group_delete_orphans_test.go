@@ -48,6 +48,9 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 		for _, a := range []string{"db", "cache", "storage"} {
 			fqn := "st-" + a + "-" + grp
 			objs = append(objs, pvc("data-"+fqn+"-0", fqn), secret(fqn+"-conn"))
+			key := keptSecret(fqn+"-backup-key", fqn)
+			key.Labels["kuso.sislelabs.com/role"] = "backup-key"
+			objs = append(objs, key)
 		}
 		objs = append(objs, keptSecret("st-storage-"+grp+"-root", "st-storage-"+grp),
 			keptSecret("st-storage-"+grp+"-readonly", "st-storage-"+grp))
@@ -103,6 +106,11 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 		}
 		if addonExists(t, s, "st-"+a+"-verify") {
 			t.Errorf("verify addon CR st-%s-verify survived", a)
+		}
+		// The clone's dumps stay in the bucket; without the key they are
+		// unreadable.
+		if !secretExists("st-" + a + "-verify-backup-key") {
+			t.Errorf("verify clone backup key st-%s-verify-backup-key was deleted while its dumps are retained", a)
 		}
 		// Siblings: staging clones and production data are untouched.
 		for _, keep := range []string{"st-" + a + "-staging", "st-" + a} {

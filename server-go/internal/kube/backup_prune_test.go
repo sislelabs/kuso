@@ -257,6 +257,38 @@ func TestBackupPrune_KeepsNewestThreePerTenantSeries(t *testing.T) {
 	assertDeleted(t, runPrune(t, docker, block, strings.Join(listing, "\n"), 0), want)
 }
 
+// DB-5: a dropped database's series (a closed PR's preview clone, seeded
+// from production) gets no new dumps, so KEEP_MIN held its last copies
+// forever. Once the run listed the live databases, the series ages out
+// like any dump; a live tenant and an unknown listing keep KEEP_MIN.
+func TestBackupPrune_DroppedDatabaseSeriesAgesOut(t *testing.T) {
+	docker := requireBackupImage(t)
+	now := time.Now().UTC()
+	block := renderedPruneBlock(t, "postgres")
+	var listing, droppedOld, liveOld []string
+	for _, days := range []int{100, 90, 80, 70, 5} {
+		s := stampDaysAgo(now, days)
+		for _, series := range []string{".db-kuso-preview-pr-7.sql.gz", ".db-tenant.sql.gz"} {
+			listing = append(listing, fileLine(s+series), fileLine(s+series+".manifest.json"))
+		}
+		if days >= 70 {
+			droppedOld = append(droppedOld, s+".db-kuso-preview-pr-7.sql.gz", s+".db-kuso-preview-pr-7.sql.gz.manifest.json")
+		}
+		if days >= 90 { // beyond the newest three
+			liveOld = append(liveOld, s+".db-tenant.sql.gz", s+".db-tenant.sql.gz.manifest.json")
+		}
+	}
+	listed := "DBLIST_OK=1\nALL_DBS='app\ntenant'\n"
+	assertDeleted(t, runPrune(t, docker, listed+block, strings.Join(listing, "\n"), 0), append(droppedOld, liveOld...))
+
+	unknown := "DBLIST_OK=0\nALL_DBS=''\n"
+	var keepMinOnly []string
+	for _, s := range liveOld {
+		keepMinOnly = append(keepMinOnly, s, strings.Replace(s, ".db-tenant.", ".db-kuso-preview-pr-7.", 1))
+	}
+	assertDeleted(t, runPrune(t, docker, unknown+block, strings.Join(listing, "\n"), 0), keepMinOnly)
+}
+
 // Anything short of a clean listing must delete nothing.
 func TestBackupPrune_FailsSafe(t *testing.T) {
 	docker := requireBackupImage(t)

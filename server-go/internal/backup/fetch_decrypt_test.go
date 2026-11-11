@@ -47,23 +47,35 @@ func TestS3FetchShellDecryptsAndPassesLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run := func(src, key string) ([]byte, error) {
+	run := func(src, key string, extraEnv ...string) ([]byte, error) {
 		out := filepath.Join(dir, "out-"+src)
 		cmd := exec.Command(bash, "-c", "set -eo pipefail\n"+s3FetchShell+"\ns3_fetch s3://bucket/"+src+" "+out)
-		cmd.Env = append(os.Environ(), "PATH="+stub+":"+os.Getenv("PATH"), "S3_ENDPOINT=x", "BACKUP_ENCRYPTION_KEY="+key)
+		cmd.Env = append(os.Environ(), "PATH="+stub+":"+os.Getenv("PATH"), "S3_ENDPOINT=x", "BACKUP_ENCRYPTION_KEY="+key, "ALLOW_UNVERIFIED=")
+		cmd.Env = append(cmd.Env, extraEnv...)
 		if b, err := cmd.CombinedOutput(); err != nil {
 			return b, err
 		}
 		return os.ReadFile(out)
 	}
-	for _, src := range []string{"legacy.sql.gz", "enc.sql.gz"} {
-		got, err := run(src, "the-key")
+	for _, c := range []struct{ src, key string }{
+		{"legacy.sql.gz", ""}, // addon without a key: plaintext is all it ever wrote
+		{"enc.sql.gz", "the-key"},
+	} {
+		got, err := run(c.src, c.key)
 		if err != nil {
-			t.Fatalf("%s: %v: %s", src, err, got)
+			t.Fatalf("%s: %v: %s", c.src, err, got)
 		}
 		if !bytes.Equal(got, gz.Bytes()) {
-			t.Errorf("%s: restore input is not the plaintext gzip", src)
+			t.Errorf("%s: restore input is not the plaintext gzip", c.src)
 		}
+	}
+	// BLOB-5: an addon that encrypts must not silently restore a plaintext
+	// dump (a downgrade by whoever can write the bucket), unless overridden.
+	if out, err := run("legacy.sql.gz", "the-key"); err == nil || !strings.Contains(string(out), "NOT encrypted") {
+		t.Errorf("plaintext dump for an encrypting addon was accepted: err=%v out=%s", err, out)
+	}
+	if got, err := run("legacy.sql.gz", "the-key", "ALLOW_UNVERIFIED=1"); err != nil || !bytes.Equal(got, gz.Bytes()) {
+		t.Errorf("plaintext dump with the override: err=%v out=%s", err, got)
 	}
 	if out, err := run("enc.sql.gz", ""); err == nil || !strings.Contains(string(out), "no backup encryption key") {
 		t.Errorf("encrypted dump without a key should fail loudly, got err=%v out=%s", err, out)

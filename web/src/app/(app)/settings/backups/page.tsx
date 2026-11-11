@@ -38,6 +38,7 @@ interface AddonBackupRow {
   instanceShared?: boolean;
   covered: boolean;
   healthy: boolean;
+  unprotected?: boolean;
   lastSuccessAt?: string;
   lastScheduleAt?: string;
   detail?: string;
@@ -54,6 +55,7 @@ interface BackupHealthResp {
   addonBackups?: AddonBackupRow[];
   addonBackupsComplete?: boolean;
   serviceVolumes?: ServiceVolumeRow[];
+  backupKeysUnexported?: string[];
   bucket?: BucketSafety | null;
 }
 interface BucketSafety {
@@ -65,19 +67,22 @@ interface BucketSafety {
   warnings?: string[];
 }
 
-type CoverageBadge = "on-schedule" | "overdue" | "via-instance" | "not-covered";
+type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "via-instance" | "not-covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
+  if (row.healthy && row.unprotected) return "unprotected";
   if (!row.covered) return row.instanceShared ? "via-instance" : "not-covered";
   return row.healthy ? "on-schedule" : "overdue";
 }
 
 // Green means the last scheduled run landed; overdue means a scheduled
 // run hasn't succeeded since (failed, or the job can't run). The two
-// coverage states are facts about the setup, so they stay neutral.
+// coverage states are facts about the setup, so they stay neutral, except
+// a database with no dump yet, which is a data risk.
 const BADGE: Record<CoverageBadge, StatusMeta> = {
   "on-schedule": { ...RUN_STATUS.succeeded, label: "On schedule" },
   overdue: { ...RUN_STATUS.failed, label: "Overdue" },
+  unprotected: { label: "Unprotected", tone: "warning" },
   "via-instance": { label: "Via instance", tone: "neutral" },
   "not-covered": { label: "Not backed up", tone: "neutral" },
 };
@@ -116,7 +121,7 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { overdue: 0, "not-covered": 1, "on-schedule": 2, "via-instance": 3 };
+  const rank: Record<CoverageBadge, number> = { overdue: 0, unprotected: 1, "not-covered": 2, "on-schedule": 3, "via-instance": 4 };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );
@@ -259,6 +264,13 @@ function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
           </ul>
         </SettingsNotice>
       ) : null}
+      {(health.data.backupKeysUnexported?.length ?? 0) > 0 && (
+        <SettingsNotice tone="warning" title="Backup encryption keys exist only in this cluster">
+          {health.data.backupKeysUnexported?.length} addon key(s) have never been exported. If the cluster is lost, those
+          addons&apos; encrypted backups can&apos;t be read. Run <code>kuso backup keys export</code> and store the file
+          off-cluster.
+        </SettingsNotice>
+      )}
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />

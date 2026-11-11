@@ -41,7 +41,9 @@ s3_fetch() { # src dst
   done
   # Encrypted artifacts (openssl "Salted__" header) are decrypted in place,
   # so the manifest's plaintext sha256 check below and the restore itself
-  # see the same gzip a pre-encryption dump was. Legacy dumps pass as-is.
+  # see the same gzip a pre-encryption dump was. Legacy dumps pass as-is,
+  # except for an addon that encrypts: anyone who can write the bucket
+  # could otherwise swap in a plaintext dump plus a matching manifest.
   if [ "$(head -c 8 "$2" | tr -d '\0')" = "Salted__" ]; then
     if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
       echo "==> $1 is encrypted but no backup encryption key is mounted (Secret <addon>-backup-key)" >&2; exit 1
@@ -49,6 +51,8 @@ s3_fetch() { # src dst
     echo "==> decrypting"
     openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -pass env:BACKUP_ENCRYPTION_KEY -in "$2" -out "$2.plain"
     mv "$2.plain" "$2"
+  elif [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+    unverified "$1 is NOT encrypted, but this addon encrypts its backups (a dump from before encryption, or one replaced in the bucket)"
   fi
 }
 ` + verifyManifestShell
@@ -69,6 +73,22 @@ unverified() { # reason
   echo "==> $1: refusing to restore an unverified backup. If it predates manifests and you trust it, retry with allowUnverified (kuso CLI: --allow-unverified)." >&2
   exit 1
 }
+# verify_mac checks the manifest's HMAC of the plaintext sha256 under the
+# addon's backup key. The bare sha256 sits next to the artifact, so whoever
+# can write the bucket can rewrite both; the mac they cannot forge. Manifests
+# written before the mac existed have none and keep the sha256-only check.
+verify_mac() { # sha256
+  MAC_WANT=$(grep -o '"mac":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4 || true)
+  if [ -z "${MAC_WANT}" ] || [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+    return 0
+  fi
+  MAC_GOT=$(printf 'kuso-backup-mac:%s' "$1" | openssl dgst -sha256 -hmac "${BACKUP_ENCRYPTION_KEY}" | awk '{print $NF}')
+  if [ "${MAC_WANT}" != "${MAC_GOT}" ]; then
+    echo "==> manifest signature MISMATCH: it was not written with this addon's backup key; aborting before touching the database" >&2
+    exit 1
+  fi
+  echo "==> manifest signature OK"
+}
 verify_manifest() { # artifact
   echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
   if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
@@ -81,6 +101,7 @@ verify_manifest() { # artifact
       exit 1
     else
       echo "==> checksum OK (${GOT})"
+      verify_mac "${GOT}"
     fi
   else
     unverified "no manifest for this backup"
@@ -143,6 +164,7 @@ pg_target_ready() {
   if [ -n "${RESTORE_DSN}" ]; then pg_isready -d "${RESTORE_DSN}" -q
   else pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; fi
 }
+` + pgOwnershipFilterShell + `
 pg_apply() {
   if [ -n "${RESTORE_DSN}" ]; then psql -v ON_ERROR_STOP=1 --single-transaction "${RESTORE_DSN}"
   else PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 --single-transaction -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"; fi
@@ -155,10 +177,33 @@ until pg_target_ready; do
 done
 gunzip -c /tmp/dump.sql.gz \
   | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
+  | pg_ownership_filter \
   | pg_apply
 echo "==> done"
 `
 }
+
+// pgOwnershipFilterShell defines pg_ownership_filter. Dumps keep their
+// OWNER TO and GRANT/REVOKE lines, and a restore applies them as the
+// destination's conn user, which may not SET ROLE to the source's owner
+// (every instance tenant has its own role). For a restore into a different
+// addon (RESTORE_STRIP_OWNERSHIP=1) those lines are dropped, as
+// pg_dump --no-owner --no-acl would have: the objects end up owned by the
+// destination user. COPY data and lines outside ACL entries pass untouched,
+// so a row or function body that happens to read "GRANT ..." survives.
+const pgOwnershipFilterShell = `
+pg_ownership_filter() {
+  if [ "${RESTORE_STRIP_OWNERSHIP:-}" != "1" ]; then cat; return; fi
+  echo "==> restoring into another addon: dropping the source's ownership and grants" >&2
+  awk '
+    copy { print; if ($0 == "\\.") copy = 0; next }
+    /^COPY .* FROM stdin;$/ { copy = 1; print; next }
+    /^-- (Data for )?Name: .*; Type: / { t = $0; sub(/.*; Type: /, "", t); sub(/;.*/, "", t); print; next }
+    /^ALTER [A-Z ]+ .* OWNER TO [^ ]+;$/ { next }
+    (t == "ACL" || t == "DEFAULT ACL") && /^(GRANT|REVOKE|ALTER DEFAULT PRIVILEGES) / { next }
+    { print }'
+}
+`
 
 // --- redis ------------------------------------------------------------
 

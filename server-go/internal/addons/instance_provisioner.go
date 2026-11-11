@@ -97,7 +97,7 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 		}
 	}
 
-	db, err := sql.Open("postgres", adminDSN)
+	db, err := sql.Open("postgres", withConnectTimeout(adminDSN))
 	if err != nil {
 		return "", "", false, fmt.Errorf("open admin: %w", err)
 	}
@@ -113,12 +113,12 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// against a database whose existence we couldn't verify.
 	var exists int
 	var dbOwner sql.NullString
-	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&exists, &dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.QueryRowContext(ctx, `SELECT 1, shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&exists, &dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", false, fmt.Errorf("check pg_database: %w", err)
 	}
 	var userExists int
 	var roleOwner sql.NullString
-	if err := db.QueryRow(`SELECT 1, shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists, &roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.QueryRowContext(ctx, `SELECT 1, shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists, &roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", false, fmt.Errorf("check pg_roles: %w", err)
 	}
 	// The identifier isn't injective across projects ("acme"/"api-db" and
@@ -133,11 +133,11 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	}
 	owner := instanceDBOwnerTag(project, addonShort)
 	if exists != 1 {
-		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %s`, pq.QuoteIdentifier(dbName))); err != nil {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE %s`, pq.QuoteIdentifier(dbName))); err != nil {
 			return "", "", false, fmt.Errorf("create db %s: %w", dbName, err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON DATABASE %s IS %s`, pq.QuoteIdentifier(dbName), pq.QuoteLiteral(owner))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`COMMENT ON DATABASE %s IS %s`, pq.QuoteIdentifier(dbName), pq.QuoteLiteral(owner))); err != nil {
 		return "", "", false, fmt.Errorf("mark db owner: %w", err)
 	}
 
@@ -145,15 +145,15 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// so a fresh provision and a re-provision both end with a known
 	// password we can return to the caller.
 	if userExists != 1 {
-		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", false, fmt.Errorf("create role: %w", err)
 		}
 	} else {
-		if _, err := db.Exec(fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", false, fmt.Errorf("rotate role password: %w", err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf(`COMMENT ON ROLE %s IS %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(owner))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`COMMENT ON ROLE %s IS %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(owner))); err != nil {
 		return "", "", false, fmt.Errorf("mark role owner: %w", err)
 	}
 	if err := applyInstanceRoleConnLimit(ctx, db, userName, connLimit); err != nil {
@@ -170,10 +170,10 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	// (CONNECT/CREATE/TEMP) — it does NOT confer access to other DBs, and
 	// the role is created without SUPERUSER/CREATEDB/CREATEROLE, so it
 	// cannot escalate across databases.
-	if _, err := db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE %s FROM PUBLIC`, pq.QuoteIdentifier(dbName))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`REVOKE CONNECT ON DATABASE %s FROM PUBLIC`, pq.QuoteIdentifier(dbName))); err != nil {
 		return "", "", false, fmt.Errorf("revoke public connect: %w", err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(userName))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(userName))); err != nil {
 		return "", "", false, fmt.Errorf("grant: %w", err)
 	}
 
@@ -191,7 +191,7 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 			return "", "", false, fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
 		}
 		au.Path = "/" + dbName
-		dbConn, derr := sql.Open("postgres", au.String())
+		dbConn, derr := sql.Open("postgres", withConnectTimeout(au.String()))
 		if derr != nil {
 			return "", "", false, fmt.Errorf("open new db for schema grant: %w", derr)
 		}
@@ -200,7 +200,7 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 			fmt.Sprintf(`GRANT ALL ON SCHEMA public TO %s`, pq.QuoteIdentifier(userName)),
 			fmt.Sprintf(`ALTER SCHEMA public OWNER TO %s`, pq.QuoteIdentifier(userName)),
 		} {
-			if _, err := dbConn.Exec(stmt); err != nil {
+			if _, err := dbConn.ExecContext(ctx, stmt); err != nil {
 				return "", "", false, fmt.Errorf("grant schema public: %w", err)
 			}
 		}
@@ -471,7 +471,7 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 	dbName := pgIdentifier(project, addonShort)
 	userName := dbName
 
-	db, err := sql.Open("postgres", adminDSN)
+	db, err := sql.Open("postgres", withConnectTimeout(adminDSN))
 	if err != nil {
 		return fmt.Errorf("open admin: %w", err)
 	}
@@ -481,10 +481,10 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 	// name may be another addon's. Drop only what the ownership stamp (or,
 	// for pre-stamp DBs, the absence of a competing live addon) says is ours.
 	var dbOwner, roleOwner sql.NullString
-	if err := db.QueryRow(`SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.QueryRowContext(ctx, `SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = $1`, dbName).Scan(&dbOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("check pg_database: %w", err)
 	}
-	if err := db.QueryRow(`SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := db.QueryRowContext(ctx, `SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, userName).Scan(&roleOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("check pg_roles: %w", err)
 	}
 	if err := s.checkInstanceDBOwner(ctx, dbName, project, addonShort, dbOwner.String, roleOwner.String); err != nil {
@@ -492,16 +492,16 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 	}
 
 	// Boot any open connections so DROP DATABASE can proceed.
-	_, _ = db.Exec(
+	_, _ = db.ExecContext(ctx,
 		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
 		dbName)
-	if _, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, pq.QuoteIdentifier(dbName))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, pq.QuoteIdentifier(dbName))); err != nil {
 		return fmt.Errorf("drop db %s: %w", dbName, err)
 	}
 	// Role drop is best-effort — it can fail if the role still owns
 	// objects in OTHER databases (shouldn't for a per-PR clone role, but
 	// don't let it block the DB drop's success).
-	if _, err := db.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pq.QuoteIdentifier(userName))); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pq.QuoteIdentifier(userName))); err != nil {
 		// Not fatal: the DB (the space-consuming part) is already gone.
 		return nil
 	}
@@ -511,7 +511,7 @@ func (s *Service) dropInstanceAddonDB(ctx context.Context, adminDSN, project, ad
 // instanceDBExists reports whether the shared server already has a database
 // named ident.
 func instanceDBExists(ctx context.Context, adminDSN, ident string) (bool, error) {
-	db, err := sql.Open("postgres", adminDSN)
+	db, err := sql.Open("postgres", withConnectTimeout(adminDSN))
 	if err != nil {
 		return false, fmt.Errorf("open admin: %w", err)
 	}

@@ -38,6 +38,7 @@ type backupHealthView struct {
 		Covered       bool   `json:"covered"`
 		LastSuccessAt string `json:"lastSuccessAt"`
 		Healthy       bool   `json:"healthy"`
+		Unprotected   bool   `json:"unprotected"`
 		Detail        string `json:"detail"`
 	} `json:"addonBackups"`
 	AddonBackupsComplete bool `json:"addonBackupsComplete"`
@@ -48,7 +49,8 @@ type backupHealthView struct {
 		Covered bool     `json:"covered"`
 		Detail  string   `json:"detail"`
 	} `json:"serviceVolumes"`
-	ServiceVolumesComplete bool `json:"serviceVolumesComplete"`
+	ServiceVolumesComplete bool     `json:"serviceVolumesComplete"`
+	BackupKeysUnexported   []string `json:"backupKeysUnexported"`
 	Bucket                 *struct {
 		Bucket           string   `json:"bucket"`
 		InsecureEndpoint bool     `json:"insecureEndpoint"`
@@ -108,7 +110,11 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 			if a.Project != "" {
 				name = a.Project + "/" + strings.TrimPrefix(a.Addon, a.Project+"-")
 			}
-			t.Append([]string{name, a.Kind, orDash(a.Schedule), boolText(a.Covered), orDash(a.LastSuccessAt), healthWord(a.Healthy), a.Detail})
+			health := healthWord(a.Healthy)
+			if a.Healthy && a.Unprotected {
+				health = "UNPROTECTED"
+			}
+			t.Append([]string{name, a.Kind, orDash(a.Schedule), boolText(a.Covered), orDash(a.LastSuccessAt), health, a.Detail})
 		}
 		t.Render()
 	}
@@ -131,6 +137,13 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 	}
 	if !h.ServiceVolumesComplete {
 		fmt.Fprintln(w, "  (service volume list incomplete: a lookup failed)")
+	}
+	if n := len(h.BackupKeysUnexported); n > 0 {
+		fmt.Fprintf(w, "\nWARNING: %d backup encryption key(s) exist only in this cluster; if it is lost, those addons' encrypted dumps are unreadable.\n", n)
+		fmt.Fprintln(w, "  Export them and store the file off-cluster: kuso backup keys export --file <path>")
+		for _, k := range h.BackupKeysUnexported {
+			fmt.Fprintln(w, "  - "+k)
+		}
 	}
 }
 

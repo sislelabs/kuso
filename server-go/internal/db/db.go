@@ -244,31 +244,41 @@ type Stats struct {
 // simple-query path doesn't reliably handle multi-statement strings,
 // so we split on `;` ourselves.
 func (d *DB) applySchema() error {
-	for _, stmt := range splitSQL(schemaSQL) {
+	return d.applySchemaSQL(context.Background(), schemaSQL)
+}
+
+func (d *DB) applySchemaSQL(ctx context.Context, blob string) error {
+	for _, stmt := range splitSQL(blob) {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" || strings.HasPrefix(stmt, "--") {
 			continue
 		}
-		// ADD CONSTRAINT has no IF NOT EXISTS. Running it anyway takes an
-		// ACCESS EXCLUSIVE lock on the table (LogLine, ErrorEvent, User)
-		// on every boot before failing with "already exists"; probe first.
+		// ADD CONSTRAINT has no IF NOT EXISTS, and ADD COLUMN IF NOT EXISTS
+		// takes ACCESS EXCLUSIVE before checking. Either would lock a hot
+		// table (LogLine, User, AlertRule, ...) on every boot; probe the
+		// catalog first.
 		if m := addConstraintRe.FindStringSubmatch(stmt); m != nil {
 			var exists bool
-			if err := d.DB.QueryRow(
+			if err := d.DB.QueryRowContext(ctx,
 				`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = $1 AND conrelid = to_regclass($2))`,
 				m[2], `"`+m[1]+`"`,
 			).Scan(&exists); err == nil && exists {
 				continue
 			}
 		}
-		if _, err := d.DB.Exec(stmt); err != nil {
+		if table, cols, ok := parseAddColumnsIfNotExists(stmt); ok {
+			if exists, err := columnsAllExist(ctx, d.DB, table, cols); err == nil && exists {
+				continue
+			}
+		}
+		if err := execDDL(ctx, d.DB, stmt); err != nil {
 			// IF NOT EXISTS catches most re-runs; tolerate the
 			// remaining edge cases (constraint already present,
 			// duplicate column under ALTER … ADD COLUMN even with
 			// the IF NOT EXISTS clause).
 			msg := err.Error()
-			if strings.Contains(msg, "already exists") ||
-				strings.Contains(msg, "duplicate column") {
+			if !isLockTimeout(err) && (strings.Contains(msg, "already exists") ||
+				strings.Contains(msg, "duplicate column")) {
 				continue
 			}
 			return fmt.Errorf("db: apply schema: %w\n  stmt: %s", err, stmt)

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -114,6 +116,62 @@ func (s orphanScanner) orphanKeys(ctx context.Context, project, addon string) (k
 // reserved, so no tenant project can live there).
 func reservedBackupProject(p string) bool { return strings.HasPrefix(p, "kuso-") }
 
+// droppedDBSeriesLag: a per-database series whose newest dump trails the
+// prefix's newest dump by more than this is no longer being dumped. The
+// backup runs nightly, so two missed runs.
+const droppedDBSeriesLag = 48 * time.Hour
+
+var dbSeriesRe = regexp.MustCompile(`^\d{8}T\d{6}Z\.db-(.+?)\.sql\.gz(\.manifest\.json)?$`)
+
+// droppedDBSeries reports the per-database series (<ts>.db-<db>.sql.gz)
+// under one addon prefix that stopped while the addon kept being dumped:
+// the database was dropped (a preview or env clone, seeded from
+// production) or its dump keeps failing. Instance prefixes are included,
+// since that is where tenant series live. The backup Job's prune ages a
+// dropped series out after retention; this makes it visible until then.
+// Report-only: purge acts on whole orphaned addon prefixes.
+func (s orphanScanner) droppedDBSeries(ctx context.Context, project, addon string) ([]BackupOrphan, error) {
+	prefix := project + "/" + addon + "/"
+	series := map[string]*BackupOrphan{}
+	var newest time.Time
+	p := s3.NewListObjectsV2Paginator(s.cli, &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(prefix)})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range page.Contents {
+			key := aws.ToString(o.Key)
+			taken := backupObjectTime(prefix, key, aws.ToTime(o.LastModified))
+			if taken.After(newest) {
+				newest = taken
+			}
+			m := dbSeriesRe.FindStringSubmatch(strings.TrimPrefix(key, prefix))
+			if m == nil {
+				continue
+			}
+			b := series[m[1]]
+			if b == nil {
+				b = &BackupOrphan{Project: project, Addon: addon, Reason: "database-not-dumped:" + m[1]}
+				series[m[1]] = b
+			}
+			b.Objects++
+			b.Bytes += aws.ToInt64(o.Size)
+			if taken.After(b.Newest) {
+				b.Newest = taken
+			}
+		}
+	}
+	var out []BackupOrphan
+	for _, b := range series {
+		if newest.Sub(b.Newest) > droppedDBSeriesLag {
+			out = append(out, *b)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Reason < out[j].Reason })
+	return out, nil
+}
+
 func (s orphanScanner) scan(ctx context.Context) ([]BackupOrphan, error) {
 	projects, err := s.childPrefixes(ctx, "")
 	if err != nil {
@@ -121,14 +179,19 @@ func (s orphanScanner) scan(ctx context.Context) ([]BackupOrphan, error) {
 	}
 	out := []BackupOrphan{}
 	for _, p := range projects {
-		if reservedBackupProject(p) {
-			continue
-		}
 		addonNames, err := s.childPrefixes(ctx, p+"/")
 		if err != nil {
 			return nil, err
 		}
 		for _, a := range addonNames {
+			stale, err := s.droppedDBSeries(ctx, p, a)
+			if err != nil {
+				return nil, fmt.Errorf("%s/%s: %w", p, a, err)
+			}
+			out = append(out, stale...)
+			if reservedBackupProject(p) {
+				continue
+			}
 			_, o, err := s.orphanKeys(ctx, p, a)
 			if err != nil {
 				return nil, fmt.Errorf("%s/%s: %w", p, a, err)

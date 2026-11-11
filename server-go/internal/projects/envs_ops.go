@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"kuso/server/internal/backup"
 	"kuso/server/internal/kube"
 )
 
@@ -593,8 +594,12 @@ func (s *Service) reclaimCloneAddonData(ctx context.Context, ns, addonFQN string
 		}
 	}
 	// Kept Secrets beyond -conn (s3's -root and -readonly) carry only the
-	// instance label.
-	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, byInstance)
+	// instance label. The backup key stays: the clone's dumps outlive it in
+	// the bucket (until retention or an orphan purge) and are unreadable
+	// without it.
+	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: byInstance.LabelSelector + "," + backup.KeyRoleLabel + "!=" + backup.KeyRoleValue,
+	})
 	if lerr != nil {
 		errs = append(errs, fmt.Errorf("list Secrets of %s/%s: %w", ns, addonFQN, lerr))
 	} else {

@@ -26,6 +26,7 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	addons, addonsComplete := backuphealth.ComputeAddons(ctx, h.Kube, h.Namespace)
 	volumes, volumesComplete := backuphealth.ComputeServiceVolumes(ctx, h.Kube, h.Namespace)
+	unexportedKeys, keysComplete := backuphealth.UnexportedBackupKeys(ctx, h.Kube)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"backup":     backuphealth.Compute(ctx, h.Kube, h.Namespace),
 		"registryGC": backuphealth.RegistryGC(ctx, h.Kube, h.Namespace),
@@ -50,5 +51,10 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 		// endpoint, and which projects use their own key. Null when
 		// backup storage is not configured.
 		"bucket": computeBackupBucketSafety(ctx, h.Kube, h.Namespace),
+		// Backup encryption keys never exported (kuso backup keys export):
+		// a lost cluster takes their addons' encrypted dumps with it.
+		// A warning, never part of any Healthy verdict.
+		"backupKeysUnexported": unexportedKeys,
+		"backupKeysComplete":   keysComplete,
 	})
 }

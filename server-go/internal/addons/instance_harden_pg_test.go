@@ -132,8 +132,13 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, a).Scan(&limit); err != nil {
 		t.Fatal(err)
 	}
-	if limit != instanceConnLimitFloor {
-		t.Errorf("rolconnlimit = %d, want %d", limit, instanceConnLimitFloor)
+	var maxConns int
+	if err := admin.QueryRowContext(ctx, `SELECT current_setting('max_connections')::int`).Scan(&maxConns); err != nil {
+		t.Fatal(err)
+	}
+	// Unstamped roles are not counted as tenants, so a is the lone tenant.
+	if want := max(maxConns/2, instanceConnLimitFloor); limit != want {
+		t.Errorf("rolconnlimit = %d, want %d", limit, want)
 	}
 
 	// Idempotent, and an admin-tuned limit survives.
@@ -158,16 +163,87 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	}
 }
 
+// The default splits the server across the kuso-stamped tenant roles on it.
+func TestApplyInstanceRoleConnLimit_SplitsAcrossTenants_PG(t *testing.T) {
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
+	roles := []string{"cl_a_" + suffix, "cl_b_" + suffix}
+	t.Cleanup(func() {
+		for _, r := range roles {
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pq.QuoteIdentifier(r)))
+		}
+		_ = admin.Close()
+	})
+	for _, r := range roles {
+		for _, q := range []string{
+			fmt.Sprintf(`CREATE ROLE %s LOGIN`, pq.QuoteIdentifier(r)),
+			fmt.Sprintf(`COMMENT ON ROLE %s IS 'kuso-addon:p/%s'`, pq.QuoteIdentifier(r), r),
+		} {
+			if _, err := admin.ExecContext(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+	}
+	var maxConns, reserved, tenants int
+	if err := admin.QueryRowContext(ctx, `
+		SELECT current_setting('max_connections')::int,
+		       current_setting('superuser_reserved_connections')::int
+		         + COALESCE(NULLIF(current_setting('reserved_connections', true), ''), '0')::int,
+		       (SELECT count(*) FROM pg_roles t WHERE t.rolcanlogin AND shobj_description(t.oid, 'pg_authid') LIKE 'kuso-addon:%')`).
+		Scan(&maxConns, &reserved, &tenants); err != nil {
+		t.Fatal(err)
+	}
+	want := (maxConns - reserved - instanceConnHeadroom) / tenants
+	if want >= maxConns/2 || want < instanceConnLimitFloor {
+		t.Skipf("server shape (max_connections=%d, %d tenants) does not exercise the split", maxConns, tenants)
+	}
+	if err := applyInstanceRoleConnLimit(ctx, admin, roles[0], 0); err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, roles[0]).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("rolconnlimit with %d tenants on max_connections=%d = %d, want %d", tenants, maxConns, got, want)
+	}
+}
+
 func TestDefaultInstanceConnLimit(t *testing.T) {
-	cases := []struct{ max, inUse, want int }{
-		{100, 0, 50},
-		{100, 30, 60}, // never below twice the live usage
-		{500, 10, 250},
-		{20, 0, 50},
+	cases := []struct{ max, reserved, tenants, inUse, want int }{
+		{100, 3, 1, 0, 50},   // lone tenant: half the server
+		{100, 3, 2, 0, 46},   // (100-3-5)/2
+		{100, 3, 10, 0, 35},  // floor: a pooled tenant's own backends
+		{100, 3, 10, 30, 60}, // never below twice the live usage
+		{500, 3, 4, 0, 123},
+		{500, 3, 0, 0, 250},
+		{20, 3, 1, 0, 35},
 	}
 	for _, c := range cases {
-		if got := defaultInstanceConnLimit(c.max, c.inUse); got != c.want {
-			t.Errorf("defaultInstanceConnLimit(%d, %d) = %d, want %d", c.max, c.inUse, got, c.want)
+		if got := defaultInstanceConnLimit(c.max, c.reserved, c.tenants, c.inUse); got != c.want {
+			t.Errorf("defaultInstanceConnLimit(%+v) = %d", c, got)
+		}
+	}
+}
+
+func TestWithConnectTimeout(t *testing.T) {
+	cases := map[string]string{
+		"postgres://u:p@h:5432/db?sslmode=disable":    "postgres://u:p@h:5432/db?connect_timeout=5&sslmode=disable",
+		"postgres://u:p@h:5432/db?connect_timeout=30": "postgres://u:p@h:5432/db?connect_timeout=30",
+		"host=h user=u dbname=db":                     "host=h user=u dbname=db",
+	}
+	for in, want := range cases {
+		if got := withConnectTimeout(in); got != want {
+			t.Errorf("withConnectTimeout(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
