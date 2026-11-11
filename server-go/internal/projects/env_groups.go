@@ -766,12 +766,18 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// Copying gives staging its own isolated config under the
 		// label-consistent name. Best-effort: a missing source secret just
 		// means there's nothing to copy (service had no managed secrets).
-		var secretRewrites, secretWarnings []string
+		var secretRewrites, secretWarnings, prodValued []string
 		rewriteSecretValue := func(key string, val []byte) []byte {
 			if !utf8.Valid(val) {
+				if len(val) > 0 {
+					prodValued = append(prodValued, key)
+				}
 				return val
 			}
 			out, _ := rewriteProdHosts(string(val), prodHosts)
+			if len(val) > 0 && out == string(val) {
+				prodValued = append(prodValued, key)
+			}
 			rw, warn := literalNotes(newSvcShort, key, string(val), out)
 			secretRewrites, secretWarnings = append(secretRewrites, rw...), append(secretWarnings, warn...)
 			return []byte(out)
@@ -780,6 +786,12 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		if created {
 			rewrittenKeys = append(rewrittenKeys, secretRewrites...)
 			hostWarnings = append(hostWarnings, secretWarnings...)
+			// The copy keeps production's live values (ISO-1, ISO-9); PR
+			// previews based on this group withhold every one of them.
+			if len(prodValued) > 0 {
+				hostWarnings = append(hostWarnings, fmt.Sprintf("%s: %d secret(s) copied with production's value (%s); give the group its own values, PR previews based on it won't receive these",
+					newSvcShort, len(prodValued), strings.Join(prodValued, ", ")))
+			}
 			createdSecrets = append(createdSecrets, kube.ServiceSecretName(project, newSvcShort))
 		}
 		if err != nil {

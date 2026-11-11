@@ -77,6 +77,18 @@ spec:
                     env-isolation NetworkPolicies key on. Empty on CRs not yet
                     rewritten since the upgrade: their pods stay unlabelled and
                     keep project-wide reachability.
+                basicAuthSecret:
+                  type: string
+                  maxLength: 253
+                  pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                  x-kubernetes-validations:
+                    - rule: "!self.startsWith('kuso-')"
+                      message: "control-plane secrets (kuso-*) cannot be referenced"
+                  description: >-
+                    Secret (htpasswd lines under key "users") a Traefik
+                    basicAuth middleware checks in front of this env's
+                    ingress. Set on previews from the project's
+                    previews.basicAuthSecret.
                 disableServiceLinks:
                   type: boolean
                   description: >-

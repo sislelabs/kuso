@@ -297,6 +297,20 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	return out, nil
 }
 
+var previewAuthSecretRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// validatePreviewAuthSecret mirrors the CRD rule on previews.basicAuthSecret
+// so a bad name is a 400, not an apiserver 422. "" clears it.
+func validatePreviewAuthSecret(name string) error {
+	if name == "" {
+		return nil
+	}
+	if len(name) > 253 || !previewAuthSecretRE.MatchString(name) || strings.HasPrefix(name, "kuso-") {
+		return fmt.Errorf("%w: previews basicAuthSecret %q must be a Secret name in the project's namespace (not kuso-*)", ErrInvalid, name)
+	}
+	return nil
+}
+
 // Update applies a partial spec patch to an existing KusoProject. Only
 // the fields present in the request are touched; nil/zero values leave
 // the existing spec alone. This is what PATCH /api/projects/{name}
@@ -307,6 +321,11 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// same not-found error as before the WithRetry migration.
 	if err := validateRequestLimits(req.RequestLimits); err != nil {
 		return nil, err
+	}
+	if req.Previews != nil && req.Previews.BasicAuthSecret != nil {
+		if err := validatePreviewAuthSecret(strings.TrimSpace(*req.Previews.BasicAuthSecret)); err != nil {
+			return nil, err
+		}
 	}
 	requestLimitsChanged := false
 	existing, err := s.Get(ctx, name)
@@ -402,6 +421,9 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			}
 			if req.Previews.BaseDomain != nil {
 				cur.Spec.Previews.BaseDomain = strings.TrimSpace(*req.Previews.BaseDomain)
+			}
+			if req.Previews.BasicAuthSecret != nil {
+				cur.Spec.Previews.BasicAuthSecret = strings.TrimSpace(*req.Previews.BasicAuthSecret)
 			}
 		}
 		if req.AlwaysOn != nil {

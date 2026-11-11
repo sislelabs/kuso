@@ -1420,6 +1420,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// DisableServiceLinks is set here as well as on create because
 			// the resync below replaces the spec wholesale.
 			DisableServiceLinks:  true,
+			BasicAuthSecret:      previewAuthSecret(proj),
 			Internal:             svcInternal,
 			PrivateEgress:        svcPrivateEgress,
 			PlatformAPIEgress:    svcPlatformAPIEgress,
@@ -1666,6 +1667,15 @@ func (d *Dispatcher) unclonedProductionConns(ctx context.Context, ns, project st
 		}
 	}
 	return out, readOnly, nil
+}
+
+// previewAuthSecret is the htpasswd Secret every preview of the project
+// sits behind, "" when previews are public.
+func previewAuthSecret(proj *kube.KusoProject) string {
+	if proj.Spec.Previews == nil {
+		return ""
+	}
+	return proj.Spec.Previews.BasicAuthSecret
 }
 
 // previewEnvVarOptIn reports whether the service's previews.previewEnvVars

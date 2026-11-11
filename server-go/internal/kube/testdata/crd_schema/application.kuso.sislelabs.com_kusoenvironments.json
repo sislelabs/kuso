@@ -65,6 +65,18 @@
             },
             "type": "object"
           },
+          "basicAuthSecret": {
+            "description": "Secret (htpasswd lines under key \"users\") a Traefik basicAuth middleware checks in front of this env's ingress. Set on previews from the project's previews.basicAuthSecret.",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+            "type": "string",
+            "x-kubernetes-validations": [
+              {
+                "message": "control-plane secrets (kuso-*) cannot be referenced",
+                "rule": "!self.startsWith('kuso-')"
+              }
+            ]
+          },
           "branch": {
             "default": "main",
             "type": "string"

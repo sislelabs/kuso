@@ -92,6 +92,17 @@ spec:
                         frontend-pr-35.tickero.bg) instead of the project's
                         spec.baseDomain. Requires wildcard DNS for
                         *.<baseDomain> + a cert-manager HTTP-01 issuer.
+                    basicAuthSecret:
+                      type: string
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                      x-kubernetes-validations:
+                        - rule: "!self.startsWith('kuso-')"
+                          message: "control-plane secrets (kuso-*) cannot be referenced"
+                      description: >-
+                        Secret in the project's namespace with htpasswd lines
+                        under key "users". When set, every PR preview requires
+                        those credentials. Empty = previews are public.
                     triggers:
                       type: array
                       description: >-

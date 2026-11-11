@@ -235,6 +235,10 @@ type KusoPreviewsSpec struct {
 	// OWNER/MEMBER/COLLABORATOR. Only enable for private/trusted repos
 	// where every PR author is already trusted with production creds.
 	AllowForkPreviews bool `json:"allowForkPreviews,omitempty"`
+	// BasicAuthSecret names a Secret in the project's namespace holding
+	// htpasswd lines under key "users". When set, every preview's ingress
+	// requires those credentials (ISO-12). Empty = previews are public.
+	BasicAuthSecret string `json:"basicAuthSecret,omitempty"`
 }
 
 // KusoPreviewTrigger pairs a PR target branch with the env whose
@@ -775,11 +779,15 @@ type KusoEnvironmentSpec struct {
 	// DisableServiceLinks drops the Docker-link env vars kubelet injects
 	// for every Service in the namespace (ISO-13). Set on env CRs created
 	// since it exists (CreateKusoEnvironment), so no running pod rolls.
-	DisableServiceLinks bool             `json:"disableServiceLinks,omitempty"`
-	Branch              string           `json:"branch,omitempty"`
-	PullRequest         *KusoPullRequest `json:"pullRequest,omitempty"`
-	TTL                 *KusoTTL         `json:"ttl,omitempty"`
-	Image               *KusoImage       `json:"image,omitempty"`
+	DisableServiceLinks bool `json:"disableServiceLinks,omitempty"`
+	// BasicAuthSecret puts a Traefik basicAuth middleware (htpasswd
+	// lines under key "users") in front of the env's ingress. Set on
+	// previews from the project's previews.basicAuthSecret.
+	BasicAuthSecret string           `json:"basicAuthSecret,omitempty"`
+	Branch          string           `json:"branch,omitempty"`
+	PullRequest     *KusoPullRequest `json:"pullRequest,omitempty"`
+	TTL             *KusoTTL         `json:"ttl,omitempty"`
+	Image           *KusoImage       `json:"image,omitempty"`
 	// PendingImage holds a runtime=image target that is NOT YET LIVE
 	// because the service has a release hook that must run first. The
 	// imagerelease watcher runs the release Job against this image and,

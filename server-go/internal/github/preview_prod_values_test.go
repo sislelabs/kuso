@@ -72,3 +72,24 @@ func TestDispatch_PROpened_WithholdsProductionValuesFromEnvGroupBase(t *testing.
 		}
 	}
 }
+
+// ISO-12/ISO-13: a preview carries the project's basic-auth Secret and
+// drops service links, on create and on every resync.
+func TestDispatch_PROpened_PreviewAuthAndServiceLinks(t *testing.T) {
+	t.Parallel()
+	proj := seedProj("alpha", "https://github.com/example/alpha", "main", true, 5)
+	proj.obj.Object["spec"].(map[string]any)["previews"].(map[string]any)["basicAuthSecret"] = "alpha-preview-auth"
+	d := newDispatcher(t, proj, seedSvc("alpha", "api"))
+	for _, action := range []string{`"opened"`, `"synchronize"`} {
+		if err := d.Dispatch(context.Background(), "pull_request", []byte(strings.Replace(prOpened7, `"opened"`, action, 1))); err != nil {
+			t.Fatalf("Dispatch %s: %v", action, err)
+		}
+		env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-pr-7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env.Spec.BasicAuthSecret != "alpha-preview-auth" || !env.Spec.DisableServiceLinks {
+			t.Errorf("%s: basicAuthSecret=%q disableServiceLinks=%v", action, env.Spec.BasicAuthSecret, env.Spec.DisableServiceLinks)
+		}
+	}
+}
