@@ -390,6 +390,11 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if m.Version == "" {
 		m.Version = rel.TagName
 	}
+	// A validly signed release.json from an older release, attached to
+	// the newest tag, would otherwise roll every cluster back to it.
+	if m.Version != rel.TagName {
+		return rel.TagName, nil, fmt.Errorf("verify manifest signature: release.json is for %s but is attached to %s", m.Version, rel.TagName)
+	}
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
@@ -730,6 +735,11 @@ type UpdateOptions struct {
 	// image (releases shipped before those fields existed). Off by
 	// default; every refusal names this override.
 	AllowUnverified bool
+	// AllowDowngrade lets a pinned version older than the running one
+	// through. Without it a pinned downgrade is refused, so an old signed
+	// release (possibly with a known hole) can't be rolled back to by
+	// accident or by a holder of system:update alone.
+	AllowDowngrade bool
 }
 
 // allowUnverifiedHint is appended to every refusal AllowUnverified lifts.
@@ -791,6 +801,9 @@ func (s *Service) currentUpdaterImage(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read the running release %s: %w", s.Current, err)
 	}
+	if m.Version != s.Current {
+		return "", fmt.Errorf("the release.json attached to %s is for %s", s.Current, m.Version)
+	}
 	if !isDigestRef(m.Components.Updater.Image) {
 		return "", fmt.Errorf("the running release %s does not pin its updater image by digest", s.Current)
 	}
@@ -831,6 +844,11 @@ func (s *Service) StartUpdateWith(ctx context.Context, targetVersion string, opt
 		if err != nil {
 			return "", fmt.Errorf("fetch %s: %w", targetVersion, err)
 		}
+		// The signature covers the manifest, not the tag it hangs off:
+		// bind it to the version that was asked for.
+		if fetched.Version != targetVersion && !opts.AllowUnverified {
+			return "", fmt.Errorf("the release.json attached to %s is for %s; %s", targetVersion, fetched.Version, allowUnverifiedHint)
+		}
 		m = fetched
 	} else {
 		st := s.State()
@@ -865,6 +883,9 @@ func (s *Service) StartUpdateWith(ctx context.Context, targetVersion string, opt
 	// applies them unconditionally, so run this server's own updater,
 	// which honours KUSO_SKIP_CRDS / KUSO_SKIP_MANIFESTS — by digest.
 	downgrade := compareTags(m.Version, s.Current) < 0
+	if downgrade && !opts.AllowDowngrade {
+		return "", fmt.Errorf("%s is older than the running %s; re-run with `kuso upgrade --version %s --allow-downgrade` (API: {\"allowDowngrade\":true}, admin only) to roll back", m.Version, s.Current, m.Version)
+	}
 	updaterImg := m.Components.Updater.Image
 	if updaterImg == "" {
 		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version

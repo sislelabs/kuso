@@ -106,6 +106,9 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		// AllowUnverified accepts a release whose release.json lacks
 		// asset sha256s / an updater digest (see updater.UpdateOptions).
 		AllowUnverified bool `json:"allowUnverified"`
+		// AllowDowngrade lets a pinned older version through; admin only,
+		// since system:update alone may be a release bot.
+		AllowDowngrade bool `json:"allowDowngrade"`
 	}
 	// An empty body means "latest"; unknown fields are tolerated. A body
 	// that is present but malformed is a 400: decoding only when
@@ -117,10 +120,16 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.AllowDowngrade && !requirePerm(w, r, auth.PermSettingsAdmin) {
+		return
+	}
 	target := strings.TrimSpace(body.Version)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	jobName, err := h.Svc.StartUpdateWith(ctx, target, updater.UpdateOptions{AllowUnverified: body.AllowUnverified})
+	jobName, err := h.Svc.StartUpdateWith(ctx, target, updater.UpdateOptions{
+		AllowUnverified: body.AllowUnverified,
+		AllowDowngrade:  body.AllowDowngrade,
+	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -134,7 +143,7 @@ func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		Severity: "critical",
 		Action:   "system.update",
 		Resource: "kuso",
-		Message:  "update to " + shown + " started (job " + jobName + ")" + unverifiedNote(body.AllowUnverified),
+		Message:  "update to " + shown + " started (job " + jobName + ")" + unverifiedNote(body.AllowUnverified) + downgradeNote(body.AllowDowngrade),
 	})
 	writeJSON(w, http.StatusAccepted, map[string]string{"job": jobName})
 }
@@ -157,6 +166,13 @@ func (h *UpdaterHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 func unverifiedNote(allow bool) string {
 	if allow {
 		return " with --allow-unverified"
+	}
+	return ""
+}
+
+func downgradeNote(allow bool) string {
+	if allow {
+		return " with --allow-downgrade"
 	}
 	return ""
 }

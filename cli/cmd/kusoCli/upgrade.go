@@ -25,6 +25,7 @@ var (
 	// upgradeAllowUnverified accepts a release whose release.json has no
 	// asset sha256s / updater digest (releases from before those existed).
 	upgradeAllowUnverified bool
+	upgradeAllowDowngrade  bool
 )
 
 // versionRe matches vX.Y.Z, optionally with a dash-suffix. Used to
@@ -124,13 +125,16 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		// server; non-empty pins the tag.
 		fmt.Println("Starting update job…")
 		var bodyBytes []byte
-		if upgradeVersion != "" || upgradeAllowUnverified {
+		if upgradeVersion != "" || upgradeAllowUnverified || upgradeAllowDowngrade {
 			req := map[string]any{}
 			if upgradeVersion != "" {
 				req["version"] = upgradeVersion
 			}
 			if upgradeAllowUnverified {
 				req["allowUnverified"] = true
+			}
+			if upgradeAllowDowngrade {
+				req["allowDowngrade"] = true
 			}
 			bodyBytes, _ = json.Marshal(req)
 		}
@@ -262,4 +266,5 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
 	upgradeCmd.Flags().BoolVarP(&upgradeYes, "yes", "y", false, "skip the confirmation prompt")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowUnverified, "allow-unverified", false, "accept a release whose release.json can't pin its assets or updater image by hash (older releases); the server refuses them otherwise")
+	upgradeCmd.Flags().BoolVar(&upgradeAllowDowngrade, "allow-downgrade", false, "allow --version to roll back to a release older than the running one (admin only)")
 }

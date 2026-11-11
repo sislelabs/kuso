@@ -85,7 +85,7 @@ func jobEnv(j *batchv1.Job) map[string]string {
 // this server's own updater image.
 func TestStartUpdate_DowngradeSkipsCRDs(t *testing.T) {
 	s, cs := pinnedService(t, "v0.32.4", "v0.31.0")
-	name, err := s.StartUpdate(context.Background(), "v0.31.0")
+	name, err := s.StartUpdateWith(context.Background(), "v0.31.0", UpdateOptions{AllowDowngrade: true})
 	if err != nil {
 		t.Fatalf("StartUpdate: %v", err)
 	}
@@ -238,13 +238,13 @@ func TestStartUpdate_UnverifiedReleaseNeedsOverride(t *testing.T) {
 func TestStartUpdate_DowngradeRefusesTagOnlyUpdater(t *testing.T) {
 	cur := `{"version":"v0.32.4","components":{"updater":{"image":"ghcr.io/sislelabs/kuso-updater:v0.32.4"}}}`
 	s, _ := pinnedService(t, "v0.32.4", "v0.31.0", map[string]string{"v0.32.4": cur})
-	if _, err := s.StartUpdate(context.Background(), "v0.31.0"); err == nil || !strings.Contains(err.Error(), "by digest") {
+	if _, err := s.StartUpdateWith(context.Background(), "v0.31.0", UpdateOptions{AllowDowngrade: true}); err == nil || !strings.Contains(err.Error(), "by digest") {
 		t.Fatalf("want refusal, got %v", err)
 	}
 	// A downgrade target without asset digests is fine: nothing of it is applied.
 	noSha := `{"version":"v0.31.0","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:v0.31.0@` + testDigest + `"},"operator":{"image":"ghcr.io/sislelabs/kuso-operator:v0.31.0@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml"},"manifests":{"url":"https://example.test/m.yaml"}}`
 	s2, _ := pinnedService(t, "v0.32.4", "v0.31.0", map[string]string{"v0.31.0": noSha})
-	if _, err := s2.StartUpdate(context.Background(), "v0.31.0"); err != nil {
+	if _, err := s2.StartUpdateWith(context.Background(), "v0.31.0", UpdateOptions{AllowDowngrade: true}); err != nil {
 		t.Fatalf("downgrade to a pre-sha release: %v", err)
 	}
 }
@@ -256,15 +256,39 @@ func TestStartUpdate_TagOnlyServerImageNeedsOverride(t *testing.T) {
 	for _, target := range []string{"v0.33.0", "v0.31.0"} {
 		tagOnly := `{"version":"` + target + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + target + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + target + `@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml","sha256":"ab"},"manifests":{"url":"https://example.test/m.yaml","sha256":"cd"}}`
 		s, _ := pinnedService(t, "v0.32.4", target, map[string]string{target: tagOnly})
-		if _, err := s.StartUpdate(context.Background(), target); err == nil || !strings.Contains(err.Error(), "by digest") {
+		if _, err := s.StartUpdateWith(context.Background(), target, UpdateOptions{AllowDowngrade: true}); err == nil || !strings.Contains(err.Error(), "by digest") {
 			t.Fatalf("%s: want a by-digest refusal, got %v", target, err)
 		}
-		if _, err := s.StartUpdateWith(context.Background(), target, UpdateOptions{AllowUnverified: true}); err != nil {
+		if _, err := s.StartUpdateWith(context.Background(), target, UpdateOptions{AllowUnverified: true, AllowDowngrade: true}); err != nil {
 			t.Fatalf("%s with override: %v", target, err)
 		}
 	}
 	s, _ := pinnedService(t, "v0.32.4", "v0.33.0")
 	if _, err := s.StartUpdate(context.Background(), "v0.33.0/../../evil"); err == nil || !strings.Contains(err.Error(), "invalid release version") {
 		t.Fatalf("want invalid-version refusal, got %v", err)
+	}
+}
+
+// OPS-2: a validly signed release.json from another release, attached to
+// the requested tag, must not roll the cluster to that other release.
+func TestStartUpdate_ManifestBoundToTag(t *testing.T) {
+	s, cs := pinnedService(t, "v0.32.4", "v0.33.0", map[string]string{"v0.33.0": releaseJSON("v0.20.0")})
+	if _, err := s.StartUpdateWith(context.Background(), "v0.33.0", UpdateOptions{AllowDowngrade: true}); err == nil || !strings.Contains(err.Error(), "is for v0.20.0") {
+		t.Fatalf("want a tag-binding refusal, got %v", err)
+	}
+	if jobs, _ := cs.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Fatalf("updater job created for a mismatched manifest")
+	}
+}
+
+// OPS-2: pinning an older version is a downgrade and needs the explicit
+// override; without it nothing is started.
+func TestStartUpdate_DowngradeNeedsOverride(t *testing.T) {
+	s, cs := pinnedService(t, "v0.32.4", "v0.31.0")
+	if _, err := s.StartUpdate(context.Background(), "v0.31.0"); err == nil || !strings.Contains(err.Error(), "--allow-downgrade") {
+		t.Fatalf("want a downgrade refusal, got %v", err)
+	}
+	if jobs, _ := cs.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Fatalf("updater job created for an unconfirmed downgrade")
 	}
 }

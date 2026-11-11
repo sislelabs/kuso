@@ -198,3 +198,26 @@ func TestFetchLatest_FallsBackEmptyComponentImages(t *testing.T) {
 		t.Errorf("operator image = %q", m.Components.Operator.Image)
 	}
 }
+
+// OPS-2: the latest-release poll refuses a release.json for another
+// version, and the refusal counts as a verification failure.
+func TestFetchLatest_RefusesManifestForOtherTag(t *testing.T) {
+	t.Setenv("KUSO_REQUIRE_SIGNATURES", "false")
+	const manifestURL = "https://example.test/release.json"
+	ghRelease := `{"tag_name":"v9.9.9","assets":[{"name":"release.json","browser_download_url":"` + manifestURL + `"}]}`
+	s := &Service{
+		Repo:    "sislelabs/kuso",
+		Current: "v9.9.8",
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() == manifestURL {
+				return jsonResp(200, `{"version":"v1.0.0"}`), nil
+			}
+			return jsonResp(200, ghRelease), nil
+		})},
+	}
+	_, m, err := s.fetchLatest(context.Background())
+	if m != nil || !isVerificationError(err) {
+		t.Fatalf("want a verification refusal, got m=%v err=%v", m, err)
+	}
+}
