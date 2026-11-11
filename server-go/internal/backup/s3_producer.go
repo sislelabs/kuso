@@ -57,6 +57,15 @@ if MANIFEST=$(rclone cat "bk:${BUCKET}/${SNAP}/.kuso-snapshot.manifest.json" 2>/
   export RCLONE_CONFIG_ENC_PASSWORD
   SRC="enc:"
   echo "==> decrypting snapshot ${SNAP}"
+elif [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+  # This addon encrypts its snapshots, so a plaintext one is either from
+  # before encryption or was planted by whoever can write the bucket (drop
+  # the manifest, swap the objects). Same rule as the dump restores.
+  if [ "${ALLOW_UNVERIFIED:-}" != "1" ]; then
+    echo "==> snapshot ${SNAP} is NOT encrypted (or its manifest is missing), but this addon encrypts its backups: refusing to restore it. If it predates encryption and you trust it, retry with allowUnverified (kuso CLI: --allow-unverified)." >&2
+    exit 1
+  fi
+  echo "==> snapshot ${SNAP} is not encrypted: integrity NOT verified, proceeding (allowUnverified set)"
 else
   echo "==> snapshot ${SNAP} is not encrypted (taken before encryption, or without a key)"
 fi
