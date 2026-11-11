@@ -56,9 +56,23 @@ func (s *Service) validateProjectNamespace(ctx context.Context, project, ns stri
 	if s.Kube.Clientset == nil {
 		return nil
 	}
+	// "kuso-<name>" is the derived namespace of project <name>. Creating
+	// it for a different project would make a later <name> project fail
+	// with "namespace belongs to project x" (SEC-8). A kuso-managed
+	// leftover that already exists stays adoptable below.
+	squatsDerived := strings.HasPrefix(ns, "kuso-") && ns != derivedProjectNamespace(project)
+	if s.Kube.Clientset == nil {
+		if squatsDerived {
+			return fmt.Errorf("%w: namespace %q is reserved for a project named %q", ErrInvalid, ns, strings.TrimPrefix(ns, "kuso-"))
+		}
+		return nil
+	}
 	existing, err := s.Kube.Clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
+		if squatsDerived {
+			return fmt.Errorf("%w: namespace %q is reserved for a project named %q; leave namespace empty or pick one without the kuso- prefix", ErrInvalid, ns, strings.TrimPrefix(ns, "kuso-"))
+		}
 		return nil
 	case err != nil:
 		return fmt.Errorf("preflight: get namespace %q: %w", ns, err)
