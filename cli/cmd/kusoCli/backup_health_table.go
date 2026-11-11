@@ -38,6 +38,7 @@ type backupHealthView struct {
 		Covered       bool   `json:"covered"`
 		LastSuccessAt string `json:"lastSuccessAt"`
 		Healthy       bool   `json:"healthy"`
+		Unprotected   bool   `json:"unprotected"`
 		Detail        string `json:"detail"`
 	} `json:"addonBackups"`
 	AddonBackupsComplete bool `json:"addonBackupsComplete"`
@@ -89,7 +90,11 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 			if a.Project != "" {
 				name = a.Project + "/" + strings.TrimPrefix(a.Addon, a.Project+"-")
 			}
-			t.Append([]string{name, a.Kind, orDash(a.Schedule), boolText(a.Covered), orDash(a.LastSuccessAt), healthWord(a.Healthy), a.Detail})
+			health := healthWord(a.Healthy)
+			if a.Healthy && a.Unprotected {
+				health = "UNPROTECTED"
+			}
+			t.Append([]string{name, a.Kind, orDash(a.Schedule), boolText(a.Covered), orDash(a.LastSuccessAt), health, a.Detail})
 		}
 		t.Render()
 	}

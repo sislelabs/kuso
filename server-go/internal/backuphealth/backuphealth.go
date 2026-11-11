@@ -219,8 +219,17 @@ type AddonBackupStatus struct {
 	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
 	LastScheduleAt string `json:"lastScheduleAt,omitempty"`
 	Healthy        bool   `json:"healthy"`
-	Detail         string `json:"detail,omitempty"`
+	// Unprotected: a database addon whose data has no backup yet — no
+	// schedule on a postgres/mysql/mongodb addon kuso can dump, or an
+	// instance tenant created after the instance's last good run. Healthy
+	// stays true (nothing to page on), but surfaces must not call it ok.
+	Unprotected bool   `json:"unprotected,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 }
+
+// unprotectedKinds are the datastores whose unscheduled state is a data
+// risk rather than a deliberate opt-out (mirrors the addons create default).
+var unprotectedKinds = map[string]bool{"postgres": true, "mysql": true, "mongodb": true}
 
 // addonBackupLateGrace: a scheduled run that hasn't succeeded within
 // this window after its schedule time counts as failing. Generous (6h)
@@ -306,7 +315,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 				st.Schedule = a.Spec.Backup.Schedule
 				st.ScheduleConfigured = true
 			}
-			shared = append(shared, instanceSharedRow{st: st, backing: instanceAddonCRName(a.Spec.UseInstanceAddon)})
+			shared = append(shared, instanceSharedRow{st: st, backing: instanceAddonCRName(a.Spec.UseInstanceAddon), created: a.CreationTimestamp.Time})
 			continue
 		}
 		if a.Spec.Backup == nil || a.Spec.Backup.Schedule == "" {
@@ -318,6 +327,10 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			// would train operators to ignore the real failures).
 			st.Healthy = true
 			st.Detail = uncoveredDetail(a)
+			if unprotectedKinds[a.Spec.Kind] && a.Labels[kube.LabelEnv] == "" && dumpableShape(a) {
+				st.Unprotected = true
+				st.Detail = "UNPROTECTED: " + st.Detail
+			}
 			out = append(out, st)
 			continue
 		}
@@ -423,6 +436,7 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 type instanceSharedRow struct {
 	st      AddonBackupStatus
 	backing string
+	created time.Time
 }
 
 // instanceAddonCRName is the managed instance addon's CR name for a
@@ -456,6 +470,18 @@ func resolveInstanceShared(r instanceSharedRow, rows []AddonBackupStatus) AddonB
 		if !b.Healthy && b.Detail != "" {
 			st.Detail += " — " + b.Detail
 		}
+		// The instance's last success predates this tenant, so no dump of
+		// its database exists yet. Not a failure (the next nightly run
+		// covers it; a failing run turns the backing row unhealthy), but
+		// not covered either.
+		if last, err := time.Parse(time.RFC3339, b.LastSuccessAt); !r.created.IsZero() && (err != nil || last.Before(r.created)) {
+			st.Unprotected = true
+			st.LastSuccessAt = ""
+			st.Detail = "pending first backup: created after instance addon " + r.backing + "'s last successful run"
+			if !b.Healthy && b.Detail != "" {
+				st.Detail += " — " + b.Detail
+			}
+		}
 		return st
 	}
 	st.Covered = false
@@ -478,6 +504,16 @@ func resolveInstanceShared(r instanceSharedRow, rows []AddonBackupStatus) AddonB
 		st.Detail += "; this addon's own schedule never runs"
 	}
 	return st
+}
+
+// dumpableShape reports whether the chart would render a backup CronJob
+// for a if it had a schedule (native, not instance-shared, not external).
+func dumpableShape(a *kube.KusoAddon) bool {
+	probe := *a
+	probe.Spec.Backup = &kube.KusoBackup{Schedule: "@probe"}
+	external := a.Spec.External != nil &&
+		(a.Spec.External.SecretName != "" || len(a.Spec.External.SecretKeys) > 0)
+	return !external && kube.AddonBackupCronJobRendered(&probe)
 }
 
 // uncoveredDetail explains WHY an addon with no backup schedule is not

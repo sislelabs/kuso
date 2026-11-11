@@ -197,6 +197,10 @@ type CreateAddonRequest struct {
 	// env var), so the documented path ended at raw kubectl. Mutually
 	// exclusive with External.
 	ExternalCredentials map[string]string `json:"externalCredentials,omitempty"`
+	// BackupSchedule: nil = the default (postgres/mysql/mongodb get a
+	// nightly dump once backup S3 is configured); "" = no scheduled
+	// backups; otherwise a 5-field cron expression.
+	BackupSchedule *string `json:"backupSchedule,omitempty"`
 }
 
 // CRName builds the addon CR name from a project + a name that may
@@ -447,6 +451,9 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	// defenses are quoting at the sink and a strict charset here.
 	// Reject at the boundary so a bad value never reaches the CR —
 	// previously this field was copied verbatim into the spec.
+	if err := validateCreateBackup(req); err != nil {
+		return nil, err
+	}
 	if !validDatabaseName(req.Database) {
 		return nil, fmt.Errorf("%w: database must be a valid Postgres identifier "+
 			"(letter or underscore, then letters/digits/underscore/$, max 63 chars)", ErrInvalid)
@@ -606,6 +613,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			UseInstanceAddon: req.UseInstanceAddon,
 			Pooler:           req.Pooler,
 			TLS:              req.TLS,
+			Backup:           s.createBackup(ctx, req),
 		},
 	}
 	if req.External != nil && req.External.SecretName != "" {
