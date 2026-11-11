@@ -40,6 +40,8 @@ func (d *Dispatcher) rememberChannels(n []db.Notification) {
 	d.lastGoodMu.Lock()
 	d.lastGood = n
 	d.lastGoodMu.Unlock()
+	// Off the caller's path: it holds the channel-cache lock.
+	go d.saveSnapshot()
 }
 
 func (d *Dispatcher) lastGoodChannels() []db.Notification {

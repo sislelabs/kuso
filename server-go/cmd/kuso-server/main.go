@@ -475,6 +475,9 @@ func main() {
 		kubeClient = kc
 		// SSH host-key pins for node join must outlive this pod.
 		nodejoin.SetKnownHostStore(&nodejoin.SecretKnownHosts{Client: kc.Clientset, Namespace: *namespace})
+		// Lets the platform-alert fallback page after a restart that
+		// happened while the control-plane Postgres was down.
+		notifyDisp.SetChannelSnapshotStore(ctx, &notify.SecretChannelSnapshot{Client: kc.Clientset, Namespace: *namespace})
 		// Runtime gauges for /metrics: DB pool in-use/idle/open and
 		// build queue depth + running pods. Pool stats are free
 		// (sql.DB.Stats); build stats come from a cluster-wide list

@@ -358,6 +358,12 @@ type Dispatcher struct {
 	lastGoodMu sync.Mutex
 	lastGood   []db.Notification
 
+	// snapStore persists lastGood outside Postgres (fallback_snapshot.go);
+	// snapSaved is the hash of what it holds.
+	snapMu    sync.Mutex
+	snapStore ChannelSnapshotStore
+	snapSaved [32]byte
+
 	// directSendFn is a test seam for deliverDirect; nil means
 	// d.deliverViaChannel.
 	directSendFn func(ctx context.Context, n db.Notification, e Event) error

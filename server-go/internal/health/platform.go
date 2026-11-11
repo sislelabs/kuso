@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/notify"
 )
@@ -30,6 +31,10 @@ type PlatformTarget struct {
 	// IntentionallyOffAnnotation. Non-core targets at zero are skipped
 	// (buildkitd is scaled to 0 on purpose when shards replace it).
 	Core bool
+	// CNPGCluster names the CNPG Cluster that owns a selector-only
+	// target's pods: while that Cluster exists, zero pods means down
+	// (CNPG deleted the instances and couldn't recreate them), not absent.
+	CNPGCluster string
 }
 
 // IntentionallyOffAnnotation on a core platform Deployment marks a
@@ -49,7 +54,7 @@ var platformTargets = []PlatformTarget{
 	{Component: "activator", Deployment: "kuso-activator"},
 	{Component: "Prometheus", Deployment: "kuso-prometheus"},
 	{Component: "pgbouncer", Deployment: "kuso-pgbouncer", Core: true},
-	{Component: "control-plane Postgres", Selector: "cnpg.io/cluster=kuso-postgres"},
+	{Component: "control-plane Postgres", Selector: "cnpg.io/cluster=kuso-postgres", CNPGCluster: "kuso-postgres"},
 	{Component: "CNPG operator", Namespace: "cnpg-system", Deployment: "cnpg-controller-manager", Core: true},
 	{Component: "CoreDNS", Namespace: "kube-system", Deployment: "coredns", Core: true},
 	{Component: "kuso-operator", Namespace: "kuso-operator-system", Deployment: "kuso-operator-controller-manager", Core: true},
@@ -237,7 +242,7 @@ func (w *Watcher) observePlatform(ctx context.Context, t PlatformTarget, ns, key
 	if len(pods.Items) == 0 {
 		// A selector-only target with no pods doesn't exist here; a
 		// Deployment that wants replicas but has no pods is down.
-		if desired < 0 {
+		if desired < 0 && !w.cnpgClusterExists(ctx, ns, t.CNPGCluster) {
 			return platformObservation{absent: true}, true
 		}
 		return platformObservation{unready: true}, true
@@ -358,3 +363,18 @@ func (w *Watcher) platformPersisted() map[string]time.Time {
 	}
 	return out
 }
+
+// cnpgClusterExists reports whether the named CNPG Cluster exists in ns.
+// Any read failure (no CRD, no grant, no dynamic client) reads as "no",
+// which keeps the old absent behaviour on external-Postgres installs.
+func (w *Watcher) cnpgClusterExists(ctx context.Context, ns, name string) bool {
+	if name == "" || w.Kube == nil || w.Kube.Dynamic == nil {
+		return false
+	}
+	gctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := w.Kube.Dynamic.Resource(cnpgClusterGVR).Namespace(ns).Get(gctx, name, metav1.GetOptions{})
+	return err == nil
+}
+
+var cnpgClusterGVR = schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
