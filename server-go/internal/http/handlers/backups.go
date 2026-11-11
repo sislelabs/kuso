@@ -98,6 +98,8 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
+	r.Post("/api/projects/{project}/addons/{addon}/backups/drill", h.Drill)
+	r.Get("/api/projects/{project}/addons/{addon}/backups/drill/{job}", h.DrillStatus)
 	r.Get("/api/projects/{project}/addons/{addon}/backups/object", h.DownloadObject)
 	// Direct on-demand dump, streamed to the caller. Independent of the
 	// kuso-backup-s3 config, so it works when List/Restore return 503.
@@ -500,6 +502,9 @@ type RestoreRequest struct {
 	// AllowUnverified restores a backup that has no checksum manifest
 	// (taken before manifests existed). Without it the Job refuses one.
 	AllowUnverified bool `json:"allowUnverified,omitempty"`
+	// SkipSnapshot skips the automatic backup of the destination taken
+	// before the restore overwrites it.
+	SkipSnapshot bool `json:"skipSnapshot,omitempty"`
 }
 
 // Restore creates a one-shot Job that downloads the backup and pipes
@@ -643,6 +648,14 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	//
 	// A project with its own (scoped) key restores through it and gets no
 	// copy of the bucket-wide key (BLOB-R1).
+	if running, err := h.activeRestore(ctx, ns, destCR.Name, destAddon); err != nil {
+		h.Logger.Error("backup: check running restores", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	} else if running != "" {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("restore job %s is still running against %q; wait for it to finish (or delete it) before starting another", running, destAddon))
+		return
+	}
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 	credSecret, credCopy, err := h.restoreCredentialSecret(ctx, ns, project, jobName, tenantLoc != nil)
@@ -663,6 +676,9 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		srcBucket = tenantLoc.bucket
 	}
 	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3EnvFrom(credSecret, srcBucket)...)
+	if destCR.Spec.Kind == "postgres" {
+		restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "PGOPTIONS", Value: "-c lock_timeout=" + restoreLockTimeout})
+	}
 	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
 	// `--clean` dump of THAT logical database. Fed to the conn Secret's
 	// POSTGRES_DB it would drop and replace the primary DB's tables.
@@ -703,20 +719,44 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 
 	job := buildRestoreJob(ns, jobName, project, destAddon, addon, restoreShell,
 		append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...))
+	job.Labels[labelRestoreDest] = destCR.Name
+
+	resp := map[string]string{}
+	if !req.SkipSnapshot {
+		snap, since, warning, err := h.startPreRestoreSnapshot(ctx, ns, destCR)
+		if err != nil {
+			h.Logger.Error("backup: pre-restore snapshot", "err", err)
+			writeErr(w, http.StatusBadGateway, err.Error()+" (retry with skipSnapshot to restore without one)")
+			return
+		}
+		if warning != "" {
+			resp["warning"] = warning
+		}
+		if snap != nil {
+			resp["snapshotJob"] = snap.Name
+			job.Spec.Template.Spec.InitContainers = append(job.Spec.Template.Spec.InitContainers,
+				snapshotWaitContainer(credSecret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since))
+			deadline := *job.Spec.ActiveDeadlineSeconds + int64(snapshotWait.Seconds())
+			job.Spec.ActiveDeadlineSeconds = &deadline
+		}
+	}
 	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
-		if keyCopy {
-			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, jobName+"-key", metav1.DeleteOptions{})
-		}
 		if credCopy {
 			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, credSecret, metav1.DeleteOptions{})
 		}
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	if keyCopy {
-		h.adoptRestoreKeyCopy(ctx, ns, created)
+	if keyCopy != "" {
+		if err := h.createRestoreKeyCopy(ctx, created, project, keyCopy); err != nil {
+			h.Logger.Error("backup: copy backup key for restore", "err", err)
+			bg := metav1.DeletePropagationBackground
+			_ = h.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, created.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+			writeErr(w, http.StatusInternalServerError, "internal")
+			return
+		}
 	}
 	if credCopy {
 		h.adoptJobSecret(ctx, ns, created, credSecret)
@@ -739,7 +779,8 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			Message:  fmt.Sprintf("restore from key=%s into project=%s addon=%s job=%s", req.Key, project, destAddon, created.Name),
 		})
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+	resp["job"] = created.Name
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // siblingDumpRe matches the per-logical-DB dump the postgres backup CronJob
@@ -1701,6 +1742,8 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 	// Generous, so a large restore isn't cut off; --single-transaction
 	// rolls a killed restore back rather than leaving it half-applied.
 	deadline := int64(6 * 60 * 60)
+	// Reaps the Job, and with it the backup-key copy it owns.
+	ttl := int32(7 * 24 * 3600)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// The project's execution namespace: the <release>-conn
@@ -1719,10 +1762,11 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:          &zero,
-			ActiveDeadlineSeconds: &deadline,
-			Completions:           &one,
-			Parallelism:           &one,
+			BackoffLimit:            &zero,
+			ActiveDeadlineSeconds:   &deadline,
+			TTLSecondsAfterFinished: &ttl,
+			Completions:             &one,
+			Parallelism:             &one,
 			Template: corev1.PodTemplateSpec{
 				// Same pair the chart's backup CronJob pod carries: the
 				// project label puts the pod inside the project netpols so
@@ -1738,7 +1782,7 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:            "restore",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
+						Image:           backupJobImage,
 						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"sh", "-c"},
 						Args:            []string{restoreShell},

@@ -571,6 +571,19 @@ spec:
                     fi
                     sleep 2
                   done
+                  # HA: the headless Service publishes not-ready pods and
+                  # resolves to any replica, so ask Sentinel for the master
+                  # rather than snapshot a lagging or resyncing replica.
+                  if [ -n "${REDIS_SENTINEL_HOST:-}" ]; then
+                    MASTER=$(redis-cli -h "${REDIS_SENTINEL_HOST}" -p 26379 -a "${REDIS_PASSWORD}" --no-auth-warning \
+                      SENTINEL get-master-addr-by-name "${REDIS_MASTER_NAME}" 2>/dev/null | head -n 1 || true)
+                    if [ -n "${MASTER}" ]; then
+                      echo "==> sentinel reports master ${MASTER}"
+                      REDIS_HOST="${MASTER}"
+                    else
+                      echo "WARNING: sentinel did not answer; snapshotting ${REDIS_HOST}, which may be a replica" >&2
+                    fi
+                  fi
                   redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
                   gzip -c /tmp/dump.rdb > /tmp/dump.rdb.gz
                   seal /tmp/dump.rdb.gz
@@ -589,6 +602,10 @@ spec:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
                 - { name: REDIS_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
+                {{- if .Values.ha }}
+                - { name: REDIS_SENTINEL_HOST, value: {{ printf "%s-sentinel" (include "kusoaddon.fullname" .) | quote }} }
+                - { name: REDIS_MASTER_NAME,   value: {{ include "kusoaddon.fullname" . | quote }} }
+                {{- end }}
                 - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: REDIS_PASSWORD
                   valueFrom:
@@ -822,7 +839,18 @@ spec:
                     fi
                     sleep 2
                   done
-                  MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz
+                  # --single-transaction: a consistent InnoDB snapshot without
+                  # LOCK TABLES blocking app writes for the length of the dump.
+                  # --routines/--events: otherwise silently left out.
+                  # --no-tablespaces: the app user lacks PROCESS.
+                  # --skip-ssl-verify-server-cert: the traffic is still
+                  # TLS-encrypted, but the server's identity is NOT verified.
+                  # MySQL self-signs its cert and kuso issues no CA to check it
+                  # against; the connection stays in-cluster to the addon's
+                  # Service. A per-addon CA would let this verify.
+                  MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump --skip-ssl-verify-server-cert \
+                    --single-transaction --routines --events --triggers --no-tablespaces \
+                    -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz
                   seal /tmp/dump.sql.gz
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.sql.gz "s3://${BUCKET}/${KEY}"
                   echo "==> upload done (sha256=${SHA} bytes=${BYTES})"

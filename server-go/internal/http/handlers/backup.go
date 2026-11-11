@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/audit"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -160,7 +162,12 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(restoreUploadWindow))
 	// Only the first secretRestoreMax+1 bytes are held in memory; a larger
 	// dump is spooled to disk and staged in the backup bucket.
-	body, err := io.ReadAll(io.LimitReader(r.Body, secretRestoreMax+1))
+	src, status, msg := h.controlPlaneRestoreReader(r)
+	if status != 0 {
+		writeErr(w, status, msg)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(src, secretRestoreMax+1))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
@@ -170,7 +177,7 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body) > secretRestoreMax {
-		h.restoreViaS3(w, r, body)
+		h.restoreViaS3(w, r, body, src)
 		return
 	}
 
@@ -492,3 +499,38 @@ func (h *BackupHandler) markRolloutTriggered(ctx context.Context, jobName string
 func ptrBool(b bool) *bool    { return &b }
 func ptrInt32(i int32) *int32 { return &i }
 func ptrInt64(i int64) *int64 { return &i }
+
+// controlPlaneRestoreReader returns the uploaded dump as gzip. The scheduled
+// control-plane backup is encrypted with kuso-controlplane-backup-key, so an
+// encrypted upload is decrypted here, with the X-Kuso-Backup-Key header when
+// given (a dump from another cluster, key taken from its exported bundle),
+// else with this cluster's key. A non-zero status refuses the upload.
+func (h *BackupHandler) controlPlaneRestoreReader(r *http.Request) (io.Reader, int, string) {
+	br := bufio.NewReaderSize(r.Body, 64<<10)
+	head, _ := br.Peek(8)
+	if !backup.IsEncrypted(head) {
+		return br, 0, ""
+	}
+	key := strings.TrimSpace(r.Header.Get("X-Kuso-Backup-Key"))
+	if key == "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		k, err := kube.ControlPlaneBackupKey(ctx, h.Kube.Clientset, h.Namespace)
+		if err != nil {
+			return nil, http.StatusBadGateway, err.Error()
+		}
+		key = k
+	}
+	if key == "" {
+		return nil, http.StatusBadRequest, "the dump is encrypted and this cluster has no " + kube.ControlPlaneBackupKeySecret + "; pass the key from the exported key bundle (CLI: --key-file)"
+	}
+	dr, err := backup.NewDecryptReader(br, key)
+	if err != nil {
+		return nil, http.StatusBadRequest, "decrypt dump: " + err.Error()
+	}
+	pb := bufio.NewReaderSize(dr, 64<<10)
+	if magic, err := pb.Peek(2); err != nil || magic[0] != 0x1f || magic[1] != 0x8b {
+		return nil, http.StatusUnprocessableEntity, fmt.Sprintf("the dump does not decrypt with key %s; it was sealed with another cluster's key: pass that key from the exported bundle (CLI: --key-file)", backup.KeyID(key))
+	}
+	return pb, 0, ""
+}

@@ -1822,6 +1822,35 @@ via the local trust unix socket.`,
 	},
 }
 
+var addonRotatePasswordCmd = &cobra.Command{
+	Use:   "rotate-password <project> <name>",
+	Short: "Give a postgres/mysql addon's app user a new password",
+	Long: `Sets a new password on the database user apps connect as, writes it into
+<addon>-conn and restarts the pooler and every service that reads it. The old
+password stops working for new connections at once; sessions already open
+stay until they close. Supports native (non-HA) postgres and mysql. On a mysql
+addon created before separate root credentials, root moves to the new
+password too, since it shared the old one.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RotateAddonPassword(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("rotate: %w", err)
+		}
+		var out struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		fmt.Println(out.Message)
+		return nil
+	},
+}
+
 // ---------------- env subcommand ----------------
 
 var projectEnvCmd = &cobra.Command{
@@ -2058,7 +2087,7 @@ func init() {
 	_ = addonConnectInstanceCmd.MarkFlagRequired("instance")
 
 	projectAddonCmd.AddCommand(addonResyncInstanceCmd)
-	projectAddonCmd.AddCommand(addonRepairPasswordCmd)
+	projectAddonCmd.AddCommand(addonRepairPasswordCmd, addonRotatePasswordCmd)
 
 	projectCmd.AddCommand(projectEnvCmd)
 	projectEnvCmd.AddCommand(envDeleteCmd)

@@ -68,6 +68,7 @@ var addonBackupListCmd = &cobra.Command{
 var addonBackupRestoreInto string
 var addonBackupRestoreConfirm string
 var addonBackupRestoreAllowUnverified bool
+var addonBackupRestoreSkipSnapshot bool
 
 // resolveRestoreConfirm computes the `confirm` value to send and
 // rejects an unconfirmed restore. The dumps are --clean, so the
@@ -92,7 +93,11 @@ existing data) or a sibling addon (--into <name>), whose existing tables
 are overwritten while the source stays untouched. --confirm must echo the
 destination name. The server creates a one-shot Job that runs gunzip | psql.
 
-The target addon must already exist + be the same engine as the source.`,
+The target addon must already exist + be the same engine as the source.
+
+Before overwriting, the destination's scheduled backup runs once and the
+restore waits for that snapshot to upload (--skip-snapshot opts out). Only
+one restore may run against a destination at a time.`,
 	Example: `  kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz --confirm postgres
   kuso addon-backup restore myproj postgres myproj/postgres/20260504T030000Z.sql.gz --into postgres-rehearse --confirm postgres-rehearse`,
 	Args: cobra.ExactArgs(3),
@@ -107,18 +112,26 @@ The target addon must already exist + be the same engine as the source.`,
 		if err != nil {
 			return err
 		}
-		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm, AllowUnverified: addonBackupRestoreAllowUnverified}
+		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm, AllowUnverified: addonBackupRestoreAllowUnverified, SkipSnapshot: addonBackupRestoreSkipSnapshot}
 		resp, err := api.RestoreAddonBackup(args[0], args[1], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
 		var body struct {
-			Job string `json:"job"`
+			Job         string `json:"job"`
+			SnapshotJob string `json:"snapshotJob"`
+			Warning     string `json:"warning"`
 		}
 		_ = json.Unmarshal(resp.Body(), &body)
 		dest := args[1] + " (in-place / destructive)"
 		if addonBackupRestoreInto != "" {
 			dest = addonBackupRestoreInto + " (non-destructive)"
+		}
+		if body.SnapshotJob != "" {
+			fmt.Printf("pre-restore snapshot job %s started; the restore waits for it to upload\n", body.SnapshotJob)
+		}
+		if body.Warning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", body.Warning)
 		}
 		fmt.Printf("restore job %s started → %s\n", body.Job, dest)
 		return nil
@@ -439,6 +452,7 @@ func init() {
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the destination addon name (the addon, or --into) to acknowledge the overwrite")
 	addonBackupRestoreCmd.Flags().BoolVar(&addonBackupRestoreAllowUnverified, "allow-unverified", false, "restore a backup that has no checksum manifest (taken before manifests existed)")
+	addonBackupRestoreCmd.Flags().BoolVar(&addonBackupRestoreSkipSnapshot, "skip-snapshot", false, "don't back up the destination before overwriting it")
 	addonBackupCmd.AddCommand(addonBackupDownloadCmd)
 	// Long-only --file for the destination; -o/--output is retired here
 	// (it used to mean the FILE while meaning the FORMAT everywhere

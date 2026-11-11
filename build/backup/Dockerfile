@@ -5,8 +5,7 @@
 #   - aws-cli for S3 transfers (works with any S3-compatible store
 #     when --endpoint-url is set; we read it from kuso-backup-s3 Secret)
 #   - postgresql-client for pg_dump / pg_restore
-#   - mariadb-client + mongodb-tools deferred until v2 — postgres
-#     covers the addon kinds users actually self-host today
+#   - redis-cli, mongodb-tools and the MariaDB client for the other kinds
 #
 # postgresql{16,17,18}-client: we install SEVERAL, deliberately.
 #
@@ -41,7 +40,8 @@
 # 2.22+, which works against Hetzner / Wasabi / B2 / MinIO without
 # the spurious "argument of type NoneType is not iterable" abort.
 #
-# Built + pushed by `make backup-image`.
+# Built + pushed for linux/amd64 and linux/arm64 by every `make ship`
+# (hack/release.sh) and by `make backup-image`.
 FROM alpine:3.24
 
 # aws-cli >= 2.23 sends a CRC64NVME checksum on every upload and
@@ -62,6 +62,7 @@ RUN apk add --no-cache \
       redis \
       mongodb-tools \
       mysql-client \
+      mariadb-connector-c \
       openssl \
       gzip
 # openssl      -> client-side encryption of dumps (backup-cronjob.yaml) and
@@ -83,8 +84,14 @@ RUN apk add --no-cache \
 # redis        -> redis-cli, needed by the redis backup CronJob branch
 #                (it was referenced but missing from this image before).
 # mongodb-tools-> mongodump / mongorestore for the mongodb producer.
-# mysql-client -> mysqldump / mysql for the mysql producer (alpine's
-#                mysql-client is the mariadb-client, wire-compatible).
+# mysql-client -> mysqldump / mysql for the mysql producer. alpine's
+#                mysql-client is the MariaDB client, which reaches MySQL 8.x
+#                only with two things: mariadb-connector-c, which carries the
+#                caching_sha2_password auth plugin MySQL 8 defaults to, and
+#                --skip-ssl-verify-server-cert, because MariaDB 11.4+ verifies
+#                the server cert by default and MySQL serves a self-signed one.
+#                backup-cronjob.yaml and the restore script pass the flag;
+#                TestMySQLBackupRestore_Docker proves it against mysql:8.4.
 
 # Run as non-root so a compromised CronJob can't touch the host.
 RUN adduser -D -u 1001 kuso

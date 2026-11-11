@@ -103,6 +103,86 @@ func applyInstanceRoleConnLimit(ctx context.Context, db *sql.DB, role string, ov
 	return nil
 }
 
+// instanceRoleSetting is a per-role GUC default that keeps one tenant from
+// starving the rest of the shared server.
+type instanceRoleSetting struct {
+	name, value string
+	// newOnly settings go on roles provisioned now, never onto an existing
+	// tenant: a statement_timeout appearing under a live app could cut its
+	// long-running migrations or reports.
+	newOnly bool
+}
+
+// instanceRoleSettings: an idle-in-transaction session pins a backend and
+// blocks vacuum for everyone; unbounded temp files can fill the shared PVC
+// and take every tenant down; a runaway statement holds a backend forever.
+var instanceRoleSettings = []instanceRoleSetting{
+	{name: "idle_in_transaction_session_timeout", value: "10min"},
+	{name: "temp_file_limit", value: "5GB"},
+	{name: "statement_timeout", value: "1h", newOnly: true},
+}
+
+// applyInstanceRoleSettings sets each default the role does not already
+// carry (pg_db_role_setting, any database), so an admin's own ALTER ROLE ...
+// SET survives every resync. fresh marks a role created in this call.
+// temp_file_limit needs a superuser admin; a refusal is returned as a warning
+// per setting rather than failing provisioning. Returns how many it set.
+func applyInstanceRoleSettings(ctx context.Context, db *sql.DB, role string, fresh bool) (int, []string) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT split_part(c, '=', 1)
+		  FROM pg_db_role_setting s
+		  JOIN pg_roles r ON r.oid = s.setrole, unnest(s.setconfig) c
+		 WHERE r.rolname = $1`, role)
+	if err != nil {
+		return 0, []string{fmt.Sprintf("read settings of %s: %v", role, err)}
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return 0, []string{fmt.Sprintf("read settings of %s: %v", role, err)}
+		}
+		have[n] = true
+	}
+	rows.Close()
+	set := 0
+	var warns []string
+	for _, st := range instanceRoleSettings {
+		if have[st.name] || (st.newOnly && !fresh) {
+			continue
+		}
+		q := fmt.Sprintf(`ALTER ROLE %s SET %s = %s`, pq.QuoteIdentifier(role), st.name, pq.QuoteLiteral(st.value))
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			warns = append(warns, fmt.Sprintf("set %s on %s: %v", st.name, role, err))
+			continue
+		}
+		set++
+	}
+	return set, warns
+}
+
+// connLimitOversubscription returns a warning when the kuso tenant roles'
+// CONNECTION LIMITs together exceed what the server can actually serve. The
+// limits are deliberately not lowered (a running app may depend on them);
+// the operator raises max_connections or pins per-addon limits instead.
+func connLimitOversubscription(ctx context.Context, db *sql.DB) string {
+	var sum, usable, tenants int
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(sum(r.rolconnlimit) FILTER (WHERE r.rolconnlimit >= 0), 0),
+		       current_setting('max_connections')::int
+		         - current_setting('superuser_reserved_connections')::int
+		         - COALESCE(NULLIF(current_setting('reserved_connections', true), ''), '0')::int,
+		       count(*)
+		  FROM pg_roles r
+		 WHERE r.rolcanlogin AND shobj_description(r.oid, 'pg_authid') LIKE $1`, instanceDBOwnerPrefix+"%").Scan(&sum, &usable, &tenants)
+	if err != nil || sum <= usable {
+		return ""
+	}
+	return fmt.Sprintf("%d tenant roles may open %d connections together but the server serves %d: busy tenants can exhaust it for the rest; raise max_connections or pin limits with the %s annotation",
+		tenants, sum, usable, AnnotationInstanceConnLimit)
+}
+
 // withConnectTimeout bounds the connect phase of a URL-form admin DSN so an
 // unreachable or half-open server can't pin a handler goroutine for the OS
 // TCP timeout. Applied at open time only: per-project DSNs in conn Secrets
@@ -198,6 +278,7 @@ func preservedWarning(dbName string, roles []string) string {
 // InstanceHardenResult counts what HardenInstanceServer changed.
 type InstanceHardenResult struct {
 	LimitsSet    int
+	SettingsSet  int
 	TenantLocked int
 	SharedLocked []string
 	Warnings     []string
@@ -207,7 +288,8 @@ type InstanceHardenResult struct {
 // what provisioning does today, idempotently:
 //
 //   - every kuso-stamped tenant role without a CONNECTION LIMIT gets the
-//     derived default;
+//     derived default, and the resource-limit GUCs it does not carry yet
+//     (instanceRoleSettings, minus the new-tenant-only ones);
 //   - every kuso-stamped tenant DB that PUBLIC can still CONNECT to (DBs
 //     provisioned before the revoke existed) is locked to its own role;
 //   - when lockShared, postgres, template1 and the admin's own database are
@@ -254,6 +336,11 @@ func HardenInstanceServer(ctx context.Context, adminDSN string, lockShared bool)
 	}
 
 	for _, t := range tenants {
+		if t.hasRole {
+			n, warns := applyInstanceRoleSettings(ctx, db, t.name, false)
+			res.SettingsSet += n
+			res.Warnings = append(res.Warnings, warns...)
+		}
 		if t.hasRole && t.connLimit < 0 {
 			if err := applyInstanceRoleConnLimit(ctx, db, t.name, 0); err != nil {
 				res.Warnings = append(res.Warnings, err.Error())
@@ -277,6 +364,9 @@ func HardenInstanceServer(ctx context.Context, adminDSN string, lockShared bool)
 			res.Warnings = append(res.Warnings, preservedWarning(t.name, kept))
 		}
 		res.TenantLocked++
+	}
+	if w := connLimitOversubscription(ctx, db); w != "" {
+		res.Warnings = append(res.Warnings, w)
 	}
 
 	if !lockShared {

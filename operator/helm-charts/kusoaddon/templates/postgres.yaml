@@ -62,6 +62,8 @@
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
 {{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $appRole := .Values.appRole -}}
+{{- $adminPw := include "kusoaddon.adminPassword" (list $ $name $existingSts) -}}
 {{- /* tlsOn: opt-in in-cluster TLS. Default "disable" → plaintext +
        sslmode=disable (works with every driver). "require" → serve TLS
        via a self-signed cert + advertise sslmode=require, for apps that
@@ -155,6 +157,23 @@ spec:
           env:
             - name: POSTGRES_DB
               value: {{ $database | quote }}
+            {{- if $appRole }}
+            # appRole: the image's bootstrap superuser is `postgres` (password
+            # in <name>-admin, never mounted into apps); the init script makes
+            # the conn user `kuso` a plain role that owns the app database.
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-admin" $name }}
+                  key: ADMIN_PASSWORD
+            - name: KUSO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusoaddon.connSecretName" . }}
+                  key: POSTGRES_PASSWORD
+            {{- else }}
             - name: POSTGRES_USER
               value: kuso
             - name: POSTGRES_PASSWORD
@@ -162,6 +181,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "kusoaddon.connSecretName" . }}
                   key: POSTGRES_PASSWORD
+            {{- end }}
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -170,6 +190,11 @@ spec:
             {{- if $tlsOn }}
             - name: tls
               mountPath: /tls
+              readOnly: true
+            {{- end }}
+            {{- if $appRole }}
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
               readOnly: true
             {{- end }}
           {{- if $pinned }}
@@ -204,14 +229,22 @@ spec:
             periodSeconds: 15
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
-      {{- if $tlsOn }}
+      {{- if or $tlsOn $appRole }}
       volumes:
+        {{- if $tlsOn }}
         - name: tls-src
           secret:
             secretName: {{ printf "%s-tls" $name }}
             defaultMode: 0444
         - name: tls
           emptyDir: {}
+        {{- end }}
+        {{- if $appRole }}
+        - name: initdb
+          configMap:
+            name: {{ printf "%s-initdb" $name }}
+            defaultMode: 0555
+        {{- end }}
       {{- end }}
   volumeClaimTemplates:
     - metadata:
@@ -376,4 +409,27 @@ data:
   POOLER_PORT: {{ "" | b64enc | quote }}
   POOLER_URL: {{ "" | b64enc | quote }}
   {{- end }}
+{{- if $appRole }}
+---
+{{ include "kusoaddon.adminSecret" (list $ $name "postgres" $adminPw) }}
+---
+# Runs once, on an empty data directory only (docker-entrypoint-initdb.d).
+# The app role cannot reach COPY ... TO PROGRAM or pg_read_file: those need
+# superuser or pg_execute_server_program / pg_read_server_files.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-initdb" $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  10-kuso-app-role.sh: |
+    #!/usr/bin/env bash
+    set -eo pipefail
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --no-password --dbname "$POSTGRES_DB" --set app_pw="$KUSO_APP_PASSWORD" <<'EOSQL'
+    CREATE ROLE kuso LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_pw';
+    DO $kuso$ BEGIN EXECUTE format('ALTER DATABASE %I OWNER TO kuso', current_database()); END $kuso$;
+    ALTER SCHEMA public OWNER TO kuso;
+    EOSQL
+{{- end }}
 {{- end }}

@@ -531,3 +531,47 @@ exact ref, so changing spec.version drops a stale pin by itself.
 {{- $ref | quote -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+kusoaddon.adminPassword: the DB superuser password for an addon created with
+spec.appRole (call with (list $ <fullname> <existing StatefulSet>)). Reused
+from <fullname>-admin. A StatefulSet whose admin Secret is gone already holds
+a superuser initialised with the lost password, and appRole on an addon that
+predates it would never run the init script, so both refuse rather than mint
+a password nothing matches. Empty without appRole.
+*/ -}}
+{{- define "kusoaddon.adminPassword" -}}
+{{- $root := index . 0 -}}
+{{- $name := index . 1 -}}
+{{- $sts := index . 2 -}}
+{{- if $root.Values.appRole -}}
+{{- $existing := lookup "v1" "Secret" $root.Release.Namespace (printf "%s-admin" $name) -}}
+{{- if and $existing $existing.data (index $existing.data "ADMIN_PASSWORD") -}}
+{{- index $existing.data "ADMIN_PASSWORD" | b64dec -}}
+{{- else if $sts -}}
+{{- fail (printf "kusoaddon %s/%s: appRole is set but %s-admin is missing on an existing StatefulSet; appRole can only be set when the addon is created" $root.Release.Namespace $name $name) -}}
+{{- else -}}
+{{- randAlphaNum 32 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* kusoaddon.adminSecret renders <fullname>-admin: (list $ <fullname> <user> <password>). */ -}}
+{{- define "kusoaddon.adminSecret" -}}
+{{- $root := index . 0 -}}
+{{- $name := index . 1 -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ printf "%s-admin" $name }}
+  annotations:
+    # Lives as long as the data PVC, like the conn Secret.
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" $root | nindent 4 }}
+    kuso.sislelabs.com/role: db-admin
+type: Opaque
+data:
+  ADMIN_USER: {{ index . 2 | b64enc | quote }}
+  ADMIN_PASSWORD: {{ index . 3 | b64enc | quote }}
+{{- end -}}

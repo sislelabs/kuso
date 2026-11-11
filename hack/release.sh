@@ -867,6 +867,35 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
+# ---- 4a2a. backup image ---------------------------------------------
+#
+# ghcr.io/sislelabs/kuso-backup runs every addon backup CronJob and every
+# restore, drill and preview-seed Job, which follow the addon's placement
+# onto any node, so it must exist for arm64 as well as amd64. Rebuilt on
+# every ship so a fix to build/backup reaches clusters with the release
+# instead of waiting for someone to run `make backup-image` by hand; the
+# CronJobs pull :latest with PullAlways.
+BACKUP_IMAGE="${KUSO_RELEASE_BACKUP_IMAGE:-ghcr.io/sislelabs/kuso-backup}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "docker buildx linux/amd64,linux/arm64 → ${BACKUP_IMAGE}:${VERSION} (+ :latest)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64,linux/arm64 --push -t ${BACKUP_IMAGE}:${VERSION} -t ${BACKUP_IMAGE}:latest -f build/backup/Dockerfile build/backup"
+  else
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      --push \
+      -t "${BACKUP_IMAGE}:${VERSION}" \
+      -t "${BACKUP_IMAGE}:latest" \
+      -f build/backup/Dockerfile \
+      build/backup >/dev/null
+    for arch in amd64 arm64; do
+      docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" 2>/dev/null | grep -q "linux/${arch}" \
+        || fail "${BACKUP_IMAGE}:${VERSION} has no linux/${arch} variant"
+    done
+    log "backup image pushed: ${BACKUP_IMAGE}:${VERSION} (amd64+arm64)"
+  fi
+fi
+
 # ---- 4a3b. operator image build ----------------------------------
 #
 # OPERATOR_VERSION and the install-source re-stamp were resolved in

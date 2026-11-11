@@ -1,10 +1,12 @@
 package kusoCli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -46,6 +48,7 @@ var (
 	restoreNoWait      bool
 	restoreWait        time.Duration
 	restoreYes         bool
+	restoreKeyFile     string
 )
 
 // rejectRetiredOutputFlag is the shared refusal for `kuso backup` and
@@ -140,10 +143,21 @@ you want to fire-and-forget and check status separately).`,
 		// Cheap shape check — gzipped pg_dump starts with the gzip
 		// magic bytes 1f 8b. Saves a confusing server-side error for
 		// the obvious mistake of pointing this at a plain .sql.
-		if len(body) < 2 || body[0] != 0x1f || body[1] != 0x8b {
+		// Scheduled control-plane dumps are encrypted ("Salted__"); the
+		// server decrypts them with its key, or with --key-file.
+		encrypted := bytes.HasPrefix(body, []byte("Salted__"))
+		if !encrypted && (len(body) < 2 || body[0] != 0x1f || body[1] != 0x8b) {
 			return fmt.Errorf("%s does not look like a gzipped pg_dump (use the file produced by `kuso backup`)", args[0])
 		}
-		resp, err := api.RawPost("/api/admin/restore", body, "application/gzip")
+		headers := map[string]string{}
+		if restoreKeyFile != "" {
+			k, err := os.ReadFile(restoreKeyFile)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", restoreKeyFile, err)
+			}
+			headers["X-Kuso-Backup-Key"] = strings.TrimSpace(string(k))
+		}
+		resp, err := api.RawPostWithHeaders("/api/admin/restore", body, "application/gzip", headers)
 		if err != nil {
 			return fmt.Errorf("upload: %w", err)
 		}
@@ -413,6 +427,7 @@ func init() {
 	backupCmd.AddCommand(backupDBStatsCmd)
 	rootCmd.AddCommand(restoreCmd)
 	restoreCmd.Flags().BoolVarP(&restoreYes, "yes", "y", false, "skip the overwrite confirmation prompt")
+	restoreCmd.Flags().StringVar(&restoreKeyFile, "key-file", "", "file holding the control-plane backup key (the kuso-controlplane-backup-key entry of an exported key bundle), to decrypt a dump taken on another cluster")
 	restoreCmd.Flags().BoolVar(&restoreNoWait, "no-wait", false, "return immediately after submitting; don't poll the Job")
 	restoreCmd.Flags().DurationVar(&restoreWait, "wait", 10*time.Minute, "max time to wait for the Job (used with default polling)")
 	restoreCmd.AddCommand(restoreStatusCmd)

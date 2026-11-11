@@ -139,7 +139,7 @@ printf 'EXTRA-BUCKET-BODY' | mc pipe addon/extra/e.txt >/dev/null`)
 		t.Fatalf("no new snapshot:\n%s", after)
 		return ""
 	}
-	restore := func(key, tgt, encKey string) (string, error) {
+	restore := func(key, tgt, encKey string, extra ...string) (string, error) {
 		env := []string{
 			"KEY=" + key, "BUCKET=backups", "S3_ENDPOINT=http://" + id + "-store:9000",
 			"AWS_ACCESS_KEY_ID=rootuserstore", "AWS_SECRET_ACCESS_KEY=rootpasswordstore", "AWS_DEFAULT_REGION=us-east-1",
@@ -149,7 +149,7 @@ printf 'EXTRA-BUCKET-BODY' | mc pipe addon/extra/e.txt >/dev/null`)
 		if encKey != "" {
 			env = append(env, "BACKUP_ENCRYPTION_KEY="+encKey)
 		}
-		return inImage(backup.S3SnapshotRestoreScript, env)
+		return inImage(backup.S3SnapshotRestoreScript, append(env, extra...))
 	}
 
 	enc := snapshot(true)
@@ -181,9 +181,18 @@ printf 'EXTRA-BUCKET-BODY' | mc pipe addon/extra/e.txt >/dev/null`)
 		t.Errorf("restored extra bucket object = %q", got)
 	}
 
+	// A plaintext snapshot for an addon that encrypts is refused unless
+	// the caller accepts it unverified (BLOB-R2); without a key it restores.
 	plain := snapshot(false)
-	if out, err := restore("alpha/alpha-files/"+plain+"/docs/invoice.pdf", "plain", key); err != nil {
-		t.Fatalf("plaintext restore: %v\n%s", err, out)
+	plainKey := "alpha/alpha-files/" + plain + "/docs/invoice.pdf"
+	if out, err := restore(plainKey, "plain", key); err == nil {
+		t.Fatalf("plaintext snapshot restored for an addon with a backup key:\n%s", out)
+	}
+	if out, err := restore(plainKey, "plain", key, "ALLOW_UNVERIFIED=1"); err != nil {
+		t.Fatalf("plaintext restore with allowUnverified: %v\n%s", err, out)
+	}
+	if out, err := restore(plainKey, "plain", ""); err != nil {
+		t.Fatalf("plaintext restore without a key: %v\n%s", err, out)
 	}
 	if got := mc(`mc cat addon/plain/docs/invoice.pdf`); !strings.Contains(got, "TOP-SECRET-INVOICE") {
 		t.Errorf("plaintext restored object = %q", got)

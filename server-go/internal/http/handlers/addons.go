@@ -126,6 +126,9 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	// Recover from the helm-chart password drift bug: ALTER USER
 	// inside the running postgres pod to match the conn secret.
 	r.Post("/api/projects/{project}/addons/{addon}/repair-password", h.RepairPassword)
+	// New password for a native postgres/mysql app user (DB, conn Secret,
+	// consumer restart); see addons/db_rotate.go.
+	r.Post("/api/projects/{project}/addons/{addon}/rotate-password", h.RotateDBPassword)
 	// S3 credential rotation (two-phase; see addons/s3_rotate.go).
 	r.Post("/api/projects/{project}/addons/{addon}/s3/rotate-credentials", h.RotateS3Credentials)
 	r.Post("/api/projects/{project}/addons/{addon}/s3/revoke-previous", h.RevokePreviousS3Credentials)

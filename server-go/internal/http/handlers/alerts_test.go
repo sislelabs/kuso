@@ -51,7 +51,7 @@ func TestNormalizeAlertBody(t *testing.T) {
 				}
 			}},
 		{name: "log_match query too short", in: createAlertBody{Name: "x", Kind: db.AlertKindLogMatch, Project: "p", Query: "ab"}, wantErr: "at least 3"},
-		{name: "missing name",in: createAlertBody{Kind: db.AlertKindNodeCPU}, wantErr: "name"},
+		{name: "missing name", in: createAlertBody{Kind: db.AlertKindNodeCPU}, wantErr: "name"},
 	}
 	for _, tc := range cases {
 		tc := tc

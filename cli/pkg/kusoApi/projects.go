@@ -144,6 +144,14 @@ func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*res
 	return k.client.Post(path)
 }
 
+// RawPostWithHeaders is RawPost plus extra headers for this call only.
+func (k *KusoClient) RawPostWithHeaders(path string, body []byte, contentType string, headers map[string]string) (*resty.Response, error) {
+	for h, v := range headers {
+		k.client.SetHeader(h, v)
+	}
+	return k.RawPost(path, body, contentType)
+}
+
 // RawPut mirrors RawPost for the handful of admin settings endpoints
 // that take a JSON body on PUT (backup-settings, settings/build,
 // settings/session).
@@ -513,6 +521,12 @@ func (k *KusoClient) ResyncInstanceAddon(project, addon string) (*resty.Response
 // current conn secret value.
 func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response, error) {
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/repair-password")
+}
+
+// RotateAddonPassword gives a native postgres/mysql addon's app user a new
+// password and restarts the services using it.
+func (k *KusoClient) RotateAddonPassword(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/rotate-password")
 }
 
 // EnablePublicTCP opts the addon into a public TCP endpoint, allocating

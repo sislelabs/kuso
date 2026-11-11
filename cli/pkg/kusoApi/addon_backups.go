@@ -20,6 +20,30 @@ type RestoreBackupRequest struct {
 	Confirm string `json:"confirm,omitempty"`
 	// AllowUnverified restores a backup with no checksum manifest.
 	AllowUnverified bool `json:"allowUnverified,omitempty"`
+	// SkipSnapshot skips the automatic backup of the destination taken
+	// before it is overwritten.
+	SkipSnapshot bool `json:"skipSnapshot,omitempty"`
+}
+
+// DrillBackupRequest picks the backup a restore drill replays (empty Key =
+// the newest).
+type DrillBackupRequest struct {
+	Key             string `json:"key,omitempty"`
+	AllowUnverified bool   `json:"allowUnverified,omitempty"`
+}
+
+// DrillAddonBackup starts a restore drill: the backup is restored into a
+// scratch database on the addon's server, counted and dropped.
+// 201 {"job","key","phase"}.
+func (k *KusoClient) DrillAddonBackup(project, addon string, req DrillBackupRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/drill")
+}
+
+// AddonBackupDrillStatus reports a drill Job's phase and, once finished,
+// the restored table and row counts.
+func (k *KusoClient) AddonBackupDrillStatus(project, addon, job string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/drill/" + esc(job))
 }
 
 func (k *KusoClient) ListAddonBackups(project, addon string) (*resty.Response, error) {

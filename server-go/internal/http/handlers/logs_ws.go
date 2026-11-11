@@ -339,4 +339,3 @@ func (h *LogsWSHandler) releaseWSSlot(userID string) {
 		delete(h.wsActive, userID)
 	}
 }
-

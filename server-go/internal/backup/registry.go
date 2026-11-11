@@ -175,8 +175,11 @@ until pg_target_ready; do
   if [ "${_i}" -ge 30 ]; then echo "==> postgres ${POSTGRES_HOST:-(external)} unreachable after 60s" >&2; exit 1; fi
   echo "==> waiting for postgres ${POSTGRES_HOST:-(external)} (${_i})"; sleep 2
 done
+# lock_timeout is stripped too: the dump resets it to 0, which would undo
+# the PGOPTIONS lock_timeout the restore handler sets so a restore queued
+# behind an app's lock fails and rolls back instead of waiting for hours.
 gunzip -c /tmp/dump.sql.gz \
-  | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
+  | grep -vxE "SET (transaction_timeout|idle_session_timeout|lock_timeout) = '?[^']*'?;" \
   | pg_ownership_filter \
   | pg_apply
 echo "==> done"
@@ -291,7 +294,11 @@ echo "==> piping into mysql"
 # have been taken with DROP-TABLE statements (mysqldump's default --add-drop-
 # table) OR the target must be empty. Correctness focus for the atomic path is
 # postgres above; mysql is fail-loud but not all-or-nothing.
-gunzip -c /tmp/dump.sql.gz | MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}"
+# --skip-ssl-verify-server-cert: still TLS-encrypted, but the server's
+# identity is NOT verified. MySQL self-signs its cert and kuso issues no CA
+# to check it against; the connection stays in-cluster to the addon's
+# Service. A per-addon CA would let this verify.
+gunzip -c /tmp/dump.sql.gz | MYSQL_PWD="${MYSQL_PASSWORD}" mysql --skip-ssl-verify-server-cert -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}"
 echo "==> done"
 `
 }

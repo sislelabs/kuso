@@ -136,6 +136,10 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 		t.Fatalf("tenant session: %v", err)
 	}
 
+	var stampedBefore int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_roles WHERE rolcanlogin AND shobj_description(oid, 'pg_authid') LIKE 'kuso-addon:%'`).Scan(&stampedBefore); err != nil {
+		t.Fatal(err)
+	}
 	res, err := HardenInstanceServer(ctx, dsn, true)
 	if err != nil {
 		t.Fatalf("harden: %v", err)
@@ -196,14 +200,16 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 		Scan(&maxConns, &reserved, &stamped); err != nil {
 		t.Fatal(err)
 	}
-	// Unstamped roles are not counted as tenants, so on a clean server a is
-	// the lone tenant; stamped roles other tests left behind split it.
-	want := max(maxConns/2, instanceConnLimitFloor)
-	if stamped > 1 {
-		want = defaultInstanceConnLimit(maxConns, reserved, stamped, 1)
+	// Unstamped roles are not counted as tenants; stamped roles other
+	// packages' tests create on the same server split the default, and may
+	// come or go between the harden and this count, so either side matches.
+	want := defaultInstanceConnLimit(maxConns, reserved, stamped, 1)
+	if limit != want && limit != defaultInstanceConnLimit(maxConns, reserved, stampedBefore, 1) {
+		t.Errorf("rolconnlimit = %d, want %d (%d stamped tenant roles, %d before)", limit, want, stamped, stampedBefore)
 	}
-	if limit != want {
-		t.Errorf("rolconnlimit = %d, want %d (%d stamped tenant roles)", limit, want, stamped)
+	if got := roleSettings(t, ctx, admin, a); got["idle_in_transaction_session_timeout"] != "10min" ||
+		got["temp_file_limit"] != "5GB" || got["statement_timeout"] != "" {
+		t.Errorf("existing tenant settings after heal = %v, want idle/temp limits and no statement_timeout", got)
 	}
 
 	// Idempotent, and an admin-tuned limit survives.
@@ -212,7 +218,7 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second harden: %v", err)
 	}
-	if res.TenantLocked != 0 || res.LimitsSet != 0 || len(res.SharedLocked) != 0 {
+	if res.TenantLocked != 0 || res.LimitsSet != 0 || res.SettingsSet != 0 || len(res.SharedLocked) != 0 {
 		t.Fatalf("second pass changed things: %+v", res)
 	}
 	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, b).Scan(&limit); err != nil || limit != 7 {
@@ -228,6 +234,77 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	}
 }
 
+// roleSettings returns the role-wide GUC defaults set on role.
+func roleSettings(t *testing.T, ctx context.Context, db *sql.DB, role string) map[string]string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `
+		SELECT split_part(c, '=', 1), split_part(c, '=', 2)
+		  FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole, unnest(s.setconfig) c
+		 WHERE r.rolname = $1 AND s.setdatabase = 0`, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			t.Fatal(err)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// A new tenant gets every limit; an existing one never gets a
+// statement_timeout, and a value an admin set by hand is never overwritten.
+func TestApplyInstanceRoleSettings_PG(t *testing.T) {
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := uniqueProject(t)
+	fresh, old := "rs_new_"+suffix, "rs_old_"+suffix
+	t.Cleanup(func() {
+		for _, r := range []string{fresh, old} {
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pq.QuoteIdentifier(r)))
+		}
+		_ = admin.Close()
+	})
+	for _, q := range []string{
+		fmt.Sprintf(`CREATE ROLE %s LOGIN`, pq.QuoteIdentifier(fresh)),
+		fmt.Sprintf(`CREATE ROLE %s LOGIN`, pq.QuoteIdentifier(old)),
+		fmt.Sprintf(`ALTER ROLE %s SET temp_file_limit = '20GB'`, pq.QuoteIdentifier(old)),
+	} {
+		if _, err := admin.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if n, warns := applyInstanceRoleSettings(ctx, admin, fresh, true); n != 3 || len(warns) > 0 {
+		t.Fatalf("fresh: set %d, warnings %v", n, warns)
+	}
+	if got := roleSettings(t, ctx, admin, fresh); got["statement_timeout"] != "1h" || got["temp_file_limit"] != "5GB" ||
+		got["idle_in_transaction_session_timeout"] != "10min" {
+		t.Errorf("fresh role settings = %v", got)
+	}
+	if n, warns := applyInstanceRoleSettings(ctx, admin, old, false); n != 1 || len(warns) > 0 {
+		t.Fatalf("existing: set %d, warnings %v", n, warns)
+	}
+	if got := roleSettings(t, ctx, admin, old); got["temp_file_limit"] != "20GB" || got["statement_timeout"] != "" ||
+		got["idle_in_transaction_session_timeout"] != "10min" {
+		t.Errorf("existing role settings = %v", got)
+	}
+	if n, _ := applyInstanceRoleSettings(ctx, admin, fresh, true); n != 0 {
+		t.Errorf("second pass set %d, want 0", n)
+	}
+}
+
 // The default splits the server across the kuso-stamped tenant roles on it.
 func TestApplyInstanceRoleConnLimit_SplitsAcrossTenants_PG(t *testing.T) {
 	dsn := os.Getenv("KUSO_TEST_PG_DSN")
@@ -240,6 +317,16 @@ func TestApplyInstanceRoleConnLimit_SplitsAcrossTenants_PG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Its stamped roles change the tenant count TestHardenInstanceServer_PG
+	// derives its expected limit from, so the two take turns.
+	lockConn, err := admin.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('kuso-test-harden-instance'))`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lockConn.Close() })
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 	roles := []string{"cl_a_" + suffix, "cl_b_" + suffix}
 	t.Cleanup(func() {

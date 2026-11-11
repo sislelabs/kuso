@@ -363,7 +363,13 @@ func (u *AddonUpdater) openPG(ctx context.Context, a kube.KusoAddon) *pgControl 
 		return nil
 	}
 	user := get("POSTGRES_USER", "kuso")
-	dsn := pgDSN(qualifyHost(get("POSTGRES_HOST", a.Name+"-postgresql"), a.Namespace), get("POSTGRES_PORT", "5432"), user, pass, get("POSTGRES_DB", "kuso"))
+	// An appRole addon's conn user may not CHECKPOINT or end other roles'
+	// sessions; its superuser lives in <name>-admin.
+	dbUser, dbPass := user, pass
+	if adm, err := u.Kube.CoreV1().Secrets(a.Namespace).Get(ctx, a.Name+"-admin", metav1.GetOptions{}); err == nil && len(adm.Data["ADMIN_PASSWORD"]) > 0 {
+		dbUser, dbPass = string(adm.Data["ADMIN_USER"]), string(adm.Data["ADMIN_PASSWORD"])
+	}
+	dsn := pgDSN(qualifyHost(get("POSTGRES_HOST", a.Name+"-postgresql"), a.Namespace), get("POSTGRES_PORT", "5432"), dbUser, dbPass, get("POSTGRES_DB", "kuso"))
 	c := &pgControl{dsn: dsn}
 	if db, err := sql.Open("postgres", dsn); err == nil {
 		db.SetMaxOpenConns(1)

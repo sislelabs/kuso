@@ -23,9 +23,8 @@
 #   initContainer dump   (postgres:16-bookworm)  pg_dump → gzip → emptyDir (validated before handoff)
 #   container    upload  (amazon/aws-cli)        aws s3 cp ← emptyDir
 #
-# Restore is documented in docs/BACKUP_RESTORE.md and is
-# manual: pause kuso-server, exec into postgres pod, psql < dump.sql.
-# A future v0.10 will add a /api/admin/restore endpoint.
+# Restore: `kuso restore <file>` (POST /api/admin/restore) takes these
+# dumps as they are, encrypted or not; see docs/BACKUP_RESTORE.md.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -114,7 +113,11 @@ spec:
                   # it is budget-pruned throwaway data, and at its byte
                   # budget it was GBs of text per night. -and-children
                   # also covers the daily partitions (pg_dump 16+).
+                  # --clean --if-exists: the restore API loads the dump over
+                  # a live schema (boot always creates every table), which
+                  # only works when the dump drops each object first.
                   pg_dump --format=plain --no-owner --no-privileges \
+                    --clean --if-exists \
                     --quote-all-identifiers \
                     --exclude-table-data-and-children='"LogLine"' \
                     "$KUSO_DB_DSN" > "$RAW"
@@ -139,6 +142,23 @@ spec:
                   # Integrity: the archive must decompress cleanly end to
                   # end before we let it near a retention slot.
                   gzip -t "$DUMP"
+
+                  # The dump holds SSH keys, OAuth tokens and TOTP seeds, so
+                  # it leaves the cluster encrypted, in the same openssl
+                  # format as addon dumps. kuso-server creates the key
+                  # Secret; `kuso backup keys export` escrows it and
+                  # `kuso restore` decrypts with it. Without the Secret
+                  # (an older server) the dump goes up as before.
+                  ENC=""
+                  if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+                    openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -salt \
+                      -pass env:BACKUP_ENCRYPTION_KEY -in "$DUMP" -out "$DUMP.enc"
+                    mv "$DUMP.enc" "$DUMP"
+                    SIZE=$(stat -c%s "$DUMP")
+                    ENC="openssl-aes-256-cbc-pbkdf2-sha256"
+                  else
+                    echo "WARNING: kuso-controlplane-backup-key Secret missing; uploading the dump UNENCRYPTED" >&2
+                  fi
 
                   # Hand off to the upload container. Retention slot keys
                   # are computed HERE so dump + upload agree on the hour
@@ -165,6 +185,7 @@ spec:
                     echo "MONTH=$(date -u +%m)"
                     echo "SIZE=$SIZE"
                     echo "DUMP=$DUMP"
+                    echo "ENC=$ENC"
                   } > /backup/meta.env
               env:
                 # DSN of the kuso DB — same Secret kuso-server consumes,
@@ -188,6 +209,9 @@ spec:
                 - name: KUSO_BACKUP_ENDPOINT
                   valueFrom:
                     secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_ENDPOINT, optional: true }
+                - name: BACKUP_ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef: { name: kuso-controlplane-backup-key, key: key, optional: true }
               volumeMounts:
                 - { name: workdir, mountPath: /backup }
               resources:
@@ -229,7 +253,7 @@ spec:
                   DAILY="${DEST_PREFIX}/daily/${DOM}.sql.gz"
                   aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${DAILY}" \
                     --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
-                    --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+                    --metadata "kuso-ts=$TS,kuso-size=$SIZE,kuso-encryption=${ENC:-none}"
 
                   # Weekly retention: 7 slots, keyed by UTC weekday. Gives
                   # a second, slower-rotating copy so a bad dump that
@@ -237,7 +261,7 @@ spec:
                   WEEKLY="${DEST_PREFIX}/weekly/${DOW}.sql.gz"
                   aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${WEEKLY}" \
                     --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
-                    --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+                    --metadata "kuso-ts=$TS,kuso-size=$SIZE,kuso-encryption=${ENC:-none}"
 
                   # Monthly retention: 12 slots, keyed by month. Written
                   # on the 1st, whatever hour the daily schedule runs at.
@@ -245,7 +269,7 @@ spec:
                     MONTHLY="${DEST_PREFIX}/monthly/${MONTH}.sql.gz"
                     aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${MONTHLY}" \
                       --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
-                      --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+                      --metadata "kuso-ts=$TS,kuso-size=$SIZE,kuso-encryption=${ENC:-none}"
                   fi
 
                   echo "backup complete"
