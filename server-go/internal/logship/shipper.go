@@ -90,6 +90,16 @@ const (
 	// resumeDedupeMax bounds the stored lines read to dedupe that rewind.
 	resumeDedupeMax            = 2000
 	defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
+
+	// One scanner per followed container, all on the leader: at 2,000
+	// pods a 64 KiB up-front buffer was ~128 MiB before a single long
+	// line. Start small and grow on demand. streamMaxLine only has to
+	// hold what LogLine stores (MaxLogLineChars runes of up to 4 bytes,
+	// plus the kubelet timestamp), so a stream can never grow past
+	// streamBufMax.
+	streamBufInitial = 4 * 1024
+	streamMaxLine    = 4*db.MaxLogLineChars + 64
+	streamBufMax     = 2 * streamMaxLine
 )
 
 // resolveRateCap returns the per-service per-window line cap:
@@ -645,8 +655,8 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	defer stream.Close()
 
 	scanner := bufio.NewScanner(stream)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	scanner.Split(linescan.Lines(linescan.DefaultMaxLine))
+	scanner.Buffer(make([]byte, 0, streamBufInitial), streamBufMax)
+	scanner.Split(linescan.Lines(streamMaxLine))
 	skippedAtLast := 0
 	for scanner.Scan() {
 		ts, line, ok := splitTimestamp(scanner.Text())

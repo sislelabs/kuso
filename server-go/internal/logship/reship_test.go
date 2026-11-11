@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
@@ -209,6 +210,11 @@ func TestOverlongLineDoesNotStopShipping(t *testing.T) {
 	got := shipped(s)
 	if got["web: before"] != 1 || got["web: after"] != 1 {
 		t.Fatalf("lines around the over-long one: before=%d after=%d, want 1 each", got["web: before"], got["web: after"])
+	}
+	// The smaller per-stream line cap (SCL-5) must still keep everything
+	// LogLine stores: the long line arrives as the full truncated value.
+	if want := "web: " + db.SanitizeLogLine(strings.Repeat("x", 2<<20)); got[want] != 1 {
+		t.Fatal("over-long line not stored at LogLine's full truncated length")
 	}
 }
 
