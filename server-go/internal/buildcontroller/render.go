@@ -1302,7 +1302,7 @@ IMAGE=$IMAGE_REF
 CACHE=$CACHE_REF
 BUILDKIT_HOST=$BUILDKIT_ADDR
 INSECURE=${REGISTRY_INSECURE:-true}
-
+` + foreignImageCheckScript + `
 # Runtime-only / kuso-managed keys never passed to the build (NODE_ENV=
 # production makes the install skip devDeps). Mirrors builds.reservedBuildEnvKeys.
 RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
@@ -1505,6 +1505,7 @@ exit "$RC"
 		{Name: "CACHE_EXPORT", Value: cacheExport(b)},
 		{Name: "CACHE_MOUNT_NS", Value: cacheMountNamespace(b)},
 	}
+	envs = append(envs, foreignImageCheckEnv(b)...)
 	if hasAuthSecret(b) {
 		envs = append(envs, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/tmp/.docker"})
 	}
