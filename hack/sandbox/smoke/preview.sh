@@ -44,11 +44,11 @@ preview_main() {
   "$K" project update "$PV_PROJECT" --previews=on >/dev/null
   require "production build succeeded" "$K" build trigger "$PV_PROJECT" api --follow
 
-  step "PR #${PV_PR} (re)opened"
-  # The server remembers closed PRs in memory and skips a later "opened" for
-  # them; "reopened" clears that, so the group can run more than once per
-  # server lifetime. Both actions take the same deploy path.
-  require "webhook accepted" "${SANDBOX_DIR}/gh-event" pr reopened "$PV_REPO" "$PV_PR"
+  step "PR #${PV_PR} opened"
+  # A second run reuses PR #1 after the first run closed it. The close
+  # tombstone is ordered by the payload timestamps, so this newer "opened"
+  # deploys on any replica, before or after a server restart.
+  require "webhook accepted" "${SANDBOX_DIR}/gh-event" pr opened "$PV_REPO" "$PV_PR"
   if eventually 120 pv_has_preview; then
     pass "preview env $(pv_preview) created"
   else
@@ -77,6 +77,14 @@ preview_main() {
   require "webhook accepted" "${SANDBOX_DIR}/gh-event" pr closed "$PV_REPO" "$PV_PR"
   check "preview env reclaimed" eventually 180 pv_no_preview
   check "per-PR database reclaimed" eventually 180 pv_no_pr_addons
+
+  step "PR #${PV_PR} opened again after the close"
+  # Used to be skipped until a server restart (in-memory close tombstone).
+  sleep 1
+  require "webhook accepted" "${SANDBOX_DIR}/gh-event" pr opened "$PV_REPO" "$PV_PR"
+  check "preview env recreated without a restart" eventually 120 pv_has_preview
+  require "webhook accepted" "${SANDBOX_DIR}/gh-event" pr closed "$PV_REPO" "$PV_PR"
+  check "preview env reclaimed again" eventually 180 pv_no_preview
 }
 
 preview_cleanup() { delete_project "$PV_PROJECT"; }

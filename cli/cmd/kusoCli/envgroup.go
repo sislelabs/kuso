@@ -25,6 +25,7 @@ import (
 
 var (
 	envGroupAddonShare []string
+	envGroupNoShared   bool
 	envGroupDeleteYes  bool
 )
 
@@ -116,7 +117,8 @@ var envGroupCreateCmd = &cobra.Command{
 	Short: "Create an env group (clones every service + addon into a new env set)",
 	Args:  cobra.ExactArgs(2),
 	Example: `  kuso env-group create tickero staging
-  kuso env-group create tickero staging --share-addon redis   # reuse prod redis, fresh DB`,
+  kuso env-group create tickero staging --share-addon redis   # reuse prod redis, fresh DB
+  kuso env-group create tickero qa --no-shared-keys           # no production shared secrets`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -129,6 +131,9 @@ var envGroupCreateCmd = &cobra.Command{
 			}
 		}
 		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy}
+		if envGroupNoShared {
+			req.SharedKeys = "none"
+		}
 		resp, err := api.CreateEnvGroup(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create env-group: %w", err)
@@ -164,7 +169,7 @@ func envGroupCreateMsg(project, name string, body []byte) (string, error) {
 		}
 	}
 	if len(resp.Warnings) > 0 {
-		b.WriteString("WARNING: these env vars may still point at production; review them:\n")
+		b.WriteString("WARNING: this group still reads production values or hosts; review them:\n")
 		for _, w := range resp.Warnings {
 			fmt.Fprintf(&b, "  %s\n", w)
 		}
@@ -230,6 +235,7 @@ func init() {
 	envGroupCmd.AddCommand(envGroupDeleteCmd)
 	envGroupListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 	envGroupGetCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
+	envGroupCreateCmd.Flags().BoolVar(&envGroupNoShared, "no-shared-keys", false, "don't inherit production's project shared secrets (STRIPE_KEY, ...); set the group's own with 'kuso secret set'")
 	envGroupCreateCmd.Flags().StringSliceVar(&envGroupAddonShare, "share-addon", nil, "addon short-name(s) to share with production instead of cloning fresh (repeatable)")
 	envGroupDeleteCmd.Flags().BoolVarP(&envGroupDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 }

@@ -66,7 +66,8 @@ var statusCmd = &cobra.Command{
 					Name string `json:"name"`
 				} `json:"metadata"`
 				Spec struct {
-					BaseDomain string `json:"baseDomain"`
+					BaseDomain    string                      `json:"baseDomain"`
+					NetworkPolicy *statusProjectNetworkPolicy `json:"networkPolicy,omitempty"`
 				} `json:"spec"`
 			} `json:"project"`
 			Services []struct {
@@ -137,6 +138,9 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("project %s\n", rollup.Project.Metadata.Name)
 		if rollup.Project.Spec.BaseDomain != "" {
 			fmt.Printf("  base   %s\n", rollup.Project.Spec.BaseDomain)
+		}
+		if w := isolationWarning(rollup.Project.Metadata.Name, rollup.Project.Spec.NetworkPolicy); w != "" {
+			fmt.Printf("  warning: %s\n", w)
 		}
 		for _, s := range rollup.Services {
 			fmt.Printf("\nservice %s   runtime=%s port=%d\n",
@@ -302,4 +306,26 @@ func errorSummaryLine(project string, body []byte) string {
 		parts = append(parts, fmt.Sprintf("%s %d in %d group(s)", n, s.Occurrences, s.Groups))
 	}
 	return "\nerrors (24h): " + strings.Join(parts, ", ") + "  (kuso service errors " + project + " <service>)\n"
+}
+
+type statusProjectNetworkPolicy struct {
+	Enabled            *bool `json:"enabled"`
+	EnvIsolation       *bool `json:"envIsolation"`
+	IsolateNonProdEnvs *bool `json:"isolateNonProdEnvs"`
+}
+
+// isolationWarning is the status line for a project whose envs aren't
+// network-isolated (ISO-5): projects created before isolation stay flat
+// until someone turns it on.
+func isolationWarning(project string, np *statusProjectNetworkPolicy) string {
+	on := func(b *bool) bool { return b != nil && *b }
+	switch {
+	case np != nil && np.Enabled != nil && !*np.Enabled:
+		return ""
+	case np == nil || !on(np.EnvIsolation):
+		return "env isolation off: previews and staging can reach production pods and addons (kuso project isolation enable " + project + ")"
+	case !on(np.IsolateNonProdEnvs):
+		return "non-production envs can reach each other (kuso project isolation enable " + project + ")"
+	}
+	return ""
 }

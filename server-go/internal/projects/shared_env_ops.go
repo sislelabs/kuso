@@ -303,6 +303,85 @@ func (s *Service) ResyncSharedKeySubscribers(ctx context.Context, project, key s
 	return touched, errors.Join(errs...)
 }
 
+// ResyncServiceSharedKey re-propagates service's envs when it subscribes to
+// key. Called after a service- or env-scoped secret write of that key: the
+// subscription is an inline secretKeyRef to the shared Secret, which beats
+// the scoped Secret's envFrom, so without a re-resolve the override (or
+// its removal) never reached the pod (ISO-2). Propagation drops the shared
+// ref wherever a mounted scoped Secret holds the key and restores it where
+// none does. A service that doesn't subscribe to key is left alone.
+func (s *Service) ResyncServiceSharedKey(ctx context.Context, project, service, key string) error {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	short := strings.TrimPrefix(service, project+"-")
+	svc, err := s.getOwnedService(ctx, ns, project, short)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(svc.Spec.SharedEnvKeys, key) {
+		return nil
+	}
+	return s.propagateChangedToEnvs(ctx, ns, project, short, svc, changedFields{EnvVars: true})
+}
+
+// NamedEnvInheritanceWarnings lists what a just-created named env of
+// service reads with production's value (ISO-3): every key of the service's
+// managed secret (mounted as-is) and every project shared key it inherits.
+// Best-effort: it only feeds the create response.
+func (s *Service) NamedEnvInheritanceWarnings(ctx context.Context, project, service, env string) []string {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil
+	}
+	short := strings.TrimPrefix(service, project+"-")
+	svc, err := s.getOwnedService(ctx, ns, project, short)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	if keys, err := s.listSecretKeys(ctx, ns, kube.ServiceSecretName(project, short)); err == nil && len(keys) > 0 {
+		keys = slices.Sorted(slices.Values(keys))
+		out = append(out, fmt.Sprintf("%s: %d secret(s) shared with production, same value (%s); give %s its own with `kuso secret set %s %s KEY VALUE --env %s`",
+			env, len(keys), strings.Join(keys, ", "), env, project, short, env))
+	}
+	if keys := s.inheritedSharedKeys(ctx, ns, project, svc.Spec.SharedEnvKeys); len(keys) > 0 {
+		out = append(out, fmt.Sprintf("%s: %d project shared secret(s) inherited with production's value (%s); override with `kuso secret set %s %s KEY VALUE --env %s --force`",
+			env, len(keys), strings.Join(keys, ", "), project, short, env))
+	}
+	return out
+}
+
+// inheritedSharedKeys names the project/instance shared-secret keys an env
+// built from a service with this subscription reads, sorted: the resolvable
+// subscribed keys, or every shared key for a legacy nil subscription (which
+// mounts the shared Secrets whole). Best-effort: a read error yields nil,
+// since this only feeds a warning.
+func (s *Service) inheritedSharedKeys(ctx context.Context, ns, project string, keys []string) []string {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return nil
+	}
+	var out []string
+	if keys == nil {
+		all, err := s.collectAvailableSharedKeys(ctx, ns, project)
+		if err != nil {
+			return nil
+		}
+		out = all
+	} else {
+		resolved, _, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, keys)
+		if err != nil {
+			return nil
+		}
+		for _, e := range resolved {
+			out = append(out, e.Name)
+		}
+	}
+	sort.Strings(out)
+	return dedupeSorted(out)
+}
+
 // dedupeSorted drops adjacent duplicates from a sorted slice; never nil.
 func dedupeSorted(in []string) []string {
 	out := make([]string, 0, len(in))

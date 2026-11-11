@@ -579,6 +579,14 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			OnFailure:               req.OnFailure,
 		},
 	}
+	// ISO-8: an unlabelled pod is "legacy" to env isolation and reaches
+	// every env and every addon. A command cron runs an arbitrary image,
+	// so it runs as production: production pods and production addons,
+	// not clones or credentialless addons it doesn't subscribe to. Only
+	// new crons; existing ones keep their pod labels.
+	if req.Kind == "command" {
+		cr.Spec.EnvScope = "production"
+	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
 	if err != nil {
 		return nil, fmt.Errorf("create project cron: %w", err)

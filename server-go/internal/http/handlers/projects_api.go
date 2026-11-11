@@ -100,6 +100,7 @@ type ProjectsAPI interface {
 	ListEnvironments(ctx context.Context, project string) ([]kube.KusoEnvironment, error)
 	GetEnvironment(ctx context.Context, project, env string) (*kube.KusoEnvironment, error)
 	AddEnvironment(ctx context.Context, project, service string, req projects.CreateEnvRequest) (*kube.KusoEnvironment, error)
+	NamedEnvInheritanceWarnings(ctx context.Context, project, service, env string) []string
 	DeleteEnvironment(ctx context.Context, project, env string) error
 
 	// Env groups

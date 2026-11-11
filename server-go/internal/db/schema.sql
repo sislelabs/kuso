@@ -648,6 +648,18 @@ CREATE TABLE IF NOT EXISTS "GithubWebhookDelivery" (
 CREATE INDEX IF NOT EXISTS "GithubWebhookDelivery_receivedAt_idx"
     ON "GithubWebhookDelivery"("receivedAt");
 
+-- Closed-PR tombstones: a synchronize/opened delivered after a PR's close
+-- must not rebuild its preview. "closedAt" is GitHub's pull_request.closed_at
+-- so it compares against the late delivery's own updated_at on one clock.
+-- Shared by every replica and kept across restarts (it was a per-process
+-- map). Rows are pruned a week after the close.
+CREATE TABLE IF NOT EXISTS "GithubClosedPR" (
+    "repo" TEXT NOT NULL,
+    "number" INTEGER NOT NULL,
+    "closedAt" TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY ("repo", "number")
+);
+
 -- v0.9.53: revision history for service / addon / environment spec
 -- edits. Every UI save writes a row; the History tab reads them for
 -- "show me what this spec looked like 2 hours ago" + "revert to

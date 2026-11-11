@@ -2,8 +2,14 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/kube"
 )
@@ -120,5 +126,74 @@ func TestCreateEnvGroup_RunsReleaseHookAgainstFreshAddons(t *testing.T) {
 	}
 	if !slices.Equal(released, []string{"acme-api-qa-production"}) {
 		t.Errorf("release hook ran for %v, want only [acme-api-qa-production]", released)
+	}
+}
+
+// ISO-3: a group clone inherits the source's project shared keys with
+// production's value, so creation says which ones; sharedKeys=none clones
+// with no shared subscription (and no wholesale shared mount for a legacy
+// nil-subscription service).
+func TestCreateEnvGroup_SharedKeyInheritance(t *testing.T) {
+	t.Parallel()
+	shared := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "acme-shared", Namespace: "kuso"},
+		Data: map[string][]byte{"STRIPE_KEY": []byte("sk_live"), "OTHER": []byte("x")}}
+	s := fakeServiceWithSecrets(t, []runtime.Object{shared},
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080, SharedEnvKeys: []string{"STRIPE_KEY"}}),
+		seedEnv("acme", "web", "production", "main", "acme-web-production"),
+		seedService("acme", "legacy", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
+		seedEnv("acme", "legacy", "production", "main", "acme-legacy-production"),
+	)
+	ctx := context.Background()
+	sum, err := s.CreateEnvGroup(ctx, "acme", CreateEnvGroupRequest{Name: "qa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warned := func(prefix, keys string) bool {
+		for _, w := range sum.Warnings {
+			if strings.HasPrefix(w, prefix+": ") && strings.Contains(w, "shared secret(s) inherited") && strings.Contains(w, "("+keys+")") {
+				return true
+			}
+		}
+		return false
+	}
+	if !warned("web-qa", "STRIPE_KEY") || !warned("legacy-qa", "OTHER, STRIPE_KEY") {
+		t.Errorf("inherited shared keys not warned: %q", sum.Warnings)
+	}
+
+	sum, err = s.CreateEnvGroup(ctx, "acme", CreateEnvGroupRequest{Name: "demo", SharedKeys: SharedKeysNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range sum.Warnings {
+		if strings.Contains(w, "shared secret(s) inherited") {
+			t.Errorf("sharedKeys=none still warns: %q", w)
+		}
+	}
+	for _, short := range []string{"web", "legacy"} {
+		svc, err := s.Kube.GetKusoService(ctx, "kuso", "acme-"+short+"-demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if svc.Spec.SharedEnvKeys == nil || len(svc.Spec.SharedEnvKeys) != 0 {
+			t.Errorf("%s-demo sharedEnvKeys = %#v, want []", short, svc.Spec.SharedEnvKeys)
+		}
+		env, err := s.Kube.GetKusoEnvironment(ctx, "kuso", "acme-"+short+"-demo-production")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range env.Spec.EnvVars {
+			if v.Name == "STRIPE_KEY" {
+				t.Errorf("%s-demo still references STRIPE_KEY: %+v", short, v)
+			}
+		}
+		for _, n := range kube.SharedSecretNames("acme") {
+			if slices.Contains(env.Spec.EnvFromSecrets, n) {
+				t.Errorf("%s-demo mounts %s: %v", short, n, env.Spec.EnvFromSecrets)
+			}
+		}
+	}
+	if _, err := s.CreateEnvGroup(ctx, "acme", CreateEnvGroupRequest{Name: "bad", SharedKeys: "some"}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad sharedKeys: err = %v", err)
 	}
 }

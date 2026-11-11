@@ -64,6 +64,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   const [scope, setScope] = useState<"project" | "service">("project");
   const [name, setName] = useState("");
   const [policy, setPolicy] = useState<Record<string, AddonPolicy>>({});
+  const [inheritShared, setInheritShared] = useState(true);
   // Set when the server created the env but flagged literals that may
   // still reach production. Shown in-dialog until dismissed — a toast
   // would vanish before anyone reads it.
@@ -88,6 +89,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     if (!open) return;
     setName("");
     setScope("project");
+    setInheritShared(true);
     setWarned(null);
     // Seed defaults on each open. Stateful kinds default to fresh,
     // others to shared. Users can flip any of them inline.
@@ -99,7 +101,8 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   }, [open, addonShorts]);
 
   const create = useMutation({
-    mutationFn: () => createEnvGroup(project, { name, addonPolicy: policy }),
+    mutationFn: () =>
+      createEnvGroup(project, { name, addonPolicy: policy, sharedKeys: inheritShared ? "inherit" : "none" }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
@@ -152,8 +155,9 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               &ldquo;{warned.name}&rdquo; created — check these variables
             </DialogTitle>
             <DialogDescription className="text-xs text-[var(--text-secondary)]">
-              These values still name a host under this project&apos;s domain that kuso couldn&apos;t map
-              to a clone. Until you change them, this environment may read from or write to production.
+              These variables still name a production host kuso couldn&apos;t map to a clone, or hold
+              production&apos;s secret values. Until you change them, this environment may read from or write
+              to production.
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -256,6 +260,10 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                       service{services.length === 1 ? "" : "s"} cloned with all env vars copied
                     </li>
                     <li className="list-disc">
+                      Service secrets are copied with production&apos;s values; replace them per
+                      service after create
+                    </li>
+                    <li className="list-disc">
                       Branch defaults to production&apos;s; change per-service in{" "}
                       <span className="font-mono">Settings</span> after create
                     </li>
@@ -267,6 +275,27 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                     </li>
                   </ul>
                 </div>
+              </div>
+
+              <div className="border-b border-[var(--border-subtle)] p-4">
+                <label className="flex cursor-pointer items-start gap-2 text-xs text-[var(--text-secondary)]">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={inheritShared}
+                    onChange={(e) => setInheritShared(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-medium text-[var(--text-primary)]">
+                      Inherit project shared secrets
+                    </span>
+                    <span className="block">
+                      Each clone keeps its service&apos;s shared-secret subscriptions with
+                      production&apos;s values (live API keys included). Untick to start the
+                      environment without them and set its own.
+                    </span>
+                  </span>
+                </label>
               </div>
 
               {addonShorts.length > 0 && (

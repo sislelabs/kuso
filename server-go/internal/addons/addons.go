@@ -2066,6 +2066,7 @@ func createAddon(ctx context.Context, s *Service, ns string, a *kube.KusoAddon) 
 	// New addons start hardened; existing ones are never flipped by the
 	// server because that would restart the database.
 	a.Spec.PodHardening = true
+	kube.StampAddonEnvScope(a)
 	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(a)
 	if err != nil {
 		return nil, fmt.Errorf("encode addon: %w", err)

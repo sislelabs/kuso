@@ -18,6 +18,24 @@ func TestLastBuildLinePicksNewest(t *testing.T) {
 	}
 }
 
+func TestIsolationWarning(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		np   *statusProjectNetworkPolicy
+		want string
+	}{
+		{nil, "env isolation off"},
+		{&statusProjectNetworkPolicy{EnvIsolation: &on}, "non-production envs"},
+		{&statusProjectNetworkPolicy{EnvIsolation: &on, IsolateNonProdEnvs: &on}, ""},
+		{&statusProjectNetworkPolicy{Enabled: &off}, ""},
+	} {
+		got := isolationWarning("shop", tc.np)
+		if (tc.want == "") != (got == "") || len(got) < len(tc.want) || got[:len(tc.want)] != tc.want {
+			t.Errorf("%+v: got %q, want prefix %q", tc.np, got, tc.want)
+		}
+	}
+}
+
 func TestAddonsStatusLines(t *testing.T) {
 	addons := []map[string]any{
 		{"metadata": map[string]any{"name": "shop-db"}, "spec": map[string]any{"kind": "postgres", "version": "16"}},

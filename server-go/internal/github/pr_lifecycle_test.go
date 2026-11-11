@@ -2,6 +2,8 @@ package github
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -11,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/builds"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
@@ -221,6 +224,99 @@ func TestPRSynchronizeAfterClose_DoesNotResurrectPreview(t *testing.T) {
 	}
 	if !envExists(d, "alpha-web-pr-8") {
 		t.Fatal("reopen did not bring the preview back")
+	}
+}
+
+// prBodyAt is prBody with GitHub's timestamps; "" leaves one out.
+func prBodyAt(t *testing.T, action string, number int, updatedAt, closedAt string) []byte {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(prBody(action, "example/alpha", "example/alpha", "feat/x", number), &m); err != nil {
+		t.Fatal(err)
+	}
+	pr := m["pull_request"].(map[string]any)
+	if updatedAt != "" {
+		pr["updated_at"], pr["created_at"] = updatedAt, updatedAt
+	}
+	if closedAt != "" {
+		pr["closed_at"] = closedAt
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+// A close tombstone orders deliveries by GitHub's clock: a synchronize sent
+// before the close stays dead, but a later "opened" for the same number (a
+// recreated repo, the sandbox reusing PR #1) deploys without a "reopened"
+// and without a server restart. Untimed payloads keep the old rule for
+// synchronize and let opened through.
+func TestPRClose_TombstoneOrdersByGitHubTime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		steps [][]byte
+		want  bool
+	}{
+		{"late synchronize", [][]byte{
+			prBodyAt(t, "opened", 8, "2026-11-11T10:00:00Z", ""),
+			prBodyAt(t, "closed", 8, "2026-11-11T10:05:00Z", "2026-11-11T10:05:00Z"),
+			prBodyAt(t, "synchronize", 8, "2026-11-11T10:03:00Z", ""),
+		}, false},
+		{"opened after close", [][]byte{
+			prBodyAt(t, "opened", 8, "2026-11-11T10:00:00Z", ""),
+			prBodyAt(t, "closed", 8, "2026-11-11T10:05:00Z", "2026-11-11T10:05:00Z"),
+			prBodyAt(t, "opened", 8, "2026-11-11T10:10:00Z", ""),
+		}, true},
+		{"untimed opened after close", [][]byte{
+			prBodyAt(t, "opened", 8, "", ""),
+			prBodyAt(t, "closed", 8, "", ""),
+			prBodyAt(t, "opened", 8, "", ""),
+		}, true},
+	} {
+		d := newDispatcher(t,
+			seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+			seedSvc("alpha", "web"),
+		)
+		for _, body := range tc.steps {
+			if err := d.Dispatch(ctx, "pull_request", body); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+		}
+		if got := envExists(d, "alpha-web-pr-8"); got != tc.want {
+			t.Errorf("%s: preview exists = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The tombstone lives in Postgres: a replica that never saw the close (or
+// one that restarted since) still refuses the late synchronize.
+func TestPRClose_TombstoneSharedThroughDB(t *testing.T) {
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set; skipping postgres-backed test")
+	}
+	database, err := db.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	repo := "example/shared-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	closedAt := time.Now().UTC().Truncate(time.Second)
+
+	closer, other := newDispatcher(t), newDispatcher(t)
+	closer.DB, other.DB = database, database
+	closer.markPRClosed(ctx, repo, 3, closedAt)
+	if !other.sentBeforeClose(ctx, repo, 3, "synchronize", closedAt.Add(-time.Minute)) {
+		t.Fatal("other replica missed the close")
+	}
+	if other.sentBeforeClose(ctx, repo, 3, "opened", closedAt.Add(time.Minute)) {
+		t.Fatal("a newer opened was refused")
+	}
+	other.clearPRClosed(ctx, repo, 3)
+	if closer.sentBeforeClose(ctx, repo, 3, "synchronize", closedAt.Add(-time.Minute)) {
+		t.Fatal("reopen on one replica not seen by the other")
 	}
 }
 

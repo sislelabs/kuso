@@ -75,6 +75,11 @@ const (
 	// in-cluster registry no longer has. The pod keeps running only while its
 	// node caches the layers; the next reschedule fails ImagePullBackOff.
 	KindImageMissingFromRegistry Kind = "image_missing_from_registry"
+	// KindEnvIsolationOff: the project's network policy doesn't separate
+	// its envs, so PR previews and staging pods can open connections to
+	// production pods and addons. Projects created before env isolation
+	// keep this until an admin turns it on (ISO-5).
+	KindEnvIsolationOff Kind = "env_isolation_off"
 )
 
 // Action is the machine-readable remediation the auto-remediator knows
@@ -170,6 +175,8 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 			}
 			rep.Scanned++
 			if iss, ok := ClassifyProject(&projects[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+			} else if iss, ok := ClassifyProjectIsolation(&projects[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
 			} else {
 				rep.Healthy++
@@ -526,6 +533,38 @@ func ClassifyProject(p *kube.KusoProject) (Issue, bool) {
 		}, true
 	}
 	return Issue{}, false
+}
+
+// ClassifyProjectIsolation flags a project whose network policy is on but
+// doesn't isolate its envs (envIsolation off), or isolates them from
+// production only (isolateNonProdEnvs off). Surface-only: enabling rolls
+// env pods once, so it stays an operator decision.
+func ClassifyProjectIsolation(p *kube.KusoProject) (Issue, bool) {
+	np := p.Spec.NetworkPolicy
+	if np != nil && np.Enabled != nil && !*np.Enabled {
+		return Issue{}, false
+	}
+	on := func(b *bool) bool { return b != nil && *b }
+	iss := Issue{
+		Resource:   p.Name,
+		Namespace:  p.Namespace,
+		Project:    p.Name,
+		Type:       "project",
+		Kind:       KindEnvIsolationOff,
+		Fix:        "Stamp the envs, wait for their pods to roll, then turn isolation on. The command does all three and refuses while any env pod is unlabelled.",
+		RunbookCmd: "kuso project isolation enable " + p.Name,
+	}
+	switch {
+	case np == nil || !on(np.EnvIsolation):
+		iss.Severity = SeverityWarning
+		iss.Summary = "Env isolation is off: PR previews, env groups and named envs can open connections to production pods and addons."
+	case !on(np.IsolateNonProdEnvs):
+		iss.Severity = SeverityInfo
+		iss.Summary = "Non-production envs aren't isolated from each other: a PR preview can reach staging's pods."
+	default:
+		return Issue{}, false
+	}
+	return iss, true
 }
 
 // isImmutableVCTError matches the helm error emitted when a StatefulSet's

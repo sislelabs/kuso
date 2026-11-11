@@ -71,10 +71,12 @@ else
   event=pull_request
   state=open; [[ "$action" == "closed" ]] && state=closed
   payload="$(jq -nc --arg repo "$repo" --arg action "$action" --argjson n "$number" \
-      --arg head "$head" --arg base "$base" --arg sha "$sha" --arg state "$state" '{
+      --arg head "$head" --arg base "$base" --arg sha "$sha" --arg state "$state" \
+      --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{
     action: $action, number: $n,
     pull_request: {
       number: $n, state: $state, title: ("sandbox PR #" + ($n|tostring)), body: "",
+      created_at: $now, updated_at: $now, closed_at: (if $state == "closed" then $now else null end),
       merged: false, user: { login: "sandbox" }, author_association: "OWNER", labels: [],
       head: { ref: $head, sha: $sha, repo: { full_name: $repo } },
       base: { ref: $base, repo: { full_name: $repo } }

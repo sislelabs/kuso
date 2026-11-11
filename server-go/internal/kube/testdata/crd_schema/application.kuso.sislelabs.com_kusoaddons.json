@@ -33,6 +33,10 @@
           "database": {
             "type": "string"
           },
+          "envScope": {
+            "description": "The non-production env (staging, qa, preview-pr-N) this addon is a clone for; empty for a project's own addon. Set by kuso-server at create. Production pods reach the addon only when it is empty.",
+            "type": "string"
+          },
           "external": {
             "properties": {
               "secretKeys": {

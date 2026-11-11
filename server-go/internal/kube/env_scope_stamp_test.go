@@ -55,6 +55,21 @@ func TestUpdateWithRetry_StampAloneIsNotAWrite(t *testing.T) {
 	}
 }
 
+// ISO-4: only a non-production env clone gets spec.envScope, the value
+// that drops production pods from its subscribers policy.
+func TestStampAddonEnvScope(t *testing.T) {
+	for label, want := range map[string]string{"": "", "production": "", "staging": "staging", "preview-pr-7": "preview-pr-7"} {
+		a := &KusoAddon{}
+		if label != "" {
+			a.Labels = map[string]string{LabelEnv: label}
+		}
+		StampAddonEnvScope(a)
+		if a.Spec.EnvScope != want {
+			t.Errorf("label %q: envScope = %q, want %q", label, a.Spec.EnvScope, want)
+		}
+	}
+}
+
 func TestStampKusoEnvironmentScope_PatchesLabelAndSpec(t *testing.T) {
 	c := fakeClient(t, envWithLabel(""))
 	if err := c.StampKusoEnvironmentScope(context.Background(), "kuso", "p-web-staging", "production"); err != nil {

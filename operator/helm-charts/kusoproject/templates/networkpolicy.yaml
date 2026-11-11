@@ -471,6 +471,11 @@ spec:
               {{- range (.Values.networkPolicy).extraBlockCIDRs }}
               - {{ . | quote }}
               {{- end }}
+              {{- range (.Values.networkPolicy).nodeBlockCIDRs }}
+              {{- if not (has . (($.Values.networkPolicy).extraBlockCIDRs | default list)) }}
+              - {{ . | quote }}
+              {{- end }}
+              {{- end }}
 ---
 # Hairpin to the cluster's own ingress for public-egress pods. A pod that
 # calls a public domain served by THIS cluster (its own API host, a
