@@ -116,6 +116,14 @@ set +e
 POSTGRES_USER=weak sh /fx/drill.sh; echo "WEAK_RC=$?"
 POSTGRES_USER=kuso sh /fx/drill.sh; echo "DRILL_RC=$?"
 DRILL_VOLUME_BYTES=1 POSTGRES_USER=kuso sh /fx/drill.sh; echo "FULL_RC=$?"
+# appRole: the dump replays as the conn role, never the admin that made
+# the scratch database; the guard fails any replay run as superuser.
+{ /usr/libexec/postgresql16/pg_dump --clean --if-exists --no-owner -h "$H" -U kuso app
+  echo "DO \$\$BEGIN IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN RAISE EXCEPTION 'replayed as superuser'; END IF; END\$\$;"
+} | gzip > /tmp/fx/dump.sql.gz
+printf '{"artifacts":[{"sha256":"%s"}]}' "$(sha256sum /tmp/fx/dump.sql.gz | cut -d' ' -f1)" > /tmp/fx/manifest.json
+DRILL_ADMIN_USER=kuso DRILL_ADMIN_PASSWORD=pw POSTGRES_USER=weak sh /fx/drill.sh; echo "APPROLE_RC=$?"
+POSTGRES_USER=kuso sh /fx/drill.sh; echo "SUPER_RC=$?"
 echo "LEFT=$(psql -qAt -h "$H" -U kuso -d app -c "select count(*) from pg_database where datname like 'kuso_drill_%'")"
 echo "LIVE=$(psql -qAt -h "$H" -U kuso -d app -c "select count(*) from t")"
 `
@@ -134,10 +142,14 @@ echo "LIVE=$(psql -qAt -h "$H" -U kuso -d app -c "select count(*) from t")"
 		"DRILL_UNSUPPORTED: role weak cannot CREATE DATABASE", "WEAK_RC=2",
 		"DRILL_RESULT tables=1 rows=3", "DRILL_RC=0",
 		"would push the addon volume past 85%", "FULL_RC=2",
+		"APPROLE_RC=0", "replayed as superuser",
 		"LEFT=0", "LIVE=3",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "SUPER_RC=0") {
+		t.Errorf("the superuser guard never fired, so APPROLE_RC proves nothing:\n%s", out)
 	}
 }

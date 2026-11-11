@@ -55,6 +55,9 @@ type DrillStatus struct {
 const drillScriptPrelude = `
 set -eo pipefail
 pg_q() { _db=$1; shift; PGPASSWORD="${POSTGRES_PASSWORD}" psql -X -v ON_ERROR_STOP=1 -qAt -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${_db}" "$@"; }
+DRILL_ADMIN_USER="${DRILL_ADMIN_USER:-${POSTGRES_USER}}"
+DRILL_ADMIN_PASSWORD="${DRILL_ADMIN_PASSWORD:-${POSTGRES_PASSWORD}}"
+pg_admin() { _db=$1; shift; PGPASSWORD="${DRILL_ADMIN_PASSWORD}" psql -X -v ON_ERROR_STOP=1 -qAt -h "${POSTGRES_HOST}" -U "${DRILL_ADMIN_USER}" -d "${_db}" "$@"; }
 _i=0
 until PGPASSWORD="${POSTGRES_PASSWORD}" pg_isready -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -q; do
   _i=$((_i+1))
@@ -62,24 +65,24 @@ until PGPASSWORD="${POSTGRES_PASSWORD}" pg_isready -h "${POSTGRES_HOST}" -U "${P
   sleep 2
 done
 LIVE_DB="${POSTGRES_DB}"
-if [ "$(pg_q "${LIVE_DB}" -c "SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname = current_user")" != "t" ]; then
-  echo "DRILL_UNSUPPORTED: role ${POSTGRES_USER} cannot CREATE DATABASE, so there is nowhere to restore a scratch copy"
+if [ "$(pg_admin "${LIVE_DB}" -c "SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname = current_user")" != "t" ]; then
+  echo "DRILL_UNSUPPORTED: role ${DRILL_ADMIN_USER} cannot CREATE DATABASE, so there is nowhere to restore a scratch copy"
   exit 2
 fi
 if [ "${DRILL_VOLUME_BYTES:-0}" -gt 0 ]; then
-  FITS=$(pg_q "${LIVE_DB}" -c "SELECT sum(pg_database_size(oid)) + 1.2 * COALESCE((SELECT pg_database_size(datname) FROM pg_database WHERE datname = '${DRILL_SIZE_DB}'), 0) <= 0.85 * ${DRILL_VOLUME_BYTES} FROM pg_database")
+  FITS=$(pg_admin "${LIVE_DB}" -c "SELECT sum(pg_database_size(oid)) + 1.2 * COALESCE((SELECT pg_database_size(datname) FROM pg_database WHERE datname = '${DRILL_SIZE_DB}'), 0) <= 0.85 * ${DRILL_VOLUME_BYTES} FROM pg_database")
   if [ "${FITS}" != "t" ]; then
     echo "DRILL_UNSUPPORTED: a scratch copy of ${DRILL_SIZE_DB} would push the addon volume past 85%; grow storageSize or drill into a sibling addon with 'addon-backup restore --into'"
     exit 2
   fi
 fi
 drill_cleanup() {
-  pg_q "${LIVE_DB}" -c "DROP DATABASE IF EXISTS \"${DRILL_DB}\" WITH (FORCE)" >/dev/null 2>&1 \
-    || pg_q "${LIVE_DB}" -c "DROP DATABASE IF EXISTS \"${DRILL_DB}\"" >/dev/null 2>&1 \
+  pg_admin "${LIVE_DB}" -c "DROP DATABASE IF EXISTS \"${DRILL_DB}\" WITH (FORCE)" >/dev/null 2>&1 \
+    || pg_admin "${LIVE_DB}" -c "DROP DATABASE IF EXISTS \"${DRILL_DB}\"" >/dev/null 2>&1 \
     || echo "==> WARNING: could not drop scratch database ${DRILL_DB}; drop it by hand" >&2
 }
 trap drill_cleanup EXIT
-pg_q "${LIVE_DB}" -c "CREATE DATABASE \"${DRILL_DB}\""
+pg_admin "${LIVE_DB}" -c "CREATE DATABASE \"${DRILL_DB}\" OWNER \"${POSTGRES_USER}\""
 echo "==> restoring ${KEY} into scratch database ${DRILL_DB}"
 `
 
@@ -242,10 +245,14 @@ func (h *BackupsHandler) Drill(w http.ResponseWriter, r *http.Request) {
 		keyEnv,
 	}, restoreConnEnv("postgres", cr.Name, false)...)
 	if cr.Spec.AppRole {
-		// The conn role of an appRole addon cannot CREATE DATABASE; the
-		// scratch copy is made by the superuser kept in <name>-admin.
-		env = overrideEnv(env, envFromSecret("POSTGRES_USER", cr.Name+"-admin", "ADMIN_USER"))
-		env = overrideEnv(env, envFromSecret("POSTGRES_PASSWORD", cr.Name+"-admin", "ADMIN_PASSWORD"))
+		// The conn role of an appRole addon cannot CREATE DATABASE, so the
+		// superuser in <name>-admin creates and drops the scratch copy. The
+		// dump replays as the conn role, as a real restore does: replayed as
+		// superuser, an index or trigger calling an app-owned function would
+		// run with superuser rights.
+		env = append(env,
+			envFromSecret("DRILL_ADMIN_USER", cr.Name+"-admin", "ADMIN_USER"),
+			envFromSecret("DRILL_ADMIN_PASSWORD", cr.Name+"-admin", "ADMIN_PASSWORD"))
 	}
 	env = append(env, restoreS3EnvFrom(s3Secret, cr.BackupBucket(""))...)
 	if sizeDB == "" {
