@@ -1,14 +1,19 @@
 # shellcheck shell=bash
 # backup: addon backups against the sandbox MinIO. Postgres: write rows,
 # back up now, damage the data, restore in place, restore into a sibling.
+# Postgres also gets a restore drill and a concurrent-restore refusal.
+# MySQL: write rows, back up, damage, restore in place (DB-1/DB-2).
 # S3 addon: put an object, snapshot, delete it, restore.
 
 BK_PROJECT="bk"
 
+# As the conn user kuso, like an app: on appRole addons the pod's
+# POSTGRES_USER is the postgres superuser, and tables it owned would not
+# be dumpable by the backup, which connects as kuso.
 bk_psql() {
   local addon="$1" sql="$2"
   node_kubectl -n "$BK_NS" exec "${BK_PROJECT}-${addon}-0" -c postgres -- \
-    sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$1"' _ "$sql"
+    sh -c 'psql -v ON_ERROR_STOP=1 -U kuso -d "$POSTGRES_DB" -tAc "$1"' _ "$sql"
 }
 bk_rows() { bk_psql "$1" "SELECT string_agg(name, ',' ORDER BY name) FROM smoke_rows" 2>/dev/null | tr -d '[:space:]'; }
 bk_rows_are() { [[ "$(bk_rows "$1")" == "$2" ]]; }
@@ -24,6 +29,17 @@ bk_has_new_key() { local k; k="$(bk_latest_key "$1" "$2")"; [[ -n "$k" && "$k" !
 # bk_job_done <job>: the Job finished successfully (fails fast on failure).
 bk_job_succeeded() { [[ "$(node_kubectl -n "$BK_NS" get job "$1" -o jsonpath='{.status.succeeded}' 2>/dev/null)" == "1" ]]; }
 
+# bk_restore <args...>: start a restore and print its job name. The CLI
+# may print a pre-restore snapshot line first.
+bk_restore() { "$K" addon-backup restore "$@" | awk '/^restore job /{print $3}'; }
+
+bk_mysql() {
+  node_kubectl -n "$BK_NS" exec "${BK_PROJECT}-sql-0" -c mysql -- \
+    sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u "$MYSQL_USER" -N -B "$MYSQL_DATABASE" -e "$1"' _ "$1"
+}
+bk_mysql_ready() { bk_mysql "SELECT 1" >/dev/null 2>&1; }
+bk_mysql_rows_are() { [[ "$(bk_mysql "SELECT GROUP_CONCAT(name ORDER BY name) FROM smoke_rows" 2>/dev/null | tr -d '[:space:]')" == "$1" ]]; }
+
 bk_s3_mc() {
   # mc against the addon's MinIO with its root credentials, from inside the pod.
   node_kubectl -n "$BK_NS" exec "${BK_PROJECT}-files-0" -- sh -c \
@@ -37,6 +53,7 @@ backup_main() {
   "$K" project addon add "$BK_PROJECT" db --kind postgres --version 16 --size small >/dev/null
   "$K" project addon add "$BK_PROJECT" db2 --kind postgres --version 16 --size small >/dev/null
   "$K" project addon add "$BK_PROJECT" files --kind s3 --size small >/dev/null
+  "$K" project addon add "$BK_PROJECT" sql --kind mysql --size small >/dev/null
   require "db accepts queries" eventually 300 bk_pg_ready db
   require "db2 accepts queries" eventually 300 bk_pg_ready db2
 
@@ -61,12 +78,18 @@ backup_main() {
 
   step "damage the data, restore in place"
   bk_psql db "DELETE FROM smoke_rows WHERE name='alpha'; INSERT INTO smoke_rows VALUES ('gamma')" >/dev/null
-  job="$("$K" addon-backup restore "$BK_PROJECT" db "$key" --confirm db | awk '{print $3}')"
-  check "in-place restore job ${job} succeeded" eventually 300 bk_job_succeeded "$job"
+  job="$(bk_restore "$BK_PROJECT" db "$key" --confirm db)"
+  check "a second restore into db is refused while ${job} runs" \
+    bash -c '! "$1" addon-backup restore "$2" db "$3" --confirm db --skip-snapshot 2>&1 | grep -q "^restore job "' _ "$K" "$BK_PROJECT" "$key"
+  check "in-place restore job ${job} (after its pre-restore snapshot) succeeded" eventually 600 bk_job_succeeded "$job"
   check "rows are back to alpha,beta" eventually 60 bk_rows_are db "alpha,beta"
 
+  step "restore drill of the db dump"
+  check "drill restores the dump into a scratch database" \
+    bash -c '"$1" addon-backup drill "$2" db --key "$3" | grep -q "restore drill OK"' _ "$K" "$BK_PROJECT" "$key"
+
   step "restore into the sibling db2"
-  job="$("$K" addon-backup restore "$BK_PROJECT" db "$key" --into db2 --confirm db2 | awk '{print $3}')"
+  job="$(bk_restore "$BK_PROJECT" db "$key" --into db2 --confirm db2)"
   check "restore-into job ${job} succeeded" eventually 300 bk_job_succeeded "$job"
   check "db2 holds alpha,beta" eventually 60 bk_rows_are db2 "alpha,beta"
   check "db is untouched by the sibling restore" bk_rows_are db "alpha,beta"
@@ -90,9 +113,27 @@ backup_main() {
     fail "s3 snapshot landed"; exit 1
   fi
   bk_s3_mc rm "l/${bucket}/smoke/o.txt" >/dev/null
-  job="$("$K" addon-backup restore "$BK_PROJECT" files "$key" --confirm files | awk '{print $3}')"
+  job="$(bk_restore "$BK_PROJECT" files "$key" --confirm files)"
   check "s3 restore job ${job} succeeded" eventually 300 bk_job_succeeded "$job"
   check "the deleted object is back" eventually 60 bk_s3_mc stat "l/${bucket}/smoke/o.txt"
+
+  step "mysql addon: back up, damage, restore in place"
+  require "sql accepts queries" eventually 300 bk_mysql_ready
+  bk_mysql "CREATE TABLE smoke_rows (name VARCHAR(20)); INSERT INTO smoke_rows VALUES ('alpha'), ('beta')" >/dev/null
+  "$K" addon-backup schedule "$BK_PROJECT" sql --schedule "0 3 * * *" >/dev/null
+  before="$(bk_latest_key sql .sql.gz)"
+  require "mysql backup run started" eventually 120 "$K" addon-backup run "$BK_PROJECT" sql
+  if eventually 300 bk_has_new_key sql .sql.gz "$before"; then
+    key="$(bk_latest_key sql .sql.gz)"
+    pass "mysql dump landed (${key})"
+  else
+    node_kubectl -n "$BK_NS" logs -l "kuso.sislelabs.com/role=backup,kuso.sislelabs.com/addon=${BK_PROJECT}-sql" --tail=30 >&2 || true
+    fail "mysql dump landed"; return 0
+  fi
+  bk_mysql "DELETE FROM smoke_rows WHERE name='alpha'" >/dev/null
+  job="$(bk_restore "$BK_PROJECT" sql "$key" --confirm sql --skip-snapshot)"
+  check "mysql restore job ${job} succeeded" eventually 300 bk_job_succeeded "$job"
+  check "mysql rows are back to alpha,beta" eventually 60 bk_mysql_rows_are "alpha,beta"
 }
 
 backup_cleanup() { delete_project "$BK_PROJECT"; }

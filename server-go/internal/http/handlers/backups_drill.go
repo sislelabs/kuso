@@ -241,6 +241,12 @@ func (h *BackupsHandler) Drill(w http.ResponseWriter, r *http.Request) {
 		{Name: "DRILL_VOLUME_BYTES", Value: strconv.FormatInt(addonVolumeBytes(cr), 10)},
 		keyEnv,
 	}, restoreConnEnv("postgres", cr.Name, false)...)
+	if cr.Spec.AppRole {
+		// The conn role of an appRole addon cannot CREATE DATABASE; the
+		// scratch copy is made by the superuser kept in <name>-admin.
+		env = overrideEnv(env, envFromSecret("POSTGRES_USER", cr.Name+"-admin", "ADMIN_USER"))
+		env = overrideEnv(env, envFromSecret("POSTGRES_PASSWORD", cr.Name+"-admin", "ADMIN_PASSWORD"))
+	}
 	env = append(env, restoreS3EnvFrom(s3Secret, cr.BackupBucket(""))...)
 	if sizeDB == "" {
 		env = append(env, envFromSecret("DRILL_SIZE_DB", cr.Name+"-conn", "POSTGRES_DB"))
