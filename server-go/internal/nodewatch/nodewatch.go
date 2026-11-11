@@ -92,6 +92,8 @@ type Watcher struct {
 	// we don't spam the webhook on every tick. Cleared when recovery
 	// fires.
 	alerted map[string]struct{}
+	// lastActivatorRebalance rate-limits rebalanceActivator.
+	lastActivatorRebalance time.Time
 }
 
 // Run blocks until ctx is cancelled. Idempotent: re-running on the
@@ -371,6 +373,7 @@ func (w *Watcher) tick(ctx context.Context) {
 			}
 		}
 	}
+	w.rebalanceActivator(ctx, nodes, now)
 }
 
 // cordon patches spec.unschedulable=true and stamps our annotation so

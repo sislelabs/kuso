@@ -110,6 +110,16 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels: { app.kubernetes.io/name: kuso-activator }
+      # Soft on purpose: a required spread would leave a single-node
+      # install's second replica (and every maxSurge rollout) Pending.
+      # Neither rule moves a running pod, so nodewatch also evicts one
+      # replica when both end up on the same node and another can take it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: kuso-activator }
       # uid/gid 100/101 = the image's `kuso` user (server-go/Dockerfile
       # adduser -S). Numeric because runAsNonRoot can't verify a named
       # USER. Activator mode writes nothing to disk, hence the read-only

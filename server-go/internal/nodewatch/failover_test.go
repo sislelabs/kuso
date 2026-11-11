@@ -58,6 +58,9 @@ func TestTickEvictsStatelessPodsFromUnreachableNode(t *testing.T) {
 		nodePod("pg-0", "dead", "kusoaddon", false, true),
 		nodePod("other", "dead", "traefik", true, false),
 		nodePod("web-elsewhere", "alive", "kusoenvironment", true, false),
+		nodePod("act", "dead", "kuso-activator", true, false),
+		inNS(nodePod("traefik-1", "dead", "traefik", true, false), "traefik"),
+		inNS(nodePod("tenant-act", "dead", "kuso-activator", true, false), "tenant"),
 	)
 	w := &Watcher{Kube: &kube.Client{Clientset: cs}, Logger: slogDiscard(),
 		notReadySince: map[string]time.Time{}, alerted: map[string]struct{}{}}
@@ -68,14 +71,25 @@ func TestTickEvictsStatelessPodsFromUnreachableNode(t *testing.T) {
 	for _, p := range pods.Items {
 		left[p.Name] = true
 	}
-	if left["web"] {
-		t.Error("stateless service pod on the dead node was not evicted")
+	if left["web"] || left["act"] {
+		t.Error("stateless service / activator pod on the dead node was not evicted")
+	}
+	if _, err := cs.CoreV1().Pods("traefik").Get(context.Background(), "traefik-1", metav1.GetOptions{}); err == nil {
+		t.Error("traefik pod on the dead node was not evicted")
+	}
+	if _, err := cs.CoreV1().Pods("tenant").Get(context.Background(), "tenant-act", metav1.GetOptions{}); err != nil {
+		t.Error("a tenant pod merely labelled kuso-activator must not be evicted")
 	}
 	for _, keep := range []string{"vol", "pg-0", "other", "web-elsewhere"} {
 		if !left[keep] {
 			t.Errorf("pod %s must not be evicted", keep)
 		}
 	}
+}
+
+func inNS(p *corev1.Pod, ns string) *corev1.Pod {
+	p.Namespace = ns
+	return p
 }
 
 func TestShouldEvict(t *testing.T) {

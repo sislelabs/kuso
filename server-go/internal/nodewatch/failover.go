@@ -70,8 +70,13 @@ func shouldEvict(n *corev1.Node, now time.Time, after time.Duration) bool {
 // ReplicaSet then starts a replacement elsewhere, which is what taint
 // eviction would do at 300s. Volume-backed pods are skipped: a node-bound
 // RWO volume can't attach anywhere else, so a replacement could only hang.
+//
+// The platform proxies in front of those services (kuso-activator, and
+// traefik in its install namespace) qualify too: with both replicas on
+// the dead node, every sleep-routed host was down for the full 300s
+// taint eviction even after the apps themselves had moved.
 func evictablePod(p *corev1.Pod) bool {
-	if p.DeletionTimestamp != nil || p.Labels["app.kubernetes.io/name"] != "kusoenvironment" {
+	if p.DeletionTimestamp != nil || !evictableApp(p) {
 		return false
 	}
 	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
@@ -92,6 +97,26 @@ func evictablePod(p *corev1.Pod) bool {
 		}
 	}
 	return true
+}
+
+// activatorNamespace is where deploy/kuso-activator.yaml installs the
+// activator.
+const activatorNamespace = "kuso"
+
+// evictableApp matches by namespace as well as name label so a tenant
+// workload labelled "traefik" or "kuso-activator" isn't swept up.
+func evictableApp(p *corev1.Pod) bool {
+	switch p.Labels["app.kubernetes.io/name"] {
+	case "kusoenvironment":
+		return true
+	case "kuso-activator":
+		return p.Namespace == activatorNamespace
+	case "traefik":
+		// hack/install.sh installs traefik into "traefik"; k3s' bundled
+		// one lives in kube-system.
+		return p.Namespace == "traefik" || p.Namespace == "kube-system"
+	}
+	return false
 }
 
 func (w *Watcher) podsOnNode(ctx context.Context, nodeName string) ([]corev1.Pod, error) {
