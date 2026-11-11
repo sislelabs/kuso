@@ -31,6 +31,7 @@ var previewInheritedFields = []string{
 	"Command",
 	"SecurityContext",
 	"Healthcheck",
+	"TCPLiveness",
 	"PublicEnv",
 	"Release",
 	"SnapshotBeforeDeploy",

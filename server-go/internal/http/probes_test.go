@@ -1,6 +1,7 @@
 package http
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,24 @@ import (
 
 	"kuso/server/internal/serverstate"
 )
+
+// RUN-7: a ping that times out only because every pool connection is in
+// use means Postgres is up and busy, not unreachable.
+func TestPoolSaturated(t *testing.T) {
+	cases := []struct {
+		st   sql.DBStats
+		want bool
+	}{
+		{sql.DBStats{MaxOpenConnections: 25, InUse: 25}, true},
+		{sql.DBStats{MaxOpenConnections: 25, InUse: 3}, false},
+		{sql.DBStats{MaxOpenConnections: 0, InUse: 40}, false}, // unlimited pool never saturates
+	}
+	for _, c := range cases {
+		if got := poolSaturated(c.st); got != c.want {
+			t.Errorf("%+v: got %v, want %v", c.st, got, c.want)
+		}
+	}
+}
 
 // stubPollerClock replaces the poller staleness clock for the duration
 // of a test. Not parallel-safe (package-level state) — callers must not

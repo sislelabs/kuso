@@ -408,6 +408,10 @@
             },
             "type": "array"
           },
+          "tcpLiveness": {
+            "description": "Propagated from KusoService.spec.tcpLiveness.",
+            "type": "boolean"
+          },
           "tlsEnabled": {
             "default": true,
             "type": "boolean"

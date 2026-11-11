@@ -227,6 +227,12 @@ func (w *Watcher) tick(ctx context.Context) {
 			}
 			continue
 		}
+		// Independent of the cordon/page threshold below: the stateless
+		// service pods on an unreachable node are rescheduled as soon as
+		// the outage is unambiguous, not after the 5-min page window.
+		if shouldEvict(n, now, evictAfter()) {
+			actions = append(actions, pendingAction{kind: "evict", node: n})
+		}
 		first, ok := w.notReadySince[n.Name]
 		if !ok {
 			// Recover from the persisted annotation when present —
@@ -321,7 +327,12 @@ func (w *Watcher) tick(ctx context.Context) {
 					"auto-cordoned, new pods won't schedule here.",
 					"already cordoned (not by kuso), new pods won't schedule here.", 1)
 			}
+			if pods, err := w.podsOnNode(ctx, a.node.Name); err == nil {
+				a.emit.Description += addonGuidance(addonsOnNode(pods))
+			}
 			w.Notify.Emit(a.emit)
+		case "evict":
+			w.evictStateless(ctx, a.node.Name)
 		case "uncordon":
 			if err := w.uncordonIfOurs(ctx, a.node); err != nil {
 				// A transient uncordon failure must NOT be dropped silently —

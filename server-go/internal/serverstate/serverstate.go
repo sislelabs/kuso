@@ -323,6 +323,24 @@ func InsecureJWT() string {
 	return insecureJWT
 }
 
+var schemaAhead string
+
+// SetSchemaAhead records that the database carries migrations newer than
+// this binary ("" = fine). Set once at boot; surfaced on /readyz without
+// failing it, so the updater's revert can report it.
+func SetSchemaAhead(problem string) {
+	mu.Lock()
+	schemaAhead = problem
+	mu.Unlock()
+}
+
+// SchemaAhead returns the boot-time schema-ahead problem, or "".
+func SchemaAhead() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return schemaAhead
+}
+
 // CRDStale returns the current preflight state. The returned
 // pointer is read-only; callers should not mutate Mismatches.
 func CRDStale() *CRDStaleInfo {

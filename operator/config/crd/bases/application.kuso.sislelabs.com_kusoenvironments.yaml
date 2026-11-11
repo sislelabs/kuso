@@ -117,6 +117,9 @@ spec:
                 port:
                   type: integer
                   format: int32
+                tcpLiveness:
+                  type: boolean
+                  description: Propagated from KusoService.spec.tcpLiveness.
                 healthcheck:
                   type: object
                   description: >-

@@ -358,6 +358,12 @@ type KusoServiceSpec struct {
 	// owned KusoEnvironment. Nil/empty Path = default TCP probes, no
 	// liveness (the pre-v0.18.x behaviour).
 	Healthcheck *KusoHealthcheck `json:"healthcheck,omitempty"`
+	// TCPLiveness adds a TCP liveness probe (and a 5s instead of 60s
+	// readiness failure window) to the default TCP probes, so a process
+	// whose listener died is restarted. Set on services created from
+	// v0.42.5; existing services opt in via PATCH, since turning it on
+	// rolls the service's pods. No effect when Healthcheck.Path is set.
+	TCPLiveness bool `json:"tcpLiveness,omitempty"`
 	// Resources is the pod CPU/memory requests+limits, shaped exactly
 	// like a k8s ResourceRequirements ({"requests":{...},"limits":{...}}).
 	// Free-form map so the chart's `toYaml .Values.resources` renders it
@@ -782,6 +788,8 @@ type KusoEnvironmentSpec struct {
 	// service. When set, the chart renders HTTP readiness + liveness
 	// probes instead of the default TCP readiness/startup probes.
 	Healthcheck *KusoHealthcheck `json:"healthcheck,omitempty"`
+	// TCPLiveness mirrors KusoServiceSpec.TCPLiveness.
+	TCPLiveness bool `json:"tcpLiveness,omitempty"`
 	// ReplicaCount: pointer so JSON marshal includes the field even at
 	// zero (omitempty would drop replicaCount=0, causing the CRD's
 	// `default: 1` to silently clobber scale-to-zero on env writes).

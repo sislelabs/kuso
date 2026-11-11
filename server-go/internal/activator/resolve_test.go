@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,9 +150,9 @@ func TestResolveByHost_SkipsInternalAndWorkerEnvs(t *testing.T) {
 }
 
 // Every unclaimed host on the internet reaches the activator via the
-// catch-all route; a miss must not re-list every env CR per request, and
-// the cache keyed by those hosts must stay bounded.
-func TestResolveByHost_CachesMissesAndStaysBounded(t *testing.T) {
+// catch-all route; a flood of distinct random hosts must not LIST envs
+// per request.
+func TestResolveByHost_RandomHostsDoNotListPerRequest(t *testing.T) {
 	t.Parallel()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
@@ -159,23 +162,84 @@ func TestResolveByHost_CachesMissesAndStaysBounded(t *testing.T) {
 		return false, nil, nil
 	})
 	a := New(&kube.Client{Dynamic: dyn}, slog.Default())
-	for i := 0; i < 3; i++ {
-		if _, _, _, err := a.resolveByHost(context.Background(), "nothing.example.com"); err == nil {
-			t.Fatal("unknown host resolved")
+	for i := 0; i < 500; i++ {
+		_, _, _, err := a.resolveByHost(context.Background(), fmt.Sprintf("r%d.example.com", i))
+		if !errors.Is(err, errHostNotFound) {
+			t.Fatalf("unknown host: err = %v, want errHostNotFound", err)
 		}
 	}
 	if got := lists.Load(); got != 1 {
-		t.Errorf("3 lookups of one unknown host listed envs %d times, want 1", got)
+		t.Errorf("500 lookups of random hosts listed envs %d times, want 1", got)
+	}
+}
+
+// RUN-1: an apiserver outage must keep resolving known hosts from the last
+// good snapshot, and a lookup that can't be answered must not read as
+// "no such host" (the 404 page).
+func TestResolveByHost_ServesLastGoodSnapshotOnListError(t *testing.T) {
+	t.Parallel()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{kube.GVREnvironments: "KusoEnvironmentList"})
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+		"kind":       "KusoEnvironment",
+		"metadata":   map[string]any{"name": "app-web-staging", "namespace": "kuso"},
+		"spec":       map[string]any{"kind": "custom", "host": "staging.example.com"},
+	}}
+	if err := dyn.Tracker().Create(kube.GVREnvironments, u, "kuso"); err != nil {
+		t.Fatal(err)
+	}
+	var down atomic.Bool
+	dyn.PrependReactor("list", "kusoenvironments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if down.Load() {
+			return true, nil, errors.New("connection refused")
+		}
+		return false, nil, nil
+	})
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	a := New(&kube.Client{Dynamic: dyn}, slog.Default())
+	a.nowFn = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+
+	if env, _, _, err := a.resolveByHost(context.Background(), "staging.example.com"); err != nil || env != "app-web-staging" {
+		t.Fatalf("warm-up resolve: (%q, %v)", env, err)
+	}
+	down.Store(true)
+	mu.Lock()
+	now = now.Add(10 * time.Minute)
+	mu.Unlock()
+	if env, _, _, err := a.resolveByHost(context.Background(), "staging.example.com"); err != nil || env != "app-web-staging" {
+		t.Fatalf("during outage: got (%q, %v), want last-good app-web-staging", env, err)
 	}
 
-	for i := 0; i < maxHostCache+50; i++ {
-		a.storeHost(fmt.Sprintf("h%d.example.com", i), hostEntry{miss: true, at: time.Now()})
+	cold := New(&kube.Client{Dynamic: dyn}, slog.Default())
+	rec := httptest.NewRecorder()
+	cold.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://staging.example.com/", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("cold activator during outage answered %d, want 503 (never the 404 page)", rec.Code)
 	}
-	a.hostMu.RLock()
-	n := len(a.hostCache)
-	a.hostMu.RUnlock()
-	if n > maxHostCache {
-		t.Errorf("hostCache grew to %d entries, cap %d", n, maxHostCache)
+}
+
+// RUN-3: one env that never becomes ready must not take every held slot.
+func TestTryHold_PerEnvCap(t *testing.T) {
+	t.Parallel()
+	a := New(nil, slog.Default())
+	a.maxHeld, a.maxHeldPerEnv = 10, 2
+	if !a.tryHold("ns/broken") || !a.tryHold("ns/broken") {
+		t.Fatal("first two holds refused")
+	}
+	if a.tryHold("ns/broken") {
+		t.Error("third hold on one env accepted past the per-env cap")
+	}
+	if !a.tryHold("ns/other") {
+		t.Error("another env refused while the global budget has room")
+	}
+	a.release("ns/broken")
+	if !a.tryHold("ns/broken") {
+		t.Error("released slot not reusable")
+	}
+	if got := a.held.Load(); got != 3 {
+		t.Errorf("held = %d, want 3", got)
 	}
 }
 

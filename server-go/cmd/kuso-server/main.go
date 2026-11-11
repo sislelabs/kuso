@@ -161,6 +161,12 @@ func main() {
 			logger.Error("db: close", "err", err)
 		}
 	}()
+	if ahead, err := database.SchemaAhead(context.Background()); err != nil {
+		logger.Warn("db: schema version check", "err", err)
+	} else if ahead != "" {
+		logger.Error("db: schema is newer than this server; verify it still reads its tables", "problem", ahead)
+		serverstate.SetSchemaAhead(ahead)
+	}
 	// Log search/storage shares the main Postgres DB now. Keep the
 	// `*db.LogDB` shim so callers that took the log-DB type continue
 	// to compile; it's a thin alias around *db.DB.

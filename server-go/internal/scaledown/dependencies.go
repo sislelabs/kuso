@@ -26,13 +26,21 @@ import (
 // emits for HOST / URL / INTERNAL_URL.
 var serviceHostRE = regexp.MustCompile(`([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc(?:\.cluster\.local)?\b`)
 
+// shortHostRE matches a bare same-namespace Service name used as a URL
+// host ("http://alpha-api-staging/v1") or host:port ("alpha-api-staging:80"),
+// the idiomatic in-namespace form. Bare words without a scheme or port
+// are not matched: too many plain values look like names.
+var shortHostRE = regexp.MustCompile(`(?:://([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:[:/?#]|$))|(?:^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?):[0-9]+(?:/|$))`)
+
 // maxDependencyDepth bounds the wake cascade (web → api → auth → …).
 const maxDependencyDepth = 4
 
 // referencedEnvs returns the ns/name keys of every in-cluster Service the
 // env's literal envVars point at, excluding itself. The env kuso Service
-// is named after its env CR, so the key doubles as an env key.
-func referencedEnvs(env *kube.KusoEnvironment) []string {
+// is named after its env CR, so the key doubles as an env key. sameNS
+// reports whether a bare name is an env in the env's own namespace; nil
+// ignores short names.
+func referencedEnvs(env *kube.KusoEnvironment, sameNS func(name string) bool) []string {
 	self := env.Namespace + "/" + env.Name
 	var out []string
 	seen := map[string]bool{}
@@ -48,6 +56,18 @@ func referencedEnvs(env *kube.KusoEnvironment) []string {
 			seen[key] = true
 			out = append(out, key)
 		}
+		if sameNS == nil {
+			continue
+		}
+		for _, m := range shortHostRE.FindAllStringSubmatch(v.Value, -1) {
+			name := m[1] + m[2]
+			key := env.Namespace + "/" + name
+			if name == "" || key == self || seen[key] || !sameNS(name) {
+				continue
+			}
+			seen[key] = true
+			out = append(out, key)
+		}
 	}
 	return out
 }
@@ -55,11 +75,16 @@ func referencedEnvs(env *kube.KusoEnvironment) []string {
 // referrersByTarget inverts referencedEnvs over every env: target key →
 // keys of the envs that call it.
 func referrersByTarget(envs []kube.KusoEnvironment) map[string][]string {
+	names := map[string]bool{}
+	for i := range envs {
+		names[envs[i].Namespace+"/"+envs[i].Name] = true
+	}
 	out := map[string][]string{}
 	for i := range envs {
 		e := &envs[i]
 		from := e.Namespace + "/" + e.Name
-		for _, to := range referencedEnvs(e) {
+		inNS := func(name string) bool { return names[e.Namespace+"/"+name] }
+		for _, to := range referencedEnvs(e, inNS) {
 			out[to] = append(out[to], from)
 		}
 	}
@@ -90,7 +115,9 @@ func WakeDependencies(ctx context.Context, kc *kube.Client, logger *slog.Logger,
 			if err != nil || env == nil {
 				continue
 			}
-			for _, dep := range referencedEnvs(env) {
+			// A short name that isn't an env just fails the Get below.
+			anyName := func(string) bool { return true }
+			for _, dep := range referencedEnvs(env, anyName) {
 				if visited[dep] {
 					continue
 				}

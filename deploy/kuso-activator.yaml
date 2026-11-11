@@ -18,6 +18,8 @@
 #   kusoenvironments  list (resolve Host), get + update (wake, activity stamp)
 #   endpointslices    list (wake readiness); endpoints get (legacy fallback)
 #   deployments       patch spec.replicas (wake)
+#   pods              list (fail a held request fast when the woken pod
+#                     can't start; skipped if this rule is missing)
 # deployments patch has to be cluster-wide (project namespaces are
 # created at runtime) and kusoenvironments update would let a
 # compromised activator rewrite an env's image; both are narrowed by the
@@ -53,6 +55,9 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -140,9 +145,11 @@ spec:
             initialDelaySeconds: 2
             periodSeconds: 10
           resources:
-            # The activator is a thin proxy — small footprint. It's a
-            # fixed shared cost amortized across every scaled-to-zero app.
-            requests: { cpu: 25m, memory: 64Mi }
+            # A fixed shared cost in front of every sleep-routed app. The
+            # CPU request sets its share under contention (builds on the
+            # same node): at 25m a junk-Host flood measured ~350m and every
+            # proxied request queued behind buildkitd.
+            requests: { cpu: 100m, memory: 64Mi }
             limits: { memory: 256Mi }
 ---
 # Every sleep-routed host goes through the activator, so a node drain must

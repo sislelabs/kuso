@@ -923,6 +923,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				// pre-deploy migration on first deploy.
 				PublicEnv:            item.svc.Spec.PublicEnv,
 				Healthcheck:          item.svc.Spec.Healthcheck,
+				TCPLiveness:          item.svc.Spec.TCPLiveness,
 				Release:              item.svc.Spec.Release,
 				SnapshotBeforeDeploy: item.svc.Spec.SnapshotBeforeDeploy,
 				PrivateEgress:        item.svc.Spec.PrivateEgress,

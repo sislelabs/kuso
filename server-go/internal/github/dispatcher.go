@@ -1124,6 +1124,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcSecurityContext *kube.KusoSecurityContext
 	var svcRequestLimits *kube.KusoRequestLimits
 	var svcHealthcheck *kube.KusoHealthcheck
+	var svcTCPLiveness bool
 	var svcPublicEnv []string
 	// Fail closed: building the preview from zero values would publish an
 	// internal service, skip its release hook and mount every addon, and
@@ -1163,6 +1164,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		svcSecurityContext = svc.Spec.SecurityContext
 		svcRequestLimits = svc.Spec.RequestLimits
 		svcHealthcheck = svc.Spec.Healthcheck
+		svcTCPLiveness = svc.Spec.TCPLiveness
 		svcPublicEnv = svc.Spec.PublicEnv
 		if svc.Spec.Previews != nil {
 			svcPreviewEnvVars = svc.Spec.Previews.PreviewEnvVars
@@ -1412,6 +1414,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			SecurityContext:      svcSecurityContext,
 			RequestLimits:        kube.ResolveRequestLimits(proj.Spec.RequestLimits, svcRequestLimits),
 			Healthcheck:          svcHealthcheck,
+			TCPLiveness:          svcTCPLiveness,
 			PublicEnv:            svcPublicEnv,
 			SnapshotBeforeDeploy: svcSnapshotBeforeDeploy,
 		},

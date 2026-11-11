@@ -41,6 +41,11 @@ port: 8080
 healthcheck:
   path: ""
 
+# tcpLiveness: copied from KusoService.spec.tcpLiveness. Adds a TCP
+# liveness probe and a 5s readiness failure window to the default TCP
+# probes (ignored when healthcheck.path is set).
+tcpLiveness: false
+
 # replicaCount, autoscaling: copied from KusoService.spec.scale, optionally
 # overridden by KusoEnvironment.spec.overrides.scale.
 replicaCount: 1
