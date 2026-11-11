@@ -147,6 +147,23 @@ func TestAuditLogAndReadbacks(t *testing.T) {
 	}
 }
 
+// The mutation has committed by the time Log runs; a client that
+// disconnected (cancelled request ctx) must not lose its audit row.
+func TestAuditLogSurvivesCancelledRequest(t *testing.T) {
+	d := openAuditTestDB(t)
+	s := &Service{DB: d, Enabled: true, MaxBackups: 1000}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.Log(ctx, Entry{Action: "token.create", Severity: "critical", Message: "after disconnect"})
+	rows, _, _, err := s.Get(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Message != "after disconnect" {
+		t.Fatalf("audit rows = %+v, want the one written on a cancelled ctx", rows)
+	}
+}
+
 // Audit must default ON with age-based retention and a large routine-row
 // safety cap. No DB needed — New skips the trim goroutine on nil.
 func TestAuditDefaults(t *testing.T) {

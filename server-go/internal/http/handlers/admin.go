@@ -9,10 +9,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
@@ -25,6 +27,7 @@ import (
 type AdminHandler struct {
 	DB     *db.DB
 	Issuer *auth.Issuer
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -310,6 +313,8 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "create token", err)
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "critical", "token.create", "token/"+id,
+		"minted API token "+strconv.Quote(req.Name)+" expiring "+expiresAt.UTC().Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, createTokenResponse{
 		Name:      req.Name,
 		Token:     jwt,
@@ -364,6 +369,7 @@ func (h *AdminHandler) DeleteMyToken(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "token.revoke", "token/"+chi.URLParam(r, "id"), "revoked own API token")
 	w.WriteHeader(http.StatusNoContent)
 }
 

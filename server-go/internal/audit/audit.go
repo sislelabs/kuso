@@ -47,6 +47,9 @@ const (
 	defaultRetentionDays    = 90
 	defaultSecRetentionDays = 365
 	day                     = 24 * time.Hour
+	// logTimeout bounds one audit INSERT once it is detached from the
+	// caller's (possibly cancelled) request context.
+	logTimeout = 5 * time.Second
 )
 
 // securitySeverities never fall to the count cap. Kept as a SQL literal
@@ -172,6 +175,10 @@ func (s *Service) Log(ctx context.Context, e Entry) {
 		e.Resource = "unknown"
 	}
 	now := time.Now().UTC()
+	// Detached from the request: the mutation already committed, so a
+	// client that disconnects now must not cancel its audit row.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logTimeout)
+	defer cancel()
 	// `user` is a Postgres reserved word; camelCase columns also
 	// need quoting. Unquoted, the INSERT silently fails the FK.
 	if _, err := s.DB.ExecContext(ctx, `

@@ -541,7 +541,7 @@ func mountAuthenticatedRoutes(
 			logsH.Mount(r)
 		}
 		if d.DB != nil && d.Issuer != nil {
-			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Audit: d.Audit, Logger: d.Logger}
 			adminH.Mount(r)
 			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			if d.Builds != nil {
@@ -568,11 +568,11 @@ func mountAuthenticatedRoutes(
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			rolesH.Mount(r)
-			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
+			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			groupsH.Mount(r)
 			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger, Kube: d.Kube, Namespace: d.Namespace}
 			grantsH.Mount(r)
-			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Audit: d.Audit, Logger: d.Logger}
 			invitesH.Mount(r)
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
@@ -606,7 +606,7 @@ func mountAuthenticatedRoutes(
 					Logger:           d.Logger,
 				}).Mount(r)
 			}
-			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
+			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify, Audit: d.Audit}
 			if d.Projects != nil {
 				notifH.ProjectExists = func(ctx context.Context, name string) (bool, error) {
 					_, err := d.Projects.Get(ctx, name)
@@ -631,7 +631,7 @@ func mountAuthenticatedRoutes(
 			tokAdminH.Mount(r)
 		}
 		if d.Config != nil {
-			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
+			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			cfgH.Mount(r)
 			// /api/usage: cost rollup derived from NodeMetric +
 			// the cost rates the operator set in the Kuso CR.

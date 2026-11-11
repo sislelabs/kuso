@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/notify"
@@ -45,6 +46,7 @@ type notifySink interface {
 
 type NotificationsHandler struct {
 	Notify notifySink
+	Audit  *audit.Service
 
 	DB     *db.DB
 	Logger *slog.Logger
@@ -184,6 +186,7 @@ func (h *NotificationsHandler) MuteProject(w http.ResponseWriter, r *http.Reques
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
+	auditAccess(ctx, h.Audit, "warn", "notification.mute", "project/"+project, "muted external notifications for project "+project)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -201,6 +204,7 @@ func (h *NotificationsHandler) UnmuteProject(w http.ResponseWriter, r *http.Requ
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
+	auditAccess(ctx, h.Audit, "info", "notification.unmute", "project/"+project, "unmuted external notifications for project "+project)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -507,6 +511,8 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "notification.create", "notification/"+n.ID,
+		fmt.Sprintf("created %s alert channel %q (enabled=%v)", n.Type, n.Name, n.Enabled))
 	masked := maskNotificationConfig(*n)
 	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": masked, "message": "Notification created successfully"})
 }
@@ -592,6 +598,8 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "notification.update", "notification/"+existing.ID,
+		fmt.Sprintf("updated %s alert channel %q (enabled=%v, %d event filter(s))", existing.Type, existing.Name, existing.Enabled, len(existing.Events)))
 	masked := maskNotificationConfig(*existing)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": masked, "message": "Notification updated successfully"})
 }
@@ -606,6 +614,7 @@ func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if h.Notify != nil {
 		h.Notify.InvalidateNotifications()
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "notification.delete", "notification/"+chi.URLParam(r, "id"), "deleted alert channel")
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Notification deleted successfully"})
 }
 
