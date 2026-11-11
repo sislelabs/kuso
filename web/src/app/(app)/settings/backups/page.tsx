@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
@@ -53,6 +54,15 @@ interface BackupHealthResp {
   addonBackups?: AddonBackupRow[];
   addonBackupsComplete?: boolean;
   serviceVolumes?: ServiceVolumeRow[];
+  bucket?: BucketSafety | null;
+}
+interface BucketSafety {
+  bucket: string;
+  insecureEndpoint: boolean;
+  versioning: string;
+  objectLock: string;
+  scopedProjects: string[];
+  warnings?: string[];
 }
 
 type CoverageBadge = "on-schedule" | "overdue" | "via-instance" | "not-covered";
@@ -240,6 +250,15 @@ function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
   return (
     <>
       <CoverageHeadline rows={health.data.addonBackups ?? []} complete={health.data.addonBackupsComplete !== false} s3={s3} />
+      {health.data.bucket?.warnings?.length ? (
+        <SettingsNotice tone="warning" title={`Backup bucket ${health.data.bucket.bucket}`}>
+          <ul className="list-disc pl-4">
+            {health.data.bucket.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </SettingsNotice>
+      ) : null}
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />
@@ -260,6 +279,7 @@ interface BackupSettings {
   accessKeyId: string;
   secretAccessKey?: string;
   hasSecret: boolean;
+  allowInsecureHttp?: boolean;
 }
 
 // Backups settings page. Writes to /api/admin/backup-settings which
@@ -372,6 +392,26 @@ export default function BackupSettingsPage() {
               value={form.endpoint}
               onChange={(v) => setForm((s) => ({ ...s, endpoint: v }))}
             />
+            {/^http:\/\//i.test(form.endpoint.trim()) && (
+              <div className="flex items-start gap-3">
+                <Switch
+                  on={!!form.allowInsecureHttp}
+                  onChange={(v) => setForm((s) => ({ ...s, allowInsecureHttp: v }))}
+                  labelledBy="backup-allow-http"
+                  describedBy="backup-allow-http-hint"
+                  className="mt-0.5"
+                />
+                <div className="min-w-0">
+                  <p id="backup-allow-http" className="text-sm font-medium text-[var(--text-primary)]">
+                    Allow plain http
+                  </p>
+                  <p id="backup-allow-http-hint" className="text-xs text-[var(--text-secondary)]">
+                    Every backup and the requests carrying it cross the network unencrypted. Use https unless the
+                    store is on a network you trust.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
               <Field
                 label="Access key ID"

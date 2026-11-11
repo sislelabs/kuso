@@ -311,18 +311,21 @@ func SweepImagesPastWindow(
 		return 0, fmt.Errorf("image-sweep list envs: %w", eerr)
 	} else {
 		for i := range envs {
-			live.addKuso(envs[i].Spec.Image)
-			img := envs[i].Spec.Image
-			if img == nil || img.Tag == "" {
-				continue
+			// PendingImage is a held rollout (approval/promotion): nothing
+			// runs it yet, but approving it pulls it.
+			for _, img := range []*kube.KusoImage{envs[i].Spec.Image, envs[i].Spec.PendingImage} {
+				live.addKuso(img)
+				if img == nil || img.Tag == "" {
+					continue
+				}
+				// Env repositories are "<registry-host>/<project>/<service>";
+				// untag targets are "<project>/<service>". Strip the host.
+				repo := img.Repository
+				if idx := strings.Index(repo, "/"); idx >= 0 {
+					repo = repo[idx+1:]
+				}
+				protected[repo+":"+img.Tag] = true
 			}
-			// Env repositories are "<registry-host>/<project>/<service>";
-			// untag targets are "<project>/<service>". Strip the host.
-			repo := img.Repository
-			if idx := strings.Index(repo, "/"); idx >= 0 {
-				repo = repo[idx+1:]
-			}
-			protected[repo+":"+img.Tag] = true
 		}
 	}
 	// Same protection for crons. A KusoCron carries its own copy of an

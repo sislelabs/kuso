@@ -463,6 +463,22 @@ encryption key. Mirrored by backup.KeySecretName in server-go.
 {{- end -}}
 
 {{- /*
+kusoaddon.backupS3SecretName — the backup storage Secret a CronJob reads.
+kuso-backup-s3-<project> (project-scoped key, BLOB-4) when kuso-server has
+rendered one into this namespace, else the shared kuso-backup-s3. Mirrored
+by kube.ProjectBackupSecretName. lookup is empty under `helm template`,
+which keeps the shared name.
+*/ -}}
+{{- define "kusoaddon.backupS3SecretName" -}}
+{{- $scoped := printf "kuso-backup-s3-%s" (.Values.project | default "") -}}
+{{- if and .Values.project (lookup "v1" "Secret" .Release.Namespace $scoped) -}}
+{{- $scoped -}}
+{{- else -}}
+kuso-backup-s3
+{{- end -}}
+{{- end -}}
+
+{{- /*
 kusoaddon.backupExtraEnv — env shared by every backup CronJob:
   BACKUP_ENCRYPTION_KEY  optional: no Secret → plaintext, as before.
   OWNER_SINCE/OWNER_UID  this addon CR's creation stamp (minus 2 minutes of
@@ -484,9 +500,7 @@ kusoaddon.backupExtraEnv — env shared by every backup CronJob:
 {{- end -}}
 - { name: OWNER_SINCE, value: {{ $since | quote }} }
 - { name: OWNER_UID,   value: {{ $uid | quote }} }
-{{- if ne .Values.kind "s3" }}
 - { name: BACKUP_ENCRYPTION_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupKeySecretName" . | quote }}, key: key, optional: true } } }
-{{- end }}
 {{- end -}}
 
 {{- define "kusoaddon.backupContainerExtras" -}}

@@ -95,6 +95,15 @@ func DeleteOrphan(ctx context.Context, k *kube.Client, kind Kind, ns, name strin
 			return fmt.Errorf("get secret: %w", err)
 		}
 		addonCR = strings.TrimSuffix(name, connSecretSuffix)
+	case KindOrphanS3Secret:
+		sec, err := k.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get secret: %w", err)
+		}
+		if !isS3CredentialSecret(sec) {
+			return fmt.Errorf("%w: %s is not an s3 addon credential", ErrNotOrphan, name)
+		}
+		addonCR = sec.Labels[labelAddonInstance]
 	case KindOrphanAddonPVC:
 		pvc, err := k.Clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -112,7 +121,7 @@ func DeleteOrphan(ctx context.Context, k *kube.Client, kind Kind, ns, name strin
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("check addon %s: %w", addonCR, err)
 	}
-	if kind == KindOrphanConnSecret {
+	if kind == KindOrphanConnSecret || kind == KindOrphanS3Secret {
 		return k.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	}
 	return k.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{})

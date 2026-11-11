@@ -49,6 +49,14 @@ type backupHealthView struct {
 		Detail  string   `json:"detail"`
 	} `json:"serviceVolumes"`
 	ServiceVolumesComplete bool `json:"serviceVolumesComplete"`
+	Bucket                 *struct {
+		Bucket           string   `json:"bucket"`
+		InsecureEndpoint bool     `json:"insecureEndpoint"`
+		Versioning       string   `json:"versioning"`
+		ObjectLock       string   `json:"objectLock"`
+		ScopedProjects   []string `json:"scopedProjects"`
+		Warnings         []string `json:"warnings"`
+	} `json:"bucket"`
 }
 
 func healthWord(ok bool) string {
@@ -77,6 +85,17 @@ func jobLine(w io.Writer, label string, s backupJobStatus) {
 func renderBackupHealth(w io.Writer, h backupHealthView) {
 	jobLine(w, "control-plane DB backup", h.Backup)
 	jobLine(w, "registry GC", h.RegistryGC)
+	if b := h.Bucket; b != nil {
+		scoped := "none"
+		if len(b.ScopedProjects) > 0 {
+			scoped = strings.Join(b.ScopedProjects, ", ")
+		}
+		fmt.Fprintf(w, "backup bucket %s: versioning=%s  object lock=%s  plain http=%s  own-key projects=%s\n",
+			b.Bucket, orDash(b.Versioning), orDash(b.ObjectLock), boolText(b.InsecureEndpoint), scoped)
+		for _, warn := range b.Warnings {
+			fmt.Fprintf(w, "  WARNING: %s\n", warn)
+		}
+	}
 
 	fmt.Fprintln(w, "\naddon backups:")
 	if len(h.AddonBackups) == 0 {
@@ -125,4 +144,7 @@ func renderBackupSettings(w io.Writer, s map[string]any) {
 		secret = "set (not shown)"
 	}
 	fmt.Fprintf(w, "%-18s %s\n", "secretAccessKey:", secret)
+	if b, _ := s["allowInsecureHttp"].(bool); b {
+		fmt.Fprintf(w, "%-18s %s\n", "plain http:", "allowed (backups travel unencrypted)")
+	}
 }

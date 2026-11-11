@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,5 +75,44 @@ func TestDelete_InstanceCloneKeepsConnWhenDropSkipped(t *testing.T) {
 	}
 	if _, err := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-db-pr-3-conn", metav1.GetOptions{}); err != nil {
 		t.Errorf("conn secret of an undropped database was deleted: %v", err)
+	}
+}
+
+// BLOB-8: a native s3 env clone's -root and -readonly Secrets are helm
+// keep. Left behind, re-creating the env made the chart read the old root
+// password back into a fresh MinIO.
+func TestDelete_NativeS3CloneReclaimsCredentialSecrets(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := fakeService(t, seedProj("alpha"), typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "alpha-store-staging", Namespace: "kuso",
+			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelEnv: "staging"},
+		},
+		Spec: kube.KusoAddonSpec{Project: "alpha", Kind: "s3"},
+	}))
+	roleSecret := func(name, role string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso",
+			Labels: map[string]string{"kuso.sislelabs.com/role": role}}}
+	}
+	cs := kubefake.NewSimpleClientset(
+		connSecret("alpha-store-staging-conn"),
+		roleSecret("alpha-store-staging-root", "s3-root"),
+		roleSecret("alpha-store-staging-readonly", "s3-readonly"),
+		// The project's own addon: must survive.
+		roleSecret("alpha-store-root", "s3-root"),
+	)
+	s.Kube.Clientset = cs
+
+	if err := s.Delete(ctx, "alpha", "store-staging"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, gone := range []string{"alpha-store-staging-root", "alpha-store-staging-readonly"} {
+		if _, err := cs.CoreV1().Secrets("kuso").Get(ctx, gone, metav1.GetOptions{}); err == nil {
+			t.Errorf("%s survived the clone delete", gone)
+		}
+	}
+	if _, err := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-store-root", metav1.GetOptions{}); err != nil {
+		t.Errorf("the project addon's root Secret was deleted: %v", err)
 	}
 }

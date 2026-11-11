@@ -21,6 +21,7 @@ var (
 	backupSetRegion    string
 	backupSetAccessKey string
 	backupSetSecretKey string
+	backupSetAllowHTTP bool
 )
 
 // `kuso backup` — pull a gzipped pg_dump of the live kuso server's
@@ -319,6 +320,9 @@ server-side on subsequent saves if omitted.`,
 		if cmd.Flags().Changed("secret-access-key") {
 			body["secretAccessKey"] = backupSetSecretKey
 		}
+		if cmd.Flags().Changed("allow-insecure-http") {
+			body["allowInsecureHttp"] = backupSetAllowHTTP
+		}
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode settings: %w", err)
@@ -402,6 +406,7 @@ func init() {
 	backupSettingsSetCmd.Flags().StringVar(&backupSetRegion, "region", "", "S3 region (default: auto)")
 	backupSettingsSetCmd.Flags().StringVar(&backupSetAccessKey, "access-key-id", "", "S3 access key ID")
 	backupSettingsSetCmd.Flags().StringVar(&backupSetSecretKey, "secret-access-key", "", "S3 secret access key (preserved server-side if omitted after first save)")
+	backupSettingsSetCmd.Flags().BoolVar(&backupSetAllowHTTP, "allow-insecure-http", false, "accept an http:// endpoint (backups then travel unencrypted)")
 	backupCmd.AddCommand(backupHealthCmd)
 	backupHealthCmd.Flags().StringVarP(&backupHealthOutput, "output", "o", "table", "output format: table|json")
 	backupSettingsGetCmd.Flags().StringVarP(&backupSettingsOutput, "output", "o", "table", "output format: table|json")

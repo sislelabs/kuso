@@ -483,8 +483,10 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The backup bucket is where production dumps get written with the
-	// instance's S3 credentials, so moving it is a secrets:read action.
-	// Re-sending the current value (whole-form saves) stays at Editor.
+	// instance's S3 credentials, which can reach buckets no project owns
+	// (BLOB-10): moving it is an instance-admin action, and the new bucket
+	// must be one that key can actually reach. Re-sending the current
+	// value (whole-form saves) stays at Editor.
 	if wire.Backup != nil && wire.Backup.Bucket != nil {
 		cur, err := h.Svc.GetOwned(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 		if err != nil {
@@ -495,9 +497,17 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		if cur.Spec.Backup != nil {
 			current = cur.Spec.Backup.Bucket
 		}
-		if strings.TrimSpace(*wire.Backup.Bucket) != current && !callerCanReadSecrets(ctx, h.DB, chi.URLParam(r, "project")) {
-			writeErr(w, http.StatusForbidden, "changing an addon's backup bucket needs project admin")
-			return
+		if next := strings.TrimSpace(*wire.Backup.Bucket); next != current {
+			if !isInstanceAdmin(ctx) {
+				writeErr(w, http.StatusForbidden, "changing an addon's backup bucket needs an instance admin")
+				return
+			}
+			if next != "" && h.Svc.Kube != nil && h.Svc.Kube.Clientset != nil {
+				if err := backupBucketReachable(ctx, h.Svc.Kube, h.Svc.Namespace, next); err != nil {
+					writeErr(w, http.StatusBadRequest, err.Error())
+					return
+				}
+			}
 		}
 	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), apiv1UpdateAddonToDomain(wire))

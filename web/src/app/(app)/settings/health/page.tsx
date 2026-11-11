@@ -55,6 +55,7 @@ const SEVERITY_ORDER: Severity[] = ["critical", "warning", "info"];
 // instead of among reconcile problems.
 const ORPHAN_KINDS: Record<string, string> = {
   orphan_conn_secret: "credentials",
+  orphan_s3_secret: "credentials",
   orphan_addon_pvc: "data",
 };
 const isOrphan = (i: ReconcileIssue) => !!i.kind && i.kind in ORPHAN_KINDS;

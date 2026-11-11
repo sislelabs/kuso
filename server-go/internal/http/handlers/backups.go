@@ -88,6 +88,10 @@ const backupSecretName = "kuso-backup-s3"
 func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/admin/backup-settings", h.GetSettings)
 	r.Put("/api/admin/backup-settings", h.PutSettings)
+	r.Get("/api/admin/backup-settings/projects", h.ListScopedCredentials)
+	r.Put("/api/admin/backup-settings/projects/{project}", h.PutScopedCredential)
+	r.Delete("/api/admin/backup-settings/projects/{project}", h.DeleteScopedCredential)
+	r.Get("/api/admin/backup-settings/projects/{project}/policy", h.ScopedCredentialPolicy)
 	r.Get("/api/admin/backups/orphans", h.ListOrphanBackups)
 	r.Post("/api/admin/backups/orphans/purge", h.PurgeOrphanBackups)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
@@ -123,6 +127,8 @@ type BackupSettings struct {
 	AccessKeyID     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey,omitempty"`
 	HasSecret       bool   `json:"hasSecret"`
+	// AllowInsecureHTTP must be set to save an http:// endpoint (BLOB-7).
+	AllowInsecureHTTP bool `json:"allowInsecureHttp,omitempty"`
 }
 
 func (h *BackupsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +153,8 @@ func (h *BackupsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		Region:      string(sec.Data["region"]),
 		AccessKeyID: string(sec.Data["accessKeyId"]),
 		HasSecret:   len(sec.Data["secretAccessKey"]) > 0,
+
+		AllowInsecureHTTP: string(sec.Data[backupInsecureHTTPKey]) == "true",
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -171,6 +179,11 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "endpoint: "+err.Error())
 		return
 	}
+	insecure, err := checkBackupEndpointScheme(req.Endpoint, req.AllowInsecureHTTP)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "endpoint: "+err.Error())
+		return
+	}
 	ctx, cancel := backupCtx(r)
 	defer cancel()
 
@@ -186,6 +199,9 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		"endpoint":    []byte(req.Endpoint),
 		"region":      []byte(req.Region),
 		"accessKeyId": []byte(req.AccessKeyID),
+	}
+	if insecure {
+		data[backupInsecureHTTPKey] = []byte("true")
 	}
 	if req.SecretAccessKey != "" {
 		data["secretAccessKey"] = []byte(req.SecretAccessKey)
@@ -233,6 +249,9 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	keyNote := ""
 	if req.SecretAccessKey != "" {
 		keyNote = ", secret key changed"
+	}
+	if insecure {
+		keyNote += ", plain http allowed"
 	}
 	h.Audit.Log(ctx, audit.Entry{
 		User:     auditUser(ctx),
@@ -789,6 +808,16 @@ func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
 			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
 		}
 	}
+	if kind == "s3" {
+		// Root, not the app user: a snapshot can hold buckets besides
+		// S3_BUCKET, which the restore may have to create.
+		return []corev1.EnvVar{
+			envFromSecret("TGT_BUCKET", releaseName+"-conn", "S3_BUCKET"),
+			envFromSecret("TGT_ENDPOINT", releaseName+"-conn", "S3_ENDPOINT"),
+			envFromSecret("TGT_ACCESS_KEY", releaseName+"-root", "MINIO_ROOT_USER"),
+			envFromSecret("TGT_SECRET_KEY", releaseName+"-root", "MINIO_ROOT_PASSWORD"),
+		}
+	}
 	if kind == "mysql" {
 		return []corev1.EnvVar{
 			envFromSecret("MYSQL_HOST", releaseName+"-conn", "MYSQL_HOST"),
@@ -900,11 +929,16 @@ func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, erro
 	if err != nil {
 		return nil, "", err
 	}
-	bucket := string(sec.Data["bucket"])
-	endpoint := string(sec.Data["endpoint"])
-	region := string(sec.Data["region"])
-	akid := string(sec.Data["accessKeyId"])
-	skey := string(sec.Data["secretAccessKey"])
+	cli, err := newBackupS3Client(ctx, string(sec.Data["endpoint"]), string(sec.Data["region"]),
+		string(sec.Data["accessKeyId"]), string(sec.Data["secretAccessKey"]))
+	if err != nil {
+		return nil, "", err
+	}
+	return cli, string(sec.Data["bucket"]), nil
+}
+
+// newBackupS3Client builds an S3 client for an admin-supplied endpoint.
+func newBackupS3Client(ctx context.Context, endpoint, region, akid, skey string) (*s3.Client, error) {
 	if region == "" {
 		region = "auto"
 	}
@@ -924,15 +958,14 @@ func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, erro
 		awsconfig.WithHTTPClient(httpx.SSRFSafeClient(0)),
 	)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	cli := s3.NewFromConfig(cfg, func(o *s3.Options) {
+	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
 			o.UsePathStyle = true // Most S3-compatible stores need this
 		}
-	})
-	return cli, bucket, nil
+	}), nil
 }
 
 func backupCtx(r *http.Request) (context.Context, context.CancelFunc) {

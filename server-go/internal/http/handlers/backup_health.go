@@ -46,5 +46,9 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 		"serviceVolumes":         volumes,
 		"serviceVolumesHealthy":  backuphealth.ServiceVolumesHealthy(volumes),
 		"serviceVolumesComplete": volumesComplete,
+		// Bucket protection (versioning / object lock), plain-http
+		// endpoint, and which projects use their own key. Null when
+		// backup storage is not configured.
+		"bucket": computeBackupBucketSafety(ctx, h.Kube, h.Namespace),
 	})
 }

@@ -2,12 +2,16 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 )
@@ -24,7 +28,15 @@ func (h *AddonsHandler) RotateS3Credentials(w http.ResponseWriter, r *http.Reque
 	if !h.requireAddonOwned(ctx, w, project, name) {
 		return
 	}
-	res, err := h.Svc.RotateS3Credentials(ctx, project, name)
+	// The body is optional: older CLIs POST nothing.
+	var opts addons.S3RotateOptions
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
+			return
+		}
+	}
+	res, err := h.Svc.RotateS3Credentials(ctx, project, name, opts)
 	if err != nil {
 		h.fail(w, "rotate s3 credentials", err)
 		return
@@ -33,7 +45,7 @@ func (h *AddonsHandler) RotateS3Credentials(w http.ResponseWriter, r *http.Reque
 		h.Audit.Log(ctx, audit.Entry{
 			User: auditUser(ctx), Severity: "critical", Action: "addon.s3_rotate",
 			Pipeline: project, App: name, Resource: "kusoaddon",
-			Message: fmt.Sprintf("s3 credentials rotated for %s/%s (new key %s, previous was root: %v)", project, name, res.AccessKeyID, res.PreviousWasRoot),
+			Message: fmt.Sprintf("s3 credentials rotated for %s/%s (new key %s, previous was root: %v, root password rotated: %v)", project, name, res.AccessKeyID, res.PreviousWasRoot, res.RootRotated),
 		})
 	}
 	writeJSON(w, http.StatusOK, res)

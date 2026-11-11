@@ -158,7 +158,7 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 
 // orphanKinds are the reconcile-health issue kinds DELETE /api/admin/orphans
 // accepts.
-var orphanKinds = map[string]bool{"orphan_conn_secret": true, "orphan_addon_pvc": true}
+var orphanKinds = map[string]bool{"orphan_conn_secret": true, "orphan_addon_pvc": true, "orphan_s3_secret": true}
 
 func fetchOrphans() ([]healthIssue, error) {
 	resp, err := api.ReconcileHealth()
@@ -228,7 +228,7 @@ var healthOrphansDelete struct {
 var healthOrphansDeleteCmd = &cobra.Command{
 	Use:     "delete",
 	Aliases: []string{"rm"},
-	Short:   "Delete one orphaned addon conn Secret or data volume",
+	Short:   "Delete one orphaned addon Secret or data volume",
 	Long: `Delete one orphan the reconcile scan flagged. The server re-checks
 that the owning addon is really gone and refuses (409) otherwise. Deleting
 an orphan_addon_pvc destroys that volume's data and it is not recoverable;
@@ -245,7 +245,7 @@ target is currently flagged as an orphan.`,
 		}
 		f := &healthOrphansDelete
 		if !orphanKinds[f.kind] {
-			return fmt.Errorf("--kind must be orphan_conn_secret or orphan_addon_pvc")
+			return fmt.Errorf("--kind must be orphan_conn_secret, orphan_s3_secret or orphan_addon_pvc")
 		}
 		if f.namespace == "" || f.name == "" {
 			return fmt.Errorf("--namespace and --name are required (see 'kuso health orphans')")
@@ -281,7 +281,7 @@ func init() {
 	healthOrphansCmd.AddCommand(healthOrphansDeleteCmd)
 	healthOrphansCmd.Flags().StringVarP(&healthOrphansOutput, "output", "o", "table", "output format [table, json]")
 	of := healthOrphansDeleteCmd.Flags()
-	of.StringVar(&healthOrphansDelete.kind, "kind", "", "orphan_conn_secret or orphan_addon_pvc")
+	of.StringVar(&healthOrphansDelete.kind, "kind", "", "orphan_conn_secret, orphan_s3_secret or orphan_addon_pvc")
 	of.StringVar(&healthOrphansDelete.namespace, "namespace", "", "namespace of the orphan")
 	of.StringVar(&healthOrphansDelete.name, "name", "", "Secret or PVC name")
 	of.BoolVarP(&healthOrphansDelete.yes, "yes", "y", false, "skip the confirmation prompt")

@@ -67,7 +67,7 @@ func TestRotateS3Credentials_LegacyRootMovesToScopedUser(t *testing.T) {
 	defer cancel()
 	go completeJobs(ctx, cs, false)
 
-	res, err := s.RotateS3Credentials(ctx, "alpha", "files")
+	res, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +107,55 @@ func TestRotateS3Credentials_LegacyRootMovesToScopedUser(t *testing.T) {
 	}
 }
 
+// BLOB-3: --root replaces the root password and restarts MinIO onto it;
+// the root user name stays so every reader of the Secret keeps working.
+func TestRotateS3Credentials_RotateRootReplacesPassword(t *testing.T) {
+	s3AdminPoll = time.Millisecond
+	s, cs := rotateFixture(t, s3Secrets("ROOTAK", "ROOTSK", "ROOTAK", "ROOTSK"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go completeJobs(ctx, cs, false)
+
+	res, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{RotateRoot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.RootRotated {
+		t.Fatalf("result = %+v", res)
+	}
+	root, _ := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-files-root", metav1.GetOptions{})
+	if string(root.Data["MINIO_ROOT_USER"]) != "ROOTAK" {
+		t.Error("root user changed")
+	}
+	if p := string(root.Data["MINIO_ROOT_PASSWORD"]); p == "ROOTSK" || len(p) != 40 {
+		t.Errorf("root password not replaced: %q", p)
+	}
+	sts, _ := cs.AppsV1().StatefulSets("kuso").Get(ctx, "alpha-files", metav1.GetOptions{})
+	if sts.Spec.Template.Annotations[annS3RootRotatedAt] == "" {
+		t.Error("MinIO pod template not stamped, so it never restarts onto the new password")
+	}
+	conn, _ := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-files-conn", metav1.GetOptions{})
+	if string(conn.Data["S3_SECRET_ACCESS_KEY"]) == string(root.Data["MINIO_ROOT_PASSWORD"]) {
+		t.Error("conn Secret holds the new root password")
+	}
+}
+
+// Without the option the root password is left alone.
+func TestRotateS3Credentials_RootUntouchedByDefault(t *testing.T) {
+	s3AdminPoll = time.Millisecond
+	s, cs := rotateFixture(t, s3Secrets("APPAK", "APPSK", "ROOTAK", "ROOTSK"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go completeJobs(ctx, cs, false)
+	if _, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-files-root", metav1.GetOptions{})
+	if string(root.Data["MINIO_ROOT_PASSWORD"]) != "ROOTSK" {
+		t.Error("root password changed without RotateRoot")
+	}
+}
+
 func TestRotateS3Credentials_ScopedThenRevoke(t *testing.T) {
 	s3AdminPoll = time.Millisecond
 	s, cs := rotateFixture(t, s3Secrets("APPAK", "APPSK", "ROOTAK", "ROOTSK"))
@@ -114,7 +163,7 @@ func TestRotateS3Credentials_ScopedThenRevoke(t *testing.T) {
 	defer cancel()
 	go completeJobs(ctx, cs, false)
 
-	res, err := s.RotateS3Credentials(ctx, "alpha", "files")
+	res, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +171,7 @@ func TestRotateS3Credentials_ScopedThenRevoke(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	// A second rotation before revoking is refused.
-	if _, err := s.RotateS3Credentials(ctx, "alpha", "files"); !errors.Is(err, ErrConflict) {
+	if _, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{}); !errors.Is(err, ErrConflict) {
 		t.Errorf("second rotate: want ErrConflict, got %v", err)
 	}
 	key, err := s.RevokePreviousS3Credentials(ctx, "alpha", "files")
@@ -142,7 +191,7 @@ func TestRotateS3Credentials_FailedJobChangesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go completeJobs(ctx, cs, true)
-	if _, err := s.RotateS3Credentials(ctx, "alpha", "files"); err == nil {
+	if _, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{}); err == nil {
 		t.Fatal("want error")
 	}
 	conn, _ := cs.CoreV1().Secrets("kuso").Get(ctx, "alpha-files-conn", metav1.GetOptions{})
@@ -153,12 +202,12 @@ func TestRotateS3Credentials_FailedJobChangesNothing(t *testing.T) {
 
 func TestRotateS3Credentials_Preconditions(t *testing.T) {
 	s, _ := rotateFixture(t, s3Secrets("A", "B", "A", "B")[:1]) // no root Secret
-	if _, err := s.RotateS3Credentials(context.Background(), "alpha", "files"); !errors.Is(err, ErrConflict) {
+	if _, err := s.RotateS3Credentials(context.Background(), "alpha", "files", S3RotateOptions{}); !errors.Is(err, ErrConflict) {
 		t.Errorf("missing root secret: want ErrConflict, got %v", err)
 	}
 	pg := fakeService(t, seedProj("alpha"), seedAddon("alpha", "db", "postgres"))
 	pg.Kube.Clientset = kubefake.NewSimpleClientset()
-	if _, err := pg.RotateS3Credentials(context.Background(), "alpha", "db"); !errors.Is(err, ErrInvalid) {
+	if _, err := pg.RotateS3Credentials(context.Background(), "alpha", "db", S3RotateOptions{}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("postgres addon: want ErrInvalid, got %v", err)
 	}
 }
