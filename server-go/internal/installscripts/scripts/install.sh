@@ -66,8 +66,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.42.4}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.42.4}"
+KUSO_VERSION="${KUSO_VERSION:-v0.43.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.43.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 # Public-TCP entrypoint pool for addons (docs/superpowers/specs/
@@ -420,6 +420,7 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   # Pinned, not "stable channel": a fresh install months from now must
   # get the k3s minor this release was tested against. Bump deliberately.
   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUSO_K3S_VERSION:-v1.36.6+k3s1}" INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
+  K3S_FRESH=1
 else
   log "k3s already present; skipping install"
 fi
@@ -476,6 +477,36 @@ if command -v kubectl >/dev/null 2>&1 && [ -f /etc/rancher/k3s/k3s.yaml ]; then
 EOF
     log "kept the kuso-registry credential in registries.yaml"
   fi
+fi
+# Fresh installs start with registry auth ON: mint the credential here so
+# this node's containerd holds it before anything is pulled; section 8
+# creates kuso-registry-auth with enabled=true and kuso-server fills in
+# the htpasswd hash. Only on a k3s this script just installed (or a re-run
+# of such an install that stopped before section 8, via the saved file):
+# an existing cluster may have other nodes without the credential, and
+# turning auth on there would break their pulls. KUSO_REGISTRY_AUTH=0 opts
+# out.
+REG_MINT=0
+REG_MINT_FILE=/etc/rancher/k3s/kuso-registry-auth.env
+if [[ -z "${REG_USER:-}" && "${KUSO_REGISTRY_AUTH:-1}" != "0" ]] \
+    && [[ "${K3S_FRESH:-0}" == "1" || -s "$REG_MINT_FILE" ]]; then
+  if [[ -s "$REG_MINT_FILE" ]]; then
+    REG_PASS=$(sed -n 's/^REG_PASS=//p' "$REG_MINT_FILE")
+  fi
+  if [[ -z "${REG_PASS:-}" ]]; then
+    REG_PASS=$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')
+  fi
+  REG_USER=kuso
+  ( umask 077; printf 'REG_PASS=%s\n' "$REG_PASS" > "$REG_MINT_FILE" )
+  REG_MARKER=$(printf '%s' "$REG_USER:$REG_PASS" | sha256sum | cut -c1-16)
+  cat >> /etc/rancher/k3s/registries.yaml <<EOF
+    auth:
+      username: "$REG_USER"
+      password: "$REG_PASS"
+# kuso-registry-auth: $REG_MARKER
+EOF
+  REG_MINT=1
+  log "minted the kuso-registry credential (registry auth on)"
 fi
 chmod 600 /etc/rancher/k3s/registries.yaml
 
@@ -762,9 +793,23 @@ kuso_manifest "operator/config/crd/bases/application.kuso.dev_kusoes.yaml" 2>/de
 # -------- 8. registry --------
 log "deploying in-cluster registry"
 kubectl create namespace kuso 2>/dev/null || true
+if [[ "$REG_MINT" == "1" ]] && ! kubectl -n kuso get secret kuso-registry-auth >/dev/null 2>&1; then
+  kubectl -n kuso create secret generic kuso-registry-auth \
+    --from-literal=username="$REG_USER" \
+    --from-literal=password="$REG_PASS" \
+    --from-literal=enabled=true >/dev/null
+  kubectl -n kuso label secret kuso-registry-auth app.kubernetes.io/name=kuso-registry --overwrite >/dev/null
+fi
+if [[ "$REG_MINT" == "1" ]]; then rm -f "$REG_MINT_FILE"; fi
 kuso_manifest "deploy/registry.yaml" | kubectl apply -f - >/dev/null
-kubectl wait --for=condition=Available --timeout=180s \
-  deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
+kuso_manifest "deploy/vulnscan-egress.yaml" | kubectl apply -f - >/dev/null \
+  || warn "deploy/vulnscan-egress.yaml apply failed — vulnerability scans run without an egress policy"
+# With auth just minted the registry waits for kuso-server to hash the
+# password (section 11), so its readiness is checked after the server.
+if [[ "$REG_MINT" != "1" ]]; then
+  kubectl wait --for=condition=Available --timeout=180s \
+    deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
+fi
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')
 ensure_registry_hosts_entry "$REGISTRY_IP"
 
@@ -775,9 +820,22 @@ ensure_registry_hosts_entry "$REGISTRY_IP"
 # (the daemon runs privileged once; the build Jobs are unprivileged
 # thin clients).
 log "deploying in-cluster buildkitd"
+# Fresh installs require mutual TLS on the daemon's gRPC port from the
+# start: the placeholder below says enabled=true and kuso-server mints the
+# certificates (the daemon waits for them). Existing installs keep their
+# mode; see server-go/internal/buildkittls for switching one over.
+BK_TLS_MINT=0
+if [[ "${K3S_FRESH:-0}" == "1" && "${KUSO_BUILDKIT_TLS:-1}" != "0" ]] \
+    && ! kubectl -n kuso get secret kuso-buildkitd-tls >/dev/null 2>&1; then
+  kubectl -n kuso create secret generic kuso-buildkitd-tls --from-literal=enabled=true >/dev/null
+  kubectl -n kuso label secret kuso-buildkitd-tls app.kubernetes.io/name=kuso-buildkitd --overwrite >/dev/null
+  BK_TLS_MINT=1
+fi
 kuso_manifest "deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
-kubectl wait --for=condition=Available --timeout=180s \
-  deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
+if [[ "$BK_TLS_MINT" != "1" ]]; then
+  kubectl wait --for=condition=Available --timeout=180s \
+    deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
+fi
 
 # -------- 8b. prometheus --------
 # Lightweight prometheus that scrapes traefik:9100 + opted-in pods.
@@ -1553,6 +1611,14 @@ EOF
 
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-server -n kuso
+
+# The registry and buildkitd wait for kuso-server to finish their freshly
+# minted credentials (htpasswd, buildkitd mTLS certs); the kubelet resyncs
+# the Secret volumes within a couple of minutes.
+for d in kuso-registry kuso-buildkitd; do
+  kubectl wait --for=condition=Available --timeout=300s \
+    deployment/$d -n kuso >/dev/null || warn "$d not yet ready (kubectl -n kuso logs deploy/$d)"
+done
 
 # -------- 11b. auto-flip to LE prod --------
 #

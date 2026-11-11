@@ -21,7 +21,7 @@ import (
 
 // DefaultAgentImage is the in-cluster incident-agent image. Carries Claude
 // Code CLI + kuso CLI + kubectl + git + gh. Overridable per-Spawner.
-const DefaultAgentImage = "ghcr.io/sislelabs/kuso-incident-agent:latest"
+const DefaultAgentImage = "ghcr.io/sislelabs/kuso-incident-agent:latest@sha256:a5f3a17828063b612f4cd30c56ff128a6ca0c7964b474e1e77c7e539f1c4e3aa"
 
 // agentServiceAccount is the read-only SA the investigate Job runs under
 // (deploy/incident-agent-rbac.yaml: pods/nodes/events get+list+watch).
