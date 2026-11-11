@@ -85,7 +85,7 @@
                 "type": "boolean"
               },
               "envIsolation": {
-                "description": "Deny pods labelled as a non-production env (previews, env groups, named envs) and build pods ingress to production pods, and gate addon pods on subscription. Off by default; enable only after the env-isolation readiness check passes.",
+                "description": "Deny pods labelled as a non-production env (previews, env groups, named envs) and build pods ingress to production pods, and gate addon pods on subscription. Set on when a project is created; an older project enables it only after the env-isolation readiness check passes.",
                 "type": "boolean"
               },
               "extraBlockCIDRs": {
@@ -103,6 +103,17 @@
               "instanceDBEgress": {
                 "description": "Legacy project-wide egress to the shared instance Postgres. Unset = on. Instance-addon charts render a subscriber-scoped rule of their own, so this can be turned off once those have reconciled.",
                 "type": "boolean"
+              },
+              "isolateNonProdEnvs": {
+                "description": "With envIsolation, also isolate non-production envs from each other: a pod labelled env=\u003cscope\u003e accepts project traffic only from the same env and from unlabelled pods. On for projects created since this field exists.",
+                "type": "boolean"
+              },
+              "knownEnvScopes": {
+                "description": "Extra env scopes treated as isolated, on top of the ones read from the project's env CRs.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "platformNamespace": {
                 "type": "string"

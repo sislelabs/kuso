@@ -110,6 +110,13 @@ type KusoProjectNetworkPolicy struct {
 	// flipped through the env-isolation endpoint, which refuses while
 	// any env pod is still unlabelled.
 	EnvIsolation *bool `json:"envIsolation,omitempty"`
+	// IsolateNonProdEnvs (with EnvIsolation) isolates non-production envs
+	// from each other as well (ISO-4). On for new projects; existing ones
+	// opt in through the env-isolation endpoint.
+	IsolateNonProdEnvs *bool `json:"isolateNonProdEnvs,omitempty"`
+	// KnownEnvScopes adds env scopes the chart treats as isolated on top
+	// of the ones it reads from the project's env CRs.
+	KnownEnvScopes []string `json:"knownEnvScopes,omitempty"`
 	// InstanceDBEgress: nil/true keeps the legacy project-wide egress to
 	// the instance Postgres; false leaves only the per-addon rule.
 	InstanceDBEgress *bool `json:"instanceDBEgress,omitempty"`
@@ -764,11 +771,15 @@ type KusoEnvironmentSpec struct {
 	// EnvScope mirrors the CR's LabelEnv so the chart (which only sees
 	// spec) can stamp it on pods for the env-isolation NetworkPolicies.
 	// Never set by hand: toUnstructured derives it on every write.
-	EnvScope    string           `json:"envScope,omitempty"`
-	Branch      string           `json:"branch,omitempty"`
-	PullRequest *KusoPullRequest `json:"pullRequest,omitempty"`
-	TTL         *KusoTTL         `json:"ttl,omitempty"`
-	Image       *KusoImage       `json:"image,omitempty"`
+	EnvScope string `json:"envScope,omitempty"`
+	// DisableServiceLinks drops the Docker-link env vars kubelet injects
+	// for every Service in the namespace (ISO-13). Set on env CRs created
+	// since it exists (CreateKusoEnvironment), so no running pod rolls.
+	DisableServiceLinks bool             `json:"disableServiceLinks,omitempty"`
+	Branch              string           `json:"branch,omitempty"`
+	PullRequest         *KusoPullRequest `json:"pullRequest,omitempty"`
+	TTL                 *KusoTTL         `json:"ttl,omitempty"`
+	Image               *KusoImage       `json:"image,omitempty"`
 	// PendingImage holds a runtime=image target that is NOT YET LIVE
 	// because the service has a release hook that must run first. The
 	// imagerelease watcher runs the release Job against this image and,
@@ -1408,6 +1419,10 @@ type KusoCronSpec struct {
 	// aliases as secretKeyRef/configMapKeyRef), same shape as
 	// KusoRunSpec.Env. kind=service only.
 	Env []KusoRunEnv `json:"env,omitempty"`
+	// EnvScope is the env label of the env the cron runs as (its owning
+	// env's spec.envScope). The chart stamps it plus addon-subscriber
+	// labels on the pod for env isolation (ISO-3). Empty = legacy.
+	EnvScope string `json:"envScope,omitempty"`
 	// DisplayName lets the canvas show a friendly label. Optional;
 	// UI falls back to the cron's short name when empty.
 	DisplayName string `json:"displayName,omitempty"`
@@ -1483,6 +1498,8 @@ type KusoRunSpec struct {
 	// service so the run pod gets the same NetworkPolicy egress labels.
 	PrivateEgress     bool `json:"privateEgress,omitempty"`
 	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
+	// EnvScope: see KusoCronSpec.EnvScope.
+	EnvScope string `json:"envScope,omitempty"`
 	// Resources overrides the run container's requests/limits
 	// (ResourceRequirements shape). nil = chart default.
 	Resources map[string]any `json:"resources,omitempty"`

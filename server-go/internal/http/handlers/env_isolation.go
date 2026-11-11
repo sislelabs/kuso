@@ -62,12 +62,15 @@ func (h *EnvIsolationHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Enabled *bool `json:"enabled"`
+		// NonProductionEnvs, when present, also sets ISO-4 isolation
+		// between non-production envs.
+		NonProductionEnvs *bool `json:"nonProductionEnvs"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil || in.Enabled == nil {
-		writeErr(w, http.StatusBadRequest, `body must be {"enabled": true|false}`)
+		writeErr(w, http.StatusBadRequest, `body must be {"enabled": true|false, "nonProductionEnvs"?: true|false}`)
 		return
 	}
-	rep, err := h.Svc.SetEnabled(r.Context(), project, *in.Enabled)
+	rep, err := h.Svc.SetEnabled(r.Context(), project, *in.Enabled, in.NonProductionEnvs)
 	if errors.Is(err, envisolation.ErrNotReady) {
 		writeErrExtra(w, http.StatusConflict, err.Error(), "env_isolation_not_ready", map[string]any{"readiness": rep})
 		return

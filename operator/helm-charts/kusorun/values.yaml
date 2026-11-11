@@ -75,3 +75,6 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]
+# Env scope the job runs as (server-stamped). Drives the env-isolation pod
+# labels; empty = legacy, unlabelled.
+envScope: ""

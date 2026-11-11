@@ -42,7 +42,7 @@ func egressFixture(t *testing.T, private, platform bool, extra ...*kube.KusoCron
 	seed(kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-production"},
 		Spec: kube.KusoEnvironmentSpec{
-			Project: "alpha", Service: "alpha-web",
+			Project: "alpha", Service: "alpha-web", EnvScope: "production",
 			Image: &kube.KusoImage{Repository: "registry.local/alpha/web", Tag: "sha1"},
 		},
 	})
@@ -65,6 +65,10 @@ func TestAdd_CopiesServiceEgress(t *testing.T) {
 		if cr.Spec.PrivateEgress != tc.private || cr.Spec.PlatformAPIEgress != tc.platform {
 			t.Errorf("service egress private=%v platform=%v, cron got private=%v platform=%v",
 				tc.private, tc.platform, cr.Spec.PrivateEgress, cr.Spec.PlatformAPIEgress)
+		}
+		// ISO-3: the cron runs as its env, for the isolation labels.
+		if cr.Spec.EnvScope != "production" {
+			t.Errorf("cron envScope = %q, want the env's production", cr.Spec.EnvScope)
 		}
 	}
 }

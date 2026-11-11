@@ -77,6 +77,12 @@ spec:
                     env-isolation NetworkPolicies key on. Empty on CRs not yet
                     rewritten since the upgrade: their pods stay unlabelled and
                     keep project-wide reachability.
+                disableServiceLinks:
+                  type: boolean
+                  description: >-
+                    Render enableServiceLinks=false on the pod (no Docker-link
+                    env vars for every Service in the namespace). Set by
+                    kuso-server on env CRs it creates.
                 branch:
                   type: string
                   default: main

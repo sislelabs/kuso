@@ -1416,6 +1416,10 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// boot dead; Sleep and Placement, because previews carry their
 			// own scale-down lifecycle and scheduling. TestPreviewEnv-
 			// LiteralCoversServiceDerivedFields encodes that split.
+			//
+			// DisableServiceLinks is set here as well as on create because
+			// the resync below replaces the spec wholesale.
+			DisableServiceLinks:  true,
 			Internal:             svcInternal,
 			PrivateEgress:        svcPrivateEgress,
 			PlatformAPIEgress:    svcPlatformAPIEgress,

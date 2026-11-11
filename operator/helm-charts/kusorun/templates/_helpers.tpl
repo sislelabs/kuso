@@ -126,3 +126,29 @@ envFrom:
   {{- end }}
 {{- end }}
 {{- end -}}
+
+{{- /* Env identity + addon-subscription pod labels (ISO-3). Only when the
+       server stamped spec.envScope (crons/runs created or synced since it
+       exists), so an upgrade changes no existing job template. Mirrors
+       kusoenvironment.isolationLabels; the subscriber key MUST stay
+       byte-identical to kusoaddon.subscriberKey. */ -}}
+{{- define "kusorun.isolationLabels" -}}
+{{- if .Values.envScope -}}
+kuso.sislelabs.com/env: {{ .Values.envScope | quote }}
+{{- $conns := dict }}
+{{- $names := list }}
+{{- range (.Values.envFromSecrets | default list) }}{{ $names = append $names (toString .) }}{{ end }}
+{{- range (.Values.env | default list) }}
+{{- if and (kindIs "map" .) (kindIs "map" .valueFrom) (kindIs "map" .valueFrom.secretKeyRef) }}
+{{- $names = append $names (toString .valueFrom.secretKeyRef.name) }}
+{{- end }}
+{{- end }}
+{{- range $n := $names }}
+{{- if hasSuffix "-readonly" $n }}{{ $n = printf "%s-conn" (trimSuffix "-readonly" $n) }}{{ end }}
+{{- if hasSuffix "-conn" $n }}{{ $_ := set $conns $n true }}{{ end }}
+{{- end }}
+{{- range $n := keys $conns | sortAlpha }}
+{{ printf "conn.kuso.sislelabs.com/%s" (sha256sum $n | trunc 20) }}: "true"
+{{- end }}
+{{- end }}
+{{- end -}}

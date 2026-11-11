@@ -254,6 +254,16 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 				Enabled: previewsEnabled,
 				TTLDays: previewsTTL,
 			},
+			// A new project has no env pod without its env label, so the
+			// readiness check that gates turning isolation on for older
+			// projects is trivially met (ISO-2, ISO-4). Its instance-addon
+			// subscribers reach the shared Postgres through the per-addon
+			// rule, so the legacy project-wide egress stays off (ISO-11).
+			NetworkPolicy: &kube.KusoProjectNetworkPolicy{
+				EnvIsolation:       new(true),
+				IsolateNonProdEnvs: new(true),
+				InstanceDBEgress:   new(false),
+			},
 		},
 	}
 	// Ensure the execution namespace exists with PSA labels + the

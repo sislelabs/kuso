@@ -1037,6 +1037,9 @@ func cloneServiceCron(src *kube.KusoCron, project, cloneShort, group string, clo
 	spec.Placement = cloneEnv.Spec.Placement
 	spec.PrivateEgress = cloneSvc.Spec.PrivateEgress
 	spec.PlatformAPIEgress = cloneSvc.Spec.PlatformAPIEgress
+	// The clone runs as the group's env: its pods carry the group's env
+	// label, like the clone env's own pods (ISO-3).
+	spec.EnvScope = group
 	return &kube.KusoCron{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: crons.CRName(project, cloneShort, short),

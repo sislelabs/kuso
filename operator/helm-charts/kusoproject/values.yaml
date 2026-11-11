@@ -90,6 +90,14 @@ networkPolicy:
   # with PUT /api/projects/<p>/env-isolation, which refuses while any env
   # pod still lacks the env label.
   envIsolation: false
+  # With envIsolation on, also isolate non-production envs from each other
+  # (ISO-4): a pod labelled env=<scope> accepts project traffic only from
+  # the same env and from unlabelled pods. Scopes come from the project's
+  # env CRs (plus knownEnvScopes). New projects get it on; existing ones
+  # opt in with PUT /api/projects/<p>/env-isolation
+  # {"enabled":true,"nonProductionEnvs":true}.
+  isolateNonProdEnvs: false
+  knownEnvScopes: []
   # Legacy egress from every project pod to the shared instance Postgres.
   # false leaves only the per-instance-addon, subscriber-scoped rule.
   instanceDBEgress: true

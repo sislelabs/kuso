@@ -228,8 +228,23 @@ spec:
                         Deny pods labelled as a non-production env (previews,
                         env groups, named envs) and build pods ingress to
                         production pods, and gate addon pods on subscription.
-                        Off by default; enable only after the
-                        env-isolation readiness check passes.
+                        Set on when a project is created; an older project
+                        enables it only after the env-isolation readiness
+                        check passes.
+                    isolateNonProdEnvs:
+                      type: boolean
+                      description: >-
+                        With envIsolation, also isolate non-production envs
+                        from each other: a pod labelled env=<scope> accepts
+                        project traffic only from the same env and from
+                        unlabelled pods. On for projects created since
+                        this field exists.
+                    knownEnvScopes:
+                      type: array
+                      items: { type: string }
+                      description: >-
+                        Extra env scopes treated as isolated, on top of the
+                        ones read from the project's env CRs.
                     instanceDBEgress:
                       type: boolean
                       description: >-
