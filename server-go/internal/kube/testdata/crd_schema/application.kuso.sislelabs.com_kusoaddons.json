@@ -13,6 +13,10 @@
       },
       "spec": {
         "properties": {
+          "appRole": {
+            "description": "Native postgres/mysql: apps connect as a non-superuser that owns the app database; the superuser password is kept in \u003cname\u003e-admin. kuso-server sets it on addons it creates. Takes effect only when the database first initialises, so setting it on an existing addon is refused by the chart.",
+            "type": "boolean"
+          },
           "backup": {
             "properties": {
               "bucket": {

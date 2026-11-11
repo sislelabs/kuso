@@ -136,15 +136,15 @@ func (s *Service) execInPod(ctx context.Context, ns, podName, container string, 
 }
 
 // postgresExecTarget resolves the pod and psql user for admin commands on
-// a postgres addon. A StatefulSet addon runs in <addon>-0 and its conn user
-// is the superuser. An HA addon is a CloudNativePG cluster: pods are
+// a postgres addon. A StatefulSet addon runs in <addon>-0 as the superuser
+// its image bootstrapped (podSuperuser). An HA addon is a CloudNativePG cluster: pods are
 // <addon>-1..N, the writable one is labelled cnpg.io/instanceRole=primary
 // (and moves on failover), and local socket auth maps to the postgres
 // superuser, not the app role.
 func (s *Service) postgresExecTarget(ctx context.Context, ns, fqn, connUser string) (pod, psqlUser string, err error) {
 	pods := s.Kube.Clientset.CoreV1().Pods(ns)
-	if _, gerr := pods.Get(ctx, fqn+"-0", metav1.GetOptions{}); gerr == nil {
-		return fqn + "-0", connUser, nil
+	if p, gerr := pods.Get(ctx, fqn+"-0", metav1.GetOptions{}); gerr == nil {
+		return fqn + "-0", podSuperuser(p, connUser), nil
 	}
 	list, lerr := pods.List(ctx, metav1.ListOptions{
 		LabelSelector: "cnpg.io/cluster=" + fqn + ",cnpg.io/instanceRole=primary",
@@ -156,4 +156,21 @@ func (s *Service) postgresExecTarget(ctx context.Context, ns, fqn, connUser stri
 		return "", "", fmt.Errorf("no running postgres pod for addon %s/%s", ns, fqn)
 	}
 	return list.Items[0].Name, "postgres", nil
+}
+
+// podSuperuser is the role the postgres image bootstrapped as: the conn
+// user on legacy addons, `postgres` on appRole addons, where the conn user
+// cannot create the browser role or alter other roles.
+func podSuperuser(p *corev1.Pod, connUser string) string {
+	for _, c := range p.Spec.Containers {
+		if c.Name != "postgres" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "POSTGRES_USER" && e.Value != "" && e.ValueFrom == nil {
+				return e.Value
+			}
+		}
+	}
+	return connUser
 }

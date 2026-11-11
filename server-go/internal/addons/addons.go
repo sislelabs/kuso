@@ -614,6 +614,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			Pooler:           req.Pooler,
 			TLS:              req.TLS,
 			Backup:           s.createBackup(ctx, req),
+			AppRole:          newAddonGetsAppRole(req, isExternal),
 		},
 	}
 	if req.External != nil && req.External.SecretName != "" {
@@ -2434,12 +2435,12 @@ func (s *Service) deleteCloneDataPVCs(ctx context.Context, ns, addonFQN string) 
 }
 
 // deleteS3CredentialSecrets removes an s3 addon's kept -root and
-// -readonly Secrets once its data is gone. Left behind, a re-created
+// -readonly Secrets (and a database addon's -admin) once its data is gone. Left behind, a re-created
 // addon of the same name reads the old root password back through the
 // chart's lookup, reviving a credential of deleted data (BLOB-8). Only
 // Secrets carrying the chart's role label are touched.
 func (s *Service) deleteS3CredentialSecrets(ctx context.Context, ns, addonFQN string) {
-	for suffix, role := range map[string]string{s3RootSuffix: "s3-root", s3ReadOnlySuffix: "s3-readonly"} {
+	for suffix, role := range map[string]string{s3RootSuffix: "s3-root", s3ReadOnlySuffix: "s3-readonly", adminSecretSuffix: "db-admin"} {
 		name := addonFQN + suffix
 		sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {

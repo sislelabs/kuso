@@ -21,6 +21,7 @@
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
 {{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $adminPw := include "kusoaddon.adminPassword" (list $ $name $existingSts) -}}
 
 apiVersion: apps/v1
 kind: StatefulSet
@@ -55,8 +56,13 @@ spec:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
+                  {{- if .Values.appRole }}
+                  name: {{ printf "%s-admin" $name }}
+                  key: ADMIN_PASSWORD
+                  {{- else }}
                   name: {{ $secretName }}
                   key: MYSQL_PASSWORD
+                  {{- end }}
             - name: MYSQL_DATABASE
               valueFrom:
                 secretKeyRef:
@@ -139,4 +145,8 @@ data:
   MYSQL_URL: {{ printf "mysql://kuso:%s@%s:3306/%s" ($password | urlquery) $name $database | b64enc | quote }}
   # DATABASE_URL alias — generic ecosystems expect this name.
   DATABASE_URL: {{ printf "mysql://kuso:%s@%s:3306/%s" ($password | urlquery) $name $database | b64enc | quote }}
+{{- if .Values.appRole }}
+---
+{{ include "kusoaddon.adminSecret" (list $ $name "root" $adminPw) }}
+{{- end }}
 {{- end }}

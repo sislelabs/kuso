@@ -1078,6 +1078,11 @@ type KusoAddonSpec struct {
 	// create (kube.CreateKusoAddon, addons.createAddon): turning it on
 	// for a live addon changes its pod template and restarts the DB.
 	PodHardening bool `json:"podHardening,omitempty"`
+	// AppRole (native postgres/mysql) gives apps a non-superuser conn user
+	// and keeps the superuser password in <name>-admin. It only takes effect
+	// when the database initialises, so it is set only at create
+	// (addons.Service.Add); the chart refuses it on an existing StatefulSet.
+	AppRole bool `json:"appRole,omitempty"`
 	// UseInstanceAddon points at an instance-shared database server
 	// registered by an admin (Model 2). The kuso server creates an
 	// isolated database on the shared server for this project and

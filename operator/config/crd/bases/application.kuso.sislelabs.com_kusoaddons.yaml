@@ -320,6 +320,14 @@ spec:
                     Drop the ServiceAccount token from addon pods. kuso-server
                     sets it on addons it creates; an existing addon keeps its
                     pod template (no DB restart) until this is set by hand.
+                appRole:
+                  type: boolean
+                  description: >-
+                    Native postgres/mysql: apps connect as a non-superuser that
+                    owns the app database; the superuser password is kept in
+                    <name>-admin. kuso-server sets it on addons it creates.
+                    Takes effect only when the database first initialises, so
+                    setting it on an existing addon is refused by the chart.
                 useInstanceAddon:
                   type: string
                   description: |

@@ -503,6 +503,12 @@ func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/repair-password")
 }
 
+// RotateAddonPassword gives a native postgres/mysql addon's app user a new
+// password and restarts the services using it.
+func (k *KusoClient) RotateAddonPassword(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/rotate-password")
+}
+
 // EnablePublicTCP opts the addon into a public TCP endpoint, allocating
 // a port from the cluster's configured pool. The server returns
 // {"port": <N>} on success. Admin-gated.

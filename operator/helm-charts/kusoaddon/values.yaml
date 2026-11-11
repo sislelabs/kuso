@@ -112,6 +112,12 @@ useInstanceAddon: ""
 # pod template, and so the running DB, is untouched) until opted in.
 podHardening: false
 
+# appRole: native postgres/mysql only. Apps connect as a non-superuser that
+# owns the app database; the superuser password lives in <name>-admin. Set
+# by kuso-server on addons it creates; it only takes effect at first init,
+# so the chart refuses it on an existing StatefulSet without <name>-admin.
+appRole: false
+
 # pooler: opt-in PgBouncer in front of a kind=postgres addon. When
 # enabled, single-node addons get a self-managed 1-replica PgBouncer
 # Deployment; HA (CNPG) addons get a CNPG-native Pooler CRD. Reach it
