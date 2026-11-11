@@ -91,6 +91,26 @@ func TestDescribeEnrich_NoLiveSecretGetsOnSyncedCache(t *testing.T) {
 	}
 }
 
+// SCL-2: Describe walks envs serially, so the singleflight alone gave one
+// metrics-server LIST per env. Serial calls within the TTL share one LIST.
+func TestFetchNsMetrics_SerialCallsShareOneList(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "PodMetricsList"})
+	var lists atomic.Int32
+	dyn.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		lists.Add(1)
+		return false, nil, nil
+	})
+	s := New(&kube.Client{Dynamic: dyn}, "kuso")
+	for range 5 {
+		s.fetchNsMetrics(context.Background(), "kuso")
+	}
+	if n := lists.Load(); n != 1 {
+		t.Fatalf("5 serial fetches issued %d metrics LISTs, want 1", n)
+	}
+}
+
 func hasEnvVar(vars []kube.KusoEnvVar, name string) bool {
 	for _, v := range vars {
 		if v.Name == name {

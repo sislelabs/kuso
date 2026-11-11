@@ -174,6 +174,18 @@ type Service struct {
 	// cache: the key window naturally collapses to one in-flight
 	// request, so cache invalidation isn't a concern.
 	metricsSF singleflight.Group
+
+	// metricsCache keeps each namespace's last metrics list for
+	// nsMetricsTTL. The singleflight above only dedupes CONCURRENT
+	// callers; Describe walks envs serially, so without this every env
+	// paid its own metrics-server LIST.
+	metricsCacheMu sync.Mutex
+	metricsCache   map[string]nsMetricsEntry
+}
+
+type nsMetricsEntry struct {
+	at   time.Time
+	pods []nsPodMetrics
 }
 
 type svcMutexEntry struct {

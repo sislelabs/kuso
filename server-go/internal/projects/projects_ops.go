@@ -1201,7 +1201,14 @@ func (s *Service) aggregateCPUPercent(ctx context.Context, ns, envName string, d
 // one round-trip to metrics-server. Without this, a 10-env project
 // with one open canvas tab fired 10 parallel queries every 5s.
 func (s *Service) fetchNsMetrics(ctx context.Context, ns string) []nsPodMetrics {
-	bucket := time.Now().Truncate(5 * time.Second).Unix()
+	now := time.Now()
+	s.metricsCacheMu.Lock()
+	if e, ok := s.metricsCache[ns]; ok && now.Sub(e.at) < nsMetricsTTL {
+		s.metricsCacheMu.Unlock()
+		return e.pods
+	}
+	s.metricsCacheMu.Unlock()
+	bucket := now.Truncate(nsMetricsTTL).Unix()
 	key := fmt.Sprintf("%s@%d", ns, bucket)
 	v, _, _ := s.metricsSF.Do(key, func() (any, error) {
 		gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
@@ -1234,10 +1241,28 @@ func (s *Service) fetchNsMetrics(ctx context.Context, ns string) []nsPodMetrics 
 			}
 			out = append(out, nsPodMetrics{instance: inst, cpuMilli: milli})
 		}
+		s.storeNsMetrics(ns, out)
 		return out, nil
 	})
 	pods, _ := v.([]nsPodMetrics)
 	return pods
+}
+
+const nsMetricsTTL = 5 * time.Second
+
+func (s *Service) storeNsMetrics(ns string, pods []nsPodMetrics) {
+	now := time.Now()
+	s.metricsCacheMu.Lock()
+	defer s.metricsCacheMu.Unlock()
+	if s.metricsCache == nil {
+		s.metricsCache = map[string]nsMetricsEntry{}
+	}
+	for k, e := range s.metricsCache {
+		if now.Sub(e.at) >= nsMetricsTTL {
+			delete(s.metricsCache, k)
+		}
+	}
+	s.metricsCache[ns] = nsMetricsEntry{at: now, pods: pods}
 }
 
 // parsePodCPU mirrors the helper in handlers/kubernetes.go but lives
