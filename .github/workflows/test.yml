@@ -106,21 +106,43 @@ jobs:
         # exposed to (leader handover, informer callbacks, the build
         # in-flight map). Slower, but this is the only gate.
         #
-        # -p 1 is REQUIRED, not a tuning knob. The DSN-gated tests all
-        # point at one database and truncate tables in t.Cleanup, so
-        # packages running concurrently clobber each other's rows —
-        # producing foreign-key violations and spurious 403s that look
-        # like product bugs but are pure cross-package contamination.
-        # Verified locally: with -p 1 the suite is 47/47 green; without
-        # it, 4 tests fail non-deterministically. If this gets slow,
-        # give each package its own database rather than dropping -p 1.
+        # The DSN-gated tests truncate tables in t.Cleanup, so two
+        # packages must never share a database (that used to need -p 1,
+        # which also serialised every -race compile). go test -exec runs
+        # each package's test binary under cmd/pgtestexec, which creates
+        # a private database on this server for it and drops it after,
+        # so packages run in parallel. One go test over every module
+        # path, so all modules share that parallelism.
         run: |
           set -euo pipefail
-          for m in $(go list -m -f '{{.Dir}}'); do
-            echo "::group::test $m"
-            (cd "$m" && go test -race -p 1 ./...)
-            echo "::endgroup::"
-          done
+          (cd server-go && go build -o "$RUNNER_TEMP/pgtestexec" ./cmd/pgtestexec)
+          go test -race -exec "$RUNNER_TEMP/pgtestexec" $(go list -m -f '{{.Path}}/...')
+
+  # The *_Docker tests run real images (backup prune in the backup image,
+  # the s3 snapshot round trip against two MinIOs) and skip unless
+  # KUSO_TEST_DOCKER=1. Their own job so they run alongside the main one;
+  # once opted in, a missing image fails instead of skipping.
+  docker:
+    name: go test (docker-backed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # The prune tests render the chart with helm first.
+      - name: helm present
+        run: helm version --short
+
+      - name: go test -run '_Docker$'
+        env:
+          KUSO_TEST_DOCKER: "1"
+        run: cd server-go && go test -race -run '_Docker$' ./...
 
   charts:
     name: charts + CRDs vs apiserver

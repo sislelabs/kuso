@@ -44,28 +44,37 @@ func TestBuildBody_Fields(t *testing.T) {
 	}
 }
 
-func TestBuildBody_DataFile(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "b.json")
-	_ = os.WriteFile(f, []byte(`{"x":1}`), 0o600)
-	b, err := buildBody("@"+f, nil, nil)
-	if err != nil {
+func TestBuildBody(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "b.json")
+	if err := os.WriteFile(f, []byte(`{"x":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != `{"x":1}` {
-		t.Fatalf("data-file body = %s", b)
-	}
-}
-
-func TestBuildBody_MutuallyExclusive(t *testing.T) {
-	if _, err := buildBody(`{"a":1}`, []string{"b=2"}, nil); err == nil {
-		t.Error("expected error when --data and -f both set")
-	}
-}
-
-func TestBuildBody_Empty(t *testing.T) {
-	b, err := buildBody("", nil, nil)
-	if err != nil || b != nil {
-		t.Fatalf("empty inputs should yield nil body, got %v %v", b, err)
+	for _, tc := range []struct {
+		name    string
+		data    string
+		fields  []string
+		wantErr bool
+		want    []byte // nil: the body itself must be nil
+	}{
+		{name: "DataFile", data: "@" + f, want: []byte(`{"x":1}`)},
+		// --data and -f both set
+		{name: "MutuallyExclusive", data: `{"a":1}`, fields: []string{"b=2"}, wantErr: true},
+		{name: "Empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := buildBody(tc.data, tc.fields, nil)
+			if tc.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == nil && b != nil || string(b) != string(tc.want) {
+				t.Fatalf("body = %s, want %s", b, tc.want)
+			}
+		})
 	}
 }

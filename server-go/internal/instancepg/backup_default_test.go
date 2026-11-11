@@ -17,13 +17,6 @@ import (
 	"kuso/server/internal/kube"
 )
 
-func TestInstanceAddonSpec_HasBackupSchedule(t *testing.T) {
-	b, ok := instanceAddonSpec(ProvisionManagedRequest{Version: "16"})["backup"].(map[string]any)
-	if !ok || b["schedule"] == "" || b["schedule"] == nil {
-		t.Fatalf("managed instance PG must be created with a backup schedule, got %#v", b)
-	}
-}
-
 // Every tenant DB on the managed instance is dumped only by its CronJob, so
 // a CR without a backup block gets the default. One the admin set (even an
 // empty schedule) is theirs and must not be overwritten or doubled.

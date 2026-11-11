@@ -21,41 +21,47 @@ func refVars(pairs ...string) []any {
 
 func TestReferencedEnvs(t *testing.T) {
 	t.Parallel()
-	e := &kube.KusoEnvironment{}
-	e.Name, e.Namespace = "alpha-web-staging", "kuso"
-	e.Spec.EnvVars = []kube.KusoEnvVar{
-		{Name: "API_URL", Value: "http://alpha-api-staging.kuso.svc.cluster.local"},
-		{Name: "AUTH_HOST", Value: "alpha-auth-staging.kuso.svc"},
-		{Name: "AGAIN", Value: "http://alpha-api-staging.kuso.svc.cluster.local/v2"},
-		{Name: "SELF", Value: "http://alpha-web-staging.kuso.svc.cluster.local"},
-		{Name: "PUBLIC", Value: "https://api.example.com"},
-		{Name: "DB", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "x-conn", "key": "URL"}}},
-	}
-	got := referencedEnvs(e, nil)
-	want := []string{"kuso/alpha-api-staging", "kuso/alpha-auth-staging"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("referencedEnvs = %v, want %v", got, want)
-	}
-}
-
-// RUN-9: same-namespace short Service names are the idiomatic in-namespace
-// form and must count as references, but only when they name a real env.
-func TestReferencedEnvs_ShortNames(t *testing.T) {
-	t.Parallel()
-	e := &kube.KusoEnvironment{}
-	e.Name, e.Namespace = "alpha-web-staging", "kuso"
-	e.Spec.EnvVars = []kube.KusoEnvVar{
-		{Name: "API_URL", Value: "http://alpha-api-staging/v1"},
-		{Name: "AUTH_ADDR", Value: "alpha-auth-staging:8080"},
-		{Name: "CACHE", Value: "redis://not-an-env:6379"},
-		{Name: "MODE", Value: "alpha-jobs-staging"}, // bare word: not a URL
-		{Name: "PUBLIC", Value: "https://alpha-api-staging.example.com"},
-	}
 	envs := map[string]bool{"alpha-api-staging": true, "alpha-auth-staging": true, "alpha-jobs-staging": true}
-	got := referencedEnvs(e, func(n string) bool { return envs[n] })
+	cases := []struct {
+		name  string
+		vars  []kube.KusoEnvVar
+		isEnv func(string) bool
+	}{
+		{
+			name: "FQDN",
+			vars: []kube.KusoEnvVar{
+				{Name: "API_URL", Value: "http://alpha-api-staging.kuso.svc.cluster.local"},
+				{Name: "AUTH_HOST", Value: "alpha-auth-staging.kuso.svc"},
+				{Name: "AGAIN", Value: "http://alpha-api-staging.kuso.svc.cluster.local/v2"},
+				{Name: "SELF", Value: "http://alpha-web-staging.kuso.svc.cluster.local"},
+				{Name: "PUBLIC", Value: "https://api.example.com"},
+				{Name: "DB", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "x-conn", "key": "URL"}}},
+			},
+		},
+		{
+			// RUN-9: same-namespace short Service names are the idiomatic in-namespace
+			// form and must count as references, but only when they name a real env.
+			name: "ShortNames",
+			vars: []kube.KusoEnvVar{
+				{Name: "API_URL", Value: "http://alpha-api-staging/v1"},
+				{Name: "AUTH_ADDR", Value: "alpha-auth-staging:8080"},
+				{Name: "CACHE", Value: "redis://not-an-env:6379"},
+				{Name: "MODE", Value: "alpha-jobs-staging"}, // bare word: not a URL
+				{Name: "PUBLIC", Value: "https://alpha-api-staging.example.com"},
+			},
+			isEnv: func(n string) bool { return envs[n] },
+		},
+	}
 	want := []string{"kuso/alpha-api-staging", "kuso/alpha-auth-staging"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("referencedEnvs = %v, want %v", got, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &kube.KusoEnvironment{}
+			e.Name, e.Namespace = "alpha-web-staging", "kuso"
+			e.Spec.EnvVars = tc.vars
+			if got := referencedEnvs(e, tc.isEnv); !slices.Equal(got, want) {
+				t.Fatalf("referencedEnvs = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

@@ -16,43 +16,30 @@ import (
 // (detect-runtime / scan-addons / check-repo) intentionally stay
 // non-admin and are not covered here.
 
-func TestGithubListInstallations_RejectsNonAdmin(t *testing.T) {
+func TestGithubEnumeration_RejectsNonAdmin(t *testing.T) {
 	t.Parallel()
 	h := &GithubHandler{}
-	req := httptest.NewRequest(http.MethodGet, "/api/github/installations", nil)
-	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
-		&auth.Claims{UserID: "u1", Permissions: []string{}}))
-	rr := httptest.NewRecorder()
-	h.ListInstallations(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("ListInstallations status=%d want 403; body=%s", rr.Code, rr.Body.String())
+	cases := []struct {
+		name    string
+		path    string
+		handler http.HandlerFunc
+	}{
+		{"ListInstallations", "/api/github/installations", h.ListInstallations},
+		{"InstallationRepos", "/api/github/installations/1/repos", h.InstallationRepos},
+		{"RepoTree", "/api/github/installations/1/repos/owner/repo/tree?branch=main", h.RepoTree},
 	}
-}
-
-func TestGithubInstallationRepos_RejectsNonAdmin(t *testing.T) {
-	t.Parallel()
-	h := &GithubHandler{}
-	req := httptest.NewRequest(http.MethodGet, "/api/github/installations/1/repos", nil)
-	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
-		&auth.Claims{UserID: "u1", Permissions: []string{}}))
-	rr := httptest.NewRecorder()
-	h.InstallationRepos(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("InstallationRepos status=%d want 403; body=%s", rr.Code, rr.Body.String())
-	}
-}
-
-func TestGithubRepoTree_RejectsNonAdmin(t *testing.T) {
-	t.Parallel()
-	h := &GithubHandler{}
-	req := httptest.NewRequest(http.MethodGet,
-		"/api/github/installations/1/repos/owner/repo/tree?branch=main", nil)
-	req = req.WithContext(auth.WithClaimsForTest(req.Context(),
-		&auth.Claims{UserID: "u1", Permissions: []string{}}))
-	rr := httptest.NewRecorder()
-	h.RepoTree(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("RepoTree status=%d want 403; body=%s", rr.Code, rr.Body.String())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req = req.WithContext(auth.WithClaimsForTest(req.Context(),
+				&auth.Claims{UserID: "u1", Permissions: []string{}}))
+			rr := httptest.NewRecorder()
+			tc.handler(rr, req)
+			if rr.Code != http.StatusForbidden {
+				t.Errorf("%s status=%d want 403; body=%s", tc.name, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }
 

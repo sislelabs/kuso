@@ -158,33 +158,23 @@ func TestInvites_Admin_CreateListRevoke(t *testing.T) {
 
 // --- input validation gates -------------------------------------------
 
-func TestInvites_MultiUseRequiresExpiry(t *testing.T) {
+func TestInvites_Create_Rejects400(t *testing.T) {
 	r, _, iss := newInviteServer(t)
 	tok := mintToken(t, iss, "admin", auth.PermUserWrite)
-
-	body := strings.NewReader(`{"maxUses":5}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/invites", body)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("multi-use without expiry: status=%d want 400 body=%q", rr.Code, rr.Body.String())
-	}
-}
-
-func TestInvites_NegativeMaxUses_400(t *testing.T) {
-	r, _, iss := newInviteServer(t)
-	tok := mintToken(t, iss, "admin", auth.PermUserWrite)
-
-	body := strings.NewReader(`{"maxUses":-1}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/invites", body)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("status=%d want 400", rr.Code)
+	for _, tc := range []struct{ name, body string }{
+		{"MultiUseRequiresExpiry", `{"maxUses":5}`},
+		{"NegativeMaxUses", `{"maxUses":-1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/invites", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer "+tok)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("status=%d want 400 body=%q", rr.Code, rr.Body.String())
+			}
+		})
 	}
 }
 
@@ -204,25 +194,26 @@ func TestInvites_PublicLookup_NoAuth(t *testing.T) {
 
 // --- /api/admin/db/stats ----------------------------------------------
 
-func TestDBStats_RequiresAdmin(t *testing.T) {
+func TestDBStats_Gate(t *testing.T) {
 	r, _, iss := newInviteServer(t)
-	tok := mintToken(t, iss, "bob", auth.PermProjectRead)
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("non-admin: status=%d want 403", rr.Code)
-	}
-}
-
-func TestDBStats_NoAuth_401(t *testing.T) {
-	r, _, _ := newInviteServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status=%d want 401", rr.Code)
+	for _, tc := range []struct {
+		name, token string
+		want        int
+	}{
+		{"RequiresAdmin", mintToken(t, iss, "bob", auth.PermProjectRead), http.StatusForbidden},
+		{"NoAuth_401", "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, req)
+			if rr.Code != tc.want {
+				t.Errorf("status=%d want %d", rr.Code, tc.want)
+			}
+		})
 	}
 }
 

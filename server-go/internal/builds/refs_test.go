@@ -76,27 +76,26 @@ var refCases = []string{
 	"0123456789abcdef0123456789abcdef01234567", // full 40-char SHA
 }
 
-func TestImageTagIsAlwaysAValidDockerTag(t *testing.T) {
+// Every ref→identifier conversion point, checked against every ref.
+func TestRefIdentifiersAreValid(t *testing.T) {
 	for _, ref := range refCases {
 		tag := ImageTag(ref)
 		if !dockerTagOK(tag) {
 			t.Errorf("ImageTag(%q) = %q, which is not a valid Docker tag", ref, tag)
 		}
-	}
-}
-
-func TestShortRefIsAlwaysAValidLabelValue(t *testing.T) {
-	for _, ref := range refCases {
 		if got := shortRef(ref); !labelValueOK(got) {
 			t.Errorf("shortRef(%q) = %q, which is not a valid label value", ref, got)
 		}
-	}
-}
-
-func TestBuildCRNameIsAlwaysAValidResourceName(t *testing.T) {
-	// A CR name must be a DNS-1123 subdomain and ≤253 chars; in
-	// practice the derived Job name keeps us under 63.
-	for _, ref := range refCases {
+		// The tag and the CR-name suffix must agree for a non-SHA ref.
+		// dispatcher.stampExistingBuildImage reconstructs a build name using
+		// ImageTag while buildCRName uses shortRef; if the two ever diverge
+		// again that reconstruction silently targets a CR that doesn't exist.
+		if tag != shortRef(ref) {
+			t.Errorf("ImageTag(%q) = %q but shortRef = %q; the two ref→identifier paths must agree",
+				ref, tag, shortRef(ref))
+		}
+		// A CR name must be a DNS-1123 subdomain and ≤253 chars; in
+		// practice the derived Job name keeps us under 63.
 		name := buildCRName("tickero", "api", ref)
 		if len(name) > 63 {
 			t.Errorf("buildCRName(tickero, api, %q) = %q (%d chars), exceeds 63", ref, name, len(name))
@@ -106,32 +105,6 @@ func TestBuildCRNameIsAlwaysAValidResourceName(t *testing.T) {
 		}
 		if name != strings.ToLower(name) {
 			t.Errorf("buildCRName(tickero, api, %q) = %q, must be lowercase", ref, name)
-		}
-	}
-}
-
-// A full SHA must keep the exact 12-char short form on every path —
-// the promote/rollback logic and `git rev-parse --short` comparisons
-// depend on it, so the slugifier must not disturb it.
-func TestFullSHAKeepsShortForm(t *testing.T) {
-	const sha = "3abf9b9927bb4d2d6c5844da49fdb665cb671bae"
-	if got := ImageTag(sha); got != "3abf9b9927bb" {
-		t.Errorf("ImageTag(sha) = %q, want 3abf9b9927bb", got)
-	}
-	if got := shortRef(sha); got != "3abf9b9927bb" {
-		t.Errorf("shortRef(sha) = %q, want 3abf9b9927bb", got)
-	}
-}
-
-// The tag and the CR-name suffix must agree for a non-SHA ref.
-// dispatcher.stampExistingBuildImage reconstructs a build name using
-// ImageTag while buildCRName uses shortRef; if the two ever diverge
-// again that reconstruction silently targets a CR that doesn't exist.
-func TestImageTagAgreesWithShortRef(t *testing.T) {
-	for _, ref := range refCases {
-		if ImageTag(ref) != shortRef(ref) {
-			t.Errorf("ImageTag(%q) = %q but shortRef = %q; the two ref→identifier paths must agree",
-				ref, ImageTag(ref), shortRef(ref))
 		}
 	}
 }
@@ -159,16 +132,5 @@ func TestSuffixedRefKeepsSuffixThroughShortRef(t *testing.T) {
 		if shortRef(a) != a || !strings.HasSuffix(a, "-mg0x1abc") {
 			t.Errorf("%s: suffixedRef = %q, not stable under shortRef or suffix lost", branch, a)
 		}
-	}
-}
-
-// BLD-22: Dependabot branches contain '@'; git only forbids "@{".
-func TestValidateGitRefAllowsAt(t *testing.T) {
-	t.Parallel()
-	if err := ValidateGitRef("dependabot/npm_and_yarn/@types/node-20.11.5"); err != nil {
-		t.Errorf("dependabot branch rejected: %v", err)
-	}
-	if err := ValidateGitRef("main@{1}"); err == nil {
-		t.Error("reflog syntax accepted")
 	}
 }

@@ -146,18 +146,6 @@ func TestFingerprintFor_CollapsesNoisyVariants(t *testing.T) {
 	}
 }
 
-// TestFingerprintFor_LongLineIsStable guards the 256-char truncation: a
-// stack trace whose tail differs per occurrence must still fingerprint
-// identically, otherwise every panic becomes its own group.
-func TestFingerprintFor_LongLineIsStable(t *testing.T) {
-	t.Parallel()
-
-	prefix := strings.Repeat("x", 256)
-	if got, want := fingerprintFor(prefix+"tail-one"), fingerprintFor(prefix+"tail-two"); got != want {
-		t.Errorf("long lines differing only past 256 chars fingerprinted differently: %q vs %q", got, want)
-	}
-}
-
 // TestTruncateProducesValidUTF8 guards against byte-slicing a multi-byte
 // rune in half. Both truncators cut at a byte offset; a log line with
 // non-ASCII text (any non-English app log) can land a cut mid-rune, which
@@ -190,15 +178,23 @@ func TestTruncateForMessage_ShortLineUnchanged(t *testing.T) {
 
 func TestFingerprintFor_IgnoresVolatileTokens(t *testing.T) {
 	t.Parallel()
-	pairs := [][2]string{
-		{"2026-11-08T19:40:05Z ERROR x order_id=1006", "2026-11-08T21:02:59Z ERROR x order_id=99999999"},
-		{"ERROR redis: slow reply (250ms) from 10.0.0.12:6379", "ERROR redis: slow reply (1520ms) from 10.42.1.7:6380"},
-		{"ERROR job 5m0s over budget at 0xc0001a2b30", "ERROR job 12m30s over budget at 0xc00ff00"},
-		{"ERROR lost req 3f2c9a1e-7b6d-4c1a-9e2f-0a1b2c3d4e5f", "ERROR lost req 00000000-1111-2222-3333-444444444444"},
+	prefix := strings.Repeat("x", 256)
+	pairs := []struct {
+		name string
+		a, b string
+	}{
+		{"timestamps and ids", "2026-11-08T19:40:05Z ERROR x order_id=1006", "2026-11-08T21:02:59Z ERROR x order_id=99999999"},
+		{"durations and addresses", "ERROR redis: slow reply (250ms) from 10.0.0.12:6379", "ERROR redis: slow reply (1520ms) from 10.42.1.7:6380"},
+		{"go durations and pointers", "ERROR job 5m0s over budget at 0xc0001a2b30", "ERROR job 12m30s over budget at 0xc00ff00"},
+		{"uuids", "ERROR lost req 3f2c9a1e-7b6d-4c1a-9e2f-0a1b2c3d4e5f", "ERROR lost req 00000000-1111-2222-3333-444444444444"},
+		// LongLineIsStable guards the 256-char truncation: a stack trace
+		// whose tail differs per occurrence must still fingerprint
+		// identically, otherwise every panic becomes its own group.
+		{"LongLineIsStable", prefix + "tail-one", prefix + "tail-two"},
 	}
 	for _, p := range pairs {
-		if fingerprintFor(p[0]) != fingerprintFor(p[1]) {
-			t.Errorf("split into two groups:\n  %s\n  %s", p[0], p[1])
+		if fingerprintFor(p.a) != fingerprintFor(p.b) {
+			t.Errorf("%s: split into two groups:\n  %s\n  %s", p.name, p.a, p.b)
 		}
 	}
 }

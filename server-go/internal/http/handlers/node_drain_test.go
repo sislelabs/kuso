@@ -44,9 +44,12 @@ func evictionReactor(cs *kubefake.Clientset, blocked map[string]bool, evicted *[
 }
 
 func shortDrainBudgets(t *testing.T) {
-	prevRetry, prevWait := evictRetryFor, drainGoneWait
+	prevRetry, prevWait, prevPoll, prevEvict := evictRetryFor, drainGoneWait, drainPollEvery, evictRetryEvery
 	evictRetryFor, drainGoneWait = 200*time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { evictRetryFor, drainGoneWait = prevRetry, prevWait })
+	drainPollEvery, evictRetryEvery = 10*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() {
+		evictRetryFor, drainGoneWait, drainPollEvery, evictRetryEvery = prevRetry, prevWait, prevPoll, prevEvict
+	})
 }
 
 // LOOP-14: node remove must go through the Eviction API (PDBs), not

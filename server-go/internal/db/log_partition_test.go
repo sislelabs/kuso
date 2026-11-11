@@ -14,9 +14,9 @@ import (
 // partition with a different naming scheme).
 func TestDayPartitionEnd(t *testing.T) {
 	cases := []struct {
-		name    string
-		want    string // ISO date, empty when ok=false
-		wantOk  bool
+		name   string
+		want   string // ISO date, empty when ok=false
+		wantOk bool
 	}{
 		{"LogLine_2026_05_18", "2026-05-19T00:00:00Z", true},
 		{"LogLine_2026_01_01", "2026-01-02T00:00:00Z", true},
@@ -56,54 +56,52 @@ func TestDayPartitionEnd(t *testing.T) {
 	}
 }
 
-// TestLogPartitionState_NotPartitioned verifies the catalog query
-// returns Partitioned=false on a fresh install (LogLine is a
-// regular table per schema.sql). DB-dependent — skips when
+// TestLogPartitions_Unpartitioned covers a fresh install, where LogLine
+// is a regular table per schema.sql. DB-dependent — skips when
 // KUSO_TEST_PG_DSN isn't set.
-func TestLogPartitionState_NotPartitioned(t *testing.T) {
+func TestLogPartitions_Unpartitioned(t *testing.T) {
 	d := openTestDB(t)
-	st, err := d.LogPartitionState(context.Background())
-	if err != nil {
-		t.Fatalf("LogPartitionState: %v", err)
-	}
-	if st.Partitioned {
-		t.Errorf("fresh install should report Partitioned=false")
-	}
-	if st.PartitionCount != 0 {
-		t.Errorf("Partitioned=false implies PartitionCount=0, got %d", st.PartitionCount)
-	}
-}
+	ctx := context.Background()
 
-// TestEnsureLogPartitionForDay_NoOpWhenUnpartitioned guards the
-// callsite in the daily cleanup tick: every install calls Ensure*
-// unconditionally, and it must no-op cleanly when the table is a
-// regular (non-partitioned) one. Otherwise the daily tick errors
-// every 24h on default installs.
-func TestEnsureLogPartitionForDay_NoOpWhenUnpartitioned(t *testing.T) {
-	d := openTestDB(t)
-	// LogLine on a fresh install is unpartitioned. Ensure should
-	// return nil without touching the catalog.
-	if err := d.EnsureLogPartitionForDay(context.Background(), time.Now()); err != nil {
-		t.Fatalf("EnsureLogPartitionForDay on unpartitioned table: %v", err)
-	}
-	if err := d.EnsureLogPartitionWindow(context.Background(), time.Now(), 3); err != nil {
-		t.Fatalf("EnsureLogPartitionWindow on unpartitioned table: %v", err)
-	}
-}
+	// The catalog query returns Partitioned=false on a fresh install.
+	t.Run("StateNotPartitioned", func(t *testing.T) {
+		st, err := d.LogPartitionState(ctx)
+		if err != nil {
+			t.Fatalf("LogPartitionState: %v", err)
+		}
+		if st.Partitioned {
+			t.Errorf("fresh install should report Partitioned=false")
+		}
+		if st.PartitionCount != 0 {
+			t.Errorf("Partitioned=false implies PartitionCount=0, got %d", st.PartitionCount)
+		}
+	})
 
-// TestPruneLogPartitions_NoOpWhenUnpartitioned mirrors the above for
-// the prune path: PruneLogPartitionsBefore must return (0, nil) on
-// regular tables so the daily cleanup's chunked-DELETE fallback
-// still runs without false errors in the log.
-func TestPruneLogPartitions_NoOpWhenUnpartitioned(t *testing.T) {
-	d := openTestDB(t)
-	n, err := d.PruneLogPartitionsBefore(context.Background(), time.Now().Add(-30*24*time.Hour))
-	if err != nil {
-		t.Fatalf("PruneLogPartitionsBefore on unpartitioned table: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("dropped %d partitions on a non-partitioned table, want 0", n)
-	}
+	// Guards the callsite in the daily cleanup tick: every install calls
+	// Ensure* unconditionally, and it must no-op cleanly when the table is
+	// a regular (non-partitioned) one. Otherwise the daily tick errors
+	// every 24h on default installs.
+	t.Run("EnsureIsNoOp", func(t *testing.T) {
+		if err := d.EnsureLogPartitionForDay(ctx, time.Now()); err != nil {
+			t.Fatalf("EnsureLogPartitionForDay on unpartitioned table: %v", err)
+		}
+		if err := d.EnsureLogPartitionWindow(ctx, time.Now(), 3); err != nil {
+			t.Fatalf("EnsureLogPartitionWindow on unpartitioned table: %v", err)
+		}
+	})
+
+	// Same for the prune path: PruneLogPartitionsBefore must return
+	// (0, nil) on regular tables so the daily cleanup's chunked-DELETE
+	// fallback still runs without false errors in the log.
+	t.Run("PruneIsNoOp", func(t *testing.T) {
+		n, err := d.PruneLogPartitionsBefore(ctx, time.Now().Add(-30*24*time.Hour))
+		if err != nil {
+			t.Fatalf("PruneLogPartitionsBefore on unpartitioned table: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("dropped %d partitions on a non-partitioned table, want 0", n)
+		}
+	})
 }
 
 // TestMigrateLogLineToPartitioned_HappyPath exercises the full

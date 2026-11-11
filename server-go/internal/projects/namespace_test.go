@@ -12,38 +12,38 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// TestNamespaceFor_FallsBackWhenSpecEmpty proves the legacy single-tenant
-// case still works: a project with no spec.namespace resolves to the
-// home namespace, not "" or anything weird.
-func TestNamespaceFor_FallsBackWhenSpecEmpty(t *testing.T) {
+func TestNamespaceFor_SpecNamespace(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
-		DefaultRepo: &kube.KusoRepoRef{URL: "x"},
-		// Namespace deliberately omitted.
-	}))
-	ns, err := s.namespaceFor(context.Background(), "alpha")
-	if err != nil {
-		t.Fatalf("namespaceFor: %v", err)
+	cases := []struct {
+		name   string
+		specNS string
+		want   string // "" = the home namespace
+	}{
+		// The legacy single-tenant case still works: a project with no
+		// spec.namespace resolves to the home namespace, not "" or anything
+		// weird.
+		{"FallsBackWhenSpecEmpty", "", ""},
+		// Child resources for a project route into spec.namespace when set.
+		{"HonorsSpecNamespace", "acme-prod", "acme-prod"},
 	}
-	if ns != s.Namespace {
-		t.Errorf("got %q, want home namespace %q", ns, s.Namespace)
-	}
-}
-
-// TestNamespaceFor_HonorsSpecNamespace proves child resources for a
-// project route into spec.namespace when set.
-func TestNamespaceFor_HonorsSpecNamespace(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t, seedProject("acme", kube.KusoProjectSpec{
-		DefaultRepo: &kube.KusoRepoRef{URL: "x"},
-		Namespace:   "acme-prod",
-	}))
-	ns, err := s.namespaceFor(context.Background(), "acme")
-	if err != nil {
-		t.Fatalf("namespaceFor: %v", err)
-	}
-	if ns != "acme-prod" {
-		t.Errorf("got %q, want %q", ns, "acme-prod")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t, seedProject("acme", kube.KusoProjectSpec{
+				DefaultRepo: &kube.KusoRepoRef{URL: "x"},
+				Namespace:   tc.specNS,
+			}))
+			want := tc.want
+			if want == "" {
+				want = s.Namespace
+			}
+			ns, err := s.namespaceFor(context.Background(), "acme")
+			if err != nil {
+				t.Fatalf("namespaceFor: %v", err)
+			}
+			if ns != want {
+				t.Errorf("got %q, want %q", ns, want)
+			}
+		})
 	}
 }
 

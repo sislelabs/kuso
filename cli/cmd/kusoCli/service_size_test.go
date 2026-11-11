@@ -58,135 +58,100 @@ func resetFlags(t *testing.T, cmds []*cobra.Command, names ...string) {
 	})
 }
 
-func TestServiceAdd_SizeSendsPresetResources(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, nil, &body)
-	cmds := []*cobra.Command{serviceAddCmd, serviceAddTopCmd}
-	resetFlags(t, cmds, "size")
-
-	want := map[string]any{
-		"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
-		"limits":   map[string]any{"memory": "2Gi"},
-	}
-	for _, cmd := range cmds {
-		mustSet(t, cmd, "size", "large")
-		if err := cmd.RunE(cmd, []string{"acme", "web"}); err != nil {
-			t.Fatalf("%s: %v", cmd.CommandPath(), err)
-		}
-		if !reflect.DeepEqual(body["resources"], want) {
-			t.Fatalf("%s: resources = %v, want %v", cmd.CommandPath(), body["resources"], want)
-		}
-	}
-}
-
-func TestServiceAdd_SizeNoneSendsEmptyResources(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, nil, &body)
-	resetFlags(t, []*cobra.Command{serviceAddCmd}, "size")
-	mustSet(t, serviceAddCmd, "size", "none")
-	if err := serviceAddCmd.RunE(serviceAddCmd, []string{"acme", "web"}); err != nil {
-		t.Fatal(err)
-	}
-	res, ok := body["resources"].(map[string]any)
-	if !ok || len(res) != 0 {
-		t.Fatalf("resources = %#v, want {} (explicit none)", body["resources"])
-	}
-}
-
-func TestServiceAdd_NoSizeLeavesServerDefault(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, nil, &body)
-	resetFlags(t, []*cobra.Command{serviceAddCmd}, "size")
-	if err := serviceAddCmd.RunE(serviceAddCmd, []string{"acme", "web"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := body["resources"]; present {
-		t.Fatalf("resources sent without --size: %v", body["resources"])
-	}
-}
-
-func TestServiceAdd_UnknownSizeErrors(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, nil, &body)
-	resetFlags(t, []*cobra.Command{serviceAddCmd}, "size")
-	mustSet(t, serviceAddCmd, "size", "huge")
-	if err := serviceAddCmd.RunE(serviceAddCmd, []string{"acme", "web"}); err == nil {
-		t.Fatal("--size huge succeeded; want unknown-preset error")
-	}
-	if body != nil {
-		t.Fatalf("request sent despite unknown preset: %v", body)
-	}
-}
-
-// PATCH resources replaces verbatim, so a single-field flag must merge onto
-// the live resources rather than dropping the rest.
-func TestServiceSet_MemoryLimitMergesOntoCurrent(t *testing.T) {
-	var body map[string]any
-	current := map[string]any{
-		"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
-		"limits":   map[string]any{"memory": "1Gi"},
-	}
-	sizeServer(t, current, &body)
-	cmds := []*cobra.Command{serviceSetCmd, serviceSetTopCmd}
-	resetFlags(t, cmds, "memory-limit", "cpu-request", "size", "memory-request")
-	for _, cmd := range cmds {
-		mustSet(t, cmd, "memory-limit", "1536Mi")
-		if err := cmd.RunE(cmd, []string{"acme", "web"}); err != nil {
-			t.Fatalf("%s: %v", cmd.CommandPath(), err)
-		}
-		want := map[string]any{
-			"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
-			"limits":   map[string]any{"memory": "1536Mi"},
-		}
-		if !reflect.DeepEqual(body["resources"], want) {
-			t.Fatalf("%s: resources = %v, want %v", cmd.CommandPath(), body["resources"], want)
-		}
-	}
-}
-
-func TestServiceSet_SizeThenOverride(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, map[string]any{"limits": map[string]any{"cpu": "2"}}, &body)
-	resetFlags(t, []*cobra.Command{serviceSetCmd}, "size", "cpu-request")
-	mustSet(t, serviceSetCmd, "size", "small")
-	mustSet(t, serviceSetCmd, "cpu-request", "75m")
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "web"}); err != nil {
-		t.Fatal(err)
-	}
-	// --size replaces the live block (the old cpu limit is gone), then the
-	// explicit flag wins over the preset.
-	want := map[string]any{
-		"requests": map[string]any{"cpu": "75m", "memory": "128Mi"},
-		"limits":   map[string]any{"memory": "512Mi"},
-	}
-	if !reflect.DeepEqual(body["resources"], want) {
-		t.Fatalf("resources = %v, want %v", body["resources"], want)
-	}
-}
-
-func TestServiceSet_SizeNoneClears(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, map[string]any{"limits": map[string]any{"memory": "1Gi"}}, &body)
-	resetFlags(t, []*cobra.Command{serviceSetCmd}, "size")
-	mustSet(t, serviceSetCmd, "size", "none")
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "web"}); err != nil {
-		t.Fatal(err)
-	}
-	res, ok := body["resources"].(map[string]any)
-	if !ok || len(res) != 0 {
-		t.Fatalf("resources = %#v, want {} (clears)", body["resources"])
-	}
-}
-
-func TestServiceSet_NoSizeFlagsSendsNoResources(t *testing.T) {
-	var body map[string]any
-	sizeServer(t, nil, &body)
-	resetFlags(t, []*cobra.Command{serviceSetCmd}, "display-name")
-	mustSet(t, serviceSetCmd, "display-name", "Web")
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "web"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := body["resources"]; present {
-		t.Fatalf("resources sent without size flags: %v", body["resources"])
+func TestServiceSizeFlags(t *testing.T) {
+	addCmds := []*cobra.Command{serviceAddCmd, serviceAddTopCmd}
+	setCmds := []*cobra.Command{serviceSetCmd, serviceSetTopCmd}
+	empty := map[string]any{}
+	for _, tc := range []struct {
+		name    string
+		cmds    []*cobra.Command
+		current map[string]any
+		flags   [][2]string
+		wantErr bool
+		// wantRes is the expected body["resources"]; nil means the key
+		// must be absent (the server default / live value is kept).
+		wantRes map[string]any
+	}{
+		{
+			name:  "ServiceAdd_SizeSendsPresetResources",
+			cmds:  addCmds,
+			flags: [][2]string{{"size", "large"}},
+			wantRes: map[string]any{
+				"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
+				"limits":   map[string]any{"memory": "2Gi"},
+			},
+		},
+		{name: "ServiceAdd_SizeNoneSendsEmptyResources", cmds: addCmds[:1], flags: [][2]string{{"size", "none"}}, wantRes: empty},
+		{name: "ServiceAdd_NoSizeLeavesServerDefault", cmds: addCmds[:1]},
+		{name: "ServiceAdd_UnknownSizeErrors", cmds: addCmds[:1], flags: [][2]string{{"size", "huge"}}, wantErr: true},
+		// PATCH resources replaces verbatim, so a single-field flag must
+		// merge onto the live resources rather than dropping the rest.
+		{
+			name: "ServiceSet_MemoryLimitMergesOntoCurrent",
+			cmds: setCmds,
+			current: map[string]any{
+				"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
+				"limits":   map[string]any{"memory": "1Gi"},
+			},
+			flags: [][2]string{{"memory-limit", "1536Mi"}},
+			wantRes: map[string]any{
+				"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
+				"limits":   map[string]any{"memory": "1536Mi"},
+			},
+		},
+		// --size replaces the live block (the old cpu limit is gone), then
+		// the explicit flag wins over the preset.
+		{
+			name:    "ServiceSet_SizeThenOverride",
+			cmds:    setCmds[:1],
+			current: map[string]any{"limits": map[string]any{"cpu": "2"}},
+			flags:   [][2]string{{"size", "small"}, {"cpu-request", "75m"}},
+			wantRes: map[string]any{
+				"requests": map[string]any{"cpu": "75m", "memory": "128Mi"},
+				"limits":   map[string]any{"memory": "512Mi"},
+			},
+		},
+		{
+			name:    "ServiceSet_SizeNoneClears",
+			cmds:    setCmds[:1],
+			current: map[string]any{"limits": map[string]any{"memory": "1Gi"}},
+			flags:   [][2]string{{"size", "none"}},
+			wantRes: empty,
+		},
+		{name: "ServiceSet_NoSizeFlagsSendsNoResources", cmds: setCmds[:1], flags: [][2]string{{"display-name", "Web"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			sizeServer(t, tc.current, &body)
+			resetFlags(t, tc.cmds, "size", "memory-limit", "cpu-request", "memory-request", "display-name")
+			for _, cmd := range tc.cmds {
+				for _, f := range tc.flags {
+					mustSet(t, cmd, f[0], f[1])
+				}
+				err := cmd.RunE(cmd, []string{"acme", "web"})
+				if tc.wantErr {
+					if err == nil {
+						t.Fatalf("%s: succeeded; want unknown-preset error", cmd.CommandPath())
+					}
+					if body != nil {
+						t.Fatalf("%s: request sent despite the error: %v", cmd.CommandPath(), body)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", cmd.CommandPath(), err)
+				}
+				got, present := body["resources"]
+				if tc.wantRes == nil {
+					if present {
+						t.Fatalf("%s: resources sent without size flags: %v", cmd.CommandPath(), got)
+					}
+					continue
+				}
+				if !reflect.DeepEqual(got, any(tc.wantRes)) {
+					t.Fatalf("%s: resources = %#v, want %#v", cmd.CommandPath(), got, tc.wantRes)
+				}
+			}
+		})
 	}
 }

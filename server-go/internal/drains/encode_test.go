@@ -31,24 +31,19 @@ func assertJSONEqual(t *testing.T, got []byte, want string) {
 	}
 }
 
-func TestEncodeHTTPGolden(t *testing.T) {
-	got, err := Encode(TypeHTTP, sampleLines()[:1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertJSONEqual(t, got, `[
+func TestEncodeGolden(t *testing.T) {
+	cases := []struct {
+		name  string
+		typ   Type
+		lines []Line
+		want  string
+	}{
+		{"HTTP", TypeHTTP, sampleLines()[:1], `[
 	  {"ts":"2026-09-28T10:00:00.0000005Z","project":"shop","service":"web","env":"shop-web-production","pod":"web-1","stream":"combined","line":"GET / 200"}
-	]`)
-}
-
-func TestEncodeOTLPGolden(t *testing.T) {
-	got, err := Encode(TypeOTLP, sampleLines())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Grouped per (project, service, env): web's two records share one
-	// resource, worker gets its own. Resource order follows first sight.
-	assertJSONEqual(t, got, `{"resourceLogs":[
+	]`},
+		// Grouped per (project, service, env): web's two records share one
+		// resource, worker gets its own. Resource order follows first sight.
+		{"OTLP", TypeOTLP, sampleLines(), `{"resourceLogs":[
 	  {"resource":{"attributes":[
 	      {"key":"service.name","value":{"stringValue":"shop/web"}},
 	      {"key":"kuso.project","value":{"stringValue":"shop"}},
@@ -69,20 +64,23 @@ func TestEncodeOTLPGolden(t *testing.T) {
 	   "scopeLogs":[{"scope":{"name":"kuso"},"logRecords":[
 	      {"timeUnixNano":"1790589601000000500","observedTimeUnixNano":"1790589601000000000","body":{"stringValue":"job done"},
 	       "attributes":[{"key":"k8s.pod.name","value":{"stringValue":"worker-1"}}]}]}]}
-	]}`)
-}
-
-func TestEncodeLokiGolden(t *testing.T) {
-	got, err := Encode(TypeLoki, sampleLines())
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertJSONEqual(t, got, `{"streams":[
+	]}`},
+		{"Loki", TypeLoki, sampleLines(), `{"streams":[
 	  {"stream":{"env":"shop-web-production","project":"shop","service":"web"},
 	   "values":[["1790589600000000500","GET / 200"],["1790589602000000500","panic: \"boom\""]]},
 	  {"stream":{"env":"shop-worker-production","project":"shop","service":"worker"},
 	   "values":[["1790589601000000500","job done"]]}
-	]}`)
+	]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Encode(tc.typ, tc.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSONEqual(t, got, tc.want)
+		})
+	}
 }
 
 func TestEncodeUnknownType(t *testing.T) {

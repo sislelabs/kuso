@@ -79,79 +79,66 @@ func seedEnv(name string, spec kube.KusoEnvironmentSpec) seed {
 	return seed{gvr: kube.GVREnvironments, obj: u}
 }
 
-func TestReconcile_PromotesOnSuccess(t *testing.T) {
+func TestReconcile_ReleaseOutcome(t *testing.T) {
 	t.Parallel()
-	pending := &kube.KusoImage{Repository: "ghcr.io/x/y", Tag: "v2"}
-	kc := fakeKube(t, seedEnv("alpha-web-production", kube.KusoEnvironmentSpec{
-		Project:      "alpha",
-		Service:      "alpha-web",
-		Kind:         "production",
-		PendingImage: pending,
-		Release:      &kube.KusoReleaseSpec{Command: []string{"sh", "-c", "bin/migrate"}},
-	}))
+	cases := []struct {
+		name     string
+		outcome  releaserun.Outcome
+		promoted bool
+	}{
+		{"PromotesOnSuccess", releaserun.OutcomeSucceeded, true},
+		{"WithholdsOnFailure", releaserun.OutcomeFailed, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pending := &kube.KusoImage{Repository: "ghcr.io/x/y", Tag: "v2"}
+			kc := fakeKube(t, seedEnv("alpha-web-production", kube.KusoEnvironmentSpec{
+				Project:      "alpha",
+				Service:      "alpha-web",
+				Kind:         "production",
+				PendingImage: pending,
+				Release:      &kube.KusoReleaseSpec{Command: []string{"sh", "-c", "bin/migrate"}},
+			}))
 
-	w := &Watcher{
-		Kube:      kc,
-		Namespace: "kuso",
-		Logger:    slog.Default(),
-		Release:   fakeRunner{outcome: releaserun.OutcomeSucceeded},
-	}
+			var notified []string
+			w := &Watcher{
+				Kube:      kc,
+				Namespace: "kuso",
+				Logger:    slog.Default(),
+				Release:   fakeRunner{outcome: tc.outcome},
+				Notify: func(project, service, msg string) {
+					notified = append(notified, project+"/"+service+": "+msg)
+				},
+			}
 
-	if err := w.reconcileOnce(context.Background()); err != nil {
-		t.Fatalf("reconcileOnce: %v", err)
-	}
-	w.wait()
+			if err := w.reconcileOnce(context.Background()); err != nil {
+				t.Fatalf("reconcileOnce: %v", err)
+			}
+			w.wait()
 
-	env, err := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
-	if err != nil {
-		t.Fatalf("GetKusoEnvironment: %v", err)
-	}
-	if env.Spec.Image == nil || env.Spec.Image.Repository != pending.Repository || env.Spec.Image.Tag != pending.Tag {
-		t.Errorf("expected image promoted to %+v, got %+v", pending, env.Spec.Image)
-	}
-	if env.Spec.PendingImage != nil {
-		t.Errorf("expected pendingImage cleared, got %+v", env.Spec.PendingImage)
-	}
-}
-
-func TestReconcile_WithholdsOnFailure(t *testing.T) {
-	t.Parallel()
-	pending := &kube.KusoImage{Repository: "ghcr.io/x/y", Tag: "v2"}
-	kc := fakeKube(t, seedEnv("alpha-web-production", kube.KusoEnvironmentSpec{
-		Project:      "alpha",
-		Service:      "alpha-web",
-		Kind:         "production",
-		PendingImage: pending,
-		Release:      &kube.KusoReleaseSpec{Command: []string{"sh", "-c", "bin/migrate"}},
-	}))
-
-	var notified []string
-	w := &Watcher{
-		Kube:      kc,
-		Namespace: "kuso",
-		Logger:    slog.Default(),
-		Release:   fakeRunner{outcome: releaserun.OutcomeFailed},
-		Notify: func(project, service, msg string) {
-			notified = append(notified, project+"/"+service+": "+msg)
-		},
-	}
-
-	if err := w.reconcileOnce(context.Background()); err != nil {
-		t.Fatalf("reconcileOnce: %v", err)
-	}
-	w.wait()
-
-	env, err := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
-	if err != nil {
-		t.Fatalf("GetKusoEnvironment: %v", err)
-	}
-	if env.Spec.Image != nil {
-		t.Errorf("expected image to stay nil on failure, got %+v", env.Spec.Image)
-	}
-	if env.Spec.PendingImage == nil || env.Spec.PendingImage.Tag != pending.Tag {
-		t.Errorf("expected pendingImage retained, got %+v", env.Spec.PendingImage)
-	}
-	if len(notified) != 1 {
-		t.Errorf("expected exactly one Notify call, got %+v", notified)
+			env, err := kc.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+			if err != nil {
+				t.Fatalf("GetKusoEnvironment: %v", err)
+			}
+			if tc.promoted {
+				if env.Spec.Image == nil || env.Spec.Image.Repository != pending.Repository || env.Spec.Image.Tag != pending.Tag {
+					t.Errorf("expected image promoted to %+v, got %+v", pending, env.Spec.Image)
+				}
+				if env.Spec.PendingImage != nil {
+					t.Errorf("expected pendingImage cleared, got %+v", env.Spec.PendingImage)
+				}
+				return
+			}
+			if env.Spec.Image != nil {
+				t.Errorf("expected image to stay nil on failure, got %+v", env.Spec.Image)
+			}
+			if env.Spec.PendingImage == nil || env.Spec.PendingImage.Tag != pending.Tag {
+				t.Errorf("expected pendingImage retained, got %+v", env.Spec.PendingImage)
+			}
+			if len(notified) != 1 {
+				t.Errorf("expected exactly one Notify call, got %+v", notified)
+			}
+		})
 	}
 }

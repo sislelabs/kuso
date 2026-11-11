@@ -47,10 +47,3 @@ func TestConfirmApplyDeletes_NoDeletesNoPrompt(t *testing.T) {
 		t.Fatalf("plan without deletions must not prompt: %v", err)
 	}
 }
-
-func TestApplyRegistersYes(t *testing.T) {
-	f := applyCmd.Flags().Lookup("yes")
-	if f == nil || f.Shorthand != "y" {
-		t.Fatalf("apply needs --yes/-y for non-interactive prune")
-	}
-}

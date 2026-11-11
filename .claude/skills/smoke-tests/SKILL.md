@@ -13,7 +13,8 @@ Fast (sub-second to a few seconds). No external dependencies.
 
 ```bash
 make verify                # web typecheck + every go.work module's tests + CLI/API parity + sandbox manifest drift + chart/RBAC/CRD-guard checks
-make test-db               # Go tests incl. the Postgres-backed ones (-race -p 1), = the CI gate
+make test-db               # Go tests incl. the Postgres-backed ones (-race, one DB per package), = the CI gate
+make test-docker           # the *_Docker tests that run real images (KUSO_TEST_DOCKER=1); CI runs them as a separate job
 # Or per-subproject:
 cd server-go && go test ./...
 cd cli && go test ./...

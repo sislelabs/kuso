@@ -367,39 +367,24 @@ func TestMCPManageAddon(t *testing.T) {
 	}
 }
 
-func TestMCPPlanIncludesCronsAndWouldDelete(t *testing.T) {
+func TestMCPPlanAndApplyIncludeCronsAndWouldDelete(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
-	s := newSession(t, bin, srv.URL)
-
-	res := callTool(t, s, "plan", map[string]any{
-		"project": "analiz",
-		"yaml":    "project: analiz\n",
-	})
-	text := contentText(t, res)
-	if !strings.Contains(text, "+ Crons nightly") {
-		t.Errorf("expected cron create in plan summary, got %q", text)
-	}
-	if !strings.Contains(text, "would delete service:legacy") {
-		t.Errorf("expected wouldDelete report in plan summary, got %q", text)
-	}
-}
-
-func TestMCPApplyIncludesCronsAndWouldDelete(t *testing.T) {
-	srv := startFakeKuso(t)
-	bin := buildBinary(t)
-	s := newSession(t, bin, srv.URL)
-
-	res := callTool(t, s, "apply", map[string]any{
-		"project": "analiz",
-		"yaml":    "project: analiz\n",
-	})
-	text := contentText(t, res)
-	if !strings.Contains(text, "+ Crons nightly") {
-		t.Errorf("expected cron create in apply summary, got %q", text)
-	}
-	if !strings.Contains(text, "would delete service:legacy") {
-		t.Errorf("expected wouldDelete report in apply summary, got %q", text)
+	for _, tool := range []string{"plan", "apply"} {
+		t.Run(tool, func(t *testing.T) {
+			s := newSession(t, bin, srv.URL)
+			res := callTool(t, s, tool, map[string]any{
+				"project": "analiz",
+				"yaml":    "project: analiz\n",
+			})
+			text := contentText(t, res)
+			if !strings.Contains(text, "+ Crons nightly") {
+				t.Errorf("expected cron create in %s summary, got %q", tool, text)
+			}
+			if !strings.Contains(text, "would delete service:legacy") {
+				t.Errorf("expected wouldDelete report in %s summary, got %q", tool, text)
+			}
+		})
 	}
 }
 

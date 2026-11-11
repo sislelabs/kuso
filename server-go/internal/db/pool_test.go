@@ -2,52 +2,41 @@ package db
 
 import "testing"
 
-// TestMaxOpenConns_DefaultUnchanged pins the historical value. An install
-// that sets nothing must size its pool exactly as it did before the
-// override existed — this knob is opt-in tuning, not a behaviour change.
-func TestMaxOpenConns_DefaultUnchanged(t *testing.T) {
-	t.Setenv("KUSO_DB_MAX_CONNS", "")
-	if got := maxOpenConns(); got != defaultMaxOpenConns {
-		t.Errorf("maxOpenConns() with unset env = %d, want %d", got, defaultMaxOpenConns)
+func TestMaxOpenConns(t *testing.T) {
+	tests := []struct {
+		name, env string
+		want      int
+	}{
+		// An install that sets nothing must size its pool exactly as it did
+		// before the override existed — this knob is opt-in tuning, not a
+		// behaviour change.
+		{"DefaultUnchanged", "", defaultMaxOpenConns},
+		{"Override", "60", 60},
+		// The important ones: a typo in a tuning env var must never take the
+		// control plane down at boot. Every unparseable / nonsensical form
+		// falls back to the default.
+		{"BadValuesFallBack/abc", "abc", defaultMaxOpenConns},
+		{"BadValuesFallBack/zero", "0", defaultMaxOpenConns},
+		{"BadValuesFallBack/negative", "-5", defaultMaxOpenConns},
+		{"BadValuesFallBack/float", "12.5", defaultMaxOpenConns},
+		{"BadValuesFallBack/blank", "  ", defaultMaxOpenConns},
+		{"BadValuesFallBack/exponent", "1e3", defaultMaxOpenConns},
+		// The deadlock case. A pool of 1 serialises every query, and any code
+		// path holding a connection while acquiring a second — the migration
+		// runner takes a dedicated *sql.Conn for its advisory lock and then
+		// queries — would hang forever.
+		{"ClampsTooSmall", "1", minMaxOpenConns},
+		// Values injected via YAML env blocks routinely carry a trailing
+		// newline or space.
+		{"TrimsWhitespace", "  40\n", 40},
 	}
-}
-
-func TestMaxOpenConns_Override(t *testing.T) {
-	t.Setenv("KUSO_DB_MAX_CONNS", "60")
-	if got := maxOpenConns(); got != 60 {
-		t.Errorf("maxOpenConns() = %d, want 60", got)
-	}
-}
-
-// TestMaxOpenConns_BadValuesFallBack is the important one: a typo in a
-// tuning env var must never take the control plane down at boot. Every
-// unparseable / nonsensical form falls back to the default.
-func TestMaxOpenConns_BadValuesFallBack(t *testing.T) {
-	for _, v := range []string{"abc", "0", "-5", "12.5", "  ", "1e3"} {
-		t.Setenv("KUSO_DB_MAX_CONNS", v)
-		if got := maxOpenConns(); got != defaultMaxOpenConns {
-			t.Errorf("maxOpenConns() with %q = %d, want fallback %d", v, got, defaultMaxOpenConns)
-		}
-	}
-}
-
-// TestMaxOpenConns_ClampsTooSmall guards the deadlock case. A pool of 1
-// serialises every query, and any code path holding a connection while
-// acquiring a second — the migration runner takes a dedicated *sql.Conn
-// for its advisory lock and then queries — would hang forever.
-func TestMaxOpenConns_ClampsTooSmall(t *testing.T) {
-	t.Setenv("KUSO_DB_MAX_CONNS", "1")
-	if got := maxOpenConns(); got < minMaxOpenConns {
-		t.Errorf("maxOpenConns() = %d, want clamped to >= %d", got, minMaxOpenConns)
-	}
-}
-
-// TestMaxOpenConns_TrimsWhitespace — values injected via YAML env blocks
-// routinely carry a trailing newline or space.
-func TestMaxOpenConns_TrimsWhitespace(t *testing.T) {
-	t.Setenv("KUSO_DB_MAX_CONNS", "  40\n")
-	if got := maxOpenConns(); got != 40 {
-		t.Errorf("maxOpenConns() = %d, want 40", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("KUSO_DB_MAX_CONNS", tt.env)
+			if got := maxOpenConns(); got != tt.want {
+				t.Errorf("maxOpenConns() with %q = %d, want %d", tt.env, got, tt.want)
+			}
+		})
 	}
 }
 

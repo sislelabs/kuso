@@ -67,55 +67,50 @@ func TestSenderSignsTimestamp(t *testing.T) {
 	}
 }
 
-func TestSenderRetriesTransientThenSucceeds(t *testing.T) {
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if n.Add(1) < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	s := &Sender{Client: srv.Client(), Retry: fastRetry()}
-	if err := s.Deliver(context.Background(), Drain{Type: TypeHTTP, URL: srv.URL}, sampleLines()); err != nil {
-		t.Fatalf("expected success after retries: %v", err)
+func TestSenderRetryPolicy(t *testing.T) {
+	cases := []struct {
+		name         string
+		handle       func(n int32, w http.ResponseWriter)
+		wantErr      bool
+		wantErrParts []string
+		wantAttempts int32
+	}{
+		{"RetriesTransientThenSucceeds", func(n int32, w http.ResponseWriter) {
+			if n < 3 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}, false, nil, 3},
+		// A 401 must not be retried, and the upstream body is surfaced.
+		{"DoesNotRetryClientErrors", func(_ int32, w http.ResponseWriter) {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+		}, true, []string{"401", "bad token"}, 1},
+		{"RetriesTooManyRequests", func(_ int32, w http.ResponseWriter) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}, true, nil, 4},
 	}
-	if n.Load() != 3 {
-		t.Fatalf("attempts=%d want 3", n.Load())
-	}
-}
-
-func TestSenderDoesNotRetryClientErrors(t *testing.T) {
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n.Add(1)
-		http.Error(w, "bad token", http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-	s := &Sender{Client: srv.Client(), Retry: fastRetry()}
-	err := s.Deliver(context.Background(), Drain{Type: TypeHTTP, URL: srv.URL}, sampleLines())
-	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "bad token") {
-		t.Fatalf("err=%v, want upstream 401 with body", err)
-	}
-	if n.Load() != 1 {
-		t.Fatalf("attempts=%d, a 401 must not be retried", n.Load())
-	}
-}
-
-func TestSenderRetriesTooManyRequests(t *testing.T) {
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n.Add(1)
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-	s := &Sender{Client: srv.Client(), Retry: fastRetry()}
-	if err := s.Deliver(context.Background(), Drain{Type: TypeHTTP, URL: srv.URL}, sampleLines()); err == nil {
-		t.Fatal("want error after exhausting retries")
-	}
-	if n.Load() != 4 {
-		t.Fatalf("attempts=%d want 4", n.Load())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var n atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tc.handle(n.Add(1), w)
+			}))
+			defer srv.Close()
+			s := &Sender{Client: srv.Client(), Retry: fastRetry()}
+			err := s.Deliver(context.Background(), Drain{Type: TypeHTTP, URL: srv.URL}, sampleLines())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v, wantErr=%v", err, tc.wantErr)
+			}
+			for _, part := range tc.wantErrParts {
+				if !strings.Contains(err.Error(), part) {
+					t.Fatalf("err=%v, want containing %q", err, part)
+				}
+			}
+			if n.Load() != tc.wantAttempts {
+				t.Fatalf("attempts=%d want %d", n.Load(), tc.wantAttempts)
+			}
+		})
 	}
 }
 

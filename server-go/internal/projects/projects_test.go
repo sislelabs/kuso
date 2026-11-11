@@ -175,51 +175,54 @@ func TestCreate_RejectsDuplicate(t *testing.T) {
 	}
 }
 
-func TestCreate_RejectsMissingFields(t *testing.T) {
+func TestCreate_NameValidation(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t)
-	// Name is the only hard requirement now. Empty name → ErrInvalid.
-	if _, err := s.Create(context.Background(), CreateProjectRequest{}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("missing name: got %v", err)
+	cases := []struct {
+		name    string
+		project string
+		wantErr error // nil = must succeed
+	}{
+		// Name is the only hard requirement now. Empty name → ErrInvalid.
+		{"MissingFields", "", ErrInvalid},
+		// The "kuso-" prefix is reserved for kuso-internal resources (e.g. the
+		// cluster-PG addon's synthetic project "kuso-instance"). A user project
+		// named "kuso-instance" would otherwise produce an addon CR colliding
+		// with the cluster PG.
+		{"ReservedKusoPrefix/kuso-instance", "kuso-instance", ErrInvalid},
+		{"ReservedKusoPrefix/kuso-foo", "kuso-foo", ErrInvalid},
+		{"ReservedKusoPrefix/kuso-", "kuso-", ErrInvalid},
+		// A name that merely CONTAINS "kuso" but isn't prefixed is fine.
+		{"ReservedKusoPrefix/mykuso_allowed", "mykuso", nil},
+		// Web-route segments (STATIC_SEGMENTS in web/src/lib/dynamic-params.ts
+		// plus the static /projects/new page) are stripped by the SPA's
+		// pathname-based param extraction, so a project carrying one of those
+		// names would be unreachable in the UI. AddService applies the same
+		// rule to service slugs.
+		{"ReservedRouteNames/new", "new", ErrInvalid},
+		{"ReservedRouteNames/projects", "projects", ErrInvalid},
+		{"ReservedRouteNames/services", "services", ErrInvalid},
+		{"ReservedRouteNames/addons", "addons", ErrInvalid},
+		{"ReservedRouteNames/envs", "envs", ErrInvalid},
+		{"ReservedRouteNames/logs", "logs", ErrInvalid},
+		{"ReservedRouteNames/settings", "settings", ErrInvalid},
+		{"ReservedRouteNames/invite", "invite", ErrInvalid},
+		// Names that merely CONTAIN a reserved segment are fine.
+		{"ReservedRouteNames/new-app_allowed", "new-app", nil},
+		{"ReservedRouteNames/my-settings_allowed", "my-settings", nil},
+		{"ReservedRouteNames/logstash_allowed", "logstash", nil},
 	}
-}
-
-// The "kuso-" prefix is reserved for kuso-internal resources (e.g. the
-// cluster-PG addon's synthetic project "kuso-instance"). A user project named
-// "kuso-instance" would otherwise produce an addon CR colliding with the
-// cluster PG. Create must reject "kuso-" prefixed names with ErrInvalid.
-func TestCreate_RejectsReservedKusoPrefix(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t)
-	for _, name := range []string{"kuso-instance", "kuso-foo", "kuso-"} {
-		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); !errors.Is(err, ErrInvalid) {
-			t.Errorf("name %q should be rejected as reserved (ErrInvalid), got %v", name, err)
-		}
-	}
-	// A name that merely CONTAINS "kuso" but isn't prefixed is fine.
-	if _, err := s.Create(context.Background(), CreateProjectRequest{Name: "mykuso"}); err != nil {
-		t.Errorf("name %q (not kuso- prefixed) should be allowed, got %v", "mykuso", err)
-	}
-}
-
-// Web-route segments (STATIC_SEGMENTS in web/src/lib/dynamic-params.ts
-// plus the static /projects/new page) are stripped by the SPA's
-// pathname-based param extraction, so a project carrying one of those
-// names would be unreachable in the UI. Create must reject them with
-// ErrInvalid; AddService applies the same rule to service slugs.
-func TestCreate_RejectsReservedRouteNames(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t)
-	for _, name := range []string{"new", "projects", "services", "addons", "envs", "logs", "settings", "invite"} {
-		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); !errors.Is(err, ErrInvalid) {
-			t.Errorf("project name %q should be rejected as reserved (ErrInvalid), got %v", name, err)
-		}
-	}
-	// Names that merely CONTAIN a reserved segment are fine.
-	for _, name := range []string{"new-app", "my-settings", "logstash"} {
-		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); err != nil {
-			t.Errorf("project name %q should be allowed, got %v", name, err)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t)
+			_, err := s.Create(context.Background(), CreateProjectRequest{Name: tc.project})
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Errorf("project name %q should be allowed, got %v", tc.project, err)
+				}
+			} else if !errors.Is(err, tc.wantErr) {
+				t.Errorf("project name %q: err = %v, want %v", tc.project, err, tc.wantErr)
+			}
+		})
 	}
 }
 

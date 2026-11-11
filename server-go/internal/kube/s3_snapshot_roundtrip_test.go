@@ -57,15 +57,10 @@ func renderedS3SnapshotScript(t *testing.T) string {
 // real MinIOs (addon + backup store): an encrypted snapshot must not hold
 // plaintext, must restore byte-identical with the key and refuse without
 // it, and a plaintext snapshot (no key) must still restore (BLOB-6).
-func TestS3Snapshot_EncryptedRoundTrip(t *testing.T) {
+func TestS3Snapshot_EncryptedRoundTrip_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
-	for _, img := range []string{minioImage, mcImage} {
-		if exec.Command(docker, "image", "inspect", img).Run() != nil {
-			if out, err := exec.Command(docker, "pull", "-q", img).CombinedOutput(); err != nil {
-				t.Skipf("cannot pull %s: %v\n%s", img, err, out)
-			}
-		}
-	}
+	ensureImage(t, docker, minioImage)
+	ensureImage(t, docker, mcImage)
 	script := renderedS3SnapshotScript(t)
 	id := fmt.Sprintf("kuso-s3rt-%d", time.Now().UnixNano())
 	run := func(args ...string) (string, error) {

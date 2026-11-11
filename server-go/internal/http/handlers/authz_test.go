@@ -54,24 +54,34 @@ func reqWithClaims(claims *auth.Claims) *http.Request {
 	return r
 }
 
-func TestRequirePerm_NoClaims_401(t *testing.T) {
-	rr := httptest.NewRecorder()
-	if requirePerm(rr, reqWithClaims(nil), auth.PermProjectRead) {
-		t.Fatal("expected gate to deny")
+// TestRequirePerm_Denies covers every deny branch of the perm gate,
+// including the requireAdmin wrapper.
+func TestRequirePerm_Denies(t *testing.T) {
+	readOnly := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermProjectRead)}}
+	cases := []struct {
+		name   string
+		claims *auth.Claims
+		gate   func(http.ResponseWriter, *http.Request) bool
+		want   int
+	}{
+		{"RequirePerm_NoClaims_401", nil, func(w http.ResponseWriter, r *http.Request) bool {
+			return requirePerm(w, r, auth.PermProjectRead)
+		}, http.StatusUnauthorized},
+		{"RequirePerm_MissingPerm_403", readOnly, func(w http.ResponseWriter, r *http.Request) bool {
+			return requirePerm(w, r, auth.PermSettingsAdmin)
+		}, http.StatusForbidden},
+		{"RequireAdmin_Wraps", readOnly, requireAdmin, http.StatusForbidden},
 	}
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status=%d want 401", rr.Code)
-	}
-}
-
-func TestRequirePerm_MissingPerm_403(t *testing.T) {
-	rr := httptest.NewRecorder()
-	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermProjectRead)}}
-	if requirePerm(rr, reqWithClaims(c), auth.PermSettingsAdmin) {
-		t.Fatal("expected gate to deny")
-	}
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status=%d want 403", rr.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			if tc.gate(rr, reqWithClaims(tc.claims)) {
+				t.Fatal("expected gate to deny")
+			}
+			if rr.Code != tc.want {
+				t.Errorf("status=%d want %d", rr.Code, tc.want)
+			}
+		})
 	}
 }
 
@@ -84,17 +94,6 @@ func TestRequirePerm_Granted_PassesThrough(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		// Recorder default is 200 when nothing was written.
 		t.Errorf("gate wrote response on success: %d", rr.Code)
-	}
-}
-
-func TestRequireAdmin_Wraps(t *testing.T) {
-	rr := httptest.NewRecorder()
-	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermProjectRead)}}
-	if requireAdmin(rr, reqWithClaims(c)) {
-		t.Errorf("non-admin passed requireAdmin")
-	}
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status=%d want 403", rr.Code)
 	}
 }
 
@@ -137,31 +136,36 @@ func TestRequireProjectAccess_NilDB_FailsClosed(t *testing.T) {
 	}
 }
 
-func TestRequireProjectAccess_NoMembership_403(t *testing.T) {
-	d := openTestDB(t)
-	seedUserNoGroup(t, d, "u1")
-	rr := httptest.NewRecorder()
-	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
-	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleViewer) {
-		t.Fatal("expected deny — user has no membership on p1")
+// TestRequireProjectAccess_Denies403: authenticated non-admin users who
+// lack a sufficient grant on the requested project are rejected.
+func TestRequireProjectAccess_Denies403(t *testing.T) {
+	cases := []struct {
+		name    string
+		seed    func(t *testing.T, d *db.DB)
+		project string
+		need    db.ProjectRole
+	}{
+		// user has no membership on p1
+		{"NoMembership", func(t *testing.T, d *db.DB) { seedUserNoGroup(t, d, "u1") }, "p1", db.ProjectRoleViewer},
+		// viewer should not pass editor gate
+		{"RoleTooLow", func(t *testing.T, d *db.DB) { seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleViewer) }, "p1", db.ProjectRoleEditor},
+		// membership on p1 should not grant access to p2
+		{"DifferentProject", func(t *testing.T, d *db.DB) { seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleEditor) }, "p2", db.ProjectRoleViewer},
 	}
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status=%d want 403", rr.Code)
-	}
-}
-
-func TestRequireProjectAccess_RoleTooLow_403(t *testing.T) {
-	d := openTestDB(t)
-	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleViewer)
-	rr := httptest.NewRecorder()
-	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
-	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleEditor) {
-		t.Fatal("viewer should not pass owner gate")
-	}
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status=%d want 403", rr.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := openTestDB(t)
+			tc.seed(t, d)
+			rr := httptest.NewRecorder()
+			c := &auth.Claims{UserID: "u1", Permissions: []string{}}
+			ctx := auth.WithClaimsForTest(context.Background(), c)
+			if requireProjectAccess(ctx, rr, d, tc.project, tc.need) {
+				t.Fatal("expected deny")
+			}
+			if rr.Code != http.StatusForbidden {
+				t.Errorf("status=%d want 403", rr.Code)
+			}
+		})
 	}
 }
 
@@ -173,20 +177,6 @@ func TestRequireProjectAccess_RoleSufficient(t *testing.T) {
 	ctx := auth.WithClaimsForTest(context.Background(), c)
 	if !requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleEditor) {
 		t.Errorf("owner should satisfy deployer gate; body=%s", rr.Body.String())
-	}
-}
-
-func TestRequireProjectAccess_DifferentProject_403(t *testing.T) {
-	d := openTestDB(t)
-	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleEditor)
-	rr := httptest.NewRecorder()
-	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
-	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if requireProjectAccess(ctx, rr, d, "p2", db.ProjectRoleViewer) {
-		t.Fatal("membership on p1 should not grant access to p2")
-	}
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status=%d want 403", rr.Code)
 	}
 }
 

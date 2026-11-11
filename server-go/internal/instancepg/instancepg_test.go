@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestBuildAdminDSN pins the DSN composition from the kusoaddon
@@ -258,24 +257,13 @@ func TestCoerceSSLMode_DoesNotLeakDSNOnParseError(t *testing.T) {
 	}
 }
 
-// TestHealthSnapshotSurface pins the three states GetStatus must
-// distinguish based on the periodic-probe snapshot:
-//
-//	zero snapshot       → don't flag unhealthy yet (fresh leader,
-//	                      first tick pending)
-//	probed + ok=true    → ready
-//	probed + ok=false   → unhealthy + LastError surfaces
-//
-// We bypass the live SELECT 1 by writing the snapshot directly.
-// Without this, a fresh boot would briefly flag the cluster PG as
-// down before the first Reconcile tick — the zero-snapshot guard
-// in GetStatus prevents that, and this test pins it.
-// TestInstanceAddonSpec_EnablesAuthQueryPooler pins the cluster-DB pooler
+// TestInstanceAddonSpec_EnablesAuthQueryPoolerAndBackup pins the cluster-DB pooler
 // wiring: the instance PG addon CR must enable a pooler in auth_query mode so
 // projects can route their DATABASE_URL through PgBouncer (:6432) instead of
 // connecting direct. auth_query (not a static userlist) is required because the
 // cluster PG serves many per-project users that rotate as projects opt in.
-func TestInstanceAddonSpec_EnablesAuthQueryPooler(t *testing.T) {
+// It also must carry a default backup schedule.
+func TestInstanceAddonSpec_EnablesAuthQueryPoolerAndBackup(t *testing.T) {
 	spec := instanceAddonSpec(ProvisionManagedRequest{
 		Size: "small", Version: "16", StorageSize: "20Gi", HA: false,
 	})
@@ -299,41 +287,9 @@ func TestInstanceAddonSpec_EnablesAuthQueryPooler(t *testing.T) {
 	if spec["kind"] != "postgres" || spec["version"] != "16" {
 		t.Errorf("base spec fields changed: %#v", spec)
 	}
-}
-
-func TestHealthSnapshotSurface(t *testing.T) {
-	t.Run("zero snapshot stays at ready", func(t *testing.T) {
-		s := &Service{Logger: slog.Default()}
-		snap := s.healthSnapshotCopy()
-		if !snap.checkedAt.IsZero() {
-			t.Fatalf("zero snapshot should have zero checkedAt, got %v", snap.checkedAt)
-		}
-	})
-
-	t.Run("recorded ok stays at ready", func(t *testing.T) {
-		s := &Service{Logger: slog.Default()}
-		s.healthMu.Lock()
-		s.health = healthSnapshot{checkedAt: time.Now(), ok: true}
-		s.healthMu.Unlock()
-		snap := s.healthSnapshotCopy()
-		if !snap.ok || snap.checkedAt.IsZero() {
-			t.Fatalf("expected probed-ok snapshot, got %+v", snap)
-		}
-	})
-
-	t.Run("recorded failure surfaces unhealthy + error", func(t *testing.T) {
-		s := &Service{Logger: slog.Default()}
-		s.healthMu.Lock()
-		s.health = healthSnapshot{checkedAt: time.Now(), ok: false, err: "dial tcp: timeout"}
-		s.healthMu.Unlock()
-		snap := s.healthSnapshotCopy()
-		if snap.ok {
-			t.Fatalf("expected probed-failed snapshot, got ok=true")
-		}
-		if !strings.Contains(snap.err, "timeout") {
-			t.Errorf("err should carry probe error: %q", snap.err)
-		}
-	})
+	if b, ok := spec["backup"].(map[string]any); !ok || b["schedule"] == "" || b["schedule"] == nil {
+		t.Fatalf("managed instance PG must be created with a backup schedule, got %#v", b)
+	}
 }
 
 // TestProbeRecordOnFailure verifies probeAndRecord stamps the

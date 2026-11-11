@@ -178,37 +178,6 @@ func TestRenderJobBuildpacks(t *testing.T) {
 	}
 }
 
-func TestRenderJobPrivateRepoSecretRef(t *testing.T) {
-	b := baseBuild()
-	b.Spec.GithubInstallationID = 12345
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
-	clone := findInit(job.Spec.Template.Spec, "clone")
-	if clone == nil {
-		t.Fatal("clone missing")
-	}
-	var tokenRef *corev1.EnvVar
-	for i := range clone.Env {
-		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
-			tokenRef = &clone.Env[i]
-		}
-	}
-	if tokenRef == nil {
-		t.Fatal("KUSO_GIT_TOKEN env missing on private-repo clone")
-	}
-	if tokenRef.ValueFrom == nil || tokenRef.ValueFrom.SecretKeyRef == nil {
-		t.Fatal("token env should be a secretKeyRef")
-	}
-	if tokenRef.ValueFrom.SecretKeyRef.Name != "b1-token" {
-		t.Errorf("token secret ref name = %q", tokenRef.ValueFrom.SecretKeyRef.Name)
-	}
-	// Script body should NOT splice the repo URL or branch literally
-	// into a shell command — it should go through shellQuote so an
-	// embedded `'` can't break out.
-	if !strings.Contains(clone.Args[0], `URL='`) {
-		t.Errorf("clone script missing quoted URL: %s", clone.Args[0])
-	}
-}
-
 func TestRenderJobAuthSecretMount(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Auth = &kube.KusoBuildAuth{SecretName: "ghcr-pull", Registry: "ghcr.io"}
@@ -280,39 +249,39 @@ func TestRenderJobLabelsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestResourceRequirementsDefaults(t *testing.T) {
-	b := baseBuild()
-	res, err := resourceRequirements(b)
-	if err != nil {
-		t.Fatal(err)
+func TestResourceRequirements(t *testing.T) {
+	cases := []struct {
+		name                   string
+		resources              *kube.KusoBuildResources
+		wantCPUReq, wantMemLim string
+	}{
+		{name: "Defaults", wantCPUReq: "200m", wantMemLim: "2Gi"},
+		{
+			name: "Override",
+			resources: &kube.KusoBuildResources{
+				Requests: &kube.KusoResourceQty{CPU: "500m", Memory: "1Gi"},
+				Limits:   &kube.KusoResourceQty{CPU: "4", Memory: "8Gi"},
+			},
+			wantCPUReq: "500m", wantMemLim: "8Gi",
+		},
 	}
-	cpu := res.Requests[corev1.ResourceCPU]
-	if cpu.String() != "200m" {
-		t.Errorf("default cpu request = %s", cpu.String())
-	}
-	mem := res.Limits[corev1.ResourceMemory]
-	if mem.String() != "2Gi" {
-		t.Errorf("default mem limit = %s", mem.String())
-	}
-}
-
-func TestResourceRequirementsOverride(t *testing.T) {
-	b := baseBuild()
-	b.Spec.Resources = &kube.KusoBuildResources{
-		Requests: &kube.KusoResourceQty{CPU: "500m", Memory: "1Gi"},
-		Limits:   &kube.KusoResourceQty{CPU: "4", Memory: "8Gi"},
-	}
-	res, err := resourceRequirements(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cpu := res.Requests[corev1.ResourceCPU]
-	if cpu.String() != "500m" {
-		t.Errorf("override cpu request = %s", cpu.String())
-	}
-	memL := res.Limits[corev1.ResourceMemory]
-	if memL.String() != "8Gi" {
-		t.Errorf("override mem limit = %s", memL.String())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := baseBuild()
+			b.Spec.Resources = tc.resources
+			res, err := resourceRequirements(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cpu := res.Requests[corev1.ResourceCPU]
+			if cpu.String() != tc.wantCPUReq {
+				t.Errorf("cpu request = %s, want %s", cpu.String(), tc.wantCPUReq)
+			}
+			mem := res.Limits[corev1.ResourceMemory]
+			if mem.String() != tc.wantMemLim {
+				t.Errorf("mem limit = %s, want %s", mem.String(), tc.wantMemLim)
+			}
+		})
 	}
 }
 
@@ -972,80 +941,76 @@ func allIndexes(s, sub string) []int {
 	}
 }
 
-// TestRenderJobGitLabPrivateRepo covers the GitLab clone path: a repo on a
-// GitLab host with a stored token secret must render a private clone that
-// mounts KUSO_GIT_TOKEN and uses GitLab's oauth2:<tok> auth form (not
-// GitHub's x-access-token).
-func TestRenderJobGitLabPrivateRepo(t *testing.T) {
-	b := baseBuild()
-	b.Spec.GithubInstallationID = 0
-	b.Spec.Repo = &kube.KusoRepoRef{
-		URL:         "https://gitlab.com/group/app.git",
-		TokenSecret: "alpha-api-gitlab-token",
+// TestRenderJobPrivateRepoCloneAuth: every private clone mounts
+// KUSO_GIT_TOKEN as a secretKeyRef to the <build>-token Secret and uses
+// the host's auth form.
+func TestRenderJobPrivateRepoCloneAuth(t *testing.T) {
+	cases := []struct {
+		name           string
+		installationID int64
+		repo           *kube.KusoRepoRef // nil keeps baseBuild's repo
+		wantAuth       string
+		forbidden      string
+	}{
+		{
+			// The GitHub path is unchanged: x-access-token auth.
+			name: "PrivateRepoSecretRef", installationID: 12345,
+			wantAuth: "x-access-token:${KUSO_GIT_TOKEN}",
+		},
+		{
+			// A GitHub repo with a stored token and no App installation clones with
+			// that token (how private GitHub repos build without the App).
+			name:     "GitHubStoredTokenWithoutInstallation",
+			repo:     &kube.KusoRepoRef{URL: "https://github.com/acme/private.git", TokenSecret: "alpha-api-repo-token"},
+			wantAuth: "x-access-token:${KUSO_GIT_TOKEN}",
+		},
+		{
+			// GitLab host with a stored token: GitLab's oauth2:<tok> auth form,
+			// NOT GitHub's x-access-token.
+			name:     "GitLabPrivateRepo",
+			repo:     &kube.KusoRepoRef{URL: "https://gitlab.com/group/app.git", TokenSecret: "alpha-api-gitlab-token"},
+			wantAuth: "oauth2:${KUSO_GIT_TOKEN}", forbidden: "x-access-token",
+		},
 	}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
-	clone := findInit(job.Spec.Template.Spec, "clone")
-	if clone == nil {
-		t.Fatal("clone missing")
-	}
-	// Token mounted as KUSO_GIT_TOKEN from the <build>-token Secret.
-	var hasToken bool
-	for i := range clone.Env {
-		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
-			hasToken = true
-			if clone.Env[i].ValueFrom.SecretKeyRef.Name != "b1-token" {
-				t.Errorf("token ref name = %q, want b1-token", clone.Env[i].ValueFrom.SecretKeyRef.Name)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := baseBuild()
+			b.Spec.GithubInstallationID = tc.installationID
+			if tc.repo != nil {
+				b.Spec.Repo = tc.repo
 			}
-		}
-	}
-	if !hasToken {
-		t.Fatal("GitLab private clone must mount KUSO_GIT_TOKEN")
-	}
-	// GitLab auth form: oauth2:<tok>, NOT x-access-token.
-	if !strings.Contains(clone.Args[0], "oauth2:${KUSO_GIT_TOKEN}") {
-		t.Errorf("GitLab clone should use oauth2: auth, script:\n%s", clone.Args[0])
-	}
-	if strings.Contains(clone.Args[0], "x-access-token") {
-		t.Errorf("GitLab clone must NOT use GitHub's x-access-token: %s", clone.Args[0])
-	}
-}
-
-// TestRenderJobGitHubStillUsesXAccessToken guards that the GitHub path is
-// unchanged: x-access-token auth, KUSO_GIT_TOKEN mount.
-func TestRenderJobGitHubStillUsesXAccessToken(t *testing.T) {
-	b := baseBuild()
-	b.Spec.GithubInstallationID = 999
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
-	clone := findInit(job.Spec.Template.Spec, "clone")
-	if !strings.Contains(clone.Args[0], "x-access-token:${KUSO_GIT_TOKEN}") {
-		t.Errorf("GitHub clone should keep x-access-token auth:\n%s", clone.Args[0])
-	}
-}
-
-// A GitHub repo with a stored token and no App installation clones with
-// that token (how private GitHub repos build without the App).
-func TestRenderJobGitHubStoredTokenWithoutInstallation(t *testing.T) {
-	b := baseBuild()
-	b.Spec.GithubInstallationID = 0
-	b.Spec.Repo = &kube.KusoRepoRef{
-		URL:         "https://github.com/acme/private.git",
-		TokenSecret: "alpha-api-repo-token",
-	}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
-	clone := findInit(job.Spec.Template.Spec, "clone")
-	if clone == nil {
-		t.Fatal("clone missing")
-	}
-	hasToken := false
-	for i := range clone.Env {
-		if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
-			hasToken = true
-		}
-	}
-	if !hasToken {
-		t.Fatal("stored-token GitHub clone must mount KUSO_GIT_TOKEN")
-	}
-	if !strings.Contains(clone.Args[0], "x-access-token:${KUSO_GIT_TOKEN}") {
-		t.Errorf("GitHub token clone should use x-access-token auth:\n%s", clone.Args[0])
+			job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+			clone := findInit(job.Spec.Template.Spec, "clone")
+			if clone == nil {
+				t.Fatal("clone missing")
+			}
+			var tokenRef *corev1.EnvVar
+			for i := range clone.Env {
+				if clone.Env[i].Name == "KUSO_GIT_TOKEN" {
+					tokenRef = &clone.Env[i]
+				}
+			}
+			if tokenRef == nil {
+				t.Fatal("KUSO_GIT_TOKEN env missing on private-repo clone")
+			}
+			if tokenRef.ValueFrom == nil || tokenRef.ValueFrom.SecretKeyRef == nil {
+				t.Fatal("token env should be a secretKeyRef")
+			}
+			if tokenRef.ValueFrom.SecretKeyRef.Name != "b1-token" {
+				t.Errorf("token secret ref name = %q, want b1-token", tokenRef.ValueFrom.SecretKeyRef.Name)
+			}
+			// Script body should NOT splice the repo URL or branch literally
+			// into a shell command — it should go through shellQuote so an
+			// embedded `'` can't break out.
+			if !strings.Contains(clone.Args[0], `URL='`) {
+				t.Errorf("clone script missing quoted URL: %s", clone.Args[0])
+			}
+			if !strings.Contains(clone.Args[0], tc.wantAuth) {
+				t.Errorf("clone should use %s auth, script:\n%s", tc.wantAuth, clone.Args[0])
+			}
+			if tc.forbidden != "" && strings.Contains(clone.Args[0], tc.forbidden) {
+				t.Errorf("clone must NOT use %s: %s", tc.forbidden, clone.Args[0])
+			}
+		})
 	}
 }

@@ -56,24 +56,35 @@ func seedJob(t *testing.T, cs *kubefake.Clientset, ns, name string, conds []batc
 	}
 }
 
-func TestWaitForJob_CompletesImmediately(t *testing.T) {
+func TestWaitForJob_TerminalAndMissing(t *testing.T) {
 	t.Parallel()
-	cs := kubefake.NewSimpleClientset()
-	seedJob(t, cs, "kuso", "snap-1", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}})
-	a := newTestAdapter(cs)
-	if err := a.waitForJob(context.Background(), "kuso", "snap-1"); err != nil {
-		t.Fatalf("waitForJob on complete job: %v", err)
+	cases := []struct {
+		name    string
+		conds   []batchv1.JobCondition
+		seed    bool
+		wantErr string // "" = success; "*" = any error
+	}{
+		{"CompletesImmediately", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}, true, ""},
+		{"FailedIsError", []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}, true, "failed"},
+		{"MissingJobIsError", nil, false, "*"},
 	}
-}
-
-func TestWaitForJob_FailedIsError(t *testing.T) {
-	t.Parallel()
-	cs := kubefake.NewSimpleClientset()
-	seedJob(t, cs, "kuso", "snap-2", []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}})
-	a := newTestAdapter(cs)
-	err := a.waitForJob(context.Background(), "kuso", "snap-2")
-	if err == nil || !strings.Contains(err.Error(), "failed") {
-		t.Fatalf("waitForJob on failed job = %v, want failure error", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cs := kubefake.NewSimpleClientset()
+			if tc.seed {
+				seedJob(t, cs, "kuso", "snap", tc.conds)
+			}
+			err := newTestAdapter(cs).waitForJob(context.Background(), "kuso", "snap")
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("waitForJob = %v, want nil", err)
+			case tc.wantErr == "*" && err == nil:
+				t.Fatal("waitForJob = nil, want error")
+			case tc.wantErr != "" && tc.wantErr != "*" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("waitForJob = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -98,15 +109,6 @@ func TestWaitForJob_TimesOut(t *testing.T) {
 	err := a.waitForJob(context.Background(), "kuso", "snap-3")
 	if err == nil || !strings.Contains(err.Error(), "did not complete") {
 		t.Fatalf("waitForJob on stuck job = %v, want timeout error", err)
-	}
-}
-
-func TestWaitForJob_MissingJobIsError(t *testing.T) {
-	t.Parallel()
-	cs := kubefake.NewSimpleClientset()
-	a := newTestAdapter(cs)
-	if err := a.waitForJob(context.Background(), "kuso", "nope"); err == nil {
-		t.Fatal("waitForJob on missing job = nil, want error")
 	}
 }
 

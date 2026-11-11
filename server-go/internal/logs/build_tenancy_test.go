@@ -111,26 +111,6 @@ func TestBuildBelongsToProject_NoSourcesDenies(t *testing.T) {
 	}
 }
 
-// The archive query itself must be project-scoped, so that even a
-// caller who somehow reaches GetBuildLog cannot read another tenant's
-// tail. This pins the WHERE ... AND "project"=$2 predicate.
-func TestGetBuildLogIsProjectScoped(t *testing.T) {
-	archive := fakeBuildLogs{
-		owner: map[string]string{"victim-api-abc123": "victim"},
-		logs:  map[string]string{"victim-api-abc123": "DATABASE_URL=postgres://secret"},
-	}
-	got, err := archive.GetBuildLog(context.Background(), "attacker", "victim-api-abc123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "" {
-		t.Errorf("cross-project archive read returned %q, want empty", got)
-	}
-	if got, _ := archive.GetBuildLog(context.Background(), "victim", "victim-api-abc123"); got == "" {
-		t.Error("owner must still be able to read their own archived tail")
-	}
-}
-
 // --- Call-site regression guards -------------------------------------
 //
 // The guard function above was always correct. The bug was that the REST

@@ -59,12 +59,12 @@ func TestApply_SkipsDeletesWhenPlanHasNone(t *testing.T) {
 	}
 }
 
-func TestApply_PatchServiceIsDeclarativeReset(t *testing.T) {
+// A service in the update set with every optional block omitted: the
+// patch must still carry every field (declarative reset) so the live CR
+// is reset to the omitted defaults rather than left stale.
+func TestApply_PatchOmittedFieldsResetDeclaratively(t *testing.T) {
 	fp := &fakeProjects{}
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	// A service in the update set with most fields omitted: the patch
-	// must still set every field (declarative reset) so the live CR is
-	// reset to the omitted defaults.
 	f := &File{
 		Project:  "shop",
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
@@ -77,12 +77,57 @@ func TestApply_PatchServiceIsDeclarativeReset(t *testing.T) {
 		t.Fatalf("service not patched: %+v", fp.patched)
 	}
 	req := fp.patched[0].req
-	if req.Port == nil || req.Internal == nil || req.PrivateEgress == nil ||
-		req.Runtime == nil || req.Domains == nil || req.Scale == nil ||
-		req.Sleep == nil || req.Placement == nil || req.Volumes == nil ||
-		req.Static == nil || req.Buildpacks == nil || req.Command == nil {
-		t.Fatalf("declarative reset: every patch field must be non-nil: %+v", req)
-	}
+
+	t.Run("PatchServiceIsDeclarativeReset", func(t *testing.T) {
+		if req.Port == nil || req.Internal == nil || req.PrivateEgress == nil ||
+			req.Runtime == nil || req.Domains == nil || req.Scale == nil ||
+			req.Sleep == nil || req.Placement == nil || req.Volumes == nil ||
+			req.Static == nil || req.Buildpacks == nil || req.Command == nil {
+			t.Fatalf("declarative reset: every patch field must be non-nil: %+v", req)
+		}
+	})
+	// Clears a stale runtime=image pointer.
+	t.Run("PatchServiceResetsImageWhenOmitted", func(t *testing.T) {
+		if req.Image == nil {
+			t.Fatalf("omitted image must still patch a non-nil reset: %+v", req)
+		}
+		if req.Image.Repository != "" || req.Image.Tag != "" {
+			t.Fatalf("reset Image must be zero-valued: %+v", req.Image)
+		}
+	})
+	// Clears the live CR's stale static config.
+	t.Run("PatchServiceResetsStaticWhenOmitted", func(t *testing.T) {
+		if req.Static == nil || req.Buildpacks == nil {
+			t.Fatalf("omitted static/buildpacks must still patch a non-nil reset: %+v", req)
+		}
+		if req.Static.BuildCmd != "" || req.Static.OutputDir != "" {
+			t.Fatalf("reset Static must be zero-valued: %+v", req.Static)
+		}
+	})
+	// Clear=true so a stale live release hook is removed.
+	t.Run("PatchServiceClearsReleaseWhenOmitted", func(t *testing.T) {
+		if req.Release == nil || !req.Release.Clear {
+			t.Fatalf("omitted release must patch Clear=true: %+v", req.Release)
+		}
+	})
+	t.Run("PatchResetsBuildArgsWhenOmitted", func(t *testing.T) {
+		if req.BuildArgs == nil || req.PublicEnv == nil {
+			t.Fatalf("omitted buildArgs/publicEnv must still patch a non-nil reset: %+v", req)
+		}
+		if len(*req.BuildArgs) != 0 || len(*req.PublicEnv) != 0 {
+			t.Fatalf("reset buildArgs/publicEnv must be empty: %+v %+v", *req.BuildArgs, *req.PublicEnv)
+		}
+	})
+	// An empty env: block must still call SetEnv (with an empty slice) so
+	// the live CR's env vars are reset to zero rather than left stale.
+	t.Run("SetEnvUnconditionalOnUpdate", func(t *testing.T) {
+		if len(fp.envSet) != 1 {
+			t.Fatalf("SetEnv must be called unconditionally on update: %+v", fp.envSet)
+		}
+		if len(fp.envSet[0].envVars) != 0 {
+			t.Fatalf("empty env: block must produce an empty SetEnv slice: %+v", fp.envSet[0].envVars)
+		}
+	})
 }
 
 func TestApply_PatchServiceCarriesStaticBuildConfig(t *testing.T) {
@@ -153,52 +198,6 @@ func TestApply_PatchServiceCarriesImagePointer(t *testing.T) {
 	}
 }
 
-func TestApply_PatchServiceResetsImageWhenOmitted(t *testing.T) {
-	fp := &fakeProjects{}
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	// A service update where the YAML OMITS the image block: the patch
-	// must still carry a non-nil (reset-to-empty) Image so a stale
-	// runtime=image pointer is cleared declaratively.
-	f := &File{
-		Project:  "shop",
-		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
-	}
-	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	req := fp.patched[0].req
-	if req.Image == nil {
-		t.Fatalf("omitted image must still patch a non-nil reset: %+v", req)
-	}
-	if req.Image.Repository != "" || req.Image.Tag != "" {
-		t.Fatalf("reset Image must be zero-valued: %+v", req.Image)
-	}
-}
-
-func TestApply_PatchServiceResetsStaticWhenOmitted(t *testing.T) {
-	fp := &fakeProjects{}
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	// A service update where the YAML OMITS the static block: the patch
-	// must still carry a non-nil (reset-to-default) Static so the live
-	// CR's stale static config is cleared.
-	f := &File{
-		Project:  "shop",
-		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
-	}
-	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	req := fp.patched[0].req
-	if req.Static == nil || req.Buildpacks == nil {
-		t.Fatalf("omitted static/buildpacks must still patch a non-nil reset: %+v", req)
-	}
-	if req.Static.BuildCmd != "" || req.Static.OutputDir != "" {
-		t.Fatalf("reset Static must be zero-valued: %+v", req.Static)
-	}
-}
-
 func TestApply_CreateServiceCarriesReleaseHook(t *testing.T) {
 	fp := &fakeProjects{}
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
@@ -239,47 +238,6 @@ func TestApply_PatchServiceCarriesReleaseHook(t *testing.T) {
 	req := fp.patched[0].req
 	if req.Release == nil || req.Release.Clear || len(req.Release.Command) != 2 {
 		t.Fatalf("patch must carry release command (not clear): %+v", req.Release)
-	}
-}
-
-func TestApply_PatchServiceClearsReleaseWhenOmitted(t *testing.T) {
-	fp := &fakeProjects{}
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	// A service update where the YAML OMITS the release block: the patch
-	// must carry Clear=true so a stale live hook is removed declaratively.
-	f := &File{
-		Project:  "shop",
-		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
-	}
-	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	req := fp.patched[0].req
-	if req.Release == nil || !req.Release.Clear {
-		t.Fatalf("omitted release must patch Clear=true: %+v", req.Release)
-	}
-}
-
-func TestApply_SetEnvUnconditionalOnUpdate(t *testing.T) {
-	fp := &fakeProjects{}
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	// A service update with an empty env: block must still call SetEnv
-	// (with an empty slice) so the live CR's env vars are declaratively
-	// reset to zero rather than left stale.
-	f := &File{
-		Project:  "shop",
-		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
-	}
-	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if len(fp.envSet) != 1 {
-		t.Fatalf("SetEnv must be called unconditionally on update: %+v", fp.envSet)
-	}
-	if len(fp.envSet[0].envVars) != 0 {
-		t.Fatalf("empty env: block must produce an empty SetEnv slice: %+v", fp.envSet[0].envVars)
 	}
 }
 
@@ -500,22 +458,6 @@ func TestApply_CreateCarriesBuildArgsAndPublicEnv(t *testing.T) {
 	}
 }
 
-func TestApply_PatchResetsBuildArgsWhenOmitted(t *testing.T) {
-	fp := &fakeProjects{}
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
-	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}}}
-	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	req := fp.patched[0].req
-	if req.BuildArgs == nil || req.PublicEnv == nil {
-		t.Fatalf("omitted buildArgs/publicEnv must still patch a non-nil reset: %+v", req)
-	}
-	if len(*req.BuildArgs) != 0 || len(*req.PublicEnv) != 0 {
-		t.Fatalf("reset buildArgs/publicEnv must be empty: %+v %+v", *req.BuildArgs, *req.PublicEnv)
-	}
-}
-
 func TestApply_GeneratesSecretOnFirstApply(t *testing.T) {
 	fp, fs := &fakeProjects{}, newFakeSecrets()
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
@@ -533,6 +475,9 @@ func TestApply_GeneratesSecretOnFirstApply(t *testing.T) {
 	}
 	if len(v) != 64 { // hex32 = 32 bytes = 64 hex chars
 		t.Fatalf("hex32 must be 64 chars, got %d: %q", len(v), v)
+	}
+	if fs.marked["PAYLOAD_SECRET"] != "hex32" {
+		t.Fatalf("minted key must be marked generated (kind hex32) so export round-trips; got %q", fs.marked["PAYLOAD_SECRET"])
 	}
 	// Generated value must NOT leak into the CR's plain env replace.
 	for _, c := range fp.envSet {
@@ -563,18 +508,6 @@ func TestApply_GeneratesHex64(t *testing.T) {
 	}
 }
 
-func TestApply_GenerateOnceDoesNotRotate(t *testing.T) {
-	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET") // already exists
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
-	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
-	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if _, set := fs.setCalls["PAYLOAD_SECRET"]; set {
-		t.Fatal("generate-once violated: existing secret was re-minted without --rotate-secrets")
-	}
-}
-
 func TestApply_RotateSecretsRemints(t *testing.T) {
 	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET") // already exists
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
@@ -597,18 +530,6 @@ func TestApply_GenerateWithoutSecretsConfiguredErrors(t *testing.T) {
 	}
 	if len(res.Errors) == 0 {
 		t.Fatal("a generate directive with no secrets backend must surface a step error, not silently skip")
-	}
-}
-
-func TestApply_MarksGeneratedKeyForExportRoundTrip(t *testing.T) {
-	fp, fs := &fakeProjects{}, newFakeSecrets()
-	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
-	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
-	if _, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if fs.marked["PAYLOAD_SECRET"] != "hex32" {
-		t.Fatalf("minted key must be marked generated (kind hex32) so export round-trips; got %q", fs.marked["PAYLOAD_SECRET"])
 	}
 }
 

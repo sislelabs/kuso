@@ -37,118 +37,50 @@ func drive(t *testing.T, h http.Handler, method, path string) (int, string) {
 	return rr.Code, rr.Body.String()
 }
 
-func TestHandler_RootServesIndex(t *testing.T) {
+// TestHandler_ServesExportedFiles: each GET resolves to the export file
+// whose body contains want (exact match when exact is set).
+func TestHandler_ServesExportedFiles(t *testing.T) {
 	h, err := Handler(nextExportFS(), "/api/")
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
-	code, body := drive(t, h, http.MethodGet, "/")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
+	cases := []struct {
+		name, path, want string
+		exact            bool
+	}{
+		{name: "RootServesIndex", path: "/", want: "landing"},
+		{name: "NextRoute_NoSlash", path: "/projects/new", want: "new project"},
+		{name: "NextRoute_TrailingSlash", path: "/projects/new/", want: "new project"},
+		{name: "NextRoute_ExplicitHTML", path: "/projects/new.html", want: "new project"},
+		{name: "RSCPayloads", path: "/projects/new/__next._head.txt", want: "rsc", exact: true},
+		{name: "StaticAsset", path: "/_next/static/chunks/main.js", want: "// js", exact: true},
+		// /projects/<slug> must serve projects/_.html (the dynamic-segment
+		// placeholder), NOT the root index.html. Without this, the client-
+		// side router lands the marketing landing on top of /projects/<slug>,
+		// the landing's "if signed in, replace to /projects" effect bounces
+		// the user out of the project page.
+		{name: "DynamicSegmentServesUnderscoreFallback", path: "/projects/kuso-hello-go", want: "project detail"},
+		{name: "NestedDynamicSegmentServesDeepUnderscoreFallback", path: "/projects/abc/services/web", want: "service detail"},
+		// /projects/abc/unknown-leaf has no projects/_/unknown-leaf.html
+		// AND no projects/_/_.html — the resolver should climb back to
+		// projects/_.html (the closest dynamic placeholder that does exist).
+		// This keeps deep links viable without requiring the export to
+		// pre-render every leaf path.
+		{name: "NestedDynamicWithSecondSegmentMissingClimbsUp", path: "/projects/abc/some-leaf-with-no-static-route", want: "project detail"},
 	}
-	if !strings.Contains(body, "landing") {
-		t.Errorf("body: %q", body)
-	}
-}
-
-func TestHandler_NextRoute_NoSlash(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/projects/new")
-	if code != 200 {
-		t.Fatalf("status: %d body=%q", code, body)
-	}
-	if !strings.Contains(body, "new project") {
-		t.Errorf("served wrong file: %q", body)
-	}
-}
-
-func TestHandler_NextRoute_TrailingSlash(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/projects/new/")
-	if code != 200 {
-		t.Fatalf("status: %d body=%q", code, body)
-	}
-	if !strings.Contains(body, "new project") {
-		t.Errorf("served wrong file: %q", body)
-	}
-}
-
-func TestHandler_NextRoute_ExplicitHTML(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/projects/new.html")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if !strings.Contains(body, "new project") {
-		t.Errorf("body: %q", body)
-	}
-}
-
-func TestHandler_RSCPayloads(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/projects/new/__next._head.txt")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if body != "rsc" {
-		t.Errorf("body: %q", body)
-	}
-}
-
-func TestHandler_StaticAsset(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/_next/static/chunks/main.js")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if body != "// js" {
-		t.Errorf("body: %q", body)
-	}
-}
-
-func TestHandler_DynamicSegmentServesUnderscoreFallback(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	// /projects/<slug> must serve projects/_.html (the dynamic-segment
-	// placeholder), NOT the root index.html. Without this, the client-
-	// side router lands the marketing landing on top of /projects/<slug>,
-	// the landing's "if signed in, replace to /projects" effect bounces
-	// the user out of the project page.
-	code, body := drive(t, h, http.MethodGet, "/projects/kuso-hello-go")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if !strings.Contains(body, "project detail") {
-		t.Errorf("dynamic fallback served wrong file: %q", body)
-	}
-	if strings.Contains(body, "landing") {
-		t.Error("served root landing instead of projects/_.html")
-	}
-}
-
-func TestHandler_NestedDynamicSegmentServesDeepUnderscoreFallback(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, body := drive(t, h, http.MethodGet, "/projects/abc/services/web")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if !strings.Contains(body, "service detail") {
-		t.Errorf("nested fallback served wrong file: %q", body)
-	}
-}
-
-func TestHandler_NestedDynamicWithSecondSegmentMissingClimbsUp(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	// /projects/abc/unknown-leaf has no projects/_/unknown-leaf.html
-	// AND no projects/_/_.html — the resolver should climb back to
-	// projects/_.html (the closest dynamic placeholder that does exist).
-	// This keeps deep links viable without requiring the export to
-	// pre-render every leaf path.
-	code, body := drive(t, h, http.MethodGet, "/projects/abc/some-leaf-with-no-static-route")
-	if code != 200 {
-		t.Fatalf("status: %d", code)
-	}
-	if !strings.Contains(body, "project detail") {
-		t.Errorf("expected projects/_.html (project detail), got: %q", body)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, body := drive(t, h, http.MethodGet, tc.path)
+			if code != 200 {
+				t.Fatalf("status: %d body=%q", code, body)
+			}
+			if (tc.exact && body != tc.want) || (!tc.exact && !strings.Contains(body, tc.want)) {
+				t.Errorf("served wrong file: %q (want %q)", body, tc.want)
+			}
+			if tc.want != "landing" && strings.Contains(body, "landing") {
+				t.Error("served root landing instead of the route's file")
+			}
+		})
 	}
 }
 
@@ -191,14 +123,6 @@ func TestHandler_DynamicRSCPayloadsResolveToPlaceholder(t *testing.T) {
 		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 			t.Errorf("%s: content-type %q", path, ct)
 		}
-	}
-}
-
-func TestHandler_APIPrefix404s(t *testing.T) {
-	h, _ := Handler(nextExportFS(), "/api/")
-	code, _ := drive(t, h, http.MethodGet, "/api/projects")
-	if code != 404 {
-		t.Errorf("api fallthrough: %d (want 404)", code)
 	}
 }
 

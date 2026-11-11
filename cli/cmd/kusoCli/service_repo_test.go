@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -69,155 +68,116 @@ func repoBlock(t *testing.T, patch map[string]any) map[string]any {
 	return repo
 }
 
-// TestServiceSet_GitlabRepoWithToken drives `service set --repo --provider
-// --gitlab-token` and asserts the PATCH body carries url + provider + token.
-func TestServiceSet_GitlabRepoWithToken(t *testing.T) {
-	var patch map[string]any
-	srv := stubServiceServer(t, `{"url":"https://github.com/old/repo.git","defaultBranch":"main","path":"."}`, &patch)
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-
-	resetServiceSetRepoFlags(t)
-	defer resetServiceSetRepoFlags(t)
-	mustSet(t, serviceSetCmd, "repo", "https://gitlab.com/acme/api.git")
-	mustSet(t, serviceSetCmd, "provider", "gitlab")
-	mustSet(t, serviceSetCmd, "gitlab-token", "glpat-secret-value")
-
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}); err != nil {
-		t.Fatalf("service set RunE: %v", err)
-	}
-
-	repo := repoBlock(t, patch)
-	if got := repo["url"]; got != "https://gitlab.com/acme/api.git" {
-		t.Errorf("repo.url = %v, want the new gitlab URL", got)
-	}
-	if got := repo["provider"]; got != "gitlab" {
-		t.Errorf("repo.provider = %v, want gitlab", got)
-	}
-	if got := repo["token"]; got != "glpat-secret-value" {
-		t.Errorf("repo.token = %v, want the supplied token", got)
-	}
-}
-
-// TestServiceSet_ProviderNormalisedAndValidated checks provider is
-// lower-cased and rejected when not github|gitlab.
-func TestServiceSet_ProviderNormalisedAndValidated(t *testing.T) {
-	var patch map[string]any
-	srv := stubServiceServer(t, `{"url":"https://gitlab.com/acme/api.git","defaultBranch":"main","path":"."}`, &patch)
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-
-	// Uppercase provider is normalised to lowercase.
-	resetServiceSetRepoFlags(t)
-	mustSet(t, serviceSetCmd, "provider", "GitLab")
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}); err != nil {
-		t.Fatalf("service set RunE: %v", err)
-	}
-	if got := repoBlock(t, patch)["provider"]; got != "gitlab" {
-		t.Errorf("provider not normalised: got %v", got)
-	}
-
-	// Bogus provider is rejected before any PATCH is sent.
-	resetServiceSetRepoFlags(t)
-	defer resetServiceSetRepoFlags(t)
-	mustSet(t, serviceSetCmd, "provider", "bitbucket")
-	err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"})
-	if err == nil || !strings.Contains(err.Error(), "must be github|gitlab") {
-		t.Fatalf("expected provider validation error, got %v", err)
-	}
-}
-
-// TestServiceSet_TokenNeverEchoed guards that the supplied token does not
-// appear in anything the command writes to stdout.
-func TestServiceSet_TokenNeverEchoed(t *testing.T) {
-	var patch map[string]any
-	srv := stubServiceServer(t, `{"url":"https://gitlab.com/acme/api.git","defaultBranch":"main","path":"."}`, &patch)
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-
-	resetServiceSetRepoFlags(t)
-	defer resetServiceSetRepoFlags(t)
+// TestServiceSetRepo drives `service set`'s repo path against a stub that
+// serves the current repo and records the PATCH body.
+func TestServiceSetRepo(t *testing.T) {
 	const secret = "glpat-super-secret-do-not-print"
-	mustSet(t, serviceSetCmd, "gitlab-token", secret)
+	for _, tc := range []struct {
+		name    string
+		current string
+		flags   [][2]string
+		envTok  string // KUSO_GITLAB_TOKEN
+		wantErr string
+		// want: repo-block fields that must be present with these values.
+		want map[string]any
+		// absent: repo-block fields that must NOT be sent.
+		absent []string
+		// noEcho: a string that must never reach stdout.
+		noEcho string
+	}{
+		// --repo --provider --gitlab-token: the PATCH carries url + provider + token.
+		{
+			name:    "GitlabRepoWithToken",
+			current: `{"url":"https://github.com/old/repo.git","defaultBranch":"main","path":"."}`,
+			flags:   [][2]string{{"repo", "https://gitlab.com/acme/api.git"}, {"provider", "gitlab"}, {"gitlab-token", "glpat-secret-value"}},
+			want:    map[string]any{"url": "https://gitlab.com/acme/api.git", "provider": "gitlab", "token": "glpat-secret-value"},
+		},
+		// Provider is lower-cased ...
+		{
+			name:  "ProviderNormalised",
+			flags: [][2]string{{"provider", "GitLab"}},
+			want:  map[string]any{"provider": "gitlab"},
+		},
+		// ... and rejected when not github|gitlab, before any PATCH is sent.
+		{
+			name:    "ProviderValidated",
+			flags:   [][2]string{{"provider", "bitbucket"}},
+			wantErr: "must be github|gitlab",
+		},
+		// The supplied token must not appear in anything written to stdout,
+		// but still rides the wire.
+		{
+			name:   "TokenNeverEchoed",
+			flags:  [][2]string{{"gitlab-token", secret}},
+			want:   map[string]any{"token": secret},
+			noEcho: secret,
+		},
+		// KUSO_GITLAB_TOKEN fallback when only --provider is passed.
+		{
+			name:   "TokenFromEnv",
+			flags:  [][2]string{{"provider", "gitlab"}},
+			envTok: "glpat-from-env",
+			want:   map[string]any{"token": "glpat-from-env"},
+		},
+		// A path/branch-only edit (no token supplied, no env) sends NO token
+		// field, so the server leaves any stored token untouched. The URL must
+		// round-trip so the repo block isn't cleared.
+		{
+			name:   "NoTokenLeavesItUnset",
+			flags:  [][2]string{{"branch", "develop"}},
+			want:   map[string]any{"url": "https://gitlab.com/acme/api.git", "branch": "develop"},
+			absent: []string{"token"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := tc.current
+			if current == "" {
+				current = `{"url":"https://gitlab.com/acme/api.git","defaultBranch":"main","path":"."}`
+			}
+			var patch map[string]any
+			srv := stubServiceServer(t, current, &patch)
+			defer srv.Close()
+			api = &kusoApi.KusoClient{}
+			api.Init(srv.URL, "test-token")
+			defer func() { api = nil }()
+			t.Setenv("KUSO_GITLAB_TOKEN", tc.envTok)
+			t.Setenv("KUSO_REPO_TOKEN", "")
 
-	out := captureStdout(t, func() {
-		if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}); err != nil {
-			t.Fatalf("service set RunE: %v", err)
-		}
-	})
-	if strings.Contains(out, secret) {
-		t.Errorf("command echoed the GitLab token to stdout: %q", out)
-	}
-	// Sanity: the token still made it onto the wire.
-	if got := repoBlock(t, patch)["token"]; got != secret {
-		t.Errorf("repo.token = %v, want the supplied token", got)
-	}
-}
+			resetServiceSetRepoFlags(t)
+			defer resetServiceSetRepoFlags(t)
+			for _, f := range tc.flags {
+				mustSet(t, serviceSetCmd, f[0], f[1])
+			}
 
-// TestServiceSet_TokenFromEnv covers the KUSO_GITLAB_TOKEN fallback when
-// only --provider is passed (the token is not echoed and rides the wire).
-func TestServiceSet_TokenFromEnv(t *testing.T) {
-	var patch map[string]any
-	srv := stubServiceServer(t, `{"url":"https://gitlab.com/acme/api.git","defaultBranch":"main","path":"."}`, &patch)
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-
-	t.Setenv("KUSO_GITLAB_TOKEN", "glpat-from-env")
-
-	resetServiceSetRepoFlags(t)
-	defer resetServiceSetRepoFlags(t)
-	mustSet(t, serviceSetCmd, "provider", "gitlab")
-
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}); err != nil {
-		t.Fatalf("service set RunE: %v", err)
-	}
-	if got := repoBlock(t, patch)["token"]; got != "glpat-from-env" {
-		t.Errorf("repo.token = %v, want token from KUSO_GITLAB_TOKEN", got)
-	}
-}
-
-// TestServiceSet_NoTokenLeavesItUnset verifies that a path/branch-only edit
-// (no token supplied, no env) sends NO token field, so the server leaves any
-// stored token untouched.
-func TestServiceSet_NoTokenLeavesItUnset(t *testing.T) {
-	var patch map[string]any
-	srv := stubServiceServer(t, `{"url":"https://gitlab.com/acme/api.git","defaultBranch":"main","path":"."}`, &patch)
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-
-	os.Unsetenv("KUSO_GITLAB_TOKEN")
-	resetServiceSetRepoFlags(t)
-	defer resetServiceSetRepoFlags(t)
-	mustSet(t, serviceSetCmd, "branch", "develop")
-
-	if err := serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}); err != nil {
-		t.Fatalf("service set RunE: %v", err)
-	}
-	repo := repoBlock(t, patch)
-	if _, ok := repo["token"]; ok {
-		t.Errorf("token field present on a token-less edit; want it omitted: %+v", repo)
-	}
-	// URL must round-trip so the repo block isn't cleared.
-	if got := repo["url"]; got != "https://gitlab.com/acme/api.git" {
-		t.Errorf("repo.url not round-tripped: got %v", got)
-	}
-	if got := repo["branch"]; got != "develop" {
-		t.Errorf("repo.branch = %v, want develop", got)
+			var err error
+			out := captureStdout(t, func() { err = serviceSetCmd.RunE(serviceSetCmd, []string{"acme", "api"}) })
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected %q error, got %v", tc.wantErr, err)
+				}
+				if patch != nil {
+					t.Fatalf("PATCH sent despite validation error: %+v", patch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("service set RunE: %v", err)
+			}
+			if tc.noEcho != "" && strings.Contains(out, tc.noEcho) {
+				t.Errorf("command echoed the GitLab token to stdout: %q", out)
+			}
+			repo := repoBlock(t, patch)
+			for k, v := range tc.want {
+				if repo[k] != v {
+					t.Errorf("repo.%s = %v, want %v", k, repo[k], v)
+				}
+			}
+			for _, k := range tc.absent {
+				if _, ok := repo[k]; ok {
+					t.Errorf("%s field present; want it omitted: %+v", k, repo)
+				}
+			}
+		})
 	}
 }
 

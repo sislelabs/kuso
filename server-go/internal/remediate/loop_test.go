@@ -62,42 +62,38 @@ func unsafeIssue(ns, name string) reconcilehealth.Issue {
 	}
 }
 
-// TestLoop_SkipsWhenDisabled verifies the opt-in gate: with Enabled()==false
-// the loop must not scan or remediate at all.
-func TestLoop_SkipsWhenDisabled(t *testing.T) {
-	rem, aud := newLoopRemediator(t, "kuso", "scubatony-db")
-	scanned := false
-	l := &Loop{
-		Scan: func(ctx context.Context) ([]reconcilehealth.Issue, error) {
-			scanned = true
-			return []reconcilehealth.Issue{safeIssue("kuso", "scubatony-db")}, nil
-		},
-		Remediator: rem,
-		Enabled:    func() bool { return false },
+func TestLoop_DisabledDoesNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		enabled func() bool
+	}{
+		// SkipsWhenDisabled verifies the opt-in gate: with Enabled()==false
+		// the loop must not scan or remediate at all.
+		{"SkipsWhenDisabled", func() bool { return false }},
+		// NilEnabledIsDisabled guards the fail-safe default: a nil Enabled
+		// closure must behave as "off", never auto-acting.
+		{"NilEnabledIsDisabled", nil},
 	}
-	l.tick(context.Background())
-	if scanned {
-		t.Error("Scan must not run when Enabled()==false")
-	}
-	if len(aud.entries) != 0 {
-		t.Errorf("expected no remediation when disabled, got %d audit entries", len(aud.entries))
-	}
-}
-
-// TestLoop_NilEnabledIsDisabled guards the fail-safe default: a nil Enabled
-// closure must behave as "off", never auto-acting.
-func TestLoop_NilEnabledIsDisabled(t *testing.T) {
-	rem, aud := newLoopRemediator(t, "kuso", "scubatony-db")
-	l := &Loop{
-		Scan: func(ctx context.Context) ([]reconcilehealth.Issue, error) {
-			return []reconcilehealth.Issue{safeIssue("kuso", "scubatony-db")}, nil
-		},
-		Remediator: rem,
-		Enabled:    nil,
-	}
-	l.tick(context.Background())
-	if len(aud.entries) != 0 {
-		t.Errorf("nil Enabled must be treated as disabled, got %d audit entries", len(aud.entries))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rem, aud := newLoopRemediator(t, "kuso", "scubatony-db")
+			scanned := false
+			l := &Loop{
+				Scan: func(ctx context.Context) ([]reconcilehealth.Issue, error) {
+					scanned = true
+					return []reconcilehealth.Issue{safeIssue("kuso", "scubatony-db")}, nil
+				},
+				Remediator: rem,
+				Enabled:    tc.enabled,
+			}
+			l.tick(context.Background())
+			if scanned {
+				t.Error("Scan must not run when disabled")
+			}
+			if len(aud.entries) != 0 {
+				t.Errorf("expected no remediation when disabled, got %d audit entries", len(aud.entries))
+			}
+		})
 	}
 }
 

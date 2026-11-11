@@ -35,35 +35,22 @@ func TestMiddleware_AcceptsValidBearer(t *testing.T) {
 	}
 }
 
-// A WebSocket ticket opens one socket; it must not work as an API token.
-func TestMiddleware_RejectsWSTicket(t *testing.T) {
-	t.Parallel()
-	iss, _ := NewIssuer("s", time.Hour)
-	tok, _ := iss.SignWSTicket(Claims{UserID: "u1"}, "/ws/projects/p/services/s/logs")
-	h := iss.Middleware()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("ticket reached the handler")
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("status: %d, want 401", rr.Code)
-	}
-}
-
 func TestMiddleware_Rejects(t *testing.T) {
 	t.Parallel()
 	iss, _ := NewIssuer("s", time.Hour)
 	h := iss.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	ticket, _ := iss.SignWSTicket(Claims{UserID: "u1"}, "/ws/projects/p/services/s/logs")
 
 	cases := map[string]string{
-		"missing":   "",
-		"not bearer": "Basic dXNlcjpwYXNz",
+		"missing":     "",
+		"not bearer":  "Basic dXNlcjpwYXNz",
 		"empty token": "Bearer ",
 		"garbage":     "Bearer not-a-jwt",
+		// A WebSocket ticket opens one socket; it must not work as an API
+		// token.
+		"ws ticket": "Bearer " + ticket,
 	}
 	for name, hdr := range cases {
 		t.Run(name, func(t *testing.T) {

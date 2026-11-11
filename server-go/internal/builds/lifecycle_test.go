@@ -37,68 +37,125 @@ func seedSucceededBuild(project, service, name, repo, tag string) seed {
 
 func TestRollback_SucceededBuildPatchesEnvImage(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
-	)
-
-	env, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-oldsha", RollbackOptions{})
-	if err != nil {
-		t.Fatalf("Rollback: %v", err)
-	}
-	if env.Spec.Image == nil {
-		t.Fatal("rolled-back env has no image")
-	}
-	if env.Spec.Image.Repository != "reg/alpha/web" || env.Spec.Image.Tag != "oldsha123456" {
-		t.Errorf("env image = %s:%s, want reg/alpha/web:oldsha123456",
-			env.Spec.Image.Repository, env.Spec.Image.Tag)
-	}
-	// The promoted-build annotation records which build we rolled to,
-	// so a concurrent auto-promote can be reasoned about.
-	if env.Annotations[annPromotedBuild] != "alpha-web-oldsha" {
-		t.Errorf("promoted-build annotation = %q, want alpha-web-oldsha", env.Annotations[annPromotedBuild])
-	}
-}
-
-func TestRollback_DefaultsToProductionEnv(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
-	)
-	// Empty envName must resolve to "production".
-	env, err := s.Rollback(context.Background(), "alpha", "web", "", "alpha-web-oldsha", RollbackOptions{})
-	if err != nil {
-		t.Fatalf("Rollback: %v", err)
-	}
-	if env.Name != "alpha-web-production" {
-		t.Errorf("rolled-back env = %q, want alpha-web-production", env.Name)
+	for _, tc := range []struct{ name, envName string }{
+		{"explicit production", "production"},
+		// Empty envName must resolve to "production".
+		{"defaults to production env", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t,
+				seedService("alpha", "web"),
+				seedProductionEnv("alpha", "web"),
+				seedSucceededBuild("alpha", "web", "alpha-web-oldsha", "reg/alpha/web", "oldsha123456"),
+			)
+			env, err := s.Rollback(context.Background(), "alpha", "web", tc.envName, "alpha-web-oldsha", RollbackOptions{})
+			if err != nil {
+				t.Fatalf("Rollback: %v", err)
+			}
+			if env.Name != "alpha-web-production" {
+				t.Errorf("rolled-back env = %q, want alpha-web-production", env.Name)
+			}
+			if env.Spec.Image == nil {
+				t.Fatal("rolled-back env has no image")
+			}
+			if env.Spec.Image.Repository != "reg/alpha/web" || env.Spec.Image.Tag != "oldsha123456" {
+				t.Errorf("env image = %s:%s, want reg/alpha/web:oldsha123456",
+					env.Spec.Image.Repository, env.Spec.Image.Tag)
+			}
+			// The promoted-build annotation records which build we rolled to,
+			// so a concurrent auto-promote can be reasoned about.
+			if env.Annotations[annPromotedBuild] != "alpha-web-oldsha" {
+				t.Errorf("promoted-build annotation = %q, want alpha-web-oldsha", env.Annotations[annPromotedBuild])
+			}
+		})
 	}
 }
 
-func TestRollback_RefusesNonSucceededBuild(t *testing.T) {
+// Every refusal must error (wantIs, when set, pins the sentinel) and,
+// where checkEnv is set, must leave that env off the build's image.
+func TestRollback_Refuses(t *testing.T) {
 	t.Parallel()
-	b := &kube.KusoBuild{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "alpha-web-failed",
-			Namespace:   "kuso",
-			Annotations: map[string]string{annPhase: "failed"},
+	webSeeds := func(extra ...seed) []seed {
+		return append([]seed{seedService("alpha", "web"), seedProductionEnv("alpha", "web")}, extra...)
+	}
+	cases := []struct {
+		name                    string
+		seeds                   []seed
+		project, service, build string
+		wantIs                  error
+		checkEnv, forbiddenTag  string
+	}{
+		{
+			name: "non-succeeded build",
+			seeds: webSeeds(seedBuild(&kube.KusoBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-failed", Namespace: "kuso",
+					Annotations: map[string]string{annPhase: "failed"}},
+				Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web",
+					Image: &kube.KusoImage{Repository: "reg/alpha/web", Tag: "failsha"}},
+			})),
+			project: "alpha", service: "web", build: "alpha-web-failed",
 		},
-		Spec: kube.KusoBuildSpec{
-			Project: "alpha",
-			Service: "alpha-web",
-			Image:   &kube.KusoImage{Repository: "reg/alpha/web", Tag: "failsha"},
+		{
+			name: "succeeded build with no image",
+			seeds: webSeeds(seedBuild(&kube.KusoBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-noimg", Namespace: "kuso",
+					Annotations: map[string]string{annPhase: "succeeded"}},
+				Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web"}, // Image nil
+			})),
+			project: "alpha", service: "web", build: "alpha-web-noimg",
+		},
+		{
+			// No RecordLookup wired → a NotFound build CR with no archive
+			// fallback must surface an error, not patch the env.
+			name:    "missing build",
+			seeds:   webSeeds(),
+			project: "alpha", service: "web", build: "alpha-web-ghost",
+		},
+		{
+			name:    "other project's build",
+			seeds:   webSeeds(seedSucceededBuild("beta", "api", "beta-api-abc", "reg/beta/api", "abcdef012345")),
+			project: "alpha", service: "web", build: "beta-api-abc",
+			wantIs:   ErrNotFound,
+			checkEnv: "alpha-web-production", forbiddenTag: "abcdef012345",
+		},
+		{
+			name:    "same project, other service's build",
+			seeds:   webSeeds(seedSucceededBuild("alpha", "worker", "alpha-worker-abc", "reg/alpha/worker", "abcdef012345")),
+			project: "alpha", service: "web", build: "alpha-worker-abc",
+			wantIs: ErrNotFound,
+		},
+		{
+			// "foo"+"bar-api" and "foo-bar"+"api" derive the same env CR name; the
+			// env must still be refused when it belongs to the other project.
+			name: "env owned by overlapping project",
+			seeds: []seed{
+				seedService("foo-bar", "api"),
+				seedProductionEnv("foo-bar", "api"),
+				seedSucceededBuild("foo", "bar-api", "foo-bar-api-abc", "reg/foo/bar-api", "abcdef012345"),
+			},
+			project: "foo", service: "bar-api", build: "foo-bar-api-abc",
+			wantIs:   ErrNotFound,
+			checkEnv: "foo-bar-api-production", forbiddenTag: "abcdef012345",
 		},
 	}
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedBuild(b),
-	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-failed", RollbackOptions{}); err == nil {
-		t.Fatal("expected Rollback to refuse a non-succeeded build, got nil error")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t, tc.seeds...)
+			_, err := s.Rollback(context.Background(), tc.project, tc.service, "production", tc.build, RollbackOptions{})
+			if err == nil || (tc.wantIs != nil && !errors.Is(err, tc.wantIs)) {
+				t.Fatalf("Rollback(%s/%s, %s): err = %v, want refusal (%v)", tc.project, tc.service, tc.build, err, tc.wantIs)
+			}
+			if tc.checkEnv == "" {
+				return
+			}
+			env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", tc.checkEnv)
+			if err != nil {
+				t.Fatalf("get env: %v", err)
+			}
+			if env.Spec.Image != nil && env.Spec.Image.Tag == tc.forbiddenTag {
+				t.Errorf("%s was repointed at the refused build's image", tc.checkEnv)
+			}
+		})
 	}
 }
 
@@ -131,91 +188,6 @@ func TestRollback_AcceptsHoldExpiredBuild(t *testing.T) {
 	}
 	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-cancelled", RollbackOptions{}); err == nil {
 		t.Error("Rollback accepted a plain cancelled build")
-	}
-}
-
-func TestRollback_RefusesBuildWithNoImage(t *testing.T) {
-	t.Parallel()
-	b := &kube.KusoBuild{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "alpha-web-noimg",
-			Namespace:   "kuso",
-			Annotations: map[string]string{annPhase: "succeeded"},
-		},
-		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web"}, // Image nil
-	}
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedBuild(b),
-	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-noimg", RollbackOptions{}); err == nil {
-		t.Fatal("expected Rollback to refuse a succeeded build with no image, got nil error")
-	}
-}
-
-func TestRollback_MissingBuildErrors(t *testing.T) {
-	t.Parallel()
-	// No RecordLookup wired → a NotFound build CR with no archive
-	// fallback must surface an error, not patch the env.
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-web-ghost", RollbackOptions{}); err == nil {
-		t.Fatal("expected Rollback to error on a missing build, got nil")
-	}
-}
-
-func TestRollback_RefusesOtherProjectsBuild(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedSucceededBuild("beta", "api", "beta-api-abc", "reg/beta/api", "abcdef012345"),
-	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "beta-api-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Rollback of beta's build via alpha: want ErrNotFound, got %v", err)
-	}
-	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
-	if err != nil {
-		t.Fatalf("get env: %v", err)
-	}
-	if env.Spec.Image != nil && env.Spec.Image.Tag == "abcdef012345" {
-		t.Error("alpha env was repointed at beta's image")
-	}
-}
-
-func TestRollback_RefusesSameProjectOtherServiceBuild(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedService("alpha", "web"),
-		seedProductionEnv("alpha", "web"),
-		seedSucceededBuild("alpha", "worker", "alpha-worker-abc", "reg/alpha/worker", "abcdef012345"),
-	)
-	if _, err := s.Rollback(context.Background(), "alpha", "web", "production", "alpha-worker-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-}
-
-// "foo"+"bar-api" and "foo-bar"+"api" derive the same env CR name; the
-// env must still be refused when it belongs to the other project.
-func TestRollback_RefusesEnvOwnedByOverlappingProject(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedService("foo-bar", "api"),
-		seedProductionEnv("foo-bar", "api"),
-		seedSucceededBuild("foo", "bar-api", "foo-bar-api-abc", "reg/foo/bar-api", "abcdef012345"),
-	)
-	if _, err := s.Rollback(context.Background(), "foo", "bar-api", "production", "foo-bar-api-abc", RollbackOptions{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "foo-bar-api-production")
-	if err != nil {
-		t.Fatalf("get env: %v", err)
-	}
-	if env.Spec.Image != nil && env.Spec.Image.Tag == "abcdef012345" {
-		t.Error("foo-bar's env was patched via project foo")
 	}
 }
 

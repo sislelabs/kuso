@@ -113,10 +113,15 @@ func typedSeed(gvr schema.GroupVersionResource, kind string, obj any) seed {
 
 // ---- pure helpers --------------------------------------------------------
 
-func TestImageTag(t *testing.T) {
+// ImageTag and shortRef must produce the same identifier for every ref.
+func TestImageTagAndShortRef(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"abcdef0123456789abcdef0123456789abcdef01": "abcdef012345",
+		// A full SHA must keep the exact 12-char short form on every path —
+		// the promote/rollback logic and `git rev-parse --short` comparisons
+		// depend on it, so the slugifier must not disturb it.
+		"3abf9b9927bb4d2d6c5844da49fdb665cb671bae": "3abf9b9927bb",
 		"main-abc": "main-abc",
 		// A slash is legal in a git ref but NOT in a Docker tag, so it
 		// must be slugified exactly as shortRef does. This case used to
@@ -124,23 +129,13 @@ func TestImageTag(t *testing.T) {
 		// that encoded the bug: the build got a CR + Job fine (both go
 		// through shortRef) and then failed at image push. See
 		// refs_test.go for the full ref→identifier coverage.
-		"feat/x": "feat-x",
+		"feat/x":           "feat-x",
+		"FEAT/Long-Branch": "feat-long-branch",
 	}
 	for in, want := range cases {
 		if got := ImageTag(in); got != want {
 			t.Errorf("ImageTag(%q): got %q, want %q", in, got, want)
 		}
-	}
-}
-
-func TestShortRef_KubeNameSafe(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"abcdef0123456789abcdef0123456789abcdef01": "abcdef012345",
-		"feat/x":           "feat-x",
-		"FEAT/Long-Branch": "feat-long-branch",
-	}
-	for in, want := range cases {
 		if got := shortRef(in); got != want {
 			t.Errorf("shortRef(%q): got %q, want %q", in, got, want)
 		}
@@ -1010,60 +1005,52 @@ func TestPoller_MarkRunningDoesNotResurrectCancelled(t *testing.T) {
 	}
 }
 
-func TestPoller_MarksFailed(t *testing.T) {
+// The poller mirrors the build Job's status onto the build's phase.
+func TestPoller_MarksPhaseFromJob(t *testing.T) {
 	t.Parallel()
-	build := &kube.KusoBuild{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-fff", Namespace: "kuso"},
-		Spec:       kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "fff", Image: &kube.KusoImage{}},
-	}
-	s := fakeService(t, seedBuild(build))
-	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-fff", Namespace: "kuso"},
-		Status: batchv1.JobStatus{
-			Conditions: []batchv1.JobCondition{
+	cases := []struct {
+		name, ref string
+		status    batchv1.JobStatus
+		wantPhase string
+		wantMsg   string
+	}{
+		{
+			name: "MarksFailed", ref: "fff",
+			status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobFailed, Status: "True", Message: "kaniko exit 1"},
-			},
+			}},
+			wantPhase: "failed", wantMsg: "kaniko",
 		},
-	}, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("seed job: %v", err)
+		{name: "MarksRunning", ref: "rrr", status: batchv1.JobStatus{Active: 1}, wantPhase: "running"},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "alpha-web-" + tc.ref
+			build := &kube.KusoBuild{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+				Spec:       kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: tc.ref, Image: &kube.KusoImage{}},
+			}
+			s := fakeService(t, seedBuild(build))
+			if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+				Status:     tc.status,
+			}, metav1.CreateOptions{}); err != nil {
+				t.Fatalf("seed job: %v", err)
+			}
 
-	p := &Poller{Svc: s, Interval: time.Hour}
-	if err := p.tick(context.Background()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	drainPromotions(t, p)
-	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-fff")
-	if got.Annotations[annPhase] != "failed" {
-		t.Errorf("phase annotation: %v", got.Annotations)
-	}
-	if !strings.Contains(got.Annotations[annMessage], "kaniko") {
-		t.Errorf("message annotation: %v", got.Annotations[annMessage])
-	}
-}
-
-func TestPoller_MarksRunning(t *testing.T) {
-	t.Parallel()
-	build := &kube.KusoBuild{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-rrr", Namespace: "kuso"},
-		Spec:       kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "rrr", Image: &kube.KusoImage{}},
-	}
-	s := fakeService(t, seedBuild(build))
-	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-rrr", Namespace: "kuso"},
-		Status:     batchv1.JobStatus{Active: 1},
-	}, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("seed job: %v", err)
-	}
-
-	p := &Poller{Svc: s, Interval: time.Hour}
-	if err := p.tick(context.Background()); err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	drainPromotions(t, p)
-	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-rrr")
-	if got.Annotations[annPhase] != "running" {
-		t.Errorf("phase annotation: %v", got.Annotations)
+			p := &Poller{Svc: s, Interval: time.Hour}
+			if err := p.tick(context.Background()); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			drainPromotions(t, p)
+			got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", name)
+			if got.Annotations[annPhase] != tc.wantPhase {
+				t.Errorf("phase annotation: %v", got.Annotations)
+			}
+			if tc.wantMsg != "" && !strings.Contains(got.Annotations[annMessage], tc.wantMsg) {
+				t.Errorf("message annotation: %v", got.Annotations[annMessage])
+			}
+		})
 	}
 }
 
@@ -1420,14 +1407,14 @@ func TestBuildEnvSecretRefRoundTrip(t *testing.T) {
 
 	// Malformed refs must not parse.
 	for _, bad := range []string{
-		"postgres://u:p@h/db",                    // ordinary literal
-		"kuso-secret-ref://",                     // empty
-		"kuso-secret-ref://no-slash",             // missing key
-		"kuso-secret-ref:///KEY",                 // empty secret
-		"kuso-secret-ref://name/",                // empty key
-		"kuso-secret-ref://Bad_Name/KEY",         // secret name charset
-		"kuso-secret-ref://name/bad key",         // key charset
-		"kuso-secret-ref://name/K/EY",            // slash in key
+		"postgres://u:p@h/db",            // ordinary literal
+		"kuso-secret-ref://",             // empty
+		"kuso-secret-ref://no-slash",     // missing key
+		"kuso-secret-ref:///KEY",         // empty secret
+		"kuso-secret-ref://name/",        // empty key
+		"kuso-secret-ref://Bad_Name/KEY", // secret name charset
+		"kuso-secret-ref://name/bad key", // key charset
+		"kuso-secret-ref://name/K/EY",    // slash in key
 	} {
 		if _, _, ok := ParseBuildEnvSecretRef(bad); ok {
 			t.Errorf("malformed ref parsed: %q", bad)

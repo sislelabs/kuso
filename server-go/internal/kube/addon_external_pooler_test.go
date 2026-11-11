@@ -56,54 +56,72 @@ func TestPooler_ExternalBackendRendersWhenOptedIn(t *testing.T) {
 	if strings.Contains(out, "* = host=test-addon port=5432") {
 		t.Errorf("external pooler still points at the in-cluster Service.\nRendered:\n%s", out)
 	}
-}
 
-// Managed providers mandate TLS. PgBouncer talks to backends unencrypted
-// unless told otherwise, so without this the backend login silently fails.
-func TestPooler_ExternalBackendRequiresServerTLS(t *testing.T) {
-	t.Parallel()
-
-	out := helmTemplateAddon(t, "postgres",
-		"external.secretName=my-planetscale",
-		"pooler.enabled=true",
-		"pooler.externalBackend=true",
-		"pooler.host=aws-eu-central-1-1.pg.psdb.cloud",
-	)
-
+	// Managed providers mandate TLS. PgBouncer talks to backends unencrypted
+	// unless told otherwise, so without this the backend login silently fails.
 	if !strings.Contains(out, "server_tls_sslmode") {
 		t.Errorf("external pooler must set server_tls_sslmode; a managed backend "+
 			"rejects the plaintext login PgBouncer defaults to.\nRendered:\n%s", out)
 	}
 }
 
-// The in-cluster pooler must keep pointing at the addon's own Service, and
-// must not start demanding TLS to a backend that serves plaintext by default.
-func TestPooler_InClusterBackendUnchanged(t *testing.T) {
+// One render of the default in-cluster pooler, checked for every ini
+// setting a past incident pinned.
+func TestPooler_InClusterDefaults(t *testing.T) {
 	t.Parallel()
 
 	out := helmTemplateAddon(t, "postgres", "pooler.enabled=true")
 
-	if !strings.Contains(out, "* = host=test-addon port=5432") {
-		t.Errorf("in-cluster pooler no longer targets the addon Service.\nRendered:\n%s", out)
-	}
-	if strings.Contains(out, "server_tls_sslmode") {
-		t.Errorf("in-cluster pooler must not force backend TLS.\nRendered:\n%s", out)
-	}
+	// The in-cluster pooler must keep pointing at the addon's own Service, and
+	// must not start demanding TLS to a backend that serves plaintext by default.
+	t.Run("InClusterBackendUnchanged", func(t *testing.T) {
+		if !strings.Contains(out, "* = host=test-addon port=5432") {
+			t.Errorf("in-cluster pooler no longer targets the addon Service.\nRendered:\n%s", out)
+		}
+		if strings.Contains(out, "server_tls_sslmode") {
+			t.Errorf("in-cluster pooler must not force backend TLS.\nRendered:\n%s", out)
+		}
+	})
+
+	// pgx sends these as startup parameters; PgBouncer's transaction pooling mode
+	// rejects unknown ones outright ("unsupported startup parameter"), which kills
+	// the pool on connect. Every Go app on the platform hits this, so the chart
+	// ignores them rather than making each app work around it.
+	t.Run("IgnoresTimeoutStartupParameters", func(t *testing.T) {
+		for _, param := range []string{"statement_timeout", "idle_in_transaction_session_timeout"} {
+			if !strings.Contains(out, param) {
+				t.Errorf("ignore_startup_parameters is missing %q, so pgx-based apps "+
+					"crash on connect through the pooler.\nRendered:\n%s", param, out)
+			}
+		}
+	})
+
+	// max_client_conn caps how many app connections the pooler accepts, not how
+	// many hit the database. Every app pod opens its own client pool (tickero: 25
+	// per pod), so 200 was a wall at ~8 pods. It must comfortably exceed a
+	// realistic pod count times a per-pod pool.
+	t.Run("PoolerClientCapAllowsManyPods", func(t *testing.T) {
+		if !strings.Contains(out, "max_client_conn = 1000") {
+			t.Errorf("max_client_conn should be 1000 (40 pods × 25 client conns); got:\n%s", grepLine(out, "max_client_conn"))
+		}
+	})
+
+	// Without pooler.poolSize the pool stays at the in-cluster 25/5; the
+	// managed-backend case is TestKusoAddonChart_PoolerPoolSize.
+	t.Run("PoolerPoolSizeDefaultStays25/5", func(t *testing.T) {
+		for _, want := range []string{"default_pool_size = 25", "reserve_pool_size = 5"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q", want)
+			}
+		}
+	})
 }
 
-// pgx sends these as startup parameters; PgBouncer's transaction pooling mode
-// rejects unknown ones outright ("unsupported startup parameter"), which kills
-// the pool on connect. Every Go app on the platform hits this, so the chart
-// ignores them rather than making each app work around it.
-func TestPooler_IgnoresTimeoutStartupParameters(t *testing.T) {
-	t.Parallel()
-
-	out := helmTemplateAddon(t, "postgres", "pooler.enabled=true")
-
-	for _, param := range []string{"statement_timeout", "idle_in_transaction_session_timeout"} {
-		if !strings.Contains(out, param) {
-			t.Errorf("ignore_startup_parameters is missing %q, so pgx-based apps "+
-				"crash on connect through the pooler.\nRendered:\n%s", param, out)
+func grepLine(s, needle string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, needle) {
+			return strings.TrimSpace(l)
 		}
 	}
+	return "<absent>"
 }
