@@ -127,22 +127,65 @@ func (h *BackupHandler) deleteStagedDump(key string) {
 	}
 }
 
-// s3RestoreScript downloads the staged dump, refuses it unless the sha256
-// matches what the server received, and applies it in one transaction.
+// controlPlaneApplyShell defines apply_dump, which both restore paths use.
+//
+// The whole dump goes in one transaction so a failure (or a deadlock with a
+// still-running replica) rolls back to the old database instead of leaving
+// tables dropped and recreated without their keys. It runs against the
+// primary, not kuso-pgbouncer: in transaction mode each statement could land
+// on a different backend, so the dump's session SETs (statement_timeout = 0)
+// would not stick and the role's 60s timeout would cut every COPY short.
+// Live replicas block on the dropped tables until COMMIT, then the rollout
+// replaces them. A failed attempt left nothing behind, so it is retried.
+// psql commits at end of input even when the input stopped mid-COPY, so a
+// truncated dump is refused up front by its missing trailer.
 // The GUC strip mirrors the addon restore: a newer pg_dump writes session
 // settings an older server rejects under ON_ERROR_STOP.
+const controlPlaneApplyShell = `
+direct_dsn() {
+  printf '%s' "$1" | sed -E 's#@kuso-pgbouncer((\.[A-Za-z0-9.-]+)?)(:[0-9]+)?/#@kuso-postgres-rw\1:5432/#'
+}
+apply_dump() { # gz file
+  if ! gunzip -c "$1" | tail -n 20 | grep -q '^-- PostgreSQL database dump complete'; then
+    echo "[restore] dump is truncated or is not a pg_dump plain dump (no 'dump complete' trailer); not touching the database" >&2
+    exit 1
+  fi
+  _dsn=$(direct_dsn "${DSN}")
+  _n=1
+  until gunzip -c "$1" \
+    | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
+    | psql "${_dsn}" -q -v ON_ERROR_STOP=1 --single-transaction; do
+    if [ "${_n}" -ge 3 ]; then
+      echo "[restore] failed ${_n} times; every attempt was rolled back, the database is unchanged" >&2
+      exit 1
+    fi
+    echo "[restore] attempt ${_n} rolled back; retrying in 10s" >&2
+    _n=$((_n+1))
+    sleep 10
+  done
+}
+`
+
+// secretRestoreScript applies a dump small enough to ride in a Secret.
+const secretRestoreScript = `
+set -eo pipefail
+` + controlPlaneApplyShell + `echo "[restore] starting at $(date -u)"
+apply_dump /data/dump.sql.gz
+echo "[restore] done at $(date -u)"
+`
+
+// s3RestoreScript downloads the staged dump and refuses it unless the
+// sha256 matches what the server received.
 const s3RestoreScript = `
 set -eo pipefail
-` + s3FetchShellCP + `echo "[restore] starting at $(date -u)"
+` + s3FetchShellCP + controlPlaneApplyShell + `echo "[restore] starting at $(date -u)"
 s3_fetch "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
 GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
 if [ "${GOT}" != "${EXPECT_SHA256}" ]; then
   echo "[restore] checksum MISMATCH: uploaded=${EXPECT_SHA256} downloaded=${GOT}; not touching the database" >&2
   exit 1
 fi
-gunzip -c /tmp/dump.sql.gz \
-  | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
-  | psql "$DSN" -v ON_ERROR_STOP=1 --single-transaction
+apply_dump /tmp/dump.sql.gz
 echo "[restore] done at $(date -u)"
 `
 
@@ -190,7 +233,7 @@ func (h *BackupHandler) s3RestoreJob(jobName, key, digest string) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:            "restore",
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"sh", "-c"},
 						Args:            []string{s3RestoreScript},
 						Env:             env,

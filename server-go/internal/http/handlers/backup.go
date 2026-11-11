@@ -409,12 +409,7 @@ func (h *BackupHandler) createRestoreJob(ctx context.Context, jobName, secretNam
 						Image:           "postgres:16-alpine",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"/bin/sh", "-ec"},
-						Args: []string{`
-set -e
-echo "[restore] starting at $(date -u)"
-gunzip -c /data/dump.sql.gz | psql "$DSN" -v ON_ERROR_STOP=1
-echo "[restore] done at $(date -u)"
-`},
+						Args:            []string{secretRestoreScript},
 						Env: []corev1.EnvVar{{
 							Name: "DSN",
 							ValueFrom: &corev1.EnvVarSource{

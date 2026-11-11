@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestS3RestoreJob_VerifiesBeforeApplying(t *testing.T) {
 	}
 	script := job.Spec.Template.Spec.Containers[0].Args[0]
 	check := strings.Index(script, `"${EXPECT_SHA256}"`)
-	apply := strings.Index(script, `psql "$DSN"`)
+	apply := strings.Index(script, "apply_dump /tmp")
 	if check < 0 || apply < 0 || check > apply {
 		t.Fatalf("checksum check (at %d) must precede psql (at %d)", check, apply)
 	}
@@ -67,6 +68,35 @@ func TestS3RestoreJob_VerifiesBeforeApplying(t *testing.T) {
 	for _, k := range []string{"KEY", "EXPECT_SHA256", "DSN", "BUCKET", "S3_ENDPOINT", "AWS_ACCESS_KEY_ID"} {
 		if !env[k] {
 			t.Errorf("job env missing %s", k)
+		}
+	}
+}
+
+// Both control-plane restore paths must apply atomically and against the
+// primary: a non-atomic replay through the transaction pooler left tables
+// recreated without their primary and foreign keys.
+func TestControlPlaneRestore_AtomicAgainstPrimary(t *testing.T) {
+	h := &BackupHandler{Namespace: "kuso"}
+	s3Script := h.s3RestoreJob("kuso-restore-x", "k", "abc").Spec.Template.Spec.Containers[0].Args[0]
+	for name, script := range map[string]string{"secret": secretRestoreScript, "s3": s3Script} {
+		if !strings.Contains(script, "apply_dump ") || !strings.Contains(script, "--single-transaction") {
+			t.Errorf("%s path does not apply through the single-transaction apply_dump", name)
+		}
+	}
+
+	cases := map[string]string{
+		"postgres://u:p%40x@kuso-pgbouncer:6432/kuso?sslmode=disable":                    "postgres://u:p%40x@kuso-postgres-rw:5432/kuso?sslmode=disable",
+		"postgres://u:p@kuso-pgbouncer.kuso.svc.cluster.local:6432/kuso?sslmode=disable": "postgres://u:p@kuso-postgres-rw.kuso.svc.cluster.local:5432/kuso?sslmode=disable",
+		"postgres://u:p@kuso-postgres-rw:5432/kuso?sslmode=disable":                      "postgres://u:p@kuso-postgres-rw:5432/kuso?sslmode=disable",
+		"postgres://u:p@db.example.com:5432/kuso":                                        "postgres://u:p@db.example.com:5432/kuso",
+	}
+	for in, want := range cases {
+		out, err := exec.Command("sh", "-c", controlPlaneApplyShell+`direct_dsn "$1"`, "sh", in).Output()
+		if err != nil {
+			t.Fatalf("direct_dsn %q: %v", in, err)
+		}
+		if string(out) != want {
+			t.Errorf("direct_dsn(%q) = %q, want %q", in, out, want)
 		}
 	}
 }
