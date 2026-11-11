@@ -72,6 +72,21 @@ var ErrPublicTCPNotConfigured = fmt.Errorf("%w: public TCP proxy is not configur
 // is already allocated.
 var ErrPublicTCPPoolExhausted = fmt.Errorf("%w: every port in the public TCP pool is allocated; widen KUSO_TCP_PROXY_PORTS", ErrConflict)
 
+// ErrPublicTCPS3Plaintext refuses a new public TCP port on an s3 addon:
+// MinIO serves plain HTTP there, so object bodies, presigned URLs and the
+// root user's signed requests would cross the internet in cleartext
+// (BLOB-R3). Traefik's TCP router passes the bytes through untouched.
+var ErrPublicTCPS3Plaintext = fmt.Errorf("%w: public TCP isn't available for s3: MinIO serves plain HTTP, so every object and the root user's requests would cross the internet unencrypted; reach it from a service in the project, or put a TLS-terminating proxy service in front of it and give that service a domain", ErrInvalid)
+
+// PublicTCPWarning is the caveat returned with an existing exposure the
+// current rules would refuse, "" when there is none.
+func PublicTCPWarning(kind string) string {
+	if kind == "s3" {
+		return "this s3 addon is exposed over plain HTTP on a public port; disable it (kuso project addon public-tcp disable) once clients no longer need it"
+	}
+	return ""
+}
+
 // publicTCPKinds are the kinds the kusoaddon chart's public-tcp.yaml can
 // route to (single-node topology). Keep in step with that template.
 // redpanda is deliberately absent: it has no auth, auto-creates topics, and
@@ -137,6 +152,11 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 	}
 	if cur.Spec.PublicTCP != nil && cur.Spec.PublicTCP.Enabled && cur.Spec.PublicTCP.Port > 0 {
 		return cur.Spec.PublicTCP.Port, nil
+	}
+	// After the idempotent return: an s3 exposure made before this check
+	// keeps its port (reconcilehealth flags it), a new one is refused.
+	if cur.Spec.Kind == "s3" {
+		return 0, ErrPublicTCPS3Plaintext
 	}
 
 	// Build the in-use port set from every addon cluster-wide.

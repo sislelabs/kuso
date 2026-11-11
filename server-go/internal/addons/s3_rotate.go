@@ -3,10 +3,13 @@ package addons
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -298,6 +301,24 @@ echo "==> previous app user removed"
 	return prev, nil
 }
 
+// s3AdminJobName is "<addon>-s3-<verb>-<ts>", shortened to a valid
+// 63-char name by keeping a prefix of the addon name plus a hash of the
+// full one, so it never starts with '-' and stays unique per addon.
+func s3AdminJobName(addon, verb string, now time.Time) string {
+	suffix := "-s3-" + verb + "-" + strconv.FormatInt(now.Unix(), 36)
+	name := addon + suffix
+	if len(name) <= 63 {
+		return name
+	}
+	sum := sha256.Sum256([]byte(addon))
+	h := "-" + hex.EncodeToString(sum[:])[:8]
+	keep := 63 - len(suffix) - len(h)
+	if keep < 1 {
+		keep = 1
+	}
+	return strings.TrimRight(addon[:keep], "-.") + h + suffix
+}
+
 // pointMinIOAtRootSecret patches the MinIO StatefulSet's root env to
 // read from the root Secret (a rolling restart of the single pod).
 func (s *Service) pointMinIOAtRootSecret(ctx context.Context, ns, sts, rootSecret string) error {
@@ -312,10 +333,7 @@ func (s *Service) pointMinIOAtRootSecret(ctx context.Context, ns, sts, rootSecre
 // waits for it. Credentials travel in a Secret the Job owns, never in the
 // Job spec.
 func (s *Service) runS3AdminJob(ctx context.Context, ns string, a *kube.KusoAddon, verb, script, rootSecret string, env []corev1.EnvVar, creds map[string][]byte) error {
-	name := fmt.Sprintf("%s-s3-%s-%s", a.Name, verb, strconv.FormatInt(time.Now().Unix(), 36))
-	if len(name) > 63 {
-		name = name[len(name)-63:]
-	}
+	name := s3AdminJobName(a.Name, verb, time.Now())
 	labels := map[string]string{
 		kube.LabelProject:              a.Spec.Project,
 		"kuso.sislelabs.com/addon":     a.Name,
@@ -323,12 +341,6 @@ func (s *Service) runS3AdminJob(ctx context.Context, ns string, a *kube.KusoAddo
 		"app.kubernetes.io/managed-by": "kuso",
 	}
 	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
-	if _, err := secrets.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Data:       creds,
-	}, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create admin job secret: %w", err)
-	}
 	secretRef := func(n, sec, key string) corev1.EnvVar {
 		return corev1.EnvVar{Name: n, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: sec}, Key: key}}}
@@ -375,16 +387,21 @@ func (s *Service) runS3AdminJob(ctx context.Context, ns string, a *kube.KusoAddo
 			},
 		},
 	}
+	// Job first, then the creds Secret born owned by it, so TTL/GC always
+	// reaps the Secret. The pod waits in CreateContainerConfigError for the
+	// moments until the Secret exists; the kubelet retries on its own.
 	created, err := s.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
-		_ = secrets.Delete(ctx, name, metav1.DeleteOptions{})
 		return fmt.Errorf("create admin job: %w", err)
 	}
-	// The creds Secret goes with the Job (TTL reaps both).
 	owner := metav1.OwnerReference{APIVersion: "batch/v1", Kind: "Job", Name: created.Name, UID: created.UID}
-	if sec, gerr := secrets.Get(ctx, name, metav1.GetOptions{}); gerr == nil {
-		sec.OwnerReferences = []metav1.OwnerReference{owner}
-		_, _ = secrets.Update(ctx, sec, metav1.UpdateOptions{})
+	if _, err := secrets.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels, OwnerReferences: []metav1.OwnerReference{owner}},
+		Data:       creds,
+	}, metav1.CreateOptions{}); err != nil {
+		bg := metav1.DeletePropagationBackground
+		_ = s.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &bg})
+		return fmt.Errorf("create admin job secret: %w", err)
 	}
 
 	deadline := time.Now().Add(s3AdminJobTimeout)

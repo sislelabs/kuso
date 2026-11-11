@@ -15,7 +15,8 @@ type CreateEnvGroupRequest struct {
 	AddonPolicy map[string]string `json:"addonPolicy,omitempty"`
 	// SharedKeys "none" clones every service with no project shared-secret
 	// subscription; empty keeps the source's (production values).
-	SharedKeys string `json:"sharedKeys,omitempty"`
+	SharedKeys  string `json:"sharedKeys,omitempty"`
+	S3ReadWrite bool   `json:"s3ReadWrite,omitempty"`
 }
 
 func (k *KusoClient) ListEnvGroups(project string) (*resty.Response, error) {

@@ -26,6 +26,12 @@ rg_env_json() {
     | jq --arg p "$RG_PROJECT" '[.items[] | select(.spec.project==$p)][0]'
 }
 
+rg_auth_not_flagged() {
+  local rep
+  rep="$("$K" health -o json)" || return 1
+  ! jq -e '.issues[] | select(.kind=="registry_auth_disabled")' <<<"$rep" >/dev/null
+}
+
 rg_has_digest() { rg_env_json | jq -e '.spec.image.digest // "" | startswith("sha256:")' >/dev/null; }
 
 registry_main() {
@@ -66,6 +72,15 @@ registry_main() {
   check "anonymous pull of the built image refused (HTTP ${code})" test "$code" == "401"
   deployed="$(node_kubectl -n "$RG_NS" get deploy "$(jq -r '.metadata.name' <<<"$env")" -o jsonpath='{.spec.template.spec.containers[0].image}')"
   check "the Deployment runs the image by that digest (${deployed##*@})" grep -qF "@${digest}" <<<"$deployed"
+
+  step "registry rebuild plans the deployed commit"
+  local plan
+  plan="$("$K" registry rebuild "$RG_PROJECT" --dry-run 2>&1 || true)"
+  echo "  ${plan}"
+  check "rebuild plan names the production env and a full commit" \
+    grep -qE "would rebuild ${RG_PROJECT}/api env=production from commit [0-9a-f]{40}" <<<"$plan"
+  check "kuso health reports registry auth as on" \
+    bash -c "! \"$K\" health -o json | jq -e '.issues[] | select(.kind==\"registry_auth_disabled\")' >/dev/null"
 }
 
 registry_cleanup() {

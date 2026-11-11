@@ -218,7 +218,8 @@ kuso environment add papelito web staging --branch develop
 #   --host <fqdn>       custom host for the env (else auto <svc>-staging.<base>)
 #   --seed-from <env>   copy a DB snapshot from another env (e.g. production)
 #   --addons <kinds>    which stateful kinds get their OWN per-env instance
-#   --share-addons      legacy: share production's addons instead (no isolation)
+#   --share-addons      legacy: share production's addons instead (no isolation;
+#                       s3 buckets are mounted read-only unless --s3-read-write)
 kuso environment list papelito
 kuso environment delete papelito papelito-web-staging   # full env name from `environment list`; production can't be deleted
 
@@ -645,6 +646,8 @@ kuso project addon public-tcp enable <project> <addon>    # admin-only
 #   → "addon <project>/<addon> exposed on public TCP port <PORT>"
 kuso project addon public-tcp disable <project> <addon> --yes   # frees the port (prompts without --yes)
 ```
+
+s3 addons can't be exposed this way: MinIO speaks plain HTTP, so kuso refuses.
 
 - **The port is server-allocated from a fixed pool** (`KUSO_TCP_PROXY_PORTS`).
   Read it back via the UI's `public · :<PORT>` badge or `kuso get addons <p> -o json`

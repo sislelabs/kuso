@@ -40,6 +40,23 @@
 # not scoped per repository, so a Dockerfile can still name another
 # project's image in FROM (the build client pulls it with the shared
 # credential). Per-repository scoping needs token auth (OPEN.md N6 a).
+# Until then the build container lints the Dockerfile and build args for
+# another project's in-cluster refs: preview builds refuse, others warn.
+# htpasswd has no per-user permissions either, so the same credential can
+# DELETE manifests; a push-only build credential also needs token auth.
+#
+# RECOVERY. kuso-registry-data is a single RWO volume with no backup. If it
+# is lost, every env still points at a digest nothing serves and the next
+# pod restart fails ImagePullBackOff. Rebuild what runs with
+#   kuso registry rebuild --all --only-missing --dry-run   (then without --dry-run)
+# which rebuilds each env from its deployed commit (branch head when kuso
+# no longer has that build) and rolls it onto the new image. To keep the
+# images off the node instead, distribution can store them in S3: set
+# REGISTRY_STORAGE=s3 plus REGISTRY_STORAGE_S3_{BUCKET,REGION,REGIONENDPOINT,
+# ACCESSKEY,SECRETKEY} (and FORCEPATHSTYLE=true for MinIO/R2) on the
+# container below and drop the PVC. kuso does not wire that for you, and
+# moving an existing registry means copying /var/lib/registry/docker into
+# the bucket first.
 
 apiVersion: v1
 kind: PersistentVolumeClaim

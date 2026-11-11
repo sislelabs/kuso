@@ -497,6 +497,9 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, req.Name)
 	if existing, err := s.Kube.GetKusoAddon(ctx, ns, fqn); err == nil && existing != nil {
+		if existing.DeletionTimestamp != nil {
+			return nil, fmt.Errorf("%w: addon %s/%s is still being deleted; retry in a few seconds", ErrConflict, project, req.Name)
+		}
 		return nil, fmt.Errorf("%w: addon %s/%s already exists", ErrConflict, project, req.Name)
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight addon: %w", err)
@@ -516,7 +519,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	}
 	if len(pvcs) > 0 {
 		if req.ExtraLabels["kuso.sislelabs.com/preview-pr"] == "" {
-			return nil, fmt.Errorf("%w: data from a previous %s still exists — pick another name or delete it with purge", ErrConflict, req.Name)
+			return nil, fmt.Errorf("%w: data from a previous %s still exists (%s) — pick another name, or remove it for good with: kuso project addon delete %s %s --purge-data", ErrConflict, req.Name, strings.Join(pvcs, ", "), project, req.Name)
 		}
 		s.deleteCloneDataPVCs(ctx, ns, fqn)
 		s.deleteCloneConnSecret(ctx, ns, fqn)
@@ -1287,6 +1290,9 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	cr, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			if opts.PurgeData {
+				return s.purgeRetainedAddonData(ctx, ns, project, fqn)
+			}
 			return ErrNotFound
 		}
 		return err
@@ -1896,6 +1902,9 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			if len(withheld) > 0 {
 				slog.Default().Warn("addon refresh: production addon conns withheld from an isolated env (no clone for it)",
 					"project", project, "env", live.Name, "withheld", withheld)
+			}
+			if !preview && SharedS3ReadOnly(live.Annotations) {
+				perEnv = SwapToReadOnlyS3(perEnv, ReadOnlyS3Swaps(addonList), SubscriptionAllows(subs, project))
 			}
 			// Respect the shared-secret subscription (mirrors projects.
 			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env

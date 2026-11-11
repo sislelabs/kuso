@@ -354,6 +354,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					}
 					if preview {
 						prunedFrom = addons.ScrubPreviewSharedMounts(prunedFrom, project)
+					} else if addons.SharedS3ReadOnly(env.Annotations) {
+						swaps := addons.ReadOnlyS3Swaps(all)
+						prunedFrom = addons.SwapToReadOnlyS3(prunedFrom, swaps, addons.SubscriptionAllows(svc.Spec.SubscribedAddons, project))
+						env.Spec.EnvVars = rescopeAddonConnRefsByOrigin(env.Spec.EnvVars, swaps)
 					}
 				}
 				// Env-scoped clones last — the env's own database must win the

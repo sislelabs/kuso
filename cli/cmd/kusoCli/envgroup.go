@@ -26,6 +26,7 @@ import (
 var (
 	envGroupAddonShare []string
 	envGroupNoShared   bool
+	envGroupS3RW       bool
 	envGroupDeleteYes  bool
 )
 
@@ -130,7 +131,7 @@ var envGroupCreateCmd = &cobra.Command{
 				policy[a] = "shared"
 			}
 		}
-		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy}
+		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy, S3ReadWrite: envGroupS3RW}
 		if envGroupNoShared {
 			req.SharedKeys = "none"
 		}
@@ -237,5 +238,6 @@ func init() {
 	envGroupGetCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 	envGroupCreateCmd.Flags().BoolVar(&envGroupNoShared, "no-shared-keys", false, "don't inherit production's project shared secrets (STRIPE_KEY, ...); set the group's own with 'kuso secret set'")
 	envGroupCreateCmd.Flags().StringSliceVar(&envGroupAddonShare, "share-addon", nil, "addon short-name(s) to share with production instead of cloning fresh (repeatable)")
+	envGroupCreateCmd.Flags().BoolVar(&envGroupS3RW, "s3-read-write", false, "let the group write the production buckets of s3 addons it shares (default: read-only)")
 	envGroupDeleteCmd.Flags().BoolVarP(&envGroupDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 }

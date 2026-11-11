@@ -106,6 +106,73 @@ func WithholdProductionConns(next, prev []string, all []kube.KusoAddon, envScope
 	return kept, withheld
 }
 
+// AnnotationSharedS3ReadOnly marks a named env (staging/qa) that shares the
+// project's s3 addons instead of owning copies: it mounts each native
+// bucket through the read-only user, like a preview does (BLOB-R9). Only
+// envs created since are stamped; older envs keep their read-write mount,
+// and `--s3-read-write` at creation opts a new one out.
+const AnnotationSharedS3ReadOnly = "kuso.sislelabs.com/shared-s3-readonly"
+
+// SharedS3ReadOnly reports whether the env carries AnnotationSharedS3ReadOnly.
+func SharedS3ReadOnly(annotations map[string]string) bool {
+	return annotations[AnnotationSharedS3ReadOnly] == "true"
+}
+
+// ReadOnlyS3Swaps maps each native project s3 addon's conn Secret to its
+// read-only Secret. Env-scoped clones are skipped: an env's own copy is
+// its own to write.
+func ReadOnlyS3Swaps(all []kube.KusoAddon) map[string]string {
+	out := map[string]string{}
+	for i := range all {
+		a := &all[i]
+		if a.Labels[kube.LabelEnv] != "" {
+			continue
+		}
+		if ro := PreviewReadOnlyConn(a); ro != "" {
+			out[connSecretName(a.Name)] = ro
+		}
+	}
+	return out
+}
+
+// SwapToReadOnlyS3 replaces every conn in list that swaps names with its
+// read-only Secret. A read-only Secret already in list stays only while
+// allowed(its read-write conn) holds, so unsubscribing still unmounts it.
+func SwapToReadOnlyS3(list []string, swaps map[string]string, allowed func(conn string) bool) []string {
+	if len(swaps) == 0 {
+		return list
+	}
+	rwOf := make(map[string]string, len(swaps))
+	for rw, ro := range swaps {
+		rwOf[ro] = rw
+	}
+	out := make([]string, 0, len(list))
+	add := func(n string) {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	for _, n := range list {
+		if ro, ok := swaps[n]; ok {
+			add(ro)
+			continue
+		}
+		if rw, ok := rwOf[n]; ok && allowed != nil && !allowed(rw) {
+			continue
+		}
+		add(n)
+	}
+	return out
+}
+
+// SubscriptionAllows reports whether an env with subscribedAddons (nil =
+// legacy mount-all) may mount conn.
+func SubscriptionAllows(subscribedAddons []string, project string) func(conn string) bool {
+	return func(conn string) bool {
+		return subscribedAddons == nil || subscribesToConn(subscribedAddons, project, conn)
+	}
+}
+
 // ScrubPreviewSharedMounts removes the project- and instance-shared Secrets
 // from a preview's envFrom list. Mounted whole they hand PR code every
 // shared key, including the instance-PG admin DSN (ISO-2).

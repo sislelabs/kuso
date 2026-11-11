@@ -1130,6 +1130,9 @@ type CreateEnvRequest struct {
 	// Addons overrides which stateful addon kinds get a per-env instance.
 	// Empty = every stateful kind the project has (postgres, redis, s3).
 	Addons []string `json:"addons,omitempty"`
+	// S3ReadWrite lets a ShareAddons env write the production buckets.
+	// Default: it mounts each shared s3 addon read-only (BLOB-R9).
+	S3ReadWrite bool `json:"s3ReadWrite,omitempty"`
 }
 
 // AddEnvironment creates a custom KusoEnvironment for a service.
@@ -1313,6 +1316,19 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// env's DATABASE_URL would still resolve to the PRODUCTION database even
 	// though envFromSecrets was correctly swapped above.
 	scopedSvcEnvVars = rescopeAddonConnRefsByOrigin(scopedSvcEnvVars, envCloneByOrigin)
+	// A shared env reads production buckets through the read-only user.
+	var s3ReadOnly bool
+	if req.ShareAddons && !req.S3ReadWrite {
+		all, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+		if err != nil {
+			return nil, fmt.Errorf("list addons: %w", err)
+		}
+		if swaps := addons.ReadOnlyS3Swaps(all); len(swaps) > 0 {
+			s3ReadOnly = true
+			envFromSecrets = addons.SwapToReadOnlyS3(envFromSecrets, swaps, nil)
+			scopedSvcEnvVars = rescopeAddonConnRefsByOrigin(scopedSvcEnvVars, swaps)
+		}
+	}
 	// Same treatment for inline envVars: expand the subscription into
 	// explicit valueFrom entries + drop shared-secret names from
 	// envFromSecrets so per-key gating actually works at create
@@ -1444,6 +1460,12 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	}
 	if len(excludedConns) > 0 {
 		env.Annotations = map[string]string{addons.AnnotationExcludedAddonConns: strings.Join(excludedConns, ",")}
+	}
+	if s3ReadOnly {
+		if env.Annotations == nil {
+			env.Annotations = map[string]string{}
+		}
+		env.Annotations[addons.AnnotationSharedS3ReadOnly] = "true"
 	}
 	if envImage != nil && svc.Spec.Runtime == "image" {
 		kube.StampPromotedAt(env, time.Now())

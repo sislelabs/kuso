@@ -94,7 +94,13 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 	// secret is missing the Job's own BUCKET guard fails loudly and the
 	// completion-poll below surfaces that failure rather than stamping a bad
 	// restore point.
-	if ns != a.homeNS {
+	// A project with its own scoped key writes through it, and the
+	// bucket-wide key never lands in its namespace (BLOB-R1).
+	scoped, err := a.kc.ProjectBackupSecretIn(ctx, ns, project)
+	if err != nil {
+		return "", err
+	}
+	if scoped == "" && ns != a.homeNS {
 		if err := a.mirrorBackupSecret(ctx, ns); err != nil {
 			return "", fmt.Errorf("mirror backup secret into %s: %w", ns, err)
 		}
@@ -102,6 +108,9 @@ func (a *snapshotAdapter) CreateSnapshotJob(ctx context.Context, project, addon,
 
 	jobName := fmt.Sprintf("%s-snapshot-%d", release, time.Now().Unix())
 	job := buildSnapshotJob(ns, jobName, key, project, addon, trigger, buildRef, bucketOverride, external)
+	if scoped != "" {
+		retargetSecretRefs(job.Spec.Template.Spec.Containers, snapshotBackupSecretName, scoped)
+	}
 	if _, err := a.kc.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		return "", fmt.Errorf("create snapshot job: %w", err)
 	}
@@ -392,4 +401,15 @@ func snapshotBucketEnv(override string) corev1.EnvVar {
 		return corev1.EnvVar{Name: "BUCKET", Value: override}
 	}
 	return snapEnvFromSecretOpt("BUCKET", snapshotBackupSecretName, "bucket")
+}
+
+// retargetSecretRefs points every env secretKeyRef to from at to.
+func retargetSecretRefs(ctrs []corev1.Container, from, to string) {
+	for i := range ctrs {
+		for j := range ctrs[i].Env {
+			if ref := ctrs[i].Env[j].ValueFrom; ref != nil && ref.SecretKeyRef != nil && ref.SecretKeyRef.Name == from {
+				ref.SecretKeyRef.Name = to
+			}
+		}
+	}
 }
