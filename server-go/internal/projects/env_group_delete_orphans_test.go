@@ -33,6 +33,15 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 	secret := func(name string) *corev1.Secret {
 		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 	}
+	// The s3 chart keeps its MinIO root + read-only user Secrets past
+	// helm uninstall, like the PVC; only the label ties them to the addon.
+	keptSecret := func(name, instance string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns,
+			Labels:      map[string]string{"app.kubernetes.io/instance": instance},
+			Annotations: map[string]string{"helm.sh/resource-policy": "keep"},
+		}}
+	}
 
 	var objs []runtime.Object
 	for _, grp := range []string{"verify", "staging"} {
@@ -40,6 +49,8 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 			fqn := "st-" + a + "-" + grp
 			objs = append(objs, pvc("data-"+fqn+"-0", fqn), secret(fqn+"-conn"))
 		}
+		objs = append(objs, keptSecret("st-storage-"+grp+"-root", "st-storage-"+grp),
+			keptSecret("st-storage-"+grp+"-readonly", "st-storage-"+grp))
 		for _, svc := range []string{"web", "api"} {
 			objs = append(objs, secret("st-"+svc+"-"+grp+"-tls"))
 		}
@@ -47,6 +58,7 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 	for _, a := range []string{"db", "cache", "storage"} {
 		objs = append(objs, pvc("data-st-"+a+"-0", "st-"+a), secret("st-"+a+"-conn"))
 	}
+	objs = append(objs, keptSecret("st-storage-root", "st-storage"), keptSecret("st-storage-readonly", "st-storage"))
 	// Shared per-service secrets every env mounts — never the group's.
 	objs = append(objs, secret("st-web-secrets"), secret("st-api-secrets"),
 		secret("st-web-production-tls"), secret("st-web-verify-tls-extra-verify-example-com"))
@@ -96,6 +108,16 @@ func TestDeleteEnvGroup_LeavesNoOrphans(t *testing.T) {
 		for _, keep := range []string{"st-" + a + "-staging", "st-" + a} {
 			if !pvcExists("data-"+keep+"-0") || !secretExists(keep+"-conn") || !addonExists(t, s, keep) {
 				t.Errorf("%s (PVC, conn secret or CR) was collaterally deleted", keep)
+			}
+		}
+	}
+	for _, suffix := range []string{"-root", "-readonly"} {
+		if secretExists("st-storage-verify" + suffix) {
+			t.Errorf("verify clone secret st-storage-verify%s orphaned", suffix)
+		}
+		for _, keep := range []string{"st-storage-staging", "st-storage"} {
+			if !secretExists(keep + suffix) {
+				t.Errorf("%s%s was collaterally deleted", keep, suffix)
 			}
 		}
 	}

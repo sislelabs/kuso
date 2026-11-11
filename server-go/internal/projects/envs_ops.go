@@ -581,15 +581,26 @@ func (s *Service) reclaimCloneAddonData(ctx context.Context, ns, addonFQN string
 		return nil
 	}
 	var errs []error
-	pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
-	})
+	byInstance := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + addonFQN}
+	pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, byInstance)
 	if lerr != nil {
 		errs = append(errs, fmt.Errorf("list PVCs of %s/%s: %w", ns, addonFQN, lerr))
 	} else {
 		for i := range pvcs.Items {
 			if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				errs = append(errs, fmt.Errorf("delete PVC %s/%s: %w", ns, pvcs.Items[i].Name, derr))
+			}
+		}
+	}
+	// Kept Secrets beyond -conn (s3's -root and -readonly) carry only the
+	// instance label.
+	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, byInstance)
+	if lerr != nil {
+		errs = append(errs, fmt.Errorf("list Secrets of %s/%s: %w", ns, addonFQN, lerr))
+	} else {
+		for i := range secs.Items {
+			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, fmt.Errorf("delete Secret %s/%s: %w", ns, secs.Items[i].Name, derr))
 			}
 		}
 	}
