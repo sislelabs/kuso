@@ -29,6 +29,9 @@ spec:
     metadata:
       labels:
         {{- include "kusorun.labels" . | nindent 8 }}
+        {{- with include "kusorun.isolationLabels" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
         {{- /* Same egress gates as the kusoenvironment pod template;
                values copied from the owning service by the server. */}}
         {{- if not .Values.privateEgress }}
@@ -43,6 +46,10 @@ spec:
       # kube apiserver, so don't mount a ServiceAccount token — same
       # rule the kusoenvironment deployment and kusocron apply.
       automountServiceAccountToken: false
+      {{- if .Values.envScope }}
+      # ISO-13: no Docker-link env vars; same gate as the isolation labels.
+      enableServiceLinks: false
+      {{- end }}
       restartPolicy: Never
       {{- with (.Values.image).pullSecret }}
       imagePullSecrets:

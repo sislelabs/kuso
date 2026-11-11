@@ -33,6 +33,9 @@ var (
 type Report struct {
 	Project string `json:"project"`
 	Enabled bool   `json:"enabled"`
+	// NonProductionEnvs: non-production envs are isolated from each other
+	// too, not only from production (ISO-4).
+	NonProductionEnvs bool `json:"nonProductionEnvs"`
 	// Ready: every env CR carries an env label mirrored into spec.envScope
 	// and every env pod carries the label.
 	Ready bool `json:"ready"`
@@ -82,11 +85,12 @@ func (s *Service) Readiness(ctx context.Context, project string) (*Report, error
 		return nil, err
 	}
 	rep := &Report{
-		Project:        project,
-		Enabled:        enabled(p),
-		UnstampedEnvs:  []string{},
-		UnlabelledEnvs: []string{},
-		UnlabelledPods: []string{},
+		Project:           project,
+		Enabled:           enabled(p),
+		NonProductionEnvs: nonProdIsolated(p),
+		UnstampedEnvs:     []string{},
+		UnlabelledEnvs:    []string{},
+		UnlabelledPods:    []string{},
 	}
 	for _, e := range envs {
 		scope := e.Labels[kube.LabelEnv]
@@ -165,9 +169,10 @@ func (s *Service) plainProduction(ctx context.Context, ns string, e *kube.KusoEn
 	return svc.Labels[kube.LabelEnv] == ""
 }
 
-// SetEnabled flips spec.networkPolicy.envIsolation. Enabling refuses
-// (ErrNotReady) unless Readiness passes; disabling always works.
-func (s *Service) SetEnabled(ctx context.Context, project string, on bool) (*Report, error) {
+// SetEnabled flips spec.networkPolicy.envIsolation, and isolateNonProdEnvs
+// when nonProd is set. Enabling refuses (ErrNotReady) unless Readiness
+// passes; disabling always works.
+func (s *Service) SetEnabled(ctx context.Context, project string, on bool, nonProd *bool) (*Report, error) {
 	if on {
 		rep, err := s.Readiness(ctx, project)
 		if err != nil {
@@ -184,6 +189,10 @@ func (s *Service) SetEnabled(ctx context.Context, project string, on bool) (*Rep
 		}
 		v := on
 		p.Spec.NetworkPolicy.EnvIsolation = &v
+		if nonProd != nil {
+			np := *nonProd
+			p.Spec.NetworkPolicy.IsolateNonProdEnvs = &np
+		}
 		return nil
 	})
 	if err != nil {
@@ -194,4 +203,9 @@ func (s *Service) SetEnabled(ctx context.Context, project string, on bool) (*Rep
 
 func enabled(p *kube.KusoProject) bool {
 	return p.Spec.NetworkPolicy != nil && p.Spec.NetworkPolicy.EnvIsolation != nil && *p.Spec.NetworkPolicy.EnvIsolation
+}
+
+func nonProdIsolated(p *kube.KusoProject) bool {
+	np := p.Spec.NetworkPolicy
+	return enabled(p) && np.IsolateNonProdEnvs != nil && *np.IsolateNonProdEnvs
 }

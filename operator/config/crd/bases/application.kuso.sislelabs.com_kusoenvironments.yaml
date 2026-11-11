@@ -77,6 +77,24 @@ spec:
                     env-isolation NetworkPolicies key on. Empty on CRs not yet
                     rewritten since the upgrade: their pods stay unlabelled and
                     keep project-wide reachability.
+                basicAuthSecret:
+                  type: string
+                  maxLength: 253
+                  pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                  x-kubernetes-validations:
+                    - rule: "!self.startsWith('kuso-')"
+                      message: "control-plane secrets (kuso-*) cannot be referenced"
+                  description: >-
+                    Secret (htpasswd lines under key "users") a Traefik
+                    basicAuth middleware checks in front of this env's
+                    ingress. Set on previews from the project's
+                    previews.basicAuthSecret.
+                disableServiceLinks:
+                  type: boolean
+                  description: >-
+                    Render enableServiceLinks=false on the pod (no Docker-link
+                    env vars for every Service in the namespace). Set by
+                    kuso-server on env CRs it creates.
                 branch:
                   type: string
                   default: main
@@ -271,7 +289,7 @@ spec:
                                 # remain unreferencable from a tenant CR.
                                 # The CEL rule closes the pattern's blind
                                 # spot: kuso-postgres-conn matches *-conn.
-                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$"
                                 x-kubernetes-validations:
                                   - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
                                     message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
@@ -287,7 +305,7 @@ spec:
                   type: array
                   items:
                     type: string
-                    pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$"
+                    pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$"
                     x-kubernetes-validations:
                       - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
                         message: "control-plane secrets (kuso-*) cannot be mounted into workload pods"

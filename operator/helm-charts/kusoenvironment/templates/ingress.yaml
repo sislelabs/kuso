@@ -125,6 +125,28 @@ spec:
     permanent: true
 ---
 {{- end }}
+{{- /* Preview basic auth (ISO-12): the project's previews.basicAuthSecret,
+       copied onto each preview env. Without the Middleware CRD/RBAC the
+       render fails rather than publishing a preview the user asked to
+       keep private. */ -}}
+{{- $authRef := "" -}}
+{{- if and $hosts .Values.basicAuthSecret }}
+{{- if not (include "kusoenvironment.limitsOn" .) }}
+{{- fail "basicAuthSecret needs Traefik Middlewares (ingressLimitsEnabled + traefik ingress class)" }}
+{{- end }}
+{{- $authRef = printf "%s-%s-auth@kubernetescrd" .Release.Namespace (include "kusoenvironment.limitsBase" .) }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "kusoenvironment.limitsBase" . }}-auth
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  basicAuth:
+    secret: {{ .Values.basicAuthSecret | quote }}
+    removeHeader: true
+---
+{{- end }}
 {{- if $hosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -134,6 +156,7 @@ metadata:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
   {{- $mw := list -}}
   {{- if $redirectMain }}{{- $mw = append $mw $redirectRef -}}{{- end -}}
+  {{- if $authRef }}{{- $mw = append $mw $authRef -}}{{- end -}}
   {{- with include "kusoenvironment.limitMiddlewares" . }}{{- $mw = append $mw . -}}{{- end -}}
   {{- if or (and .Values.tlsEnabled $tlsHosts) $mw }}
   annotations:

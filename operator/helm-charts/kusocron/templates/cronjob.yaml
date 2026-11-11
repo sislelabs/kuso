@@ -59,6 +59,9 @@ spec:
         metadata:
           labels:
             {{- include "kusocron.labels" . | nindent 12 }}
+            {{- with include "kusocron.isolationLabels" . }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- /* Same egress gates as the kusoenvironment pod template:
                    the project NetworkPolicy is default-deny and only
                    allows public egress for pods carrying this label.
@@ -78,6 +81,11 @@ spec:
           # cluster credentials. Mirrors the kusoenvironment deployment,
           # which has disabled automount since the pod-hardening pass.
           automountServiceAccountToken: false
+          {{- if .Values.envScope }}
+          # ISO-13: no Docker-link env vars for every Service in the
+          # namespace. Same gate as the isolation labels.
+          enableServiceLinks: false
+          {{- end }}
           restartPolicy: OnFailure
           {{- with (.Values.image).pullSecret }}
           imagePullSecrets:

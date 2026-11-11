@@ -197,9 +197,10 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 	}
 	if in.Previews != nil {
 		out.Previews = &projects.UpdateProjectPreviewsSpec{
-			Enabled:    in.Previews.Enabled,
-			TTLDays:    in.Previews.TTLDays,
-			BaseDomain: in.Previews.BaseDomain,
+			Enabled:         in.Previews.Enabled,
+			TTLDays:         in.Previews.TTLDays,
+			BaseDomain:      in.Previews.BaseDomain,
+			BasicAuthSecret: in.Previews.BasicAuthSecret,
 		}
 	}
 	if in.Uptime != nil {

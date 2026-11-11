@@ -391,6 +391,22 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 		pullSecrets = []corev1.LocalObjectReference{{Name: image.PullSecret}}
 	}
 
+	podLabels := map[string]string{
+		"kuso.sislelabs.com/role":    "release",
+		"kuso.sislelabs.com/project": env.Spec.Project,
+		"kuso.sislelabs.com/service": env.Spec.Service,
+		// release Jobs are short-lived; grant the same
+		// public-egress so curl-based migrations (rare
+		// but real) can reach package CDNs etc.
+		"kuso.sislelabs.com/network-egress-public": "true",
+	}
+	// ISO-3: the Job runs the env's (for a preview, the PR's) code, so the
+	// env-isolation policies must see it as that env, not as a legacy pod
+	// that reaches everything in the project.
+	for k, v := range kube.EnvIsolationLabels(env.Spec.EnvScope, kube.PodSecretNames(envVars, env.Spec.EnvFromSecrets)) {
+		podLabels[k] = v
+	}
+
 	backoff := int32(0) // One shot — never retry a failed migration.
 	parallelism := int32(1)
 	completions := int32(1)
@@ -427,15 +443,7 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 			TTLSecondsAfterFinished: ptrInt32(86400), // Keep Job + pod 24h for log access.
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"kuso.sislelabs.com/role":    "release",
-						"kuso.sislelabs.com/project": env.Spec.Project,
-						"kuso.sislelabs.com/service": env.Spec.Service,
-						// release Jobs are short-lived; grant the same
-						// public-egress so curl-based migrations (rare
-						// but real) can reach package CDNs etc.
-						"kuso.sislelabs.com/network-egress-public": "true",
-					},
+					Labels: podLabels,
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,

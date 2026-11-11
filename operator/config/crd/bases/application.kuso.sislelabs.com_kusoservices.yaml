@@ -186,7 +186,7 @@ spec:
                                 # credential. Project names can't start
                                 # with kuso-, so no tenant secret is ever
                                 # kuso-* except kuso-instance-shared.
-                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$"
                                 x-kubernetes-validations:
                                   - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
                                     message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
@@ -515,7 +515,7 @@ spec:
                                 properties:
                                   name:
                                     type: string
-                                    pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                    pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$"
                                     x-kubernetes-validations:
                                       - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
                                         message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"

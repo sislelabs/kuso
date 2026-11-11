@@ -154,6 +154,14 @@ spec:
                 placement:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                envScope:
+                  type: string
+                  maxLength: 63
+                  description: >-
+                    The env label of the env this job runs as (copied from that
+                    env's spec.envScope by kuso-server). The chart stamps it and
+                    the job's addon-subscriber labels on the pod so env
+                    isolation treats it as that env. Empty: legacy, unlabelled.
                 privateEgress:
                   type: boolean
                   default: false

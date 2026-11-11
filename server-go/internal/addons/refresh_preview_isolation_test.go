@@ -70,7 +70,8 @@ func TestRefreshEnvSecrets_PreviewNeverGetsServiceSecret(t *testing.T) {
 }
 
 // DATA-03/DATA-04: a preview never mounts a production conn it has no clone
-// of, except the kinds shared by design (s3, mailpit).
+// of, except the kinds shared by design (mailpit, and native s3 through its
+// read-only Secret, BLOB-2).
 func TestRefreshEnvSecrets_PreviewWithholdsUnclonedProductionConns(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
@@ -87,12 +88,12 @@ func TestRefreshEnvSecrets_PreviewWithholdsUnclonedProductionConns(t *testing.T)
 		t.Fatalf("RefreshEnvSecrets: %v", err)
 	}
 	got := envFromOf(t, s, "tickero-api-pr-52")
-	for _, want := range []string{"tickero-db-pr-52-conn", "tickero-storage-conn"} {
+	for _, want := range []string{"tickero-db-pr-52-conn", "tickero-storage-readonly"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("preview missing %s: %v", want, got)
 		}
 	}
-	for _, leak := range []string{"tickero-db-conn", "tickero-psdb-conn", "tickero-analytics-conn", "tickero-events-conn"} {
+	for _, leak := range []string{"tickero-db-conn", "tickero-psdb-conn", "tickero-analytics-conn", "tickero-events-conn", "tickero-storage-conn"} {
 		if slices.Contains(got, leak) {
 			t.Errorf("preview mounts production %s: %v", leak, got)
 		}

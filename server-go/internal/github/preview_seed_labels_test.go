@@ -14,7 +14,7 @@ import (
 // user image.
 func TestRunPreviewSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	d := newDispatcher(t)
-	if err := d.runPreviewSeedJob(context.Background(), "e2e", "e2e-web-pr-1", "img:tag", "npm run seed", nil, nil); err != nil {
+	if err := d.runPreviewSeedJob(context.Background(), "e2e", "e2e-web-pr-1", "preview-pr-1", "img:tag", "npm run seed", []string{"e2e-db-pr-1-conn", "e2e-web-pr-1-secrets"}, nil); err != nil {
 		t.Fatalf("runPreviewSeedJob: %v", err)
 	}
 	jobs, err := d.Kube.Clientset.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{})
@@ -27,5 +27,13 @@ func TestRunPreviewSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	}
 	if got := labels["kuso.sislelabs.com/network-egress-public"]; got != "true" {
 		t.Errorf("pod template network-egress-public = %q, want true", got)
+	}
+	// ISO-3: the preview's env scope (what its env pods carry, so the
+	// per-env policy admits it) and its clone DB subscription.
+	if got := labels["kuso.sislelabs.com/env"]; got != "preview-pr-1" {
+		t.Errorf("pod template env = %q, want preview-pr-1", got)
+	}
+	if got := labels["conn.kuso.sislelabs.com/6a1a8e2c8ce5027f4d4d"]; got != "true" {
+		t.Errorf("pod template lacks the clone DB subscriber label: %v", labels)
 	}
 }

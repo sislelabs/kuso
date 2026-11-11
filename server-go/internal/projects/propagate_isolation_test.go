@@ -65,8 +65,8 @@ func TestSetSubscribedAddons_IsolatedEnvsDoNotGainProductionConns(t *testing.T) 
 			t.Errorf("preview mounts production %s: %v", leak, preview)
 		}
 	}
-	if !slices.Contains(preview, "tickero-db-pr-52-conn") || !slices.Contains(preview, "tickero-storage-conn") {
-		t.Errorf("preview lost its clone or shared s3: %v", preview)
+	if !slices.Contains(preview, "tickero-db-pr-52-conn") || !slices.Contains(preview, "tickero-storage-readonly") || slices.Contains(preview, "tickero-storage-conn") {
+		t.Errorf("preview lost its clone or read-only s3 (BLOB-2): %v", preview)
 	}
 	staging := get("tickero-api-staging")
 	if slices.Contains(staging, "tickero-analytics-conn") || slices.Contains(staging, "tickero-db-conn") {

@@ -83,7 +83,7 @@ func TestSetEnabled_RefusesWhileAPodIsUnlabelled(t *testing.T) {
 		envPod("new", map[string]string{kube.LabelEnv: "production"}),
 		envPod("old", nil),
 	)
-	rep, err := s.SetEnabled(context.Background(), "p", true)
+	rep, err := s.SetEnabled(context.Background(), "p", true, nil)
 	if !errors.Is(err, ErrNotReady) {
 		t.Fatalf("err = %v, want ErrNotReady", err)
 	}
@@ -99,9 +99,14 @@ func TestSetEnabled_RefusesWhileAPodIsUnlabelled(t *testing.T) {
 func TestSetEnabled_FlipsWhenReady(t *testing.T) {
 	s := newSvc(t, []kube.KusoEnvironment{env("p-web-production", "production", "production")}, nil,
 		envPod("new", map[string]string{kube.LabelEnv: "production"}))
-	rep, err := s.SetEnabled(context.Background(), "p", true)
-	if err != nil || !rep.Enabled {
+	rep, err := s.SetEnabled(context.Background(), "p", true, nil)
+	if err != nil || !rep.Enabled || rep.NonProductionEnvs {
 		t.Fatalf("rep=%+v err=%v", rep, err)
+	}
+	// ISO-4 is a separate opt-in for existing projects.
+	rep, err = s.SetEnabled(context.Background(), "p", true, new(true))
+	if err != nil || !rep.NonProductionEnvs {
+		t.Fatalf("nonProductionEnvs not set: rep=%+v err=%v", rep, err)
 	}
 }
 

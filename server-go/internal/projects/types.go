@@ -78,6 +78,8 @@ type UpdateProjectPreviewsSpec struct {
 	Enabled    *bool   `json:"enabled,omitempty"`
 	TTLDays    *int    `json:"ttlDays,omitempty"`
 	BaseDomain *string `json:"baseDomain,omitempty"`
+	// BasicAuthSecret: see kube.KusoPreviewsSpec.BasicAuthSecret; "" clears.
+	BasicAuthSecret *string `json:"basicAuthSecret,omitempty"`
 }
 
 // CreateServiceRequest is the body of POST /api/projects/:project/services.

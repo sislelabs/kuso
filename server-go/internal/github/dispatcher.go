@@ -1056,10 +1056,11 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// previewdb.EnsurePRAddons). The clone's conn secrets REPLACE the
 	// source's so the preview pod talks to its own datastores instead of
 	// production. A clone failure refuses the preview (see below) rather
-	// than falling back to the source. Other kinds (s3, nats, …) keep the
-	// source secret. The clone only survives the swap when the source
-	// conn survived the subscription filter above, so a frontend preview
-	// (no db subscription) correctly gets no clone conn.
+	// than falling back to the source. Other kinds are handled below: s3
+	// goes read-only or to the base's own clone, the rest is withheld. The
+	// clone only survives the swap when the source conn survived the
+	// subscription filter above, so a frontend preview (no db subscription)
+	// correctly gets no clone conn.
 	// pgCloneByOrigin maps source addon-conn → per-PR clone-conn; captured
 	// here so the SAME swap applies to envVars' secretKeyRefs below
 	// (DATABASE_READ_URL etc.), not just the envFromSecrets list.
@@ -1095,17 +1096,24 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	for k, v := range baseSwap {
 		connSwap[k] = v
 	}
-	pgCloneMap = connSwap
-	envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	// Production conns the preview has no clone of (external DBs, mongodb,
-	// brokers, …) are withheld, not shared: the preview app runs PR code,
-	// including boot-time migrators, against whatever it mounts. Fail closed
+	// brokers, external s3, …) are withheld, not shared: the preview app
+	// runs PR code, including boot-time migrators, against whatever it
+	// mounts. A native production bucket the base doesn't shadow with its
+	// own clone is mounted through its read-only user (BLOB-2). Fail closed
 	// when the addon set can't be read.
-	unclonedProd, err := d.unclonedProductionConns(ctx, ns, proj.Name, pgCloneMap)
+	unclonedProd, readOnly, err := d.unclonedProductionConns(ctx, ns, proj.Name, connSwap)
 	if err != nil {
 		d.notifyPreviewRefused(proj.Name, short, pr.Number, err)
 		return fmt.Errorf("preview addon isolation for PR #%d: %w", pr.Number, err)
 	}
+	for k, v := range readOnly {
+		if _, ok := connSwap[k]; !ok {
+			connSwap[k] = v
+		}
+	}
+	pgCloneMap = connSwap
+	envFromSecrets = swapPGCloneSecrets(envFromSecrets, pgCloneMap)
 	for _, c := range baseWithheld {
 		unclonedProd[c] = true
 	}
@@ -1260,7 +1268,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	mergedEnvVars = slices.DeleteFunc(slices.Clone(mergedEnvVars), func(v kube.KusoEnvVar) bool {
 		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
 		name, _ := ref["name"].(string)
-		if unclonedProd[name] {
+		if unclonedProd[name] && !previewEnvVarOptIn(svcPreviewEnvVars, v.Name, name) {
 			withheldVars = append(withheldVars, v.Name+"->"+name)
 			return true
 		}
@@ -1286,10 +1294,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// reference to the source Secret name (in envFromSecrets and in
 	// envVars[].valueFrom.secretKeyRef.name) to point at the new
 	// per-PR Secret.
+	var withheldValues []string
+	var notifyValues bool
 	{
 		swapped, err := d.clonePerEnvSecretsForPreview(
 			ctx, ns, proj.Name, short, base, pr.Number,
-			envFromSecrets, mergedEnvVars, hostRewrite,
+			envFromSecrets, mergedEnvVars, hostRewrite, svcPreviewEnvVars,
 		)
 		if err != nil {
 			// Never mount the base's Secrets directly: they skip the host
@@ -1303,6 +1313,8 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		} else {
 			envFromSecrets = swapped.envFromSecrets
 			mergedEnvVars = swapped.envVars
+			withheldValues = swapped.withheld
+			notifyValues = swapped.newlyWithheld
 		}
 	}
 
@@ -1410,6 +1422,11 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// boot dead; Sleep and Placement, because previews carry their
 			// own scale-down lifecycle and scheduling. TestPreviewEnv-
 			// LiteralCoversServiceDerivedFields encodes that split.
+			//
+			// DisableServiceLinks is set here as well as on create because
+			// the resync below replaces the spec wholesale.
+			DisableServiceLinks:  true,
+			BasicAuthSecret:      previewAuthSecret(proj),
 			Internal:             svcInternal,
 			PrivateEgress:        svcPrivateEgress,
 			PlatformAPIEgress:    svcPlatformAPIEgress,
@@ -1538,19 +1555,30 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if parentSvc != nil && parentSvc.Spec.Previews != nil && parentSvc.Spec.Previews.Seed != "" {
 		buildImage := previewSeedImage(seedBuild, proj.Name, short, pr.PullRequest.Head.SHA)
 		seedEnvVars := envVarsForSeed(mergedEnvVars)
-		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars); err != nil {
+		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, fmt.Sprintf("preview-pr-%d", pr.Number), buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars); err != nil {
 			d.Logger.Warn("preview seed job", "env", envName, "err", err)
 		}
 	}
 	// Tell the user once: when the preview is first created, or when an
 	// existing preview still mounted one of these (the first push after
 	// this policy shipped). Every push re-applies it silently otherwise.
+	var notifyConns []string
 	if len(withheldConns) > 0 || len(withheldVars) > 0 {
 		d.Logger.Warn("preview: production addon conns withheld (no per-PR clone)",
 			"project", proj.Name, "service", short, "pr", pr.Number, "conns", withheldConns, "vars", withheldVars)
 		if existing == nil || slices.ContainsFunc(existing.Spec.EnvFromSecrets, func(n string) bool { return unclonedProd[n] }) {
-			d.notifyPreviewWithheld(proj.Name, short, pr.Number, append(withheldConns, withheldVars...))
+			notifyConns = append(withheldConns, withheldVars...)
 		}
+	}
+	if len(withheldValues) > 0 {
+		d.Logger.Warn("preview: keys holding production's value withheld",
+			"project", proj.Name, "service", short, "pr", pr.Number, "keys", withheldValues)
+	}
+	if !notifyValues {
+		withheldValues = nil
+	}
+	if len(notifyConns) > 0 || len(withheldValues) > 0 {
+		d.notifyPreviewWithheld(proj.Name, short, pr.Number, notifyConns, withheldValues)
 	}
 	d.Logger.Info("PR preview env ready", "env", envName, "pr", pr.Number)
 	return nil
@@ -1593,16 +1621,25 @@ func (d *Dispatcher) notifyPreviewRefused(project, service string, prNumber int,
 }
 
 // notifyPreviewWithheld reports a preview that was deployed without some of
-// production's addon conns because no per-PR clone of them exists.
-func (d *Dispatcher) notifyPreviewWithheld(project, service string, prNumber int, withheld []string) {
+// production's addon conns (no per-PR clone of them exists) or without keys
+// whose staging value is production's value.
+func (d *Dispatcher) notifyPreviewWithheld(project, service string, prNumber int, conns, keys []string) {
 	if d.Notifier == nil {
 		return
 	}
+	var parts []string
+	if len(conns) > 0 {
+		parts = append(parts, fmt.Sprintf("These production addon connections were not mounted because previews only get per-PR clones "+
+			"(postgres/redis), staging's own addons, read-only native s3 or mailpit: %s.", strings.Join(conns, ", ")))
+	}
+	if len(keys) > 0 {
+		parts = append(parts, fmt.Sprintf("These keys were not copied because the staging value is identical to production's: %s. "+
+			"Give staging its own value (kuso env set on the staging env) or list the key in the service's previewEnvVars.", strings.Join(keys, ", ")))
+	}
 	d.Notifier.Emit(builds.EventEnvelope{
-		Type:  "build.failed",
-		Title: fmt.Sprintf("Preview for PR #%d deployed without production addons: %s/%s", prNumber, project, service),
-		Body: fmt.Sprintf("These production addon connections were not mounted because previews only get per-PR clones "+
-			"(postgres/redis) or shared s3/mailpit: %s. The preview may fail where it needs them.", strings.Join(withheld, ", ")),
+		Type:     "build.failed",
+		Title:    fmt.Sprintf("Preview for PR #%d deployed without some production config: %s/%s", prNumber, project, service),
+		Body:     strings.Join(parts, " ") + " The preview may fail where it needs them.",
 		Project:  project,
 		Service:  service,
 		Severity: "warn",
@@ -1610,25 +1647,53 @@ func (d *Dispatcher) notifyPreviewWithheld(project, service string, prNumber int
 }
 
 // unclonedProductionConns returns the project-level addon conns that must
-// not reach a preview: every addon kind not shared with previews by design,
-// minus the ones the per-PR clone map redirects.
-func (d *Dispatcher) unclonedProductionConns(ctx context.Context, ns, project string, cloneByOrigin map[string]string) (map[string]bool, error) {
+// not reach a preview (every addon kind not shared with previews by design,
+// minus the ones the per-PR clone map redirects), and the read-only Secret
+// each shared native bucket's conn is swapped to.
+func (d *Dispatcher) unclonedProductionConns(ctx context.Context, ns, project string, cloneByOrigin map[string]string) (map[string]bool, map[string]string, error) {
 	all, err := d.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
 	if err != nil {
-		return nil, fmt.Errorf("list addons: %w", err)
+		return nil, nil, fmt.Errorf("list addons: %w", err)
 	}
 	out := map[string]bool{}
+	readOnly := map[string]string{}
 	for i := range all {
 		a := &all[i]
-		if a.Labels[kube.LabelEnv] != "" || addons.SharedWithPreviews(a) {
+		if a.Labels[kube.LabelEnv] != "" {
 			continue
 		}
 		conn := addons.ConnSecretName(a.Name)
+		if ro := addons.PreviewReadOnlyConn(a); ro != "" {
+			readOnly[conn] = ro
+		}
+		if addons.SharedWithPreviews(a) {
+			continue
+		}
 		if _, cloned := cloneByOrigin[conn]; !cloned {
 			out[conn] = true
 		}
 	}
-	return out, nil
+	return out, readOnly, nil
+}
+
+// previewAuthSecret is the htpasswd Secret every preview of the project
+// sits behind, "" when previews are public.
+func previewAuthSecret(proj *kube.KusoProject) string {
+	if proj.Spec.Previews == nil {
+		return ""
+	}
+	return proj.Spec.Previews.BasicAuthSecret
+}
+
+// previewEnvVarOptIn reports whether the service's previews.previewEnvVars
+// deliberately names this var as a secretKeyRef into secret: the only way
+// an external addon's conn reaches a preview.
+func previewEnvVarOptIn(optIn []kube.KusoEnvVar, name, secret string) bool {
+	return slices.ContainsFunc(optIn, func(v kube.KusoEnvVar) bool {
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		n, _ := ref["name"].(string)
+		return v.Name == name && n == secret
+	})
 }
 
 // previewBuildImage returns the image tag the preview build will
@@ -2473,6 +2538,11 @@ func rewriteEnvVarValues(in []kube.KusoEnvVar, rewrite map[string]string) []kube
 type secretSwapResult struct {
 	envFromSecrets []string
 	envVars        []kube.KusoEnvVar
+	// withheld names the keys and vars dropped because their value is
+	// production's (ISO-1); newlyWithheld is true when the preview had not
+	// been told yet (a new per-PR Secret, or one that still held them).
+	withheld      []string
+	newlyWithheld bool
 }
 
 // clonePerEnvSecretsForPreview merges the base (staging) env's own Secrets
@@ -2481,9 +2551,18 @@ type secretSwapResult struct {
 // and in envVars[].valueFrom.secretKeyRef.name) to the per-PR Secret.
 // Production's per-env Secret is never a source (ISO-1).
 //
-// When none of the base Secrets exists, nothing is written: a new preview
-// gets no per-PR Secret, and an existing one keeps the per-PR Secret it
-// already has rather than being left with none.
+// No value identical to production's value for the same key reaches the
+// preview, whichever base Secret carries it: an env-group clone starts as a
+// verbatim copy of production's service Secret, and only a staging override
+// makes a key safe to hand to PR code. Such keys are left out of the per-PR
+// Secret, and env vars that read them (by secretKeyRef, or as a literal
+// equal to production's value) are dropped unless previewEnvVars names
+// them (optIn).
+//
+// When none of the base Secrets exists, nothing new is written: a new
+// preview gets no per-PR Secret, and an existing one keeps the per-PR
+// Secret it already has (minus production values) rather than being left
+// with none.
 func (d *Dispatcher) clonePerEnvSecretsForPreview(
 	ctx context.Context,
 	ns, project, serviceShort string,
@@ -2492,6 +2571,7 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 	envFromSecrets []string,
 	envVars []kube.KusoEnvVar,
 	hostRewrite map[string]string,
+	optIn []kube.KusoEnvVar,
 ) (*secretSwapResult, error) {
 	if d.Kube == nil || d.Kube.Clientset == nil {
 		return &secretSwapResult{envFromSecrets: envFromSecrets, envVars: envVars}, nil
@@ -2507,8 +2587,13 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 		return out
 	}
 
+	prodVals, err := d.productionSecretValues(ctx, ns, project, serviceShort)
+	if err != nil {
+		return nil, err
+	}
 	// Iterating .Data gives decoded bytes already (k8s decodes on Get).
 	var prData map[string][]byte
+	withheld := map[string]bool{}
 	for _, n := range base.Secrets {
 		src, err := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, n, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
@@ -2521,11 +2606,74 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 			prData = map[string][]byte{}
 		}
 		for k, v := range src.Data {
+			if prodVals.has(k, v) {
+				delete(prData, k)
+				withheld[k] = true
+				continue
+			}
+			delete(withheld, k)
 			prData[k] = []byte(rewriteHostInValue(string(v), hostRewrite))
 		}
 	}
+	finish := func(newly bool) *secretSwapResult {
+		out := swapAll()
+		out.envVars = slices.DeleteFunc(slices.Clone(out.envVars), func(v kube.KusoEnvVar) bool {
+			if slices.ContainsFunc(optIn, func(o kube.KusoEnvVar) bool { return o.Name == v.Name }) {
+				return false
+			}
+			ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+			name, _ := ref["name"].(string)
+			key, _ := ref["key"].(string)
+			if (name == prSecretName && withheld[key]) || (v.ValueFrom == nil && prodVals.has(v.Name, []byte(v.Value))) {
+				out.withheld = append(out.withheld, v.Name)
+				return true
+			}
+			return false
+		})
+		for k := range withheld {
+			if !slices.Contains(out.withheld, k) {
+				out.withheld = append(out.withheld, k)
+			}
+		}
+		slices.Sort(out.withheld)
+		out.newlyWithheld = newly && len(out.withheld) > 0
+		return out
+	}
+	existing, gerr := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, prSecretName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(gerr):
+		existing = nil
+	case gerr != nil:
+		return nil, fmt.Errorf("get existing pr secret %s: %w", prSecretName, gerr)
+	}
 	if prData == nil {
-		return swapAll(), nil
+		// Nothing to copy; a per-PR Secret written before production values
+		// were withheld still loses them.
+		if existing == nil {
+			return finish(false), nil
+		}
+		held := false
+		for k, v := range existing.Data {
+			if prodVals.has(k, v) {
+				delete(existing.Data, k)
+				withheld[k] = true
+				held = true
+			}
+		}
+		if held {
+			if _, err := d.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+				return nil, fmt.Errorf("update pr secret %s: %w", prSecretName, err)
+			}
+		}
+		return finish(held), nil
+	}
+	newly := existing == nil
+	if existing != nil {
+		for k := range withheld {
+			if _, had := existing.Data[k]; had {
+				newly = true
+			}
+		}
 	}
 	prSec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2542,14 +2690,11 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 		Data: prData,
 	}
 	// Upsert: create on first spawn, patch on subsequent syncs.
-	existing, gerr := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, prSecretName, metav1.GetOptions{})
 	switch {
-	case gerr != nil && apierrors.IsNotFound(gerr):
+	case existing == nil:
 		if _, err := d.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, prSec, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			return nil, fmt.Errorf("create pr secret %s: %w", prSecretName, err)
 		}
-	case gerr != nil:
-		return nil, fmt.Errorf("get existing pr secret %s: %w", prSecretName, gerr)
 	default:
 		existing.Data = prData
 		if existing.Labels == nil {
@@ -2561,9 +2706,42 @@ func (d *Dispatcher) clonePerEnvSecretsForPreview(
 		}
 	}
 
-	out := swapAll()
+	out := finish(newly)
 	if !slices.Contains(out.envFromSecrets, prSecretName) {
 		out.envFromSecrets = append(out.envFromSecrets, prSecretName)
+	}
+	return out, nil
+}
+
+// prodValues is every non-empty value production's own Secrets hold, per key.
+type prodValues map[string]map[string]bool
+
+func (p prodValues) has(key string, v []byte) bool {
+	return len(v) > 0 && p[key][string(v)]
+}
+
+// productionSecretValues reads the Secrets a production pod of the service
+// mounts for its own config: the service Secret (`kuso env set`) and the
+// production per-env Secret. A read error fails the copy closed.
+func (d *Dispatcher) productionSecretValues(ctx context.Context, ns, project, serviceShort string) (prodValues, error) {
+	out := prodValues{}
+	for _, n := range []string{kube.ServiceSecretName(project, serviceShort), kube.EnvSecretName(project, serviceShort, "production")} {
+		sec, err := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, n, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get production secret %s: %w", n, err)
+		}
+		for k, v := range sec.Data {
+			if len(v) == 0 {
+				continue
+			}
+			if out[k] == nil {
+				out[k] = map[string]bool{}
+			}
+			out[k][string(v)] = true
+		}
 	}
 	return out, nil
 }

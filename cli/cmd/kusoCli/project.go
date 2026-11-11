@@ -88,6 +88,7 @@ var (
 	projectUpdatePreviews       string // "on" | "off" | "" (leave alone)
 	projectUpdatePreviewsTTL    int
 	projectUpdatePreviewsDomain string // base domain for preview hosts, "" = leave alone
+	projectUpdatePreviewsAuth   string // htpasswd Secret previews sit behind, "" = public
 	projectUpdateAlwaysOn       string // "on" | "off" | "" (leave alone)
 	projectUpdateIncidentMon    string // "on" | "off" | "" (leave alone)
 	projectUpdateRepoPath       string
@@ -154,7 +155,7 @@ installation use --github-installation-clear (sets installationId to 0).`,
 		} else if cmd.Flags().Changed("github-installation") {
 			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: projectUpdateInstallation}
 		}
-		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") || cmd.Flags().Changed("previews-domain") {
+		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") || cmd.Flags().Changed("previews-domain") || cmd.Flags().Changed("previews-auth-secret") {
 			pv := &kusoApi.PreviewsPatch{}
 			switch projectUpdatePreviews {
 			case "on", "true", "yes":
@@ -171,6 +172,9 @@ installation use --github-installation-clear (sets installationId to 0).`,
 			}
 			if cmd.Flags().Changed("previews-domain") {
 				pv.BaseDomain = kusoApi.StringPtr(projectUpdatePreviewsDomain)
+			}
+			if cmd.Flags().Changed("previews-auth-secret") {
+				pv.BasicAuthSecret = kusoApi.StringPtr(projectUpdatePreviewsAuth)
 			}
 			req.Previews = pv
 		}
@@ -1935,6 +1939,7 @@ func init() {
 	projectUpdateCmd.Flags().BoolVar(&projectUpdateInstallReset, "github-installation-clear", false, "detach the project from any GitHub App installation")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviews, "previews", "", "enable/disable preview envs (on|off)")
 	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
+	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviewsAuth, "previews-auth-secret", "", "Secret in the project namespace with htpasswd lines under key \"users\"; every PR preview then asks for those credentials (\"\" = public)")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviewsDomain, "previews-domain", "", "base domain for preview hosts, e.g. tickero.bg (previews become <svc>-pr-N.<domain>); needs wildcard DNS for *.<domain>")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateAlwaysOn, "always-on", "", "force every service to never scale to zero (on|off)")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateIncidentMon, "incident-monitoring", "", "let the incident-response agent watch this project (on|off)")

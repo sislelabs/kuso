@@ -7,19 +7,34 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// SharedWithPreviews reports whether a project addon's PRODUCTION conn may be
-// mounted on a preview env that has no clone of it. Only s3 (the preview
-// follows its staging base, which shares the bucket unless it has its own
-// clone; the dispatcher swaps in staging's clone when there is one) and
-// mailpit (a dev mail catcher holding no customer data) are shared. Everything else —
-// external databases, mongodb, mysql, brokers, valkey, clickhouse, … — would
-// hand PR code a live production datastore.
+// SharedWithPreviews reports whether a project addon may reach a preview env
+// that has no clone of it. Native s3 is shared read-only: the preview mounts
+// PreviewReadOnlyConn in place of the read-write conn (BLOB-2). Mailpit is a
+// dev mail catcher holding no customer data. Everything else, external s3
+// included, would hand PR code a live production datastore; an external
+// addon reaches a preview only through an explicit previewEnvVars ref.
 func SharedWithPreviews(a *kube.KusoAddon) bool {
 	switch a.Spec.Kind {
-	case "s3", "mailpit":
+	case "s3":
+		return !isExternal(a)
+	case "mailpit":
 		return true
 	}
 	return false
+}
+
+// PreviewReadOnlyConn is the Secret a preview mounts instead of a native s3
+// addon's production conn: the kusoaddon chart's read-only bucket user, with
+// the same key names. "" for every other addon.
+func PreviewReadOnlyConn(a *kube.KusoAddon) string {
+	if a.Spec.Kind != "s3" || isExternal(a) {
+		return ""
+	}
+	return a.Name + "-readonly"
+}
+
+func isExternal(a *kube.KusoAddon) bool {
+	return a.Spec.External != nil && a.Spec.External.SecretName != ""
 }
 
 // cloneableForNamedEnvs reports whether a named env (staging/qa) could have
@@ -27,7 +42,7 @@ func SharedWithPreviews(a *kube.KusoAddon) bool {
 // instance-shared postgres/redis. External addons are always shared with
 // named envs (env groups refuse to clone them), so they are not withheld.
 func cloneableForNamedEnvs(a *kube.KusoAddon) bool {
-	if a.Spec.External != nil && a.Spec.External.SecretName != "" {
+	if isExternal(a) {
 		return false
 	}
 	return a.Spec.Kind == "postgres" || a.Spec.Kind == "redis"
@@ -39,7 +54,8 @@ func cloneableForNamedEnvs(a *kube.KusoAddon) bool {
 // next has no clone for this env.
 //
 //   - preview envs: every project addon conn not SharedWithPreviews is
-//     dropped, including ones the preview already mounts.
+//     dropped, including ones the preview already mounts; a native s3 conn
+//     is replaced by its PreviewReadOnlyConn.
 //   - named envs that own at least one clone (an env group or an isolated
 //     staging/qa env): a cloneable-kind conn is never ADDED. One the env
 //     already mounts is kept — env groups share addons with policy "shared"
@@ -75,6 +91,11 @@ func WithholdProductionConns(next, prev []string, all []kube.KusoAddon, envScope
 		case !ok:
 		case preview && !SharedWithPreviews(a):
 			withheld = append(withheld, n)
+			continue
+		case preview && PreviewReadOnlyConn(a) != "":
+			if ro := PreviewReadOnlyConn(a); !slices.Contains(kept, ro) {
+				kept = append(kept, ro)
+			}
 			continue
 		case !preview && cloneableForNamedEnvs(a) && !slices.Contains(prev, n):
 			withheld = append(withheld, n)

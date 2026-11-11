@@ -63,7 +63,7 @@ const (
 // Returns immediately after the Job spec is submitted; the actual
 // seed runs asynchronously. Errors here mean we couldn't even submit
 // the Job (typically: kube apiserver unreachable, namespace gone).
-func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, image, seedCmd string, envFromSecrets []string, envVars []envVar) error {
+func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, envScope, image, seedCmd string, envFromSecrets []string, envVars []envVar) error {
 	if seedCmd == "" {
 		return nil
 	}
@@ -116,14 +116,7 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 					// Project label so the project netpols let the pod reach
 					// the preview DB; public egress matches the release Job,
 					// which runs the same user image.
-					Labels: map[string]string{
-						"kuso.sislelabs.com/preview-seed":          envCRName,
-						"kuso.sislelabs.com/project":               project,
-						// Env-isolation netpol scope: the pod is part of
-						// this preview, not of production.
-						"kuso.sislelabs.com/env": envCRName,
-						"kuso.sislelabs.com/network-egress-public": "true",
-					},
+					Labels: seedPodLabels(project, envCRName, envScope, envFromSecrets, podEnv),
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
@@ -158,6 +151,25 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 // corev1.EnvVar). One-way conversion only — the dispatcher writes
 // envs to the env CR via the kube types, AND submits them to a
 // kube Job via corev1 here.
+// seedPodLabels: project label so the project netpols apply, public egress
+// like the release Job (same user image), and the preview's env identity
+// plus addon subscriptions so env isolation admits it to its own clones and
+// keeps it away from production (ISO-3).
+func seedPodLabels(project, envCRName, envScope string, envFromSecrets []string, podEnv []corev1.EnvVar) map[string]string {
+	out := map[string]string{
+		"kuso.sislelabs.com/preview-seed":          envCRName,
+		"kuso.sislelabs.com/project":               project,
+		"kuso.sislelabs.com/network-egress-public": "true",
+	}
+	if envScope == "" {
+		envScope = envCRName
+	}
+	for k, v := range kube.EnvIsolationLabels(envScope, kube.PodSecretNames(podEnv, envFromSecrets)) {
+		out[k] = v
+	}
+	return out
+}
+
 type envVar struct {
 	name      string
 	value     string

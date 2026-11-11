@@ -11,6 +11,27 @@
   pods get caught in the deny.
 */ -}}
 {{- $projectSelector := dict "matchLabels" (dict "kuso.sislelabs.com/project" .Release.Name) -}}
+{{- /* Non-production env scopes that get their own intra-env rule (ISO-4):
+       every spec.envScope of this project's env CRs, read live. A scope
+       created after this render stays on the project-wide rule until the
+       next reconcile, i.e. it keeps the pre-ISO-4 reachability rather than
+       losing any. knownEnvScopes adds scopes by hand (and lets the render
+       be tested without a cluster). */ -}}
+{{- $isolatedScopes := list -}}
+{{- if and (.Values.networkPolicy).envIsolation (.Values.networkPolicy).isolateNonProdEnvs -}}
+{{- $candidates := (.Values.networkPolicy).knownEnvScopes | default list -}}
+{{- $envs := lookup "application.kuso.sislelabs.com/v1alpha1" "KusoEnvironment" (.Values.namespace | default .Release.Namespace) "" -}}
+{{- range (($envs | default dict).items | default list) -}}
+{{- if eq (toString ((.spec).project)) $.Release.Name -}}
+{{- $candidates = append $candidates (toString ((.spec).envScope)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $candidates | uniq | sortAlpha -}}
+{{- if and . (ne . "production") -}}
+{{- $isolatedScopes = append $isolatedScopes . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 # Default-deny ingress and egress for every pod owned by THIS project.
 # Sibling projects + platform pods are unaffected (their labels don't
 # match). Companion allow-policies below open just enough holes to
@@ -105,14 +126,16 @@ spec:
             {{- toYaml $projectSelector | nindent 12 }}
   {{- else }}
   {{- /* envIsolation (ISO-3): this rule keeps project-wide ingress only for
-         pods that are neither labelled production nor addon pods. Pods
-         without the env label (anything not yet rolled since the upgrade,
-         Jobs) match NotIn, so they keep exactly the old reachability. */}}
+         pods that are neither labelled production nor addon pods, nor
+         labelled with a non-production env that has its own intra-env rule
+         below. Pods without the env label (anything not yet rolled since
+         the upgrade, Jobs) match NotIn, so they keep exactly the old
+         reachability. */}}
   podSelector:
     matchLabels:
       kuso.sislelabs.com/project: {{ .Release.Name | quote }}
     matchExpressions:
-      - { key: kuso.sislelabs.com/env, operator: NotIn, values: ["production"] }
+      - { key: kuso.sislelabs.com/env, operator: NotIn, values: {{ prepend $isolatedScopes "production" | toJson }} }
       - { key: kuso.sislelabs.com/addon, operator: DoesNotExist }
   policyTypes: [Ingress]
   ingress:
@@ -121,6 +144,42 @@ spec:
             {{- toYaml $projectSelector | nindent 12 }}
   {{- end }}
 ---
+{{- range $scope := $isolatedScopes }}
+# Non-production env {{ $scope }} (ISO-4): its pods accept project traffic
+# only from pods of the same env (an env group's services share one env
+# label) and from unlabelled pods, like production. Previews, other named
+# envs and build pods are refused. Addon pods keep their own policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: {{ $.Values.namespace | default $.Release.Namespace }}
+  name: {{ printf "%s-intra-env-%s" ($.Release.Name | trunc 40 | trimSuffix "-") (sha256sum $scope | trunc 10) }}
+  labels:
+    {{- include "kusoproject.labels" $ | nindent 4 }}
+  annotations:
+    kuso.sislelabs.com/env: {{ $scope | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+      kuso.sislelabs.com/env: {{ $scope | quote }}
+    matchExpressions:
+      - { key: kuso.sislelabs.com/addon, operator: DoesNotExist }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+              kuso.sislelabs.com/env: {{ $scope | quote }}
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: {{ $.Release.Name | quote }}
+            matchExpressions:
+              - { key: kuso.sislelabs.com/env, operator: DoesNotExist }
+              - { key: app.kubernetes.io/component, operator: NotIn, values: ["kusobuild"] }
+---
+{{- end }}
 {{- if (.Values.networkPolicy).envIsolation }}
 # Egress half of allow-intra-project, unchanged: every project pod may dial
 # every sibling. Isolation is enforced on the receiving side, where the pod

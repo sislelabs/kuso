@@ -95,9 +95,10 @@ type PreviewsSettings struct {
 // PreviewsPatch is the update-time shape — pointer fields so callers
 // can flip Enabled without resetting TTLDays.
 type PreviewsPatch struct {
-	Enabled    *bool   `json:"enabled,omitempty"`
-	TTLDays    *int    `json:"ttlDays,omitempty"`
-	BaseDomain *string `json:"baseDomain,omitempty"`
+	Enabled         *bool   `json:"enabled,omitempty"`
+	TTLDays         *int    `json:"ttlDays,omitempty"`
+	BaseDomain      *string `json:"baseDomain,omitempty"`
+	BasicAuthSecret *string `json:"basicAuthSecret,omitempty"`
 }
 
 // Helpers for building pointer literals tersely. Go 1.21+ has

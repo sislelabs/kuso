@@ -47,3 +47,6 @@ placement: {}
 privateEgress: false
 platformApiEgress: false
 resources: {}
+# Env scope the job runs as (server-stamped). Drives the env-isolation pod
+# labels; empty = legacy, unlabelled.
+envScope: ""

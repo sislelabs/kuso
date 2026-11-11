@@ -460,7 +460,7 @@ func rejectHiddenSharedKeyRef(name, key string) error {
 
 // crdSecretRefNameRE mirrors the secretKeyRef.name pattern on the
 // KusoService (envVars, previewEnvVars) and KusoEnvironment CRDs.
-var crdSecretRefNameRE = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$`)
+var crdSecretRefNameRE = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$`)
 
 // instanceSharedSecretName is the instance-wide shared secret every
 // project may reference. Kept as a const so the validator and the

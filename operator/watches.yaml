@@ -48,6 +48,9 @@
   # were ~half of all operator reconcile time and a third of apiserver
   # requests came from the operator (measured 2026-11-07).
   reconcilePeriod: 30m
+  # The chart looks up the project's env CRs (per-env NetworkPolicies,
+  # ISO-4); a client dry-run can't, and would see a diff every period.
+  dryRunOption: server
   maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1

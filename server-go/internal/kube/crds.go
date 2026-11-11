@@ -488,6 +488,7 @@ func (c *Client) DeleteKusoEnvironment(ctx context.Context, namespace, name stri
 // CreateKusoEnvironment creates a new KusoEnvironment CR. Used by the
 // preview-env flow.
 func (c *Client) CreateKusoEnvironment(ctx context.Context, namespace string, e *KusoEnvironment) (*KusoEnvironment, error) {
+	e.Spec.DisableServiceLinks = true
 	return create[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
 }
 

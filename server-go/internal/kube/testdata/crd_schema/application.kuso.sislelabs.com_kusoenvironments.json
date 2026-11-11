@@ -65,6 +65,18 @@
             },
             "type": "object"
           },
+          "basicAuthSecret": {
+            "description": "Secret (htpasswd lines under key \"users\") a Traefik basicAuth middleware checks in front of this env's ingress. Set on previews from the project's previews.basicAuthSecret.",
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+            "type": "string",
+            "x-kubernetes-validations": [
+              {
+                "message": "control-plane secrets (kuso-*) cannot be referenced",
+                "rule": "!self.startsWith('kuso-')"
+              }
+            ]
+          },
           "branch": {
             "default": "main",
             "type": "string"
@@ -80,9 +92,13 @@
             },
             "type": "array"
           },
+          "disableServiceLinks": {
+            "description": "Render enableServiceLinks=false on the pod (no Docker-link env vars for every Service in the namespace). Set by kuso-server on env CRs it creates.",
+            "type": "boolean"
+          },
           "envFromSecrets": {
             "items": {
-              "pattern": "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$",
+              "pattern": "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$",
               "type": "string",
               "x-kubernetes-validations": [
                 {
@@ -122,7 +138,7 @@
                           "type": "string"
                         },
                         "name": {
-                          "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$",
+                          "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$",
                           "type": "string",
                           "x-kubernetes-validations": [
                             {
