@@ -471,6 +471,20 @@ AGENT_IMAGE_GO=server-go/internal/incidents/jobs.go
 AGENT_IMAGE_REFRESHER=deploy/incident-agent-refresher.yaml
 AGENT_IMAGE_TAG="$(sed -nE 's|^const DefaultAgentImage = "([^"@]+)(@sha256:[0-9a-f]{64})?"|\1|p' "$AGENT_IMAGE_GO")"
 [[ -n "$AGENT_IMAGE_TAG" ]] || fail "could not read DefaultAgentImage from ${AGENT_IMAGE_GO}"
+# The server's Job spec and the image's entrypoint share a contract (how
+# the per-Job credentials arrive), so a change under build/incident-agent
+# must ship its image in the same release, before the pin resolves :latest.
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]] \
+    && { [[ "${KUSO_RELEASE_FORCE_AGENT:-0}" == "1" ]] || [[ -z "${CRD_GUARD_PREV_TAG:-}" ]] \
+         || ! git diff --quiet "$CRD_GUARD_PREV_TAG" -- build/incident-agent; }; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "make incident-agent-image INCIDENT_AGENT_VERSION=${VERSION} (build/incident-agent changed)"
+  else
+    log "build/incident-agent changed since ${CRD_GUARD_PREV_TAG:-<none>}: building the incident-agent image"
+    make incident-agent-image INCIDENT_AGENT_VERSION="${VERSION}" >/dev/null \
+      || fail "incident-agent image build failed"
+  fi
+fi
 if [[ "$DRY_RUN" == "1" ]]; then
   dry "pin ${AGENT_IMAGE_TAG} to its registry digest in ${AGENT_IMAGE_GO} + ${AGENT_IMAGE_REFRESHER}"
 else
@@ -656,14 +670,132 @@ else
   cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
 fi
 
+# image_has_platforms REF PLATFORM... succeeds when REF is a multi-arch
+# index that carries every PLATFORM. A single-arch tag fails, which is
+# what makes the build steps below re-push an amd64-only tag as multi-arch.
+image_has_platforms() {
+  local ref="$1" plats
+  shift
+  plats="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys
+m = json.load(sys.stdin)
+print(" ".join(d["platform"]["os"] + "/" + d["platform"]["architecture"] for d in m.get("manifests", []) if d.get("platform")))' 2>/dev/null)" || return 1
+  local p
+  for p in "$@"; do
+    [[ " $plats " == *" $p "* ]] || return 1
+  done
+}
+
+# ---- 4-pre. nixpacks builder image ----------------------------------
+#
+# Init-container image used by kusobuild Jobs when strategy=nixpacks.
+# Bakes the nixpacks binary so each build doesn't curl|tar 30 MB from
+# GitHub Releases. Tagged with the *nixpacks version* (not the kuso
+# version) so the chart can pin to a specific nixpacks release; the
+# :latest tag is pushed in parallel so a fresh install picks the
+# current one.
+
+NIXPACKS_VERSION="${KUSO_RELEASE_NIXPACKS_VERSION:-1.41.0}"
+NIXPACKS_IMAGE="${KUSO_RELEASE_NIXPACKS_IMAGE:-ghcr.io/sislelabs/kuso-nixpacks}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  # The nixpacks image is tagged by the *nixpacks* version, not the
+  # kuso release version — so it's stable across kuso ships unless
+  # NIXPACKS_VERSION bumps. Cheap probe via docker buildx imagetools
+  # against the registry tag; on hit we skip the whole 30 MB push.
+  # That makes flaky-ghcr re-shipping idempotent (the previous push
+  # of v0.9.5 timed out at this step after 10000s on layer push).
+  # Override with KUSO_RELEASE_FORCE_NIXPACKS=1 when changing the
+  # nixpacks Dockerfile without bumping NIXPACKS_VERSION.
+  if [[ "${KUSO_RELEASE_FORCE_NIXPACKS:-0}" != "1" ]] \
+      && image_has_platforms "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" linux/amd64 linux/arm64; then
+    log "nixpacks image ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} already on ghcr — skipping rebuild"
+  else
+    log "docker buildx → ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} (+ :latest)"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "docker buildx build --platform linux/amd64,linux/arm64 --push --build-arg NIXPACKS_VERSION=${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:latest -f build/nixpacks/Dockerfile build/nixpacks"
+    else
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --push \
+        --build-arg "NIXPACKS_VERSION=${NIXPACKS_VERSION}" \
+        -t "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" \
+        -t "${NIXPACKS_IMAGE}:latest" \
+        -f build/nixpacks/Dockerfile \
+        build/nixpacks >/dev/null
+      log "nixpacks image pushed: ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}"
+    fi
+  fi
+fi
+
+# ---- 4-pre. env-detect image ----------------------------------------
+#
+# Bakes ripgrep + jq into a small alpine image so the env-detect
+# init container runs as runAsUser:1000 instead of `apk add`-as-root
+# at runtime. Tagged with KUSO_RELEASE_ENV_DETECT_TAG (default "v1"
+# — bump on Dockerfile changes) so the chart can pin a known good
+# image even when its own version stays put. Same idempotent
+# inspect-before-build dance as the nixpacks image.
+
+ENV_DETECT_TAG="${KUSO_RELEASE_ENV_DETECT_TAG:-v2}"
+ENV_DETECT_IMAGE="${KUSO_RELEASE_ENV_DETECT_IMAGE:-ghcr.io/sislelabs/kuso-env-detect}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  if [[ "${KUSO_RELEASE_FORCE_ENV_DETECT:-0}" != "1" ]] \
+      && image_has_platforms "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" linux/amd64 linux/arm64; then
+    log "env-detect image ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} already on ghcr — skipping rebuild"
+  else
+    log "docker buildx → ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} (+ :latest)"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "docker buildx build --platform linux/amd64,linux/arm64 --push -t ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} -t ${ENV_DETECT_IMAGE}:latest -f build/env-detect/Dockerfile build/env-detect"
+    else
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --push \
+        -t "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" \
+        -t "${ENV_DETECT_IMAGE}:latest" \
+        -f build/env-detect/Dockerfile \
+        build/env-detect >/dev/null
+      log "env-detect image pushed: ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}"
+    fi
+  fi
+fi
+
+# ---- 4-pre. pin build-Job images by digest -------------------------
+#
+# The build Job's buildkit client holds the registry-wide push
+# credential; env-detect, nixpacks and the static builder run with the
+# source tree and build env. Same scheme as the clone image: the tags
+# stay in imagepins.go, the digests are re-resolved on every ship (after
+# the env-detect/nixpacks pushes above) and baked into the server binary.
+IMAGE_PINS_GO=server-go/internal/buildcontroller/imagepins.go
+PIN_REFS="$(sed -nE 's|^[[:space:]]*"([^"]+)":[[:space:]]*"(sha256:[0-9a-f]{64})?",[[:space:]]*$|\1|p' "$IMAGE_PINS_GO")"
+[[ -n "$PIN_REFS" ]] || fail "could not read the build image pins from ${IMAGE_PINS_GO}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin $(echo "$PIN_REFS" | wc -l | tr -d ' ') build images to their registry digests in ${IMAGE_PINS_GO}"
+else
+  while IFS= read -r ref; do
+    dg="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+    [[ "$dg" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "could not resolve the registry digest of ${ref} (got '${dg}')"
+    docker buildx imagetools inspect "${ref}@${dg}" >/dev/null 2>&1 \
+      || fail "${ref}@${dg} does not resolve; refusing to pin it"
+    ref_re="${ref//./\\.}"
+    sed -i.bak -E "s|^([[:space:]]*\"${ref_re}\":[[:space:]]*)\"[^\"]*\"|\\1\"${dg}\"|" "$IMAGE_PINS_GO"
+    rm "${IMAGE_PINS_GO}.bak"
+    grep -qF "\"${ref}\":" "$IMAGE_PINS_GO" && grep -qF "\"${dg}\"" "$IMAGE_PINS_GO" \
+      || fail "build image pin for ${ref} did not land in ${IMAGE_PINS_GO}"
+    log "build image pinned: ${ref}@${dg}"
+  done <<<"$PIN_REFS"
+fi
+
 # ---- 4. cross-build amd64 + push -----------------------------------
 #
 # Skipped when KUSO_RELEASE_SKIP_BUILD=1 — used by `make roll` when CI
 # already built + pushed the image and we just need to flip the live
 # cluster to it.
 #
-# TODO(multi-arch): every image in this script (server, updater,
-# nixpacks, env-detect, operator) is built linux/amd64-only. Adding
+# TODO(multi-arch): the control-plane images (server, updater, operator)
+# are built linux/amd64-only; the build-Job images above (env-detect,
+# nixpacks) are multi-arch so builds can land on arm64 workers. Adding
 # arm64 is mostly `--platform linux/amd64,linux/arm64` on each buildx
 # invocation, but it needs QEMU binfmt on the build host, roughly
 # doubles build+push wall time, and none of the images have been
@@ -713,79 +845,6 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
       -f build/updater/Dockerfile \
       build/updater >/dev/null
     log "updater image pushed: ${UPDATER_IMAGE}:${VERSION}"
-  fi
-fi
-
-# ---- 4a2b. nixpacks builder image ----------------------------------
-#
-# Init-container image used by kusobuild Jobs when strategy=nixpacks.
-# Bakes the nixpacks binary so each build doesn't curl|tar 30 MB from
-# GitHub Releases. Tagged with the *nixpacks version* (not the kuso
-# version) so the chart can pin to a specific nixpacks release; the
-# :latest tag is pushed in parallel so a fresh install picks the
-# current one.
-
-NIXPACKS_VERSION="${KUSO_RELEASE_NIXPACKS_VERSION:-1.41.0}"
-NIXPACKS_IMAGE="${KUSO_RELEASE_NIXPACKS_IMAGE:-ghcr.io/sislelabs/kuso-nixpacks}"
-if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
-  # The nixpacks image is tagged by the *nixpacks* version, not the
-  # kuso release version — so it's stable across kuso ships unless
-  # NIXPACKS_VERSION bumps. Cheap probe via docker buildx imagetools
-  # against the registry tag; on hit we skip the whole 30 MB push.
-  # That makes flaky-ghcr re-shipping idempotent (the previous push
-  # of v0.9.5 timed out at this step after 10000s on layer push).
-  # Override with KUSO_RELEASE_FORCE_NIXPACKS=1 when changing the
-  # nixpacks Dockerfile without bumping NIXPACKS_VERSION.
-  if [[ "${KUSO_RELEASE_FORCE_NIXPACKS:-0}" != "1" ]] \
-      && docker buildx imagetools inspect "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" >/dev/null 2>&1; then
-    log "nixpacks image ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} already on ghcr — skipping rebuild"
-  else
-    log "docker buildx → ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} (+ :latest)"
-    if [[ "$DRY_RUN" == "1" ]]; then
-      dry "docker buildx build --platform linux/amd64 --push --build-arg NIXPACKS_VERSION=${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:latest -f build/nixpacks/Dockerfile build/nixpacks"
-    else
-      docker buildx build \
-        --platform linux/amd64 \
-        --push \
-        --build-arg "NIXPACKS_VERSION=${NIXPACKS_VERSION}" \
-        -t "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" \
-        -t "${NIXPACKS_IMAGE}:latest" \
-        -f build/nixpacks/Dockerfile \
-        build/nixpacks >/dev/null
-      log "nixpacks image pushed: ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}"
-    fi
-  fi
-fi
-
-# ---- 4a2b. env-detect image ----------------------------------------
-#
-# Bakes ripgrep + jq into a small alpine image so the env-detect
-# init container runs as runAsUser:1000 instead of `apk add`-as-root
-# at runtime. Tagged with KUSO_RELEASE_ENV_DETECT_TAG (default "v1"
-# — bump on Dockerfile changes) so the chart can pin a known good
-# image even when its own version stays put. Same idempotent
-# inspect-before-build dance as the nixpacks image.
-
-ENV_DETECT_TAG="${KUSO_RELEASE_ENV_DETECT_TAG:-v2}"
-ENV_DETECT_IMAGE="${KUSO_RELEASE_ENV_DETECT_IMAGE:-ghcr.io/sislelabs/kuso-env-detect}"
-if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
-  if [[ "${KUSO_RELEASE_FORCE_ENV_DETECT:-0}" != "1" ]] \
-      && docker buildx imagetools inspect "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" >/dev/null 2>&1; then
-    log "env-detect image ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} already on ghcr — skipping rebuild"
-  else
-    log "docker buildx → ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} (+ :latest)"
-    if [[ "$DRY_RUN" == "1" ]]; then
-      dry "docker buildx build --platform linux/amd64 --push -t ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} -t ${ENV_DETECT_IMAGE}:latest -f build/env-detect/Dockerfile build/env-detect"
-    else
-      docker buildx build \
-        --platform linux/amd64 \
-        --push \
-        -t "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" \
-        -t "${ENV_DETECT_IMAGE}:latest" \
-        -f build/env-detect/Dockerfile \
-        build/env-detect >/dev/null
-      log "env-detect image pushed: ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}"
-    fi
   fi
 fi
 
@@ -1667,6 +1726,8 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     # The incident-agent digest pin from step 2a'.
     server-go/internal/incidents/jobs.go
     deploy/incident-agent-refresher.yaml
+    # The build-image digest pins from step 4-pre.
+    server-go/internal/buildcontroller/imagepins.go
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)
