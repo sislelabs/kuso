@@ -212,7 +212,12 @@ run_pkgs() {
 		if [ -n "$mod" ] && [ "$mod" != "$ROOT" ]; then
 			local abs=$pkg
 			case "$abs" in /*) ;; *) abs="$ROOT/${abs#./}" ;; esac
-			rel="./${abs#"$mod"/}"
+			abs=${abs%/}
+			if [ "$abs" = "$mod" ]; then
+				rel=.
+			else
+				rel="./${abs#"$mod"/}"
+			fi
 		else
 			mod="$ROOT/${MOD:-server-go}"
 			rel=$pkg
