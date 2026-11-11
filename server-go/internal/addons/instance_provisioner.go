@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
@@ -158,6 +159,9 @@ func (s *Service) provisionInstanceAddonDB(ctx context.Context, adminDSN, projec
 	}
 	if err := applyInstanceRoleConnLimit(ctx, db, userName, connLimit); err != nil {
 		return "", "", false, err
+	}
+	if _, warns := applyInstanceRoleSettings(ctx, db, userName, userExists != 1); len(warns) > 0 {
+		slog.Default().Warn("instance-addon: tenant resource limits not fully applied", "role", userName, "detail", strings.Join(warns, "; "))
 	}
 
 	// Cross-project isolation on the SHARED instance-pg server (M8).

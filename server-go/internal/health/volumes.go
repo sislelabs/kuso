@@ -62,6 +62,7 @@ func (w *Watcher) checkPlatformVolumes(ctx context.Context) {
 	if !due || w.Kube == nil || w.Kube.Clientset == nil {
 		return
 	}
+	w.checkDataVolumes(ctx)
 	for _, v := range platformVolumes {
 		usage, request, ok := w.platformVolumeUsage(ctx, v)
 		if !ok || request <= 0 {
@@ -200,4 +201,137 @@ func (w *Watcher) checkBuildBacklog(ctx context.Context) {
 
 func gib(b int64) string {
 	return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
+}
+
+// Database volumes (addon StatefulSets, the shared instance Postgres, the
+// control-plane CNPG cluster) on a size-enforced CSI volume reach 100% with
+// no other signal: the DB stops accepting writes, and on the instance PG
+// that is every tenant at once. Local-path volumes grow into the node disk,
+// which the node-disk alerts already cover, so they are skipped here.
+const (
+	dataVolumeWarnPct  = 75
+	dataVolumeCritPct  = 85
+	dataVolumeClearPct = 70
+	// controlPlaneCluster is the CNPG cluster holding kuso's own database.
+	controlPlaneCluster = "kuso-postgres"
+)
+
+// dataVolume is one database PVC mounted by a running pod.
+type dataVolume struct {
+	Namespace, PVC, Node, Owner string
+}
+
+// dataVolumeTargets picks the PVCs mounted by running addon pods (backup and
+// restore Job pods carry the addon label too, but also a role label, and
+// hold only scratch space) and the control-plane Postgres pods.
+func dataVolumeTargets(pods []corev1.Pod) []dataVolume {
+	var out []dataVolume
+	seen := map[string]bool{}
+	for i := range pods {
+		p := &pods[i]
+		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		owner := p.Labels["kuso.sislelabs.com/addon"]
+		if owner == "" && p.Labels["cnpg.io/cluster"] == controlPlaneCluster {
+			owner = "control-plane database"
+		}
+		if owner == "" || p.Labels["kuso.sislelabs.com/role"] != "" {
+			continue
+		}
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim == nil {
+				continue
+			}
+			k := p.Namespace + "/" + v.PersistentVolumeClaim.ClaimName
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, dataVolume{Namespace: p.Namespace, PVC: v.PersistentVolumeClaim.ClaimName, Node: p.Spec.NodeName, Owner: owner})
+		}
+	}
+	return out
+}
+
+// dataVolumeAlert is the two-level transition for one reading: warn at
+// dataVolumeWarnPct, critical at dataVolumeCritPct (each fires once), both
+// re-arm below dataVolumeClearPct. sev is "" when nothing fires.
+func dataVolumeAlert(pct int, warned, critical bool) (sev string, nowWarned, nowCritical bool) {
+	switch {
+	case pct < dataVolumeClearPct:
+		return "", false, false
+	case pct >= dataVolumeCritPct && !critical:
+		return "error", true, true
+	case pct >= dataVolumeWarnPct && !warned:
+		return "warn", true, critical
+	}
+	return "", warned, critical
+}
+
+// checkDataVolumes uses only reads the kuso-server ClusterRole already
+// grants (pods list, persistentvolumeclaims get, nodes get, nodes/stats);
+// any failed read skips that volume for this pass.
+func (w *Watcher) checkDataVolumes(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cs := w.Kube.Clientset.CoreV1()
+	var pods []corev1.Pod
+	for _, q := range []struct{ ns, sel string }{
+		{metav1.NamespaceAll, "kuso.sislelabs.com/addon,!kuso.sislelabs.com/role"},
+		{w.Namespace, "cnpg.io/cluster=" + controlPlaneCluster},
+	} {
+		l, err := cs.Pods(q.ns).List(cctx, metav1.ListOptions{LabelSelector: q.sel})
+		if err != nil {
+			continue
+		}
+		pods = append(pods, l.Items...)
+	}
+	summaries := map[string]map[string]kube.PVCUsage{}
+	for _, v := range dataVolumeTargets(pods) {
+		byPVC, done := summaries[v.Node]
+		if !done {
+			if node, err := cs.Nodes().Get(cctx, v.Node, metav1.GetOptions{}); err == nil {
+				byPVC, _ = w.Kube.NodePVCUsage(cctx, node)
+			}
+			summaries[v.Node] = byPVC
+		}
+		usage, ok := byPVC[v.Namespace+"/"+v.PVC]
+		if !ok {
+			continue
+		}
+		pvc, err := cs.PersistentVolumeClaims(v.Namespace).Get(cctx, v.PVC, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		pct, what := volumeFill(usage, q.Value())
+		if pct < 0 || what == fillNodeDisk {
+			continue
+		}
+		wk, ck := "dbpvc:"+v.Namespace+"/"+v.PVC+":warn", "dbpvc:"+v.Namespace+"/"+v.PVC+":crit"
+		w.mu.Lock()
+		sev, warned, critical := dataVolumeAlert(pct, w.fired[wk], w.fired[ck])
+		setFired(w.fired, wk, warned)
+		setFired(w.fired, ck, critical)
+		w.mu.Unlock()
+		if sev == "" {
+			continue
+		}
+		w.send(notify.AlertFired(
+			fmt.Sprintf("Database volume %d%% full", pct),
+			fmt.Sprintf("%s/%s (%s) uses %s of its %s. A full volume stops the database accepting writes; grow the addon's storageSize or free space.",
+				v.Namespace, v.PVC, v.Owner, gib(usage.UsedBytes), gib(q.Value())),
+			sev,
+			map[string]string{"pvc": v.PVC, "namespace": v.Namespace},
+		))
+	}
+}
+
+func setFired(m map[string]bool, k string, on bool) {
+	if on {
+		m[k] = true
+	} else {
+		delete(m, k)
+	}
 }

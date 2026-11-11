@@ -607,7 +607,7 @@ func (s *Service) hardenOnce(ctx context.Context, dsn string) {
 	}
 	s.hardenedDSN = dsn
 	s.Logger.Info("instancepg: harden pass done",
-		"limitsSet", res.LimitsSet, "tenantDBsLocked", res.TenantLocked, "sharedDBsLocked", strings.Join(res.SharedLocked, ","))
+		"limitsSet", res.LimitsSet, "settingsSet", res.SettingsSet, "tenantDBsLocked", res.TenantLocked, "sharedDBsLocked", strings.Join(res.SharedLocked, ","))
 }
 
 // ensureBackupSchedule gives a managed instance PG with no backup block the
