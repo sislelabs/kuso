@@ -191,12 +191,14 @@ func (d *DB) runMigrations(ctx context.Context) error {
 // "already exists" — a versioned migration is meant to run exactly once
 // against a known state, so any error is real.
 func (d *DB) applyMigration(ctx context.Context, conn *sql.Conn, m migration) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after Commit
-	return applyMigrationTx(ctx, tx, m)
+	return retryOnLockTimeout(ctx, func() error {
+		tx, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }() // no-op after Commit
+		return applyMigrationTx(ctx, tx, m)
+	})
 }
 
 // applyMigrationTx runs a migration's statements and its bookkeeping row
@@ -205,6 +207,9 @@ func (d *DB) applyMigration(ctx context.Context, conn *sql.Conn, m migration) er
 func applyMigrationTx(ctx context.Context, tx *sql.Tx, m migration) error {
 	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = 0`); err != nil {
 		return fmt.Errorf("statement_timeout: %w", err)
+	}
+	if err := setLocalLockTimeout(ctx, tx); err != nil {
+		return fmt.Errorf("lock_timeout: %w", err)
 	}
 
 	for _, stmt := range splitSQL(m.body) {
@@ -242,32 +247,35 @@ func (d *DB) runMigrationsXact(ctx context.Context, migs []migration) error {
 		if isDeferredMigration(m.version) {
 			continue
 		}
-		tx, err := d.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("db: migration %04d: begin: %w", m.version, err)
+		if err := retryOnLockTimeout(ctx, func() error { return d.applyMigrationXact(ctx, m) }); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationsAdvisoryLockKey); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("db: migration %04d: lock: %w", m.version, err)
+	}
+	return nil
+}
+
+func (d *DB) applyMigrationXact(ctx context.Context, m migration) error {
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: migration %04d: begin: %w", m.version, err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationsAdvisoryLockKey); err != nil {
+		return fmt.Errorf("db: migration %04d: lock: %w", m.version, err)
+	}
+	var cs string
+	err = tx.QueryRowContext(ctx, `SELECT "checksum" FROM "SchemaMigration" WHERE "version" = $1`, m.version).Scan(&cs)
+	switch {
+	case err == nil:
+		if cs != m.checksum {
+			return fmt.Errorf("db: migration %04d (%s) was edited after being applied (checksum %s → %s); migrations are immutable — add a new migration instead", m.version, m.name, cs, m.checksum)
 		}
-		var cs string
-		err = tx.QueryRowContext(ctx, `SELECT "checksum" FROM "SchemaMigration" WHERE "version" = $1`, m.version).Scan(&cs)
-		switch {
-		case err == nil:
-			_ = tx.Rollback()
-			if cs != m.checksum {
-				return fmt.Errorf("db: migration %04d (%s) was edited after being applied (checksum %s → %s); migrations are immutable — add a new migration instead", m.version, m.name, cs, m.checksum)
-			}
-			continue
-		case !errors.Is(err, sql.ErrNoRows):
-			_ = tx.Rollback()
-			return fmt.Errorf("db: read applied migration %04d: %w", m.version, err)
-		}
-		err = applyMigrationTx(ctx, tx, m)
-		_ = tx.Rollback() // no-op after Commit
-		if err != nil {
-			return fmt.Errorf("db: migration %04d (%s) failed: %w", m.version, m.name, err)
-		}
+		return nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("db: read applied migration %04d: %w", m.version, err)
+	}
+	if err := applyMigrationTx(ctx, tx, m); err != nil {
+		return fmt.Errorf("db: migration %04d (%s) failed: %w", m.version, m.name, err)
 	}
 	return nil
 }
