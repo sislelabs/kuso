@@ -24,10 +24,13 @@ import (
 )
 
 type CronsHandler struct {
-	Svc    *crons.Service
-	DB     *db.DB
-	Audit  *audit.Service
-	Logger *slog.Logger
+	Svc *crons.Service
+	// RepoFiles reads cron source files from GitHub. Nil when the App
+	// isn't configured; the source endpoint then reports unavailable.
+	RepoFiles crons.RepoFileFetcher
+	DB        *db.DB
+	Audit     *audit.Service
+	Logger    *slog.Logger
 }
 
 func (h *CronsHandler) Mount(r chi.Router) {
@@ -46,6 +49,7 @@ func (h *CronsHandler) Mount(r chi.Router) {
 	r.Patch("/api/projects/{project}/services/{service}/crons/{name}", h.Update)
 	r.Delete("/api/projects/{project}/services/{service}/crons/{name}", h.Delete)
 	r.Post("/api/projects/{project}/services/{service}/crons/{name}/sync", h.Sync)
+	r.Get("/api/projects/{project}/services/{service}/crons/{name}/source", h.Source)
 }
 
 // AddProject creates a project-scoped cron (kind=http / kind=command).
@@ -205,6 +209,29 @@ func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		out = &withCronJobStatus(ctx, h.Svc.Kube, []kube.KusoCron{*out})[0]
 	}
 	writeJSON(w, http.StatusOK, maskCronIfNeeded(ctx, h.DB, project, out))
+}
+
+// Source returns the repo file the cron's command runs, read at the
+// commit its image was built from. Editor-gated: the App token can read
+// code the caller may not have GitHub access to.
+func (h *CronsHandler) Source(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := cronsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	out, err := h.Svc.Source(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "name"), h.RepoFiles)
+	if err != nil {
+		if errors.Is(err, crons.ErrNotFound) {
+			h.fail(w, "cron source", err)
+			return
+		}
+		h.Logger.Warn("cron source", "project", project, "err", err)
+		writeErr(w, http.StatusBadGateway, "couldn't read the file from GitHub")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {

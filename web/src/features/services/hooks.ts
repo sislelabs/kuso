@@ -19,6 +19,7 @@ import {
   listRuns,
   listServiceBranches,
   listServiceCrons,
+  getCronSource,
   listStorageClasses,
   patchService,
   removeEnvDomain,
@@ -306,6 +307,17 @@ export function useServiceCrons(project: string, service: string) {
     // No need for an aggressive refetch — let it follow the default
     // staleTime so navigating between services stays cheap.
     staleTime: 30_000,
+  });
+}
+
+// useCronSource fetches lazily (enabled once the row is expanded). The
+// key carries the image tag so a redeploy refetches the new commit's file.
+export function useCronSource(project: string, service: string, name: string, imageTag: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...cronsQueryKey(project, service), name, "source", imageTag] as const,
+    queryFn: () => getCronSource(project, service, name),
+    enabled: enabled && !!project && !!service && !!name,
+    staleTime: 5 * 60_000,
   });
 }
 

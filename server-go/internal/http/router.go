@@ -699,6 +699,9 @@ func mountAuthenticatedRoutes(
 			}
 			if d.Crons != nil {
 				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
+				if d.Github != nil && d.Github.Client != nil {
+					cronsH.RepoFiles = httphandlers.GithubRepoFiles{Client: d.Github.Client}
+				}
 				cronsH.Mount(r)
 			}
 			if d.Runs != nil {

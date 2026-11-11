@@ -5,10 +5,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { addCron, deleteCron, syncCron, useServiceCrons } from "@/features/services";
+import { addCron, deleteCron, syncCron, useCronSource, useServiceCrons } from "@/features/services";
 import type { KusoCron } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
-import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
+import { ChevronRight, Clock, ExternalLink, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
 import { CronPicker } from "@/components/shared/CronPicker";
@@ -124,6 +124,7 @@ function CronRow({
   const fqn = cron.metadata.name;
   const short = displayShort(project, service, fqn);
   const [confirming, setConfirming] = useState(false);
+  const [showSource, setShowSource] = useState(false);
 
   const del = useMutation({
     mutationFn: () => deleteCron(project, service, fqn),
@@ -148,55 +149,162 @@ function CronRow({
   });
 
   return (
-    <li className="flex items-center gap-3 px-3 py-2">
-      <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-mono text-xs font-medium">{short}</p>
-        <p className="truncate font-mono text-xs text-[var(--text-tertiary)]">
-          <span className="text-[var(--text-secondary)]">{cron.spec.schedule}</span>
-          {" · "}
-          {(cron.spec.command ?? []).join(" ")}
-        </p>
+    <li>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <Clock className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+        <button
+          type="button"
+          onClick={() => setShowSource((v) => !v)}
+          disabled={!canWrite}
+          aria-expanded={showSource}
+          title={canWrite ? "Show the source file this cron runs" : undefined}
+          className="group flex min-w-0 flex-1 items-center gap-1.5 text-left disabled:cursor-default"
+        >
+          {canWrite && (
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 shrink-0 text-[var(--text-tertiary)] transition-transform group-hover:text-[var(--text-primary)]",
+                showSource && "rotate-90"
+              )}
+            />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-xs font-medium">{short}</span>
+            <span className="block truncate font-mono text-xs text-[var(--text-tertiary)]">
+              <span className="text-[var(--text-secondary)]">{cron.spec.schedule}</span>
+              {" · "}
+              {(cron.spec.command ?? []).join(" ")}
+            </span>
+          </span>
+        </button>
+        {cron.spec.suspend && (
+          <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--warning)]">
+            suspended
+          </span>
+        )}
+        {canWrite && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => sync.mutate()}
+              disabled={sync.isPending}
+              title="Re-sync image + env from production (doesn't refresh this list)"
+              aria-label="Re-sync image and env from production"
+              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", sync.isPending && "animate-spin")} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              disabled={del.isPending}
+              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
+              title="Delete cron"
+              aria-label="Delete cron"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+            <ConfirmDialog
+              open={confirming}
+              title={`Delete cron ${short}`}
+              body={`No more runs on ${cron.spec.schedule}.`}
+              confirmLabel="Delete cron"
+              pending={del.isPending}
+              onConfirm={() => del.mutate()}
+              onCancel={() => setConfirming(false)}
+            />
+          </div>
+        )}
       </div>
-      {cron.spec.suspend && (
-        <span className="rounded bg-[var(--warning-subtle)] px-1.5 py-0.5 font-mono text-xs text-[var(--warning)]">
-          suspended
-        </span>
-      )}
-      {canWrite && (
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => sync.mutate()}
-            disabled={sync.isPending}
-            title="Re-sync image + env from production (doesn't refresh this list)"
-            aria-label="Re-sync image and env from production"
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", sync.isPending && "animate-spin")} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            disabled={del.isPending}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--error-subtle)] hover:text-[var(--error)] disabled:opacity-40"
-            title="Delete cron"
-            aria-label="Delete cron"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-          <ConfirmDialog
-            open={confirming}
-            title={`Delete cron ${short}`}
-            body={`No more runs on ${cron.spec.schedule}.`}
-            confirmLabel="Delete cron"
-            pending={del.isPending}
-            onConfirm={() => del.mutate()}
-            onCancel={() => setConfirming(false)}
-          />
-        </div>
+      {showSource && (
+        <CronSourceView project={project} service={service} name={fqn} imageTag={cron.spec.image?.tag ?? ""} />
       )}
     </li>
+  );
+}
+
+function CronSourceView({
+  project,
+  service,
+  name,
+  imageTag,
+}: {
+  project: string;
+  service: string;
+  name: string;
+  imageTag: string;
+}) {
+  const src = useCronSource(project, service, name, imageTag, true);
+  if (src.isPending) {
+    return (
+      <div className="border-t border-[var(--border-subtle)] p-3">
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+  if (src.isError) {
+    return (
+      <div className="border-t border-[var(--border-subtle)] p-3">
+        <QueryErrorState
+          what="cron source"
+          error={src.error}
+          onRetry={() => void src.refetch()}
+        />
+      </div>
+    );
+  }
+  const data = src.data;
+  if (!data.available) {
+    return (
+      <p className="border-t border-[var(--border-subtle)] px-3 py-2 font-mono text-xs text-[var(--text-tertiary)]">
+        Source unavailable: {data.reason ?? "unknown reason"}
+      </p>
+    );
+  }
+  const lines = (data.content ?? "").replace(/\n$/, "").split("\n");
+  return (
+    <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+        <p className="min-w-0 truncate font-mono text-xs text-[var(--text-secondary)]">
+          {data.path}
+          <span className="text-[var(--text-tertiary)]">
+            {" "}
+            @ {data.commit?.slice(0, 12)}
+          </span>
+        </p>
+        {data.htmlUrl && (
+          <a
+            href={data.htmlUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex shrink-0 items-center gap-1 font-mono text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            GitHub <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
+      </div>
+      <div className="relative max-h-[28rem] overflow-auto border-t border-[var(--border-subtle)]">
+        <table className="w-full border-collapse font-mono text-xs leading-5">
+          <tbody>
+            {lines.map((line, i) => (
+              <tr key={i}>
+                <td className="w-px select-none whitespace-nowrap px-3 text-right align-top text-[var(--text-tertiary)]">
+                  {i + 1}
+                </td>
+                <td className="whitespace-pre pr-3 text-[var(--text-primary)]">
+                  {line || " "}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.truncated && (
+        <p className="border-t border-[var(--border-subtle)] px-3 py-1.5 font-mono text-xs text-[var(--text-tertiary)]">
+          Truncated at 256 KB. Open on GitHub for the rest.
+        </p>
+      )}
+    </div>
   );
 }
 

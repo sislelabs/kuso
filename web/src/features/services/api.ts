@@ -576,6 +576,7 @@ export interface KusoCron {
     suspend?: boolean;
     concurrencyPolicy?: string;
     activeDeadlineSeconds?: number;
+    image?: { repository?: string; tag?: string };
   };
   status?: Record<string, unknown>;
 }
@@ -617,6 +618,24 @@ export async function syncCron(project: string, service: string, name: string): 
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons/${encodeURIComponent(name)}/sync`,
     { method: "POST" }
+  );
+}
+
+// CronSource is the repo file a service cron's command runs, read at
+// the commit its image was built from.
+export interface CronSource {
+  available: boolean;
+  reason?: string;
+  path?: string;
+  commit?: string;
+  content?: string;
+  truncated?: boolean;
+  htmlUrl?: string;
+}
+
+export async function getCronSource(project: string, service: string, name: string): Promise<CronSource> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons/${encodeURIComponent(name)}/source`
   );
 }
 
