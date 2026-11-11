@@ -4,9 +4,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/envisolation"
 )
@@ -17,6 +19,7 @@ import (
 type EnvIsolationHandler struct {
 	DB     *db.DB
 	Svc    *envisolation.Service
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -79,6 +82,14 @@ func (h *EnvIsolationHandler) Set(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, project, err)
 		return
 	}
+	msg := "env isolation set to " + strconv.FormatBool(*in.Enabled)
+	if in.NonProductionEnvs != nil {
+		msg += ", non-production envs isolated: " + strconv.FormatBool(*in.NonProductionEnvs)
+	}
+	h.Audit.Log(r.Context(), audit.Entry{
+		User: auditUser(r.Context()), Severity: "warn", Action: "project.env_isolation",
+		Pipeline: project, Resource: "project/" + project, Message: msg,
+	})
 	writeJSON(w, http.StatusOK, rep)
 }
 

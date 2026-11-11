@@ -578,9 +578,9 @@ func mountAuthenticatedRoutes(
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
 				if d.RegistryAuth != nil {
-					(&httphandlers.RegistryAuthHandler{Store: d.RegistryAuth, Logger: d.Logger}).Mount(r)
+					(&httphandlers.RegistryAuthHandler{Store: d.RegistryAuth, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 				}
-				(&httphandlers.EnvIsolationHandler{DB: d.DB, Logger: d.Logger, Svc: &envisolation.Service{
+				(&httphandlers.EnvIsolationHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger, Svc: &envisolation.Service{
 					Kube: d.Kube, HomeNS: d.Namespace, NS: kube.NewProjectNamespaceResolver(d.Kube, d.Namespace),
 				}}).Mount(r)
 			}
@@ -767,6 +767,7 @@ func mountAuthenticatedRoutes(
 		(&httphandlers.ImportCoolifyHandler{
 			Logger:    d.Logger,
 			Migration: &migration.Service{Projects: d.Projects, Addons: d.Addons, Logger: d.Logger},
+			Audit:     d.Audit,
 		}).Mount(r)
 		// Docker Compose import — convert-only preview. Writes nothing;
 		// the UI feeds the generated kuso.yaml back through

@@ -12,6 +12,7 @@ import (
 
 	"github.com/sislelabs/kuso/coolify"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/httpx"
 	"kuso/server/internal/migration"
 )
@@ -39,6 +40,7 @@ type ImportCoolifyHandler struct {
 	// B-01 so a future second importer (Heroku, Render) can plug
 	// in without re-growing this file.
 	Migration *migration.Service
+	Audit     *audit.Service
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -234,6 +236,14 @@ func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 		picked[u] = struct{}{}
 	}
 	resp := h.Migration.ImportCoolify(ctx, c, inv, picked)
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "import.coolify",
+		Resource: req.BaseURL,
+		Message: fmt.Sprintf("imported %d project(s), %d service(s), %d addon(s), %d env var(s) from %d selected resource(s); %d error(s)",
+			resp.ProjectsCreated, resp.ServicesCreated, resp.AddonsCreated, resp.EnvVarsCreated, len(req.UUIDs), len(resp.Errors)),
+	})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

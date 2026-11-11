@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -233,4 +235,17 @@ VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', 'admin', NOW(), NOW())`
 		t.Fatalf("create channel: %d %s", rr.Code, rr.Body.String())
 	}
 	expectOneAuditRow(t, d, "notification.create", "pager", "hmac-s3cret")
+}
+
+// OPS-6: node label edits steer every pinned workload and used to leave
+// no audit row.
+func TestAudit_NodeLabels(t *testing.T) {
+	d := openTestDB(t)
+	cs := kubefake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}})
+	r := chi.NewRouter()
+	(&KubernetesHandler{Kube: &kube.Client{Clientset: cs}, Audit: &audit.Service{DB: d, Enabled: true}, Logger: quietLogger()}).Mount(r)
+	if rr := auditDo(t, r, auditAdmin, http.MethodPut, "/api/kubernetes/nodes/n1/labels", `{"labels":{"region":"eu"}}`); rr.Code != http.StatusNoContent {
+		t.Fatalf("put labels: %d %s", rr.Code, rr.Body.String())
+	}
+	expectOneAuditRow(t, d, "node.labels", "region=eu", "")
 }

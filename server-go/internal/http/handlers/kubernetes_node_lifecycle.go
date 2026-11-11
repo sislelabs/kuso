@@ -103,6 +103,21 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 		NodeName:    body.Name,
 		K3sVersion:  nodejoin.ServerK3sVersion(h.Kube.Clientset),
 	})
+	// The k3s token went to that host whether or not the install then
+	// succeeded, so both outcomes are recorded.
+	joinMsg := fmt.Sprintf("join %s@%s:%d (%s token)", body.Credentials.User, body.Credentials.Host, body.Credentials.Port, joinTokenKind())
+	if err != nil {
+		joinMsg += " failed: " + err.Error()
+	} else {
+		joinMsg += " joined as " + res.NodeName
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "critical",
+		Action:   "node.join",
+		Resource: body.Credentials.Host,
+		Message:  joinMsg,
+	})
 	if err != nil {
 		// Return 502 so the UI distinguishes "the join failed on the
 		// remote host" from a kuso-side 500.
@@ -397,6 +412,19 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	// Labels steer placement for every workload pinned by them.
+	labelPairs := make([]string, 0, len(body.Labels))
+	for k, v := range body.Labels {
+		labelPairs = append(labelPairs, k+"="+v)
+	}
+	sort.Strings(labelPairs)
+	h.Audit.Log(ctx, audit.Entry{
+		User:     auditUser(ctx),
+		Severity: "warn",
+		Action:   "node.labels",
+		Resource: name,
+		Message:  "kuso labels set to [" + strings.Join(labelPairs, ", ") + "]",
+	})
 
 	// Step 2 — region-derived taint. Re-fetch so we see the new label
 	// state, then ensure spec.taints carries exactly one
@@ -721,4 +749,11 @@ func (h *KubernetesHandler) UncordonNode(w http.ResponseWriter, r *http.Request)
 		Message:  "node uncordoned",
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"uncordoned": name})
+}
+
+func joinTokenKind() string {
+	if nodejoin.UsingServerToken() {
+		return "server"
+	}
+	return "agent"
 }
