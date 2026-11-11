@@ -529,6 +529,10 @@ type Plan struct {
 	// Warnings are things apply can't fix, e.g. a {secret: true} key the
 	// service's Secret doesn't hold.
 	Warnings []string `json:"warnings,omitempty"`
+	// ExecChanges lists the planned service changes that pick code run
+	// with the service's secrets (command, image, release hook, build
+	// command). Applying them takes the project admin role.
+	ExecChanges []ExecChange `json:"execChanges,omitempty"`
 
 	// svcPatch / svcEnvChanged carry what PlanFor computed to Apply in
 	// the same process, so apply sends exactly the diff the plan shows.
@@ -546,6 +550,13 @@ type ResourceChange struct {
 	// NotApplied marks a diff apply won't act on (existing addons are
 	// never modified by apply).
 	NotApplied bool `json:"notApplied,omitempty"`
+}
+
+// ExecChange is one resource whose planned change is execution-bearing
+// (see projects.ExecPatchFields), keyed like ResourceChange.
+type ExecChange struct {
+	Resource string   `json:"resource"`
+	Fields   []string `json:"fields"`
 }
 
 // FieldChange is one differing field. From/To are display strings;
@@ -632,10 +643,16 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		plan.Changes = append(plan.Changes, ResourceChange{Resource: "service:" + short, Fields: fields})
 		plan.svcPatch[short] = req
 		plan.svcEnvChanged[short] = crEnvChanged
+		if ex := projects.ExecPatchFields(&ls.Spec, req); len(ex) > 0 {
+			plan.ExecChanges = append(plan.ExecChanges, ExecChange{Resource: "service:" + short, Fields: ex})
+		}
 	}
 	for name, s := range desiredSvcs {
 		if !liveSvcByShort[name] {
 			plan.ServicesToCreate = append(plan.ServicesToCreate, name)
+			if ex := projects.ExecCreateFields(serviceCreateReq(s)); len(ex) > 0 {
+				plan.ExecChanges = append(plan.ExecChanges, ExecChange{Resource: "service:" + name, Fields: ex})
+			}
 			for _, key := range secretMarkedKeys(s.Env) {
 				plan.Warnings = append(plan.Warnings, missingSecretWarning(f.Project, name, key))
 			}
@@ -727,6 +744,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	sort.Strings(plan.AddonsUnchanged)
 	sort.Strings(plan.CronsUnchanged)
 	sort.Strings(plan.Warnings)
+	sort.Slice(plan.ExecChanges, func(i, j int) bool { return plan.ExecChanges[i].Resource < plan.ExecChanges[j].Resource })
 	sort.SliceStable(plan.Changes, func(i, j int) bool { return plan.Changes[i].Resource < plan.Changes[j].Resource })
 	sort.Strings(plan.ServicesToCreate)
 	sort.Strings(plan.ServicesToUpdate)

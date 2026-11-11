@@ -10,13 +10,14 @@ import { useSetupStatus } from "@/features/github";
 import { autoDeploySwitchCopy, pushDeployState } from "../AutoDeployBanner";
 import { toastError } from "@/lib/errors";
 import { Input } from "@/components/ui/input";
-import { Section, Field, SwitchField, Callout, Code, monoInputClass, type SectionProps } from "./_primitives";
+import { Section, Field, SwitchField, Callout, Code, EXEC_LOCK_HINT, monoInputClass, type SectionProps } from "./_primitives";
 
 export function DeploySection({
   project,
   service,
   state,
   setState,
+  canExec = true,
 }: SectionProps & { project: string; service?: string }) {
   // The project's previews config, so "will my PR get its own URL?" is
   // answered here instead of in project settings.
@@ -49,7 +50,7 @@ export function DeploySection({
       {service && !isImage && <AutoDeploySwitch project={project} service={service} branch={branch} />}
       <Field
         label="Start command"
-        hint="Overrides the image's CMD. Split on spaces. Blank uses the image default."
+        hint={canExec ? "Overrides the image's CMD. Split on spaces. Blank uses the image default." : EXEC_LOCK_HINT}
         htmlFor="deploy-start-command"
       >
         <Input
@@ -57,6 +58,7 @@ export function DeploySection({
           value={state.startCommand}
           onChange={(e) => setState((s) => ({ ...s, startCommand: e.target.value }))}
           placeholder="Image default"
+          disabled={!canExec}
           className={monoInputClass}
           spellCheck={false}
         />

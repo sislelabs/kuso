@@ -993,6 +993,10 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRepoBound(ctx, w, project, addURLs, addInsts) {
 		return
 	}
+	if f := projects.ExecCreateFields(addReq); len(f) > 0 && !callerCanReadSecrets(ctx, h.DB, project) {
+		refuseExecFields(w, f)
+		return
+	}
 	out, err := h.Svc.AddService(ctx, project, addReq)
 	if err != nil {
 		h.fail(w, "add service", err)
@@ -1163,6 +1167,15 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, plan)
 		return
 	}
+	if len(plan.ExecChanges) > 0 && !callerCanReadSecrets(ctx, h.DB, f.Project) {
+		parts := make([]string, 0, len(plan.ExecChanges))
+		for _, c := range plan.ExecChanges {
+			parts = append(parts, c.Resource+" ("+strings.Join(c.Fields, ", ")+")")
+		}
+		writeErr(w, http.StatusForbidden, "forbidden: this kuso.yml changes "+strings.Join(parts, "; ")+
+			", which runs code with the service's secrets and requires the project admin role")
+		return
+	}
 	// Log the plan before executing — if the 30s context fires
 	// mid-apply, the post-apply log line never runs and we'd lose all
 	// trace of what was attempted.
@@ -1256,6 +1269,17 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	service := chi.URLParam(r, "service")
 	if req.Repo != nil && !h.requireRepoBound(ctx, w, project, []string{req.Repo.URL}, []int64{req.Repo.InstallationID}) {
 		return
+	}
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		cur, err := h.Svc.GetService(ctx, project, service)
+		if err != nil {
+			h.fail(w, "patch service", err)
+			return
+		}
+		if f := projects.ExecPatchFields(&cur.Spec, req); len(f) > 0 {
+			refuseExecFields(w, f)
+			return
+		}
 	}
 	out, err := h.Svc.PatchService(ctx, project, service, req)
 	if err != nil {

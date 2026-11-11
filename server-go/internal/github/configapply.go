@@ -116,6 +116,60 @@ func checkConfigRepoBinding(f *spec.File, bound map[string]bool) error {
 // repo-binding gate.
 var ErrConfigRepoNotBound = errors.New("config-as-code: repo not bound to project")
 
+// ErrConfigExecNotAllowed marks a push-applied kuso.yaml refused because
+// it changes how a service it doesn't build runs.
+var ErrConfigExecNotAllowed = errors.New("config-as-code: execution change outside the pushed repo")
+
+// checkConfigExecChanges refuses a push-applied kuso.yaml whose
+// execution-bearing changes (command, image, release hook, build command:
+// spec.Plan.ExecChanges) reach a service the pushed repo doesn't build.
+// Pushing to a service's own repo already runs arbitrary code with that
+// service's secrets (its Dockerfile, its start script), so kuso.yaml adds
+// nothing there. For any other service, an image service above all, it
+// would hand a repo pusher a capability a kuso editor no longer has
+// (SEC-1); `kuso apply` by a project admin is the way to make that change.
+func checkConfigExecChanges(plan *spec.Plan, f *spec.File, proj *kube.KusoProject, svcs []unstructured.Unstructured, pushed string) error {
+	if plan == nil || len(plan.ExecChanges) == 0 {
+		return nil
+	}
+	if proj == nil {
+		proj = &kube.KusoProject{}
+	}
+	desired := make(map[string]spec.ServiceSpec, len(f.Services))
+	for _, s := range f.Services {
+		desired[s.Name] = s
+	}
+	live := make(map[string]*unstructured.Unstructured, len(svcs))
+	for i := range svcs {
+		live[strings.TrimPrefix(svcs[i].GetName(), f.Project+"-")] = &svcs[i]
+	}
+	var refused []string
+	for _, c := range plan.ExecChanges {
+		name, ok := strings.CutPrefix(c.Resource, "service:")
+		if !ok {
+			refused = append(refused, c.Resource)
+			continue
+		}
+		d := desired[name]
+		runtime := d.Runtime
+		if runtime == "" && live[name] != nil {
+			runtime, _, _ = unstructured.NestedString(live[name].Object, "spec", "runtime")
+		}
+		repo := d.Repo
+		if repo == "" {
+			repo, _ = serviceEffectiveRepo(live[name], proj)
+		}
+		if runtime == "image" || !repoMatches(repo, pushed) {
+			refused = append(refused, c.Resource+" ("+strings.Join(c.Fields, ", ")+")")
+		}
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: kuso.yaml changes %s, which %s doesn't build; a project admin has to apply that with `kuso apply`",
+		ErrConfigExecNotAllowed, strings.Join(refused, "; "), pushed)
+}
+
 // auditConfigApply writes one audit row per push-driven kuso.yaml apply.
 // The pusher has no kuso account, so the row is attributed to the system
 // user and names the GitHub pusher and commit in the message.

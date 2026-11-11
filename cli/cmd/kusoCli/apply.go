@@ -243,6 +243,10 @@ type applyPlan struct {
 	WouldDelete       []string              `json:"wouldDelete"`
 	Changes           []applyResourceChange `json:"changes"`
 	Warnings          []string              `json:"warnings"`
+	ExecChanges       []struct {
+		Resource string   `json:"resource"`
+		Fields   []string `json:"fields"`
+	} `json:"execChanges"`
 }
 
 // renderApplyResult prints the plan (dry run) or ApplyResult (real
@@ -332,6 +336,12 @@ func renderApplyResult(out, errOut io.Writer, body []byte, dryRun bool) bool {
 		fmt.Fprintln(out, "\nwarnings:")
 		for _, w := range p.Warnings {
 			fmt.Fprintln(out, "  ! "+w)
+		}
+	}
+	if dryRun && len(p.ExecChanges) > 0 {
+		fmt.Fprintln(out, "\nneeds the project admin role (runs code with the service's secrets):")
+		for _, c := range p.ExecChanges {
+			fmt.Fprintf(out, "  ! %s: %s\n", c.Resource, strings.Join(c.Fields, ", "))
 		}
 	}
 	if len(p.WouldDelete) > 0 {

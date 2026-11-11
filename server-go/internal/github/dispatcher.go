@@ -430,6 +430,10 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 					if err != nil {
 						return err
 					}
+					if err := checkConfigExecChanges(plan, parsed, &proj, svcItems, repoFullName); err != nil {
+						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warning")
+						return err
+					}
 					// GitHub-driven applies never rotate generated
 					// secrets (generate-once) — a push to main must not
 					// silently roll PAYLOAD_SECRET and log everyone out.

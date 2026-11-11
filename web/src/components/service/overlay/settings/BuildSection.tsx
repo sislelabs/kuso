@@ -10,6 +10,7 @@ import {
   Field,
   FieldGrid,
   Segmented,
+  ExecLockNote,
   Code,
   RUNTIMES,
   monoInputClass,
@@ -17,7 +18,7 @@ import {
   type SectionProps,
 } from "./_primitives";
 
-export function BuildSection({ state, setState, project }: SectionProps & { project: string }) {
+export function BuildSection({ state, setState, project, canExec = true }: SectionProps & { project: string }) {
   const isDockerfile = state.runtime === "dockerfile";
   // runtime=image services never build — the chart pulls the image
   // straight from the registry. Editing the reference here + saving
@@ -34,7 +35,8 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
         description="This service runs a pre-built image and never builds. Deploying a new tag is how you ship it."
         footerNote="Deploying a new repository or tag rolls the service onto that image."
       >
-        <ImageRefFields state={state} setState={setState} />
+        <ExecLockNote locked={!canExec} />
+        <ImageRefFields state={state} setState={setState} canExec={canExec} />
         <PullSecretRow project={project} state={state} setState={setState} />
       </Section>
     );
@@ -48,11 +50,13 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
       description="How kuso turns the source into an image."
       footerNote="Build changes apply from the next build."
     >
+      <ExecLockNote locked={!canExec} />
       <Field label="Builder" hint={RUNTIME_HINTS[state.runtime] ?? "How kuso builds the image."}>
         <Segmented
           options={RUNTIMES.map((r) => ({ value: r, label: RUNTIME_LABELS[r] }))}
           value={state.runtime}
           onChange={(r) => setState((s) => ({ ...s, runtime: r }))}
+          disabled={!canExec}
           label="Builder"
         />
       </Field>
@@ -70,16 +74,16 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
       )}
       {state.runtime === "static" && (
         <FieldGrid>
-          <TextRow state={state} setState={setState} field="staticBuildCmd" label="Build command" hint="Runs before the site is packaged. Blank runs nothing." placeholder="e.g. npm ci && npm run build" />
+          <TextRow state={state} setState={setState} disabled={!canExec} field="staticBuildCmd" label="Build command" hint="Runs before the site is packaged. Blank runs nothing." placeholder="e.g. npm ci && npm run build" />
           <TextRow state={state} setState={setState} field="staticOutputDir" label="Output directory" hint="Served as the site root." placeholder="." />
-          <TextRow state={state} setState={setState} field="staticBuilderImage" label="Builder image" hint="The build command runs in this image." placeholder="node:20-alpine" />
-          <TextRow state={state} setState={setState} field="staticRuntimeImage" label="Runtime image" hint="Serves the built files." placeholder="nginx:1.27-alpine" />
+          <TextRow state={state} setState={setState} disabled={!canExec} field="staticBuilderImage" label="Builder image" hint="The build command runs in this image." placeholder="node:20-alpine" />
+          <TextRow state={state} setState={setState} disabled={!canExec} field="staticRuntimeImage" label="Runtime image" hint="Serves the built files." placeholder="nginx:1.27-alpine" />
         </FieldGrid>
       )}
       {state.runtime === "buildpacks" && (
         <FieldGrid>
-          <TextRow state={state} setState={setState} field="buildpacksBuilderImage" label="Builder image" hint="Cloud Native Buildpacks builder. Blank uses Paketo jammy-base." placeholder="paketobuildpacks/builder-jammy-base:latest" />
-          <TextRow state={state} setState={setState} field="buildpacksLifecycleImage" label="Lifecycle image" hint="Blank uses the chart default." placeholder="buildpacksio/lifecycle:0.20.5" />
+          <TextRow state={state} setState={setState} disabled={!canExec} field="buildpacksBuilderImage" label="Builder image" hint="Cloud Native Buildpacks builder. Blank uses Paketo jammy-base." placeholder="paketobuildpacks/builder-jammy-base:latest" />
+          <TextRow state={state} setState={setState} disabled={!canExec} field="buildpacksLifecycleImage" label="Lifecycle image" hint="Blank uses the chart default." placeholder="buildpacksio/lifecycle:0.20.5" />
         </FieldGrid>
       )}
       <Field
@@ -97,6 +101,7 @@ export function BuildSection({ state, setState, project }: SectionProps & { proj
           value={state.buildArgs}
           onChange={(e) => setState((s) => ({ ...s, buildArgs: e.target.value }))}
           placeholder={"e.g. NODE_ENV=production\nAPP_VERSION=1.2.3"}
+          disabled={!canExec}
           rows={3}
           spellCheck={false}
           className={textareaClass}
@@ -155,7 +160,8 @@ function TextRow({
   label,
   hint,
   placeholder,
-}: SectionProps & { field: TextField; label: string; hint: string; placeholder: string }) {
+  disabled,
+}: SectionProps & { field: TextField; label: string; hint: string; placeholder: string; disabled?: boolean }) {
   return (
     <Field label={label} hint={hint} htmlFor={`build-${field}`}>
       <Input
@@ -163,6 +169,7 @@ function TextRow({
         value={state[field]}
         onChange={(e) => setState((s) => ({ ...s, [field]: e.target.value }))}
         placeholder={placeholder}
+        disabled={disabled}
         className={monoInputClass}
         spellCheck={false}
       />
@@ -202,7 +209,7 @@ function PullSecretRow({ project, state, setState }: SectionProps & { project: s
 // ImageRefFields edits the repository + tag pair. A full reference pasted
 // or typed into Repository is split on paste/blur; problems show inline
 // and the staged settings refuse to deploy until they're fixed.
-function ImageRefFields({ state, setState }: SectionProps) {
+function ImageRefFields({ state, setState, canExec = true }: SectionProps) {
   const repoProblem = state.imageRepository.trim() ? imageRepositoryProblem(state.imageRepository) : null;
   const tagProblem = state.imageRepository.trim() ? imageTagProblem(state.imageTag) : null;
   const split = (raw: string): boolean => {
@@ -224,6 +231,7 @@ function ImageRefFields({ state, setState }: SectionProps) {
           }}
           onBlur={(e) => split(e.target.value)}
           placeholder="e.g. ghcr.io/owner/app"
+          disabled={!canExec}
           aria-invalid={repoProblem ? true : undefined}
           aria-describedby={repoProblem ? "build-image-repo-error" : undefined}
           className={monoInputClass}
@@ -241,6 +249,7 @@ function ImageRefFields({ state, setState }: SectionProps) {
           value={state.imageTag}
           onChange={(e) => setState((s) => ({ ...s, imageTag: e.target.value }))}
           placeholder="e.g. 1.4.2"
+          disabled={!canExec}
           aria-invalid={tagProblem ? true : undefined}
           aria-describedby={tagProblem ? "build-image-tag-error" : undefined}
           className={cn(monoInputClass, "sm:max-w-md")}
