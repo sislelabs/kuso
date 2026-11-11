@@ -241,3 +241,31 @@ func TestOrphanScannerAndPurge(t *testing.T) {
 		t.Error("purging acme/acme-db touched another prefix")
 	}
 }
+
+// DB-5: a dropped tenant or clone database's dumps stop while the instance
+// keeps being backed up. Its series must show up in the orphan scan, even
+// under the reserved kuso- prefix the addon-level scan skips.
+func TestOrphanScanner_ReportsDroppedDatabaseSeries(t *testing.T) {
+	ctx := context.Background()
+	cli := newMemS3()
+	prefix := "kuso-instance/kuso-instance-pg/"
+	ts := func(d time.Time) string { return d.Format("20060102T150405Z") }
+	for _, d := range []time.Time{day1, day5, day9} {
+		cli.put(prefix+ts(d)+".sql.gz", d)
+		cli.put(prefix+ts(d)+".db-live_db.sql.gz", d)
+	}
+	cli.put(prefix+ts(day1)+".db-kuso-preview-pr-7.sql.gz", day1)
+	cli.put(prefix+ts(day1)+".db-kuso-preview-pr-7.sql.gz.manifest.json", day1)
+
+	sc := orphanScanner{cli: cli, bucket: "b", owner: func(context.Context, string, string) (backupOwnership, bool, bool, error) {
+		return backupOwnership{}, false, false, nil
+	}}
+	got, err := sc.scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Reason != "database-not-dumped:kuso-preview-pr-7" || got[0].Objects != 2 ||
+		got[0].Project != "kuso-instance" || !got[0].Newest.Equal(day1) {
+		t.Fatalf("orphans = %+v, want only the dropped preview DB's series", got)
+	}
+}

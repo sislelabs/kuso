@@ -50,11 +50,28 @@ if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
       # newest copies. "<stamp>|<series>|<name>", newest first per series;
       # anything past the KEEP_MIN newest of its series and older than
       # CUTOFF goes.
+      {{- if .dbSeries }}
+      # A ".db-<name>" series whose database is gone (a dropped preview or
+      # env clone, seeded from production data) gets no new dumps, so
+      # KEEP_MIN would hold its last copies forever. Once the run listed
+      # the live databases (DBLIST_OK=1, ALL_DBS), such a series keeps
+      # nothing past retention. An unknown listing changes nothing.
+      {{- end }}
       printf '%s\n' "${NAMES}" \
         | sed -n 's/^\([0-9]\{8\}\)T\([0-9]\{6\}\)Z\(.*\)$/\1\2|\3|&/p' \
         | sort -t '|' -k2,2 -k1,1r \
-        | awk -F '|' -v keep="${KEEP_MIN}" -v cutoff="${CUTOFF}" \
+        | awk -F '|' -v keep="${KEEP_MIN}" -v cutoff="${CUTOFF}" {{- if .dbSeries }} -v listed="${DBLIST_OK:-0}" -v live="$(printf '%s' "${ALL_DBS:-}" | tr '\n' ' ')"{{ end }} \
+            {{- if .dbSeries }}
+            'BEGIN { nl = split(live, l, " "); for (i = 1; i <= nl; i++) if (l[i] != "") alive[l[i]] = 1 }
+             { if ($2 != prev) { n = 0; prev = $2; k = keep
+                 if (listed == "1" && $2 ~ /^\.db-.+\.sql\.gz(\.manifest\.json)?$/) {
+                   db = $2; sub(/^\.db-/, "", db); sub(/\.sql\.gz(\.manifest\.json)?$/, "", db)
+                   if (!(db in alive)) k = 0
+                 } }
+               n++; if (n > k && ($1 + 0) < (cutoff + 0)) print $3 }' \
+            {{- else }}
             '{ if ($2 != prev) { n = 0; prev = $2 } n++; if (n > keep && ($1 + 0) < (cutoff + 0)) print $3 }' \
+            {{- end }}
         | while read -r name; do
           {{- if eq .mode "prefixes" }}
           echo "    rm -r s3://${BUCKET}/${PREFIX}${name}"

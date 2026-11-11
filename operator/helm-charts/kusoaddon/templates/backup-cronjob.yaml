@@ -247,7 +247,7 @@ spec:
                   # support lifecycle rules consistently. It keeps the
                   # newest copies per database, so it runs even when a
                   # tenant's dump failed; the Job still fails afterwards.
-                  {{- include "kusoaddon.backupPrune" (dict "mode" "files") | nindent 18 }}
+                  {{- include "kusoaddon.backupPrune" (dict "mode" "files" "dbSeries" true) | nindent 18 }}
                   if [ -n "${FAILED_DBS}" ]; then
                     echo "ERROR: logical DB dump failed for:${FAILED_DBS}" >&2
                     exit 1
