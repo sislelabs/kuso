@@ -79,7 +79,7 @@
                           "type": "string"
                         },
                         "name": {
-                          "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$",
+                          "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$",
                           "type": "string",
                           "x-kubernetes-validations": [
                             {
@@ -224,7 +224,7 @@
                               "type": "string"
                             },
                             "name": {
-                              "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$",
+                              "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$|^[a-z0-9][a-z0-9-]*-readonly$",
                               "type": "string",
                               "x-kubernetes-validations": [
                                 {
