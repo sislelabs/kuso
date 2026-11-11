@@ -31,13 +31,16 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -199,6 +202,73 @@ func (s *Store) EnsureClientSecret(ctx context.Context, ns string) (string, erro
 		}
 	}
 	return ClientSecretName, nil
+}
+
+// ErrDaemonPredatesTLS: the live kuso-buildkitd Deployment doesn't mount
+// kuso-buildkitd-tls, so its start.sh can't turn client auth on.
+var ErrDaemonPredatesTLS = errors.New("the running kuso-buildkitd predates mutual TLS; apply deploy/buildkitd.yaml from this release first")
+
+// daemonDeployment and shardStatefulSet are the daemons start.sh runs in.
+const (
+	daemonDeployment = "kuso-buildkitd"
+	shardStatefulSet = "kuso-buildkitd-shard"
+)
+
+// Enabled reports whether the daemon is set to require client
+// certificates. A missing Secret reads as false.
+func (s *Store) Enabled(ctx context.Context) (bool, error) {
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.ns()).Get(ctx, SecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("buildkit tls: read secret: %w", err)
+	}
+	return string(sec.Data[keyEnabled]) == "true", nil
+}
+
+// SetEnabled flips client auth on or off and restarts the daemons so
+// start.sh picks it up. Build Jobs try TLS first and fall back to
+// plaintext, so queued builds survive either direction; builds running
+// at the moment of the restart are interrupted, as on any daemon restart.
+func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
+	apps := s.Kube.Clientset.AppsV1()
+	dep, err := apps.Deployments(s.ns()).Get(ctx, daemonDeployment, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("buildkit tls: read deployment %s: %w", daemonDeployment, err)
+	}
+	mounts := false
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == SecretName {
+			mounts = true
+		}
+	}
+	if !mounts {
+		return ErrDaemonPredatesTLS
+	}
+	if err := s.Ensure(ctx); err != nil {
+		return err
+	}
+	secrets := s.Kube.Clientset.CoreV1().Secrets(s.ns())
+	sec, err := secrets.Get(ctx, SecretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("buildkit tls: read secret: %w", err)
+	}
+	if sec.Data == nil {
+		sec.Data = map[string][]byte{}
+	}
+	sec.Data[keyEnabled] = []byte(strconv.FormatBool(enabled))
+	if _, err := secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("buildkit tls: update secret: %w", err)
+	}
+	patch := fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{"kuso.sislelabs.com/restartedAt":%q}}}}}`, time.Now().UTC().Format(time.RFC3339))
+	if _, err := apps.Deployments(s.ns()).Patch(ctx, daemonDeployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("buildkit tls: restart %s: %w", daemonDeployment, err)
+	}
+	if _, err := apps.StatefulSets(s.ns()).Patch(ctx, shardStatefulSet, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("buildkit tls: restart %s: %w", shardStatefulSet, err)
+	}
+	return nil
 }
 
 // Mint returns a fresh CA certificate plus server and client pairs signed

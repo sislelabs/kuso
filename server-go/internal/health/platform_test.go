@@ -11,6 +11,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
@@ -187,5 +191,31 @@ func TestPlatformCoreScaledToZero(t *testing.T) {
 		if n := countType(h.events, notify.EventPlatformUnhealthy); n != want {
 			t.Fatalf("annotated=%v: platform.unhealthy = %d, want %d (%+v)", annotated, n, want, h.events)
 		}
+	}
+}
+
+// OPS-8: with the kuso-postgres Cluster present, zero instance pods is an
+// outage (CNPG lost them), not "not installed here".
+func TestPlatformCNPGZeroPodsIsDown(t *testing.T) {
+	ctx := context.Background()
+	target := PlatformTarget{Component: "control-plane Postgres", Selector: "cnpg.io/cluster=kuso-postgres", CNPGCluster: "kuso-postgres"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{cnpgClusterGVR: "ClusterList"})
+	w := New(&kube.Client{Clientset: fake.NewSimpleClientset(), Dynamic: dyn}, testNS, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	obs, ok := w.observePlatform(ctx, target, testNS, "pg", time.Now())
+	if !ok || !obs.absent {
+		t.Fatalf("no Cluster (external Postgres): obs=%+v ok=%v, want absent", obs, ok)
+	}
+	cluster := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
+		"metadata": map[string]any{"name": "kuso-postgres", "namespace": testNS},
+	}}
+	if err := dyn.Tracker().Create(cnpgClusterGVR, cluster, testNS); err != nil {
+		t.Fatal(err)
+	}
+	obs, ok = w.observePlatform(ctx, target, testNS, "pg", time.Now())
+	if !ok || obs.absent || !obs.unready {
+		t.Fatalf("Cluster with no pods: obs=%+v ok=%v, want unready", obs, ok)
 	}
 }

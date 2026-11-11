@@ -16,8 +16,9 @@
 #   KUSO_API_URL     base URL of the kuso server      (required)
 #                    e.g. http://kuso-server.kuso.svc.cluster.local
 #   INCIDENT_TOKEN   per-incident bearer (agent-facing endpoints)  (required;
-#                    from the Job's own Secret via secretKeyRef. Used by this
-#                    script to post results, never exposed to the agent.)
+#                    the file ${SECRETS_DIR}/incident-token, or this env var
+#                    from older Jobs. Used by this script to post results,
+#                    never exposed to the agent.)
 #   KUSO_TOKEN       project-scoped kuso CLI token (viewer + sql)  (OPTIONAL;
 #                    empty in v1 → agent uses kubectl via its read-only SA)
 #   LOG_NAMESPACE    the one namespace the agent may read pod logs in
@@ -36,9 +37,10 @@
 #   implement phase only (repo wiring):
 #   REPO_OWNER, REPO_NAME, REPO_DEFAULT_BRANCH   (required for implement)
 #   GIT_TOKEN        short-lived GitHub App token restricted to REPO_OWNER/
-#                    REPO_NAME (contents:write + pull_requests:write), from
-#                    the Job's Secret. Used by this script to clone, push and
-#                    open the PR; never logged, never in the agent's env.
+#                    REPO_NAME (contents:write + pull_requests:write), the
+#                    file ${SECRETS_DIR}/git-token (or env, older Jobs). Used
+#                    by this script to clone, push and open the PR; never
+#                    logged, never in the agent's env.
 #   FIX_BRANCH       branch name to create for the fix (default:
 #                    kuso-incident-${INCIDENT_ID})
 #
@@ -47,6 +49,9 @@
 #                          from Secret kuso-incident-agent-cc (key
 #                          credentials.json), read-only. Copied into
 #                          ~/.claude/.credentials.json at startup.
+#   /run/kuso-agent        (SECRETS_DIR) memory emptyDir the Job's init
+#                          container copies the per-Job Secret into; this
+#                          script deletes the files once read.
 #   (optional) a ConfigMap mounted at CONTEXT_PACK_FILE for large packs.
 #
 # The pod runs as the read-only kuso-incident-agent ServiceAccount: kubectl
@@ -97,6 +102,25 @@ if [ "${PHASE:-}" = "refresh" ]; then
     && log "refresh: secret updated" || die "refresh: failed to write secret"
   exit 0
 fi
+
+# --- 0. Load the per-Job credentials -------------------------------------
+# An init container copies the Job's Secret into SECRETS_DIR (a memory
+# emptyDir). Reading the files into unexported shell variables and
+# deleting them keeps both tokens out of /proc/1/environ, which every
+# process of this uid can read; values set in the pod env stay there for
+# the life of the pod. The env form is still accepted from older Jobs.
+SECRETS_DIR="${SECRETS_DIR:-/run/kuso-agent}"
+load_secret() {
+  local name="$1" file="${SECRETS_DIR}/$2"
+  if [ -z "${!name:-}" ] && [ -f "$file" ]; then
+    printf -v "$name" '%s' "$(cat "$file")"
+  fi
+  rm -f "$file" 2>/dev/null || true
+  export -n "$name" 2>/dev/null || true
+}
+load_secret INCIDENT_TOKEN incident-token
+load_secret GIT_TOKEN git-token
+REAL_GIT=/usr/bin/git
 
 # --- 1. Validate the common env contract ---------------------------------
 require PHASE
@@ -241,12 +265,12 @@ if [ "$PHASE" = "implement" ]; then
 
   # GIT_TOKEN is a short-lived token scoped to this ONE repo
   # (contents:write + pull_requests:write). The credential helper reads it
-  # from the environment at call time, so it never lands in .git/config or
-  # process args, and git run inside the agent (env without GIT_TOKEN) gets
-  # no credentials at all.
-  git config --global user.name  "kuso-incident-agent"
-  git config --global user.email "incident-agent@kuso.local"
-  git config --global credential.helper \
+  # from the environment of the one git process it is handed to, so it
+  # never lands in .git/config or process args. `git` on PATH is
+  # git-guard.sh; the entrypoint's own trusted calls use the real binary.
+  "$REAL_GIT" config --global user.name  "kuso-incident-agent"
+  "$REAL_GIT" config --global user.email "incident-agent@kuso.local"
+  "$REAL_GIT" config --global credential.helper \
     '!f() { [ -n "${GIT_TOKEN:-}" ] || exit 0; echo "username=x-access-token"; echo "password=${GIT_TOKEN}"; }; f'
 
   log "cloning ${REPO_OWNER}/${REPO_NAME} (branch ${REPO_DEFAULT_BRANCH})"
@@ -254,21 +278,21 @@ if [ "$PHASE" = "implement" ]; then
   # be programmed.
   cloned=""
   for attempt in 1 2 3 4 5; do
-    if git clone --depth 50 --branch "$REPO_DEFAULT_BRANCH" "$CLONE_URL" repo; then
+    if GIT_TOKEN="$GIT_TOKEN" "$REAL_GIT" clone --depth 50 --branch "$REPO_DEFAULT_BRANCH" "$CLONE_URL" repo; then
       cloned=1; break
     fi
     rm -rf repo; sleep $((attempt * 3))
   done
   [ -n "$cloned" ] || die "git clone failed"
   cd repo
-  BASE_SHA="$(git rev-parse HEAD)"
-  git checkout -b "$FIX_BRANCH"
+  BASE_SHA="$("$REAL_GIT" rev-parse HEAD)"
+  "$REAL_GIT" checkout -b "$FIX_BRANCH"
   log "on branch ${FIX_BRANCH}"
 
   # KUSO_INCIDENT_CLONE_ONLY: plumbing test. Proves the repo-resolve → token-mint
   # → clone → branch chain works WITHOUT opening a PR. Reports a note + exits 0.
   if [ "${KUSO_INCIDENT_CLONE_ONLY:-}" = "true" ]; then
-    head_sha="$(git rev-parse --short HEAD)"
+    head_sha="$("$REAL_GIT" rev-parse --short HEAD)"
     log "clone-only: cloned ${REPO_OWNER}/${REPO_NAME}@${head_sha}, branch ${FIX_BRANCH} ready — skipping PR"
     post_note "✅ Plumbing test: successfully resolved repo ${REPO_OWNER}/${REPO_NAME}, minted a push token, cloned (${REPO_DEFAULT_BRANCH}@${head_sha}), and created branch ${FIX_BRANCH}. PR creation skipped (KUSO_INCIDENT_CLONE_ONLY)."
     exit 0
@@ -315,16 +339,16 @@ DENIED_TOOLS=(
   "Read(//cc/**)" "Read(~/.claude/**)" "Read(//var/run/secrets/**)"
   "Read(//run/secrets/**)" "Read(//proc/**)"
   "Edit(~/.claude/**)" "Write(~/.claude/**)"
+  "Edit(**/.git/**)" "Write(**/.git/**)" "Edit(//**/.git/**)" "Write(//**/.git/**)"
   "Bash(kuso:*)"
 )
 
 log "running claude (phase=${PHASE}, incident=${INCIDENT_ID})"
 set +e
-# core.hooksPath=/dev/null via GIT_CONFIG_* outranks anything the agent
-# writes into the checkout's .git/config, so `git commit` can't run a
-# hook the agent planted.
+# The agent's `git` is git-guard.sh: it ignores system/global config,
+# pins hooks/fsmonitor/pager/credentials off and refuses to run in a
+# checkout whose .git/config names anything an executor could hang off.
 env -u INCIDENT_TOKEN -u GIT_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
-  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null \
   claude -p "$PROMPT" --add-dir "$OUT_DIR" --allowedTools "${ALLOWED_TOOLS[@]}" --disallowedTools "${DENIED_TOOLS[@]}"
 rc=$?
 set -e
@@ -365,27 +389,30 @@ fi
 # and hooks are agent-writable (core.fsmonitor, url.insteadOf, pushurl …).
 # Export the new commits as a bundle with the token stripped from the
 # environment, then push them from a fresh clone under a clean HOME.
-ahead="$(env -u GIT_TOKEN -u INCIDENT_TOKEN git rev-list --count "${BASE_SHA}..${FIX_BRANCH}" 2>/dev/null || echo 0)"
+if ! ahead="$(git rev-list --count "${BASE_SHA}..${FIX_BRANCH}")"; then
+  post_note "git refused to read the agent's checkout (its .git/config was changed?); no PR opened."
+  exit 1
+fi
 if [ "$ahead" = "0" ]; then
   post_note "Agent finished without committing a fix (rc=${rc}); nothing to push."
   exit 0
 fi
-env -u GIT_TOKEN -u INCIDENT_TOKEN git bundle create "$OUT_DIR/fix.bundle" "${BASE_SHA}..${FIX_BRANCH}" \
+git bundle create "$OUT_DIR/fix.bundle" "${BASE_SHA}..${FIX_BRANCH}" \
   || { post_note "Could not bundle the agent's commits; no PR opened."; exit 1; }
 cd /
 PUSH_HOME="$(mktemp -d)"
 export HOME="$PUSH_HOME" GIT_CONFIG_NOSYSTEM=1
-git config --global credential.helper \
+"$REAL_GIT" config --global credential.helper \
   '!f() { echo "username=x-access-token"; echo "password=${GIT_TOKEN}"; }; f'
-git config --global user.name  "kuso-incident-agent"
-git config --global user.email "incident-agent@kuso.local"
-git init -q "$PUSH_HOME/push" && cd "$PUSH_HOME/push"
-git remote add origin "$CLONE_URL"
-git fetch -q --depth 50 origin "$BASE_SHA" \
+"$REAL_GIT" config --global user.name  "kuso-incident-agent"
+"$REAL_GIT" config --global user.email "incident-agent@kuso.local"
+"$REAL_GIT" init -q "$PUSH_HOME/push" && cd "$PUSH_HOME/push"
+"$REAL_GIT" remote add origin "$CLONE_URL"
+GIT_TOKEN="$GIT_TOKEN" "$REAL_GIT" fetch -q --depth 50 origin "$BASE_SHA" \
   || { post_note "Could not fetch the base commit to push from; no PR opened."; exit 1; }
-git fetch -q "$OUT_DIR/fix.bundle" "${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
+"$REAL_GIT" fetch -q "$OUT_DIR/fix.bundle" "${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
   || { post_note "The agent's commit bundle did not apply; no PR opened."; exit 1; }
-git push -q origin "refs/heads/${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
+GIT_TOKEN="$GIT_TOKEN" "$REAL_GIT" push -q origin "refs/heads/${FIX_BRANCH}:refs/heads/${FIX_BRANCH}" \
   || { post_note "Pushing ${FIX_BRANCH} failed; no PR opened."; exit 1; }
 
 PR_TITLE="Fix for kuso incident ${INCIDENT_ID}"

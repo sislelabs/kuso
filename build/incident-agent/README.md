@@ -97,7 +97,7 @@ Job-builder and the image.
 | `PHASE`              | yes      | `investigate` or `implement` (`refresh` is the keep-alive mode the `kuso-incident-agent-refresher` CronJob runs). |
 | `INCIDENT_ID`        | yes      | Incident id (`inc-xxxx`). Used in prompts + the POST URLs. |
 | `KUSO_API_URL`       | yes      | Base URL of kuso-server, e.g. `http://kuso-server.kuso.svc.cluster.local`. |
-| `INCIDENT_TOKEN`     | yes      | Per-incident bearer for the agent-facing endpoints (`/findings`, `/pr`). Single-incident scope. Source: `Incident.agentToken`. |
+| `INCIDENT_TOKEN`     | yes      | Per-incident bearer for the agent-facing endpoints (`/findings`, `/pr`). Single-incident scope. Source: `Incident.agentToken`. Arrives as the file `$SECRETS_DIR/incident-token` (the Job's init container copies it from the per-Job Secret; the entrypoint reads then deletes it), so it is never in the container env. The env form is still accepted from older Jobs. |
 | `KUSO_TOKEN`         | no       | Project-scoped kuso CLI token (viewer + sql). Empty in v1 (`jobs.go` sets it to `""`), so the agent investigates via kubectl with its read-only SA. |
 | `LOG_NAMESPACE`      | no       | The one namespace the agent may read pod logs in (default `kuso`). |
 | `EVENT_TYPE`         | yes      | `pod.crashed` \| `alert.fired` \| `node.unreachable`. |
@@ -122,7 +122,7 @@ Job-builder and the image.
 | `REPO_OWNER`          | yes      | GitHub repo owner. |
 | `REPO_NAME`           | yes      | GitHub repo name. |
 | `REPO_DEFAULT_BRANCH` | no       | Base branch to branch from / PR against (default `main`). |
-| `GIT_TOKEN`           | yes      | Short-lived, repo-scoped GitHub **installation** token. Used to clone + push over a git credential helper (never logged, never in `.git/config`). Mint via `github.Client.MintInstallationToken`. |
+| `GIT_TOKEN`           | yes      | Short-lived, repo-scoped GitHub **installation** token. Used to clone + push over a git credential helper (never logged, never in `.git/config`). Mint via `github.Client.MintInstallationToken`. Arrives as `$SECRETS_DIR/git-token`, like `INCIDENT_TOKEN`. |
 | `FIX_BRANCH`          | no       | Branch name for the fix (default `kuso-incident-${INCIDENT_ID}`). |
 
 \*\* Provide `FINDINGS` inline **or** `FINDINGS_FILE`.
@@ -147,7 +147,14 @@ Job-builder and the image.
 The agent writes its output to files in `$OUT_DIR` (`/tmp/kuso-out`); the
 entrypoint posts them with `INCIDENT_TOKEN` (single-incident bearer) after
 `claude` exits. Neither `INCIDENT_TOKEN` nor `GIT_TOKEN` is in the agent's
-environment.
+environment or in the container's (`/proc/1/environ`). The agent's `git` is
+`git-guard.sh`: no system/global config, hooks/fsmonitor/credential helpers
+pinned off, and it refuses to run in a checkout whose `.git/config` holds
+anything beyond what `git clone` writes.
+
+The operator's Claude credentials (`~/.claude/.credentials.json`) are still
+readable by any process the agent starts, since `claude` itself needs them
+under the same uid. That is why `KUSO_INCIDENT_AGENT_RUN_REPO_CODE` stays off.
 
 - `POST ${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/findings` — body
   `{"findings": "<markdown>"}` from `findings.md`. Investigate phase; the

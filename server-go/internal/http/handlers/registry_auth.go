@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/registryauth"
 )
 
@@ -16,6 +17,7 @@ import (
 // readyToEnable is true (see deploy/registry.yaml).
 type RegistryAuthHandler struct {
 	Store  *registryauth.Store
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -40,6 +42,10 @@ func (h *RegistryAuthHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	h.Audit.Log(r.Context(), audit.Entry{
+		User: auditUser(r.Context()), Severity: "critical", Action: "registry.credentials_mint",
+		Resource: "kuso-registry", Message: "ensured the registry push credential and its mirrors",
+	})
 	h.status(w, r)
 }
 
@@ -51,6 +57,10 @@ func (h *RegistryAuthHandler) Probe(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	h.Audit.Log(r.Context(), audit.Entry{
+		User: auditUser(r.Context()), Severity: "warn", Action: "registry.probe",
+		Resource: "kuso-registry", Message: "probed every node's registry credential",
+	})
 	h.status(w, r)
 }
 

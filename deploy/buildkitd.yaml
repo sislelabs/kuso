@@ -34,12 +34,11 @@
 # with enabled=false and mirrors the client certificate into every
 # namespace a build runs in; build Jobs try TLS first and fall back to
 # plaintext, so switching needs no coordination. To switch on:
-#   kubectl apply -f deploy/buildkitd.yaml      # start.sh/probe.sh + tls volume
-#   kubectl -n kuso patch secret kuso-buildkitd-tls -p '{"stringData":{"enabled":"true"}}'
-#   kubectl -n kuso rollout restart deploy/kuso-buildkitd
-# Revert: the same patch with "false", then the same restart. Builds
-# created by a kuso-server older than this file can't use TLS, so only
-# switch once no such build is queued.
+#   kubectl apply -f deploy/buildkitd.yaml      # only if the daemon predates the tls volume
+#   kuso api POST system/buildkit-tls -f enabled=true   # flips the switch + restarts the daemon
+# Revert: the same call with enabled=false. Builds created by a
+# kuso-server older than this file can't use TLS, so only switch once no
+# such build is queued. While it is off, `kuso health` lists it.
 #
 # State: persistent /var/lib/buildkit so a daemon restart doesn't
 # nuke every cache. 20Gi is generous for a 4-project install;
@@ -214,6 +213,14 @@ data:
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
+    # A Dockerfile's `# syntax=<image>` line runs that image as the build
+    # frontend inside this shared daemon. A frontend of the author's choice
+    # can ignore BUILDKIT_CACHE_MOUNT_NS and read or seed another
+    # project's `RUN --mount=type=cache` contents, so only Docker's own
+    # Dockerfile frontends may be named there (`# syntax=docker/dockerfile:1`
+    # keeps working). Compared by repository; tags and digests are free.
+    [frontend."gateway.v0"]
+      allowedRepositories = ["docker/dockerfile", "docker/dockerfile-upstream"]
   start.sh: |
     # Daemon entrypoint. Mutual TLS (review OPS-3): when kuso-buildkitd-tls
     # says enabled=true, only clients holding the kuso-server-minted client

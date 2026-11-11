@@ -578,9 +578,9 @@ func mountAuthenticatedRoutes(
 			if d.Kube != nil {
 				(&httphandlers.UptimeHandler{DB: d.DB, Cluster: uptime.KubeCluster{Kube: d.Kube}, Logger: d.Logger}).Mount(r)
 				if d.RegistryAuth != nil {
-					(&httphandlers.RegistryAuthHandler{Store: d.RegistryAuth, Logger: d.Logger}).Mount(r)
+					(&httphandlers.RegistryAuthHandler{Store: d.RegistryAuth, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 				}
-				(&httphandlers.EnvIsolationHandler{DB: d.DB, Logger: d.Logger, Svc: &envisolation.Service{
+				(&httphandlers.EnvIsolationHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger, Svc: &envisolation.Service{
 					Kube: d.Kube, HomeNS: d.Namespace, NS: kube.NewProjectNamespaceResolver(d.Kube, d.Namespace),
 				}}).Mount(r)
 			}
@@ -666,6 +666,7 @@ func mountAuthenticatedRoutes(
 				Kube:         d.Kube,
 				Images:       builds.NewInClusterImageDeleter(builds.RegistryHost),
 				RegistryHost: builds.RegistryHost,
+				Platform:     true,
 			}
 			rhRemediator := &remediate.Remediator{Kube: d.Kube, Audit: d.Audit}
 			rhH := &httphandlers.ReconcileHealthHandler{
@@ -678,6 +679,9 @@ func mountAuthenticatedRoutes(
 			}
 			rhH.Mount(r)
 			(&httphandlers.OrphansHandler{Kube: d.Kube, Audit: d.Audit, Logger: d.Logger}).Mount(r)
+		}
+		if d.Builds != nil && d.Builds.BuildkitTLS != nil {
+			(&httphandlers.BuildkitTLSHandler{Store: d.Builds.BuildkitTLS, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 		}
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
@@ -763,6 +767,7 @@ func mountAuthenticatedRoutes(
 		(&httphandlers.ImportCoolifyHandler{
 			Logger:    d.Logger,
 			Migration: &migration.Service{Projects: d.Projects, Addons: d.Addons, Logger: d.Logger},
+			Audit:     d.Audit,
 		}).Mount(r)
 		// Docker Compose import — convert-only preview. Writes nothing;
 		// the UI feeds the generated kuso.yaml back through

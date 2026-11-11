@@ -42,12 +42,11 @@ func TestBuildJob(t *testing.T) {
 	}
 
 	tests := []struct {
-		phase      string
-		wantName   string
-		wantGitEnv bool
+		phase    string
+		wantName string
 	}{
-		{"investigate", "kuso-incident-inc-deadbeef-investigate", false},
-		{"implement", "kuso-incident-inc-deadbeef-implement", true},
+		{"investigate", "kuso-incident-inc-deadbeef-investigate"},
+		{"implement", "kuso-incident-inc-deadbeef-implement"},
 	}
 
 	for _, tt := range tests {
@@ -100,13 +99,32 @@ func TestBuildJob(t *testing.T) {
 			}
 
 			// CC creds secret mounted read-only at /cc.
-			if len(pod.Volumes) != 1 || pod.Volumes[0].Secret == nil ||
+			if len(pod.Volumes) == 0 || pod.Volumes[0].Secret == nil ||
 				pod.Volumes[0].Secret.SecretName != ccSecretName {
 				t.Fatalf("CC secret volume not wired: %+v", pod.Volumes)
 			}
-			if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].MountPath != ccMountPath ||
+			if len(c.VolumeMounts) == 0 || c.VolumeMounts[0].MountPath != ccMountPath ||
 				!c.VolumeMounts[0].ReadOnly {
 				t.Errorf("CC volume mount not wired: %+v", c.VolumeMounts)
+			}
+			// OPS-1: the per-Job Secret is mounted only by the init
+			// container; the agent container sees the copied files.
+			secretVol := ""
+			for _, v := range pod.Volumes {
+				if v.Secret != nil && v.Secret.SecretName == agentSecretName(job.Name) {
+					secretVol = v.Name
+				}
+			}
+			if secretVol == "" {
+				t.Fatalf("per-Job secret volume missing: %+v", pod.Volumes)
+			}
+			for _, m := range c.VolumeMounts {
+				if m.Name == secretVol {
+					t.Errorf("agent container mounts the per-Job secret directly")
+				}
+			}
+			if len(pod.InitContainers) != 1 || pod.InitContainers[0].VolumeMounts[0].Name != secretVol {
+				t.Errorf("init container does not copy the per-Job secret: %+v", pod.InitContainers)
 			}
 
 			// Env contract.
@@ -139,14 +157,11 @@ func TestBuildJob(t *testing.T) {
 			if !*job.Spec.Suspend {
 				t.Errorf("job must be created suspended until its secret + egress policy exist")
 			}
-			// Credentials only via secretKeyRef, never as literals.
+			// OPS-1: credentials never in the container env, where every
+			// child of the agent could read them from /proc/1/environ.
 			for _, e := range c.Env {
-				if e.Name != "INCIDENT_TOKEN" && e.Name != "GIT_TOKEN" {
-					continue
-				}
-				if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
-					e.ValueFrom.SecretKeyRef.Name != agentSecretName(job.Name) {
-					t.Errorf("%s must come from secret %s, got %+v", e.Name, agentSecretName(job.Name), e)
+				if e.Name == "INCIDENT_TOKEN" || e.Name == "GIT_TOKEN" || e.ValueFrom != nil {
+					t.Errorf("credential env %s on the agent container", e.Name)
 				}
 			}
 			for _, e := range c.Env {
@@ -159,12 +174,6 @@ func TestBuildJob(t *testing.T) {
 			}
 			if env["SERVICE"] != in.Service {
 				t.Errorf("SERVICE = %q", env["SERVICE"])
-			}
-
-			// GIT_TOKEN only present on implement.
-			_, hasGit := env["GIT_TOKEN"]
-			if hasGit != tt.wantGitEnv {
-				t.Errorf("GIT_TOKEN present = %v, want %v", hasGit, tt.wantGitEnv)
 			}
 		})
 	}

@@ -268,7 +268,7 @@ func hasAuthSecret(b *kube.KusoBuild) bool {
 func renderCacheInitContainer() corev1.Container {
 	return corev1.Container{
 		Name:            "cache-init",
-		Image:           defaultCacheInitImage,
+		Image:           pinnedImage(defaultCacheInitImage),
 		SecurityContext: dropAllCapsNonRoot(1000, 1000),
 		Command:         []string{"/bin/sh", "-c"},
 		Args: []string{`
@@ -432,7 +432,7 @@ func gitTokenEnvVar(buildName string) corev1.EnvVar {
 // goes to stdout bracketed by KUSO_ENV_DETECT_BEGIN/END sentinels;
 // the build poller parses that out of the pod logs.
 func renderEnvDetectContainer(b *kube.KusoBuild) corev1.Container {
-	image := defaultEnvDetectImage + ":" + defaultEnvDetectTag
+	image := pinnedImage(defaultEnvDetectImage + ":" + defaultEnvDetectTag)
 	path := repoPath(b)
 
 	// The script is unchanged from the chart — it's a self-contained
@@ -517,7 +517,7 @@ echo "env-detect: $(jq -r 'length' /workspace/.kuso/detected-env.json) candidate
 // in the repo path via env. /nix is symlinked to /cache/nix when a
 // cache PVC is attached for the warm-store perf win.
 func renderNixpacksPlanContainer(b *kube.KusoBuild) corev1.Container {
-	image := defaultNixpacksImage + ":" + defaultNixpacksVersion
+	image := pinnedImage(defaultNixpacksImage + ":" + defaultNixpacksVersion)
 	path := repoPath(b)
 	mounts := []corev1.VolumeMount{
 		{Name: "workspace", MountPath: "/workspace"},
@@ -1171,7 +1171,7 @@ cat .kuso-static.Dockerfile
 	env := []corev1.EnvVar{
 		{Name: "BUILD_CMD", Value: buildCmd},
 		{Name: "OUTPUT_DIR", Value: outputDir},
-		{Name: "RUNTIME_IMAGE", Value: runtime},
+		{Name: "RUNTIME_IMAGE", Value: pinnedImage(runtime)},
 	}
 	// Literal buildEnv + BuildArgs only, as for nixpacks: the build output is
 	// published as files in the image, and a bundler inlines whatever it reads
@@ -1181,7 +1181,7 @@ cat .kuso-static.Dockerfile
 
 	return corev1.Container{
 		Name:            "static-plan",
-		Image:           builder,
+		Image:           pinnedImage(builder),
 		SecurityContext: dropAllCapsRootAllowed(),
 		WorkingDir:      "/workspace/src/" + repoPath(b),
 		Command:         []string{"/bin/sh", "-c"},
@@ -1220,7 +1220,7 @@ func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.R
 	}
 	return corev1.Container{
 		Name:            "buildpacks",
-		Image:           lifecycle,
+		Image:           pinnedImage(lifecycle),
 		SecurityContext: dropAllCapsNonRoot(1000, 1000),
 		Command: []string{
 			"/cnb/lifecycle/creator",
@@ -1600,7 +1600,7 @@ exit "$RC"
 
 	return corev1.Container{
 		Name:            "buildkit",
-		Image:           defaultBuildkitImage,
+		Image:           pinnedImage(defaultBuildkitImage),
 		SecurityContext: dropAllCapsNonRoot(1000, 1000),
 		Command:         []string{"/bin/sh", "-ec"},
 		Args:            []string{script},

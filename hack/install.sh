@@ -1242,13 +1242,15 @@ else
     if [[ -r /var/lib/rancher/k3s/server/agent-token ]]; then
       K3S_AGENT_TOKEN="$(tr -d '\n' < /var/lib/rancher/k3s/server/agent-token)"
     fi
-    AGENT_TOKEN_ARGS=()
+    # With a distinct agent token the server token is never handed out,
+    # so it isn't stored either: it would only sit in this Secret and
+    # kuso-server's env.
+    TOKEN_ARGS=(--from-literal=KUSO_K3S_TOKEN="$K3S_NODE_TOKEN")
     if [[ -n "$K3S_AGENT_TOKEN" && "$K3S_AGENT_TOKEN" != "$K3S_NODE_TOKEN" ]]; then
-      AGENT_TOKEN_ARGS=(--from-literal=KUSO_K3S_AGENT_TOKEN="$K3S_AGENT_TOKEN")
+      TOKEN_ARGS=(--from-literal=KUSO_K3S_AGENT_TOKEN="$K3S_AGENT_TOKEN")
     fi
     kubectl create secret generic kuso-k3s-token -n kuso --dry-run=client -o yaml \
-      --from-literal=KUSO_K3S_TOKEN="$K3S_NODE_TOKEN" \
-      ${AGENT_TOKEN_ARGS[@]+"${AGENT_TOKEN_ARGS[@]}"} \
+      "${TOKEN_ARGS[@]}" \
       | kubectl apply -f - >/dev/null
   fi
 fi

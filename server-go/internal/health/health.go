@@ -113,6 +113,10 @@ type Watcher struct {
 	lastSaved string
 	// volumeTick paces checkPlatformVolumes (volumes.go).
 	volumeTick int
+	// diskOver counts consecutive over-threshold node disk readings
+	// (nodedisk.go); nodeDisks is its test seam for the kubelet read.
+	diskOver  map[string]int
+	nodeDisks func(ctx context.Context, nodes []*corev1.Node) map[string]kube.NodeFS
 	// BuildBacklog reports queued builds and the oldest one's creation
 	// time (builds.Service.QueueBacklog). nil skips the backlog alert.
 	BuildBacklog func(ctx context.Context) (int, time.Time)

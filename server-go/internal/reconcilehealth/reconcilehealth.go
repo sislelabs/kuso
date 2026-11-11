@@ -142,6 +142,9 @@ type Scanner struct {
 	// RegistryHost is the in-cluster registry's host:port; only images there
 	// are probed — a runtime=image service pulling from ghcr.io is the user's.
 	RegistryHost string
+	// Platform adds the platform-posture checks (platform.go), which read
+	// this process's env; set on the instance that serves the report.
+	Platform bool
 }
 
 // ImageProber is the slice of builds.ImageDeleter the scanner needs: a HEAD
@@ -259,6 +262,10 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 				rep.Healthy++
 			}
 		}
+	}
+
+	if s.Platform {
+		rep.Issues = append(rep.Issues, s.platformIssues(ctx, namespace)...)
 	}
 
 	for _, iss := range rep.Issues {
