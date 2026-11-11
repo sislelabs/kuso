@@ -881,7 +881,7 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 					Containers: []corev1.Container{{
 						Name:            "seed",
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"sh", "-c"},
 						// pg_dump from the source piped through psql
 						// into the clone. --no-owner avoids role

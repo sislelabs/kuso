@@ -3,6 +3,8 @@ package handlers
 import (
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // The restore pod must be inside the project netpol (project label) to
@@ -21,6 +23,15 @@ func TestBuildRestoreJob_PodTemplateLabels(t *testing.T) {
 	}
 	if job.Namespace != "kuso-e2e" || job.Labels["kuso.sislelabs.com/addon"] != "db" {
 		t.Errorf("job meta = ns %q labels %v", job.Namespace, job.Labels)
+	}
+	// :latest under IfNotPresent restored with whatever stale image the node
+	// cached (pg16-only psql, no openssl); the backup CronJob pulls Always.
+	if p := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != corev1.PullAlways {
+		t.Errorf("restore image pull policy = %q, want Always", p)
+	}
+	s3 := (&BackupHandler{Namespace: "kuso"}).s3RestoreJob("kuso-restore-x", "k", "abc")
+	if p := s3.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != corev1.PullAlways {
+		t.Errorf("control-plane S3 restore image pull policy = %q, want Always", p)
 	}
 }
 

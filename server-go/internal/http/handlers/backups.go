@@ -667,6 +667,9 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if req.AllowUnverified {
 		restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "ALLOW_UNVERIFIED", Value: "1"})
 	}
+	if destCR.Name != srcCR.Name {
+		restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "RESTORE_STRIP_OWNERSHIP", Value: "1"})
+	}
 
 	keyEnv, keyCopy, err := h.restoreKeyEnv(ctx, ns, jobName, project, req.Key, tenantLoc)
 	if err != nil {
@@ -1626,7 +1629,7 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 					Containers: []corev1.Container{{
 						Name:            "restore",
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"sh", "-c"},
 						Args:            []string{restoreShell},
 						Env:             env,

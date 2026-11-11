@@ -419,7 +419,8 @@ volumes:
 kusoaddon.backupSealFn — shell function every backup script calls on a
 staged artifact before upload. seal FILE sets SHA (digest of the
 plaintext: the restore verifies what it applies), BYTES (stored size)
-and ENC_JSON (the manifest's encryption entry, "" when unencrypted).
+and ENC_JSON (the manifest's encryption entry plus "mac", an HMAC of SHA
+under the backup key that the restore checks; "" when unencrypted).
 
 Encrypts in place (BLOB-8) when the addon's key Secret is mounted AND
 the image has openssl; an older backup image without openssl uploads
@@ -437,7 +438,8 @@ seal() {
       openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -salt -pass env:BACKUP_ENCRYPTION_KEY -in "$1" -out "$1.enc" || return 1
       mv "$1.enc" "$1" || return 1
       KEYID=$(printf 'kuso-backup-key:%s' "${BACKUP_ENCRYPTION_KEY}" | sha256sum | cut -c1-16)
-      ENC_JSON=$(printf ',"encryption":{"alg":"openssl-aes-256-cbc-pbkdf2-sha256","keyId":"%s"}' "${KEYID}")
+      MAC=$(printf 'kuso-backup-mac:%s' "${SHA}" | openssl dgst -sha256 -hmac "${BACKUP_ENCRYPTION_KEY}" | awk '{print $NF}') || return 1
+      ENC_JSON=$(printf ',"encryption":{"alg":"openssl-aes-256-cbc-pbkdf2-sha256","keyId":"%s"},"mac":"%s"' "${KEYID}" "${MAC}")
     else
       echo "WARNING: backup image has no openssl; uploading $1 unencrypted" >&2
     fi
