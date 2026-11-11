@@ -474,9 +474,22 @@ func (h *VulnsHandler) ServiceIgnores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VulnsHandler) ServiceIgnoreAdd(w http.ResponseWriter, r *http.Request) {
-	if project, service, ok := h.service(w, r, db.ProjectRoleEditor); ok {
-		h.addIgnore(w, r, db.VulnOwnerService, project, service)
+	project, service, ok := h.service(w, r, db.ProjectRoleEditor)
+	if !ok {
+		return
 	}
+	// Under enforce an ignore lifts a deploy block, which is the same
+	// loosening PutPolicy reserves for a project admin.
+	_, effective, err := h.policy(r.Context(), project, service)
+	if err != nil {
+		h.fail(w, "add ignore", err)
+		return
+	}
+	if effective == vulnscan.ModeEnforce && !callerHasProjectPerm(r.Context(), h.DB, project, auth.PermSecretsRead) {
+		writeErr(w, http.StatusForbidden, "forbidden: while the vulnerability gate enforces, ignoring a finding requires the project admin role")
+		return
+	}
+	h.addIgnore(w, r, db.VulnOwnerService, project, service)
 }
 
 func (h *VulnsHandler) ServiceIgnoreDelete(w http.ResponseWriter, r *http.Request) {

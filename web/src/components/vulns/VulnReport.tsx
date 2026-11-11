@@ -23,6 +23,8 @@ export function VulnReport({
   owner,
   query,
   canEdit,
+  canIgnore = canEdit,
+  ignoreHint,
   modeOff,
   modeOffHint,
   header,
@@ -32,6 +34,10 @@ export function VulnReport({
   owner: VulnOwner;
   query: ReportQuery;
   canEdit: boolean;
+  // Adding an ignore can need more than other edits (an enforce gate
+  // takes a project admin to loosen); ignoreHint says why it's off.
+  canIgnore?: boolean;
+  ignoreHint?: string;
   modeOff: boolean;
   modeOffHint: string;
   // Rendered above everything (the service policy selector).
@@ -85,7 +91,10 @@ export function VulnReport({
           {/* While a rescan runs the server may still return the previous
               scan's findings; keep showing them rather than blanking. */}
           {(image.scan?.status === "succeeded" || findings.length > 0) && (
-            <FindingsTable findings={findings} onIgnore={canEdit ? setIgnoring : undefined} />
+            <FindingsTable findings={findings} onIgnore={canIgnore ? setIgnoring : undefined} />
+          )}
+          {canEdit && !canIgnore && ignoreHint && (
+            <p className="text-xs text-[var(--text-secondary)]">{ignoreHint}</p>
           )}
           <IgnoreList owner={owner} canEdit={canEdit} />
           <IgnoreDialog owner={owner} finding={ignoring} onClose={() => setIgnoring(null)} />

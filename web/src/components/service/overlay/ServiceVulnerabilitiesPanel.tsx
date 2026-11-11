@@ -85,6 +85,9 @@ export function ServiceVulnerabilitiesPanel({
 }) {
   const owner: VulnOwner = { kind: "service", project, name: service, env };
   const canEdit = useCanOnProject(project, Perms.ServicesWrite);
+  // Under enforce an ignore unblocks a deploy, so the server wants the
+  // project admin role for it, the same bar as loosening the policy.
+  const isProjectAdmin = useCanOnProject(project, Perms.SecretsRead);
   const rescan = useRescanVulns(owner);
   const q = useServiceVulns(project, service, env, rescan.data?.scanId ?? null);
   const data = q.data;
@@ -94,6 +97,8 @@ export function ServiceVulnerabilitiesPanel({
       owner={owner}
       query={q}
       canEdit={canEdit}
+      canIgnore={canEdit && (data?.effectiveMode !== "enforce" || isProjectAdmin)}
+      ignoreHint="This service's gate enforces, so an ignore would unblock deploys. Ask a project admin to add it."
       modeOff={data?.effectiveMode === "off"}
       modeOffHint={
         data?.policy === "off"
