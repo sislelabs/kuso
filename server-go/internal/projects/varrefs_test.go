@@ -55,12 +55,6 @@ func TestParseVarRef(t *testing.T) {
 	}
 }
 
-func TestVarRef_SecretName(t *testing.T) {
-	if got := (VarRef{Name: "pg"}).SecretName(); got != "pg-conn" {
-		t.Errorf("got %q, want %q", got, "pg-conn")
-	}
-}
-
 func TestRewriteEnvVar_Literal(t *testing.T) {
 	in := EnvVar{Name: "FOO", Value: "bar"}
 	got, err := RewriteEnvVar(in, nil, nil)

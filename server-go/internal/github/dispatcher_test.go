@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -176,54 +175,112 @@ func TestIsZeroSHA(t *testing.T) {
 	}
 }
 
-func TestDispatch_PushOnBranchTrackedByEnv_TriggersBuild(t *testing.T) {
+// TestDispatch_PushRouting: which services a push builds. want maps
+// "project/service" to the expected build count; wantBranch, when set, is
+// the branch every build of the first want entry must carry.
+func TestDispatch_PushRouting(t *testing.T) {
 	t.Parallel()
-	// A staging env tracks the `staging` branch; a push to staging must
-	// build the service (so promoteImage can route the image onto that env).
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
-		seedSvc("alpha", "web"),
-		seedPersistentEnv("alpha", "web", "staging", "staging"),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/staging",
-		"repository": {"full_name": "example/alpha", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
+	alpha := func(extra ...seed) []seed {
+		return append([]seed{
+			seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
+			seedSvc("alpha", "web"),
+		}, extra...)
 	}
-	bs, err := d.Builds.List(context.Background(), "alpha", "web")
-	if err != nil {
-		t.Fatalf("List builds: %v", err)
+	type svcCount struct {
+		project, service string
+		n                int
 	}
-	if len(bs) != 1 {
-		t.Fatalf("expected 1 build for staging-tracked branch, got %d", len(bs))
+	cases := []struct {
+		name       string
+		seeds      []seed
+		ref, repo  string
+		want       []svcCount
+		wantBranch string
+	}{
+		{
+			// A staging env tracks the `staging` branch; a push to staging must
+			// build the service (so promoteImage can route the image onto that env).
+			name:  "OnBranchTrackedByEnv_TriggersBuild",
+			seeds: alpha(seedPersistentEnv("alpha", "web", "staging", "staging")),
+			ref:   "staging", repo: "example/alpha",
+			want:       []svcCount{{"alpha", "web", 1}},
+			wantBranch: "staging", // drives per-env promotion
+		},
+		{
+			// A PREVIEW env's branch must NOT widen the push gate: its branch is a
+			// PR head ref driven by onPullRequest, not a plain branch to build on
+			// push. Only persistent envs count.
+			name:  "OnBranchOnlyTrackedByPreviewEnv_Skips",
+			seeds: alpha(seedPreviewEnv("alpha", "web", 7, "feature-x")),
+			ref:   "feature-x", repo: "example/alpha",
+			want: []svcCount{{"alpha", "web", 0}},
+		},
+		{
+			name:  "OnDefaultBranchTriggersBuild",
+			seeds: alpha(), ref: "main", repo: "example/alpha",
+			want: []svcCount{{"alpha", "web", 1}},
+		},
+		{
+			name:  "OnNonDefaultBranchSkips",
+			seeds: alpha(), ref: "dev", repo: "example/alpha",
+			want: []svcCount{{"alpha", "web", 0}},
+		},
+		{
+			name:  "UnknownRepoSkips",
+			seeds: alpha(), ref: "main", repo: "other/repo",
+			want: []svcCount{{"alpha", "web", 0}},
+		},
+		{
+			// A project with two services on two different repos: a push to repo A
+			// must build ONLY service A, not service B.
+			name: "MultiRepo_BuildsOnlyMatchingService",
+			seeds: []seed{
+				// Project default repo = the "api" repo; "web" overrides to its own.
+				seedProj("alpha", "https://github.com/example/api", "main", false, 0),
+				seedSvcWithRepo("alpha", "web", "https://github.com/example/web", nil),
+				seedSvc("alpha", "api"), // inherits example/api
+			},
+			ref: "main", repo: "example/web",
+			want: []svcCount{{"alpha", "web", 1}, {"alpha", "api", 0}},
+		},
+		{
+			// A service whose repo lives only on the service (project defaultRepo
+			// empty) must still build on a push to that repo. This is the nev-abrom
+			// shape — pre-fix it matched nothing because routing only looked at the
+			// project default.
+			name: "ServiceRepoNoProjectDefault_Builds",
+			seeds: []seed{
+				seedProj("nevabrom", "", "", false, 0), // no project default repo
+				seedSvcWithRepo("nevabrom", "site", "https://github.com/biznesguys/nev-abrom", nil),
+			},
+			ref: "main", repo: "biznesguys/nev-abrom",
+			want: []svcCount{{"nevabrom", "site", 1}},
+		},
 	}
-	if bs[0].Spec.Branch != "staging" {
-		t.Errorf("build branch = %q, want %q (drives per-env promotion)", bs[0].Spec.Branch, "staging")
-	}
-}
-
-func TestDispatch_PushOnBranchOnlyTrackedByPreviewEnv_Skips(t *testing.T) {
-	t.Parallel()
-	// A PREVIEW env's branch must NOT widen the push gate: its branch is a
-	// PR head ref driven by onPullRequest, not a plain branch to build on
-	// push. Only persistent envs count.
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
-		seedSvc("alpha", "web"),
-		seedPreviewEnv("alpha", "web", 7, "feature-x"),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/feature-x",
-		"repository": {"full_name": "example/alpha", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
-	}
-	bs, _ := d.Builds.List(context.Background(), "alpha", "web")
-	if len(bs) != 0 {
-		t.Errorf("expected no build (branch only tracked by a preview env), got %d", len(bs))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDispatcher(t, tc.seeds...)
+			body := []byte(`{
+				"ref": "refs/heads/` + tc.ref + `",
+				"repository": {"full_name": "` + tc.repo + `", "default_branch": "main"}
+			}`)
+			if err := d.Dispatch(context.Background(), "push", body); err != nil {
+				t.Fatalf("Dispatch push: %v", err)
+			}
+			for i, w := range tc.want {
+				bs, err := d.Builds.List(context.Background(), w.project, w.service)
+				if err != nil {
+					t.Fatalf("List builds: %v", err)
+				}
+				if len(bs) != w.n {
+					t.Fatalf("%s/%s: got %d builds, want %d", w.project, w.service, len(bs), w.n)
+				}
+				if i == 0 && tc.wantBranch != "" && bs[0].Spec.Branch != tc.wantBranch {
+					t.Errorf("build branch = %q, want %q", bs[0].Spec.Branch, tc.wantBranch)
+				}
+			}
+		})
 	}
 }
 
@@ -237,118 +294,7 @@ func typedSeed(gvr schema.GroupVersionResource, kind string, obj any) seed {
 	return seed{gvr: gvr, obj: u}
 }
 
-func TestDispatch_PushOnDefaultBranchTriggersBuild(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/main",
-		"repository": {"full_name": "example/alpha", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
-	}
-	bs, err := d.Builds.List(context.Background(), "alpha", "web")
-	if err != nil {
-		t.Fatalf("List builds: %v", err)
-	}
-	if len(bs) != 1 {
-		t.Errorf("expected 1 build triggered, got %d", len(bs))
-	}
-}
-
-func TestDispatch_PushOnNonDefaultBranchSkips(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/dev",
-		"repository": {"full_name": "example/alpha", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
-	}
-	bs, _ := d.Builds.List(context.Background(), "alpha", "web")
-	if len(bs) != 0 {
-		t.Errorf("expected no build (non-default branch), got %d", len(bs))
-	}
-}
-
-func TestDispatch_PushUnknownRepoSkips(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/main",
-		"repository": {"full_name": "other/repo", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	bs, _ := d.Builds.List(context.Background(), "alpha", "web")
-	if len(bs) != 0 {
-		t.Errorf("unrelated repo triggered build: %d", len(bs))
-	}
-}
-
 // --- multi-repo project routing (per-service repo matching) ----------
-
-// A project with two services on two different repos: a push to repo A
-// must build ONLY service A, not service B.
-func TestDispatch_PushMultiRepo_BuildsOnlyMatchingService(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		// Project default repo = the "api" repo; "web" overrides to its own.
-		seedProj("alpha", "https://github.com/example/api", "main", false, 0),
-		seedSvcWithRepo("alpha", "web", "https://github.com/example/web", nil),
-		seedSvc("alpha", "api"), // inherits example/api
-	)
-	// Push to the web repo.
-	body := []byte(`{
-		"ref": "refs/heads/main",
-		"repository": {"full_name": "example/web", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
-	}
-	webBuilds, _ := d.Builds.List(context.Background(), "alpha", "web")
-	apiBuilds, _ := d.Builds.List(context.Background(), "alpha", "api")
-	if len(webBuilds) != 1 {
-		t.Errorf("web (repo matched) should have 1 build, got %d", len(webBuilds))
-	}
-	if len(apiBuilds) != 0 {
-		t.Errorf("api (different repo) should NOT build on a web-repo push, got %d", len(apiBuilds))
-	}
-}
-
-// A service whose repo lives only on the service (project defaultRepo
-// empty) must still build on a push to that repo. This is the nev-abrom
-// shape — pre-fix it matched nothing because routing only looked at the
-// project default.
-func TestDispatch_PushServiceRepoNoProjectDefault_Builds(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("nevabrom", "", "", false, 0), // no project default repo
-		seedSvcWithRepo("nevabrom", "site", "https://github.com/biznesguys/nev-abrom", nil),
-	)
-	body := []byte(`{
-		"ref": "refs/heads/main",
-		"repository": {"full_name": "biznesguys/nev-abrom", "default_branch": "main"}
-	}`)
-	if err := d.Dispatch(context.Background(), "push", body); err != nil {
-		t.Fatalf("Dispatch push: %v", err)
-	}
-	bs, _ := d.Builds.List(context.Background(), "nevabrom", "site")
-	if len(bs) != 1 {
-		t.Errorf("service-repo push (no project default) should build, got %d", len(bs))
-	}
-}
 
 // A PR on repo A in a two-repo project must spin up a preview only for
 // service A, not service B (which tracks repo B).
@@ -822,55 +768,54 @@ func seedSvcWithRelease(project, service string, command []string) seed {
 func TestDispatch_PROpened_PropagatesReleaseHook(t *testing.T) {
 	t.Parallel()
 	cmd := []string{"sh", "-c", "migrate up"}
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvcWithRelease("alpha", "api", cmd),
-	)
-	body := []byte(`{
-		"action": "opened",
-		"number": 51,
-		"pull_request": {"head": {"ref": "feat/migrate", "sha": "5151515151515151515151515151515151515151"}, "state": "open"},
-		"repository": {"full_name": "example/alpha"}
-	}`)
-	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
-		t.Fatalf("Dispatch pr: %v", err)
+	cases := []struct {
+		name    string
+		svc     seed
+		number  string
+		envName string
+		wantCmd []string // nil: the preview must carry no release
+	}{
+		{name: "PropagatesReleaseHook", svc: seedSvcWithRelease("alpha", "api", cmd),
+			number: "51", envName: "alpha-api-pr-51", wantCmd: cmd},
+		// A service without a release hook yields a preview with no release
+		// (no-op, unchanged behaviour — most services don't migrate).
+		{name: "NoReleaseHook_LeavesReleaseNil", svc: seedSvc("alpha", "web"),
+			number: "52", envName: "alpha-web-pr-52"},
 	}
-	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-pr-51")
-	if err != nil {
-		t.Fatalf("get env: %v", err)
-	}
-	if env.Spec.Release == nil {
-		t.Fatalf("preview env should carry the parent service's release hook, got nil")
-	}
-	if got := env.Spec.Release.Command; !reflect.DeepEqual(got, cmd) {
-		t.Errorf("release command: got %v, want %v", got, cmd)
-	}
-}
-
-// TestDispatch_PROpened_NoReleaseHook_LeavesReleaseNil confirms a service
-// without a release hook yields a preview with no release (no-op, unchanged
-// behaviour — most services don't migrate).
-func TestDispatch_PROpened_NoReleaseHook_LeavesReleaseNil(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"action": "opened",
-		"number": 52,
-		"pull_request": {"head": {"ref": "feat/x", "sha": "5252525252525252525252525252525252525252"}, "state": "open"},
-		"repository": {"full_name": "example/alpha"}
-	}`)
-	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
-		t.Fatalf("Dispatch pr: %v", err)
-	}
-	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-52")
-	if err != nil {
-		t.Fatalf("get env: %v", err)
-	}
-	if env.Spec.Release != nil {
-		t.Errorf("preview env should have nil release for a service without a release hook, got %+v", env.Spec.Release)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDispatcher(t,
+				seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+				tc.svc,
+			)
+			sha := strings.Repeat(tc.number, 20)
+			body := []byte(`{
+				"action": "opened",
+				"number": ` + tc.number + `,
+				"pull_request": {"head": {"ref": "feat/x", "sha": "` + sha + `"}, "state": "open"},
+				"repository": {"full_name": "example/alpha"}
+			}`)
+			if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+				t.Fatalf("Dispatch pr: %v", err)
+			}
+			env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", tc.envName)
+			if err != nil {
+				t.Fatalf("get env: %v", err)
+			}
+			if tc.wantCmd == nil {
+				if env.Spec.Release != nil {
+					t.Errorf("preview env should have nil release for a service without a release hook, got %+v", env.Spec.Release)
+				}
+				return
+			}
+			if env.Spec.Release == nil {
+				t.Fatalf("preview env should carry the parent service's release hook, got nil")
+			}
+			if got := env.Spec.Release.Command; !reflect.DeepEqual(got, tc.wantCmd) {
+				t.Errorf("release command: got %v, want %v", got, tc.wantCmd)
+			}
+		})
 	}
 }
 
@@ -1051,12 +996,7 @@ func TestDispatch_UnknownEvent(t *testing.T) {
 func TestDispatch_BadJSON(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t)
-	err := d.Dispatch(context.Background(), "push", []byte(`{not-json`))
-	if err == nil || !errors.Is(err, errors.Unwrap(err)) {
-		// Just check we got an error — don't pin it on a specific error
-		// type since encoding/json's errors are stable.
-	}
-	if err == nil {
+	if err := d.Dispatch(context.Background(), "push", []byte(`{not-json`)); err == nil {
 		t.Error("expected error for malformed body")
 	}
 }
@@ -1183,96 +1123,79 @@ func TestAuthorIsTrusted(t *testing.T) {
 	}
 }
 
-// TestDispatch_PRFork_UntrustedAuthorSkipped is the SEC-1 regression:
-// a PR opened from a fork by an outsider must NOT spin up a preview env
-// (which would run their code with production secrets mounted).
-func TestDispatch_PRFork_UntrustedAuthorSkipped(t *testing.T) {
+func TestDispatch_PRFork(t *testing.T) {
 	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"action": "opened",
-		"number": 66,
-		"pull_request": {
-			"head": {"ref": "evil", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "attacker/alpha"}},
-			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
-			"author_association": "NONE",
-			"state": "open"
+	cases := []struct {
+		name        string
+		project     seed
+		number      string
+		headRepo    string
+		association string
+		wantPreview bool
+	}{
+		{
+			// SEC-1 regression: a PR opened from a fork by an outsider must NOT
+			// spin up a preview env (which would run their code with production
+			// secrets mounted).
+			name:    "UntrustedAuthorSkipped",
+			project: seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+			number:  "66", headRepo: "attacker/alpha", association: "NONE",
 		},
-		"repository": {"full_name": "example/alpha"}
-	}`)
-	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-66"); err == nil {
-		t.Error("preview env created for untrusted fork PR — fork-PR RCE gate failed")
-	}
-	if bs, _ := d.Builds.List(context.Background(), "alpha", "web"); len(bs) != 0 {
-		t.Errorf("build triggered for untrusted fork PR: %d builds", len(bs))
-	}
-}
-
-// TestDispatch_PRFork_TrustedAuthorAllowed: a fork PR by a COLLABORATOR
-// (write-level trust) still previews.
-func TestDispatch_PRFork_TrustedAuthorAllowed(t *testing.T) {
-	t.Parallel()
-	d := newDispatcher(t,
-		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"action": "opened",
-		"number": 67,
-		"pull_request": {
-			"head": {"ref": "feat", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "collab/alpha"}},
-			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
-			"author_association": "COLLABORATOR",
-			"state": "open"
+		{
+			// A fork PR by a COLLABORATOR (write-level trust) still previews.
+			name:    "TrustedAuthorAllowed",
+			project: seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+			number:  "67", headRepo: "collab/alpha", association: "COLLABORATOR",
+			wantPreview: true,
 		},
-		"repository": {"full_name": "example/alpha"}
-	}`)
-	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-67"); err != nil {
-		t.Errorf("preview env should exist for trusted-author fork PR: %v", err)
-	}
-}
-
-// TestDispatch_PRFork_OptInAllowsUntrusted: with previews.allowForkPreviews
-// the project accepts untrusted fork PRs (private/trusted-repo opt-in).
-func TestDispatch_PRFork_OptInAllowsUntrusted(t *testing.T) {
-	t.Parallel()
-	proj := &kube.KusoProject{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "kuso"},
-		Spec: kube.KusoProjectSpec{
-			DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/example/alpha", DefaultBranch: "main"},
-			BaseDomain:  "alpha.example.com",
-			Previews:    &kube.KusoPreviewsSpec{Enabled: true, TTLDays: 5, AllowForkPreviews: true},
+		{
+			// With previews.allowForkPreviews the project accepts untrusted fork
+			// PRs (private/trusted-repo opt-in).
+			name: "OptInAllowsUntrusted",
+			project: typedSeed(kube.GVRProjects, "KusoProject", &kube.KusoProject{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "kuso"},
+				Spec: kube.KusoProjectSpec{
+					DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/example/alpha", DefaultBranch: "main"},
+					BaseDomain:  "alpha.example.com",
+					Previews:    &kube.KusoPreviewsSpec{Enabled: true, TTLDays: 5, AllowForkPreviews: true},
+				},
+			}),
+			number: "68", headRepo: "attacker/alpha", association: "NONE",
+			wantPreview: true,
 		},
 	}
-	d := newDispatcher(t,
-		typedSeed(kube.GVRProjects, "KusoProject", proj),
-		seedSvc("alpha", "web"),
-	)
-	body := []byte(`{
-		"action": "opened",
-		"number": 68,
-		"pull_request": {
-			"head": {"ref": "x", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "attacker/alpha"}},
-			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
-			"author_association": "NONE",
-			"state": "open"
-		},
-		"repository": {"full_name": "example/alpha"}
-	}`)
-	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
-		t.Fatalf("Dispatch: %v", err)
-	}
-	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-68"); err != nil {
-		t.Errorf("preview env should exist when allowForkPreviews=true: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDispatcher(t, tc.project, seedSvc("alpha", "web"))
+			body := []byte(`{
+				"action": "opened",
+				"number": ` + tc.number + `,
+				"pull_request": {
+					"head": {"ref": "feat", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "` + tc.headRepo + `"}},
+					"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
+					"author_association": "` + tc.association + `",
+					"state": "open"
+				},
+				"repository": {"full_name": "example/alpha"}
+			}`)
+			if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			_, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-"+tc.number)
+			if tc.wantPreview {
+				if err != nil {
+					t.Errorf("preview env should exist: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Error("preview env created for untrusted fork PR — fork-PR RCE gate failed")
+			}
+			if bs, _ := d.Builds.List(context.Background(), "alpha", "web"); len(bs) != 0 {
+				t.Errorf("build triggered for untrusted fork PR: %d builds", len(bs))
+			}
+		})
 	}
 }
 

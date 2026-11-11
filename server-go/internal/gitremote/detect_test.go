@@ -44,29 +44,27 @@ func fakeGitHubAPI(t *testing.T, wantToken string) *httptest.Server {
 	return srv
 }
 
-func TestDetectRuntime_DockerfileInSubpath(t *testing.T) {
+func TestDetectRuntime(t *testing.T) {
 	api := fakeGitHubAPI(t, "")
 	in := &Inspector{HTTP: api.Client(), GitHubAPI: api.URL}
 
-	got, err := in.DetectRuntime(context.Background(), "https://github.com/acme/app.git", "main", "services/api", "")
-	if err != nil {
-		t.Fatalf("DetectRuntime: %v", err)
+	cases := []struct {
+		name, repo, path, wantRuntime string
+		wantPort                      int
+	}{
+		{"DockerfileInSubpath", "https://github.com/acme/app.git", "services/api", "dockerfile", 9090},
+		{"NodeAtRoot", "https://github.com/acme/app", ".", "nixpacks", 3000},
 	}
-	if got.Runtime != "dockerfile" || got.Port != 9090 {
-		t.Errorf("got %+v, want dockerfile on 9090", got)
-	}
-}
-
-func TestDetectRuntime_NodeAtRoot(t *testing.T) {
-	api := fakeGitHubAPI(t, "")
-	in := &Inspector{HTTP: api.Client(), GitHubAPI: api.URL}
-
-	got, err := in.DetectRuntime(context.Background(), "https://github.com/acme/app", "main", ".", "")
-	if err != nil {
-		t.Fatalf("DetectRuntime: %v", err)
-	}
-	if got.Runtime != "nixpacks" || got.Port != 3000 {
-		t.Errorf("got %+v, want nixpacks on 3000", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := in.DetectRuntime(context.Background(), tc.repo, "main", tc.path, "")
+			if err != nil {
+				t.Fatalf("DetectRuntime: %v", err)
+			}
+			if got.Runtime != tc.wantRuntime || got.Port != tc.wantPort {
+				t.Errorf("got %+v, want %s on %d", got, tc.wantRuntime, tc.wantPort)
+			}
+		})
 	}
 }
 

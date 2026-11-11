@@ -103,22 +103,6 @@ func TestDeleteForEnv_RefusesAnotherProjectsSecret(t *testing.T) {
 	}
 }
 
-func TestSetKey_LabelsNewSecretWithProject(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t, seedEnv("alpha-web-production", "alpha", "web", "production", nil))
-	ctx := context.Background()
-	if err := s.SetKey(ctx, "alpha", "web", "", "K", "v"); err != nil {
-		t.Fatal(err)
-	}
-	sec, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(ctx, "alpha-web-secrets", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sec.Labels[kube.LabelProject] != "alpha" {
-		t.Fatalf("labels = %v, want project=alpha", sec.Labels)
-	}
-}
-
 // CORE-9: attach must edit the LIVE env, not write back the cached list.
 // The list reactor serves a stale snapshot taken before an addon refresh
 // swapped production's conn for the env's own clone conn.

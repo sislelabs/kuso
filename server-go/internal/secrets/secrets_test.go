@@ -150,6 +150,9 @@ func TestSetKey_FirstWriteCreatesSecret(t *testing.T) {
 	if string(sec.Data["DB_URL"]) != "postgres://x" {
 		t.Errorf("value not persisted: %q", sec.Data["DB_URL"])
 	}
+	if sec.Labels[kube.LabelProject] != "alpha" {
+		t.Errorf("labels = %v, want project=alpha", sec.Labels)
+	}
 
 	// Env should now have the shared secret attached and a non-empty
 	// secretsRev.

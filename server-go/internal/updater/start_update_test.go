@@ -12,6 +12,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
@@ -138,30 +139,38 @@ func updaterJob(name string, created time.Time, st batchv1.JobStatus) *batchv1.J
 	}
 }
 
-// The entrypoint can die (set -e, OOM, deadline) without writing a
-// terminal phase; Status must not report "in progress" forever.
-func TestStatus_ReportsFailedWhenJobFailed(t *testing.T) {
+func TestStatus_PhaseFromJob(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	cs := fake.NewSimpleClientset(statusCM("rolling-activator"),
-		updaterJob("kuso-update-1", now.Add(-2*time.Hour), batchv1.JobStatus{Succeeded: 1}),
-		updaterJob("kuso-update-2", now.Add(-5*time.Minute), batchv1.JobStatus{Failed: 1}),
-	)
-	s := &Service{Kube: &kube.Client{Clientset: cs}, Namespace: "kuso"}
-	st, ok := s.Status(context.Background())
-	if !ok || st.Phase != "failed" {
-		t.Fatalf("Status = %+v ok=%v, want phase failed", st, ok)
+	cases := []struct {
+		name string
+		cm   string
+		jobs []*batchv1.Job
+		want string
+	}{
+		// The entrypoint can die (set -e, OOM, deadline) without writing a
+		// terminal phase; Status must not report "in progress" forever.
+		{"ReportsFailedWhenJobFailed", "rolling-activator", []*batchv1.Job{
+			updaterJob("kuso-update-1", now.Add(-2*time.Hour), batchv1.JobStatus{Succeeded: 1}),
+			updaterJob("kuso-update-2", now.Add(-5*time.Minute), batchv1.JobStatus{Failed: 1}),
+		}, "failed"},
+		{"KeepsPhaseWhileJobRuns", "rolling-server", []*batchv1.Job{
+			updaterJob("kuso-update-1", now, batchv1.JobStatus{Active: 1}),
+		}, "rolling-server"},
 	}
-}
-
-func TestStatus_KeepsPhaseWhileJobRuns(t *testing.T) {
-	t.Parallel()
-	cs := fake.NewSimpleClientset(statusCM("rolling-server"),
-		updaterJob("kuso-update-1", time.Now(), batchv1.JobStatus{Active: 1}),
-	)
-	s := &Service{Kube: &kube.Client{Clientset: cs}, Namespace: "kuso"}
-	if st, _ := s.Status(context.Background()); st.Phase != "rolling-server" {
-		t.Fatalf("phase = %q, want rolling-server", st.Phase)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			objs := []runtime.Object{statusCM(tc.cm)}
+			for _, j := range tc.jobs {
+				objs = append(objs, j)
+			}
+			s := &Service{Kube: &kube.Client{Clientset: fake.NewSimpleClientset(objs...)}, Namespace: "kuso"}
+			st, ok := s.Status(context.Background())
+			if !ok || st.Phase != tc.want {
+				t.Fatalf("Status = %+v ok=%v, want phase %s", st, ok, tc.want)
+			}
+		})
 	}
 }
 

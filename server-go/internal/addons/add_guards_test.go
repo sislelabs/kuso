@@ -31,7 +31,7 @@ import (
 func TestAdd_HAUnsupportedKindRejected(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProj("alpha"))
-	for _, kind := range []string{"valkey", "mongodb", "rabbitmq", "redpanda"} {
+	for _, kind := range []string{"valkey", "mongodb", "rabbitmq", "redpanda", "mysql"} {
 		_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "x", Kind: kind, HA: true})
 		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("kind %s ha=true: got %v, want ErrInvalid", kind, err)

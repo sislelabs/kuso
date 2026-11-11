@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestVerifyPassword_Bcrypt(t *testing.T) {
+func TestVerifyPassword(t *testing.T) {
 	t.Parallel()
 	hash, err := HashPassword("hunter2", 4) // low cost for fast tests
 	if err != nil {
@@ -17,10 +17,6 @@ func TestVerifyPassword_Bcrypt(t *testing.T) {
 	if err := VerifyPassword(hash, "wrong"); err == nil {
 		t.Error("wrong pw accepted")
 	}
-}
-
-func TestVerifyPassword_EmptyStored(t *testing.T) {
-	t.Parallel()
 	if err := VerifyPassword("", "anything"); err == nil {
 		t.Error("empty stored hash should never match")
 	}

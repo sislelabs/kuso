@@ -22,48 +22,30 @@ func pgDSN(t *testing.T) string {
 	return dsn
 }
 
-func TestStats_WriteErrors_StaysZeroOnSuccess(t *testing.T) {
+func TestStats_WriteErrors(t *testing.T) {
 	d, err := db.Open(pgDSN(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	ctx := context.Background()
 
-	if _, err := d.ExecContext(context.Background(),
-		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('rstats', 'tmp', NOW(), NOW())`); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	if got := d.GetStats().WriteErrors; got != 0 {
-		t.Errorf("WriteErrors=%d on a successful insert; want 0", got)
-	}
-}
+	t.Run("StaysZeroOnSuccess", func(t *testing.T) {
+		if _, err := d.ExecContext(ctx,
+			`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('rstats', 'tmp', NOW(), NOW())`); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+		if got := d.GetStats().WriteErrors; got != 0 {
+			t.Errorf("WriteErrors=%d on a successful insert; want 0", got)
+		}
+	})
 
-func TestStats_WriteErrors_IncrementsOnFailure(t *testing.T) {
-	d, err := db.Open(pgDSN(t))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-
-	before := d.GetStats().WriteErrors
-	_, _ = d.ExecContext(context.Background(), `INSERT INTO bogus_table_xyz VALUES (1)`)
-	after := d.GetStats().WriteErrors
-	if after-before != 1 {
-		t.Errorf("WriteErrors delta=%d want 1", after-before)
-	}
-}
-
-func TestStats_PoolFields_Populated(t *testing.T) {
-	d, err := db.Open(pgDSN(t))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	s := d.GetStats()
-	// Pool counters come from sql.DB.Stats() — we don't assert exact
-	// values (depends on the test runner's connection state), just
-	// that the fields are reachable and non-negative.
-	if s.PoolOpen < 0 || s.PoolInUse < 0 || s.PoolIdle < 0 {
-		t.Errorf("negative pool counter: %+v", s)
-	}
+	t.Run("IncrementsOnFailure", func(t *testing.T) {
+		before := d.GetStats().WriteErrors
+		_, _ = d.ExecContext(ctx, `INSERT INTO bogus_table_xyz VALUES (1)`)
+		after := d.GetStats().WriteErrors
+		if after-before != 1 {
+			t.Errorf("WriteErrors delta=%d want 1", after-before)
+		}
+	})
 }

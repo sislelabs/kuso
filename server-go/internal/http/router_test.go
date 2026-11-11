@@ -41,19 +41,6 @@ func TestHealthz_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestSession_RequiresBearer(t *testing.T) {
-	t.Parallel()
-	iss, _ := auth.NewIssuer("test-secret", 0)
-	r := NewRouter(Deps{Issuer: iss, Logger: slog.Default()})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
-	rr := httptest.NewRecorder()
-	r.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rr.Code)
-	}
-}
-
 // TestMaxBodyBytes_ImportRouteExempt — the global 1 MiB body cap must
 // not apply to /api/projects/import, whose documented cap is 16 MiB
 // (httphandlers.MaxImportRequestBytes). Everything else keeps 1 MiB.

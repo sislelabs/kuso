@@ -20,6 +20,9 @@ func TestValidateGitRef(t *testing.T) {
 		"deploy/kuso",    // slashed deploy branches are real (see refs slugify)
 		"release+hotfix", // + shows up in some release flows
 		"a",              // single char
+		// BLD-22: Dependabot branches contain '@'; git only forbids "@{"
+		// (the reflog row below).
+		"dependabot/npm_and_yarn/@types/node-20.11.5",
 	}
 	for _, ref := range valid {
 		t.Run("valid/"+ref, func(t *testing.T) {

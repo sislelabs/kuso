@@ -124,63 +124,40 @@ func containsHost(hosts []string, h string) bool {
 	return false
 }
 
-func TestAddDomain_DuplicateReturnsConflict(t *testing.T) {
+func TestAddDomain_Rejects(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{
-			Project: "alpha", Port: 8080,
-			Domains: []kube.KusoDomain{{Host: "api.example.com", TLS: true}},
-		}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	_, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{
-		Host: "api.example.com",
-		TLS:  true,
-	})
-	if !errors.Is(err, ErrConflict) {
-		t.Errorf("want ErrConflict on dup, got %v", err)
+	cases := []struct {
+		name    string
+		req     AddDomainRequest
+		wantErr error
+	}{
+		{"DuplicateReturnsConflict", AddDomainRequest{Host: "api.example.com", TLS: true}, ErrConflict},
+		// The CRD defaults domains[].tls to true and omitempty drops false, so a
+		// stored domain always reads tls:true. Re-adding it with --no-tls used to
+		// miss the duplicate check and rewrite the domain on every call.
+		{"DuplicateNoTLSIsConflict", AddDomainRequest{Host: "api.example.com", TLS: false}, ErrConflict},
+		{"InvalidHostname/empty", AddDomainRequest{Host: "", TLS: true}, ErrInvalid},
+		{"InvalidHostname/blank", AddDomainRequest{Host: "  ", TLS: true}, ErrInvalid},
+		{"InvalidHostname/leading-dash", AddDomainRequest{Host: "-leading.dash.com", TLS: true}, ErrInvalid},
+		{"InvalidHostname/trailing-dash", AddDomainRequest{Host: "trailing.dash-.com", TLS: true}, ErrInvalid},
+		{"InvalidHostname/double-dot", AddDomainRequest{Host: "double..dot.com", TLS: true}, ErrInvalid},
+		{"InvalidHostname/leading-dot", AddDomainRequest{Host: ".leading.dot", TLS: true}, ErrInvalid},
 	}
-}
-
-// The CRD defaults domains[].tls to true and omitempty drops false, so a
-// stored domain always reads tls:true. Re-adding it with --no-tls used to
-// miss the duplicate check and rewrite the domain on every call.
-func TestAddDomain_DuplicateNoTLSIsConflict(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{
-			Project: "alpha", Port: 8080,
-			Domains: []kube.KusoDomain{{Host: "api.example.com", TLS: true}},
-		}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	_, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{
-		Host: "api.example.com",
-		TLS:  false,
-	})
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("AddDomain (--no-tls re-add) err = %v, want ErrConflict", err)
-	}
-}
-
-func TestAddDomain_RejectsInvalidHostname(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	cases := []string{"", "  ", "-leading.dash.com", "trailing.dash-.com", "double..dot.com", ".leading.dot"}
-	for _, h := range cases {
-		_, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{Host: h, TLS: true})
-		if !errors.Is(err, ErrInvalid) {
-			t.Errorf("AddDomain(%q): want ErrInvalid, got %v", h, err)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{
+					Project: "alpha", Port: 8080,
+					Domains: []kube.KusoDomain{{Host: "api.example.com", TLS: true}},
+				}),
+				seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+			)
+			_, err := s.AddDomain(context.Background(), "alpha", "web", tc.req)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("AddDomain(%+v) err = %v, want %v", tc.req, err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -276,62 +253,58 @@ func TestAddDomain_ConcurrentAddsAllSurvive(t *testing.T) {
 	}
 }
 
-func TestSetEnvVar_AddsLiteralValue(t *testing.T) {
+func TestSetEnvVar_LiteralValue(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	got, err := s.SetEnvVar(context.Background(), "alpha", "web", "FOO", SetEnvVarRequest{Value: "bar"})
-	if err != nil {
-		t.Fatalf("SetEnvVar: %v", err)
+	cases := []struct {
+		name     string
+		existing []kube.KusoEnvVar
+		value    string
+	}{
+		{"AddsLiteralValue", nil, "bar"},
+		{"OverwritesExisting", []kube.KusoEnvVar{{Name: "FOO", Value: "old"}}, "new"},
 	}
-	if len(got.Spec.EnvVars) != 1 || got.Spec.EnvVars[0].Name != "FOO" || got.Spec.EnvVars[0].Value != "bar" {
-		t.Errorf("EnvVars: %+v", got.Spec.EnvVars)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080, EnvVars: tc.existing}),
+				seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+			)
+			got, err := s.SetEnvVar(context.Background(), "alpha", "web", "FOO", SetEnvVarRequest{Value: tc.value})
+			if err != nil {
+				t.Fatalf("SetEnvVar: %v", err)
+			}
+			if len(got.Spec.EnvVars) != 1 || got.Spec.EnvVars[0].Name != "FOO" || got.Spec.EnvVars[0].Value != tc.value {
+				t.Errorf("expected single FOO=%s, got %+v", tc.value, got.Spec.EnvVars)
+			}
+		})
 	}
 }
 
-func TestSetEnvVar_OverwritesExisting(t *testing.T) {
+// Exactly one of value / secretRef / secretValue must be set.
+func TestSetEnvVar_RejectsInvalidModeCombos(t *testing.T) {
 	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{
-			Project: "alpha", Port: 8080,
-			EnvVars: []kube.KusoEnvVar{{Name: "FOO", Value: "old"}},
-		}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	got, err := s.SetEnvVar(context.Background(), "alpha", "web", "FOO", SetEnvVarRequest{Value: "new"})
-	if err != nil {
-		t.Fatalf("SetEnvVar: %v", err)
+	cases := []struct {
+		name string
+		req  SetEnvVarRequest
+	}{
+		{"BothValueAndSecretRef", SetEnvVarRequest{Value: "literal", SecretRef: &SetEnvVarSecretRefBody{Name: "s", Key: "k"}}},
+		{"Neither", SetEnvVarRequest{}},
+		// Extends the XOR guard to the third mode — value + secretValue
+		// together is invalid.
+		{"ValuePlusSecretValue", SetEnvVarRequest{Value: "literal", SecretValue: strptr("secret")}},
 	}
-	if len(got.Spec.EnvVars) != 1 || got.Spec.EnvVars[0].Value != "new" {
-		t.Errorf("expected single FOO=new, got %+v", got.Spec.EnvVars)
-	}
-}
-
-func TestSetEnvVar_RejectsBothValueAndSecretRef(t *testing.T) {
-	t.Parallel()
-	s := fakeService(t,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-
-	_, err := s.SetEnvVar(context.Background(), "alpha", "web", "DB", SetEnvVarRequest{
-		Value:     "literal",
-		SecretRef: &SetEnvVarSecretRefBody{Name: "s", Key: "k"},
-	})
-	if !errors.Is(err, ErrInvalid) {
-		t.Errorf("want ErrInvalid for both, got %v", err)
-	}
-
-	_, err = s.SetEnvVar(context.Background(), "alpha", "web", "DB", SetEnvVarRequest{})
-	if !errors.Is(err, ErrInvalid) {
-		t.Errorf("want ErrInvalid for neither, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeServiceWithSecrets(t, nil,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+				seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+			)
+			if _, err := s.SetEnvVar(context.Background(), "alpha", "web", "DB", tc.req); !errors.Is(err, ErrInvalid) {
+				t.Errorf("want ErrInvalid, got %v", err)
+			}
+		})
 	}
 }
 
@@ -673,24 +646,6 @@ func TestSetEnvVar_SecretValuePreservesOtherKeysAndAnnotations(t *testing.T) {
 	}
 	if sec.Annotations["secrets.kuso.sislelabs.com/generated-JWT_SECRET"] != "hex32" {
 		t.Errorf("generated-* annotation cleared: %+v", sec.Annotations)
-	}
-}
-
-// TestSetEnvVar_RejectsValuePlusSecretValue extends the XOR guard to the
-// third mode — value + secretValue together is invalid.
-func TestSetEnvVar_RejectsValuePlusSecretValue(t *testing.T) {
-	t.Parallel()
-	s := fakeServiceWithSecrets(t, nil,
-		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
-		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
-	)
-	_, err := s.SetEnvVar(context.Background(), "alpha", "web", "DB", SetEnvVarRequest{
-		Value:       "literal",
-		SecretValue: strptr("secret"),
-	})
-	if !errors.Is(err, ErrInvalid) {
-		t.Errorf("want ErrInvalid for value+secretValue, got %v", err)
 	}
 }
 

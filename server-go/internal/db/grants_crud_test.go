@@ -37,92 +37,69 @@ func projectRoleOn(tenancy GroupTenancy, project string) ProjectRole {
 	return ""
 }
 
-// TestProjectGrant_DirectUser_Override: a direct user grant with an
-// explicit override resolves to that override regardless of instance role.
-func TestProjectGrant_DirectUser_Override(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	seedUser(t, d, "u1")
-	if _, err := d.AddProjectGrant(ctx, "p1", "u1", "", ProjectRoleEditor); err != nil {
+// TestProjectGrant_ResolvesRole covers how a user's effective role on a
+// project is resolved from direct grants, group grants and instance role.
+func TestProjectGrant_ResolvesRole(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, ctx context.Context, d *DB)
+		want  ProjectRole
+	}{
+		// A direct user grant with an explicit override resolves to that
+		// override regardless of instance role.
+		{"DirectUser_Override", func(t *testing.T, ctx context.Context, d *DB) {
+			mustGrant(t, ctx, d, "p1", "u1", "", ProjectRoleEditor)
+		}, ProjectRoleEditor},
+		// A grant with NO override inherits the user's instance role.
+		{"InheritsInstanceRole", func(t *testing.T, ctx context.Context, d *DB) {
+			if err := d.SetUserInstanceRole(ctx, "u1", InstanceRoleEditor); err != nil {
+				t.Fatalf("set user role: %v", err)
+			}
+			mustGrant(t, ctx, d, "p1", "u1", "", "") // no override
+		}, ProjectRoleEditor},
+		// A grant with no override on a user with no instance role still
+		// confers viewer.
+		{"ViewerFloor", func(t *testing.T, ctx context.Context, d *DB) {
+			mustGrant(t, ctx, d, "p1", "u1", "", "")
+		}, ProjectRoleViewer},
+		// A group grant reaches every member.
+		{"ViaGroup", func(t *testing.T, ctx context.Context, d *DB) {
+			seedGroupWithRole(t, d, "g1", InstanceRoleViewer)
+			if err := d.AddUserToGroup(ctx, "u1", "g1"); err != nil {
+				t.Fatalf("add to group: %v", err)
+			}
+			mustGrant(t, ctx, d, "p1", "", "g1", ProjectRoleEditor)
+		}, ProjectRoleEditor},
+		// Direct viewer grant + group editor grant on the same project ->
+		// editor.
+		{"HighestWins", func(t *testing.T, ctx context.Context, d *DB) {
+			seedGroupWithRole(t, d, "g1", InstanceRoleViewer)
+			_ = d.AddUserToGroup(ctx, "u1", "g1")
+			mustGrant(t, ctx, d, "p1", "u1", "", ProjectRoleViewer)
+			mustGrant(t, ctx, d, "p1", "", "g1", ProjectRoleEditor)
+		}, ProjectRoleEditor},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openTestDB(t)
+			ctx := context.Background()
+			seedUser(t, d, "u1")
+			tt.setup(t, ctx, d)
+			ten, err := d.ListUserTenancy(ctx, "u1")
+			if err != nil {
+				t.Fatalf("tenancy: %v", err)
+			}
+			if got := projectRoleOn(ten, "p1"); got != tt.want {
+				t.Errorf("p1 role = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func mustGrant(t *testing.T, ctx context.Context, d *DB, project, userID, groupID string, override ProjectRole) {
+	t.Helper()
+	if _, err := d.AddProjectGrant(ctx, project, userID, groupID, override); err != nil {
 		t.Fatalf("add grant: %v", err)
-	}
-	ten, err := d.ListUserTenancy(ctx, "u1")
-	if err != nil {
-		t.Fatalf("tenancy: %v", err)
-	}
-	if got := projectRoleOn(ten, "p1"); got != ProjectRoleEditor {
-		t.Errorf("p1 role = %q, want editor", got)
-	}
-}
-
-// TestProjectGrant_InheritsInstanceRole: a grant with NO override inherits
-// the user's instance role.
-func TestProjectGrant_InheritsInstanceRole(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	seedUser(t, d, "u1")
-	if err := d.SetUserInstanceRole(ctx, "u1", InstanceRoleEditor); err != nil {
-		t.Fatalf("set user role: %v", err)
-	}
-	if _, err := d.AddProjectGrant(ctx, "p1", "u1", "", ""); err != nil { // no override
-		t.Fatalf("add grant: %v", err)
-	}
-	ten, _ := d.ListUserTenancy(ctx, "u1")
-	if got := projectRoleOn(ten, "p1"); got != ProjectRoleEditor {
-		t.Errorf("inherited role = %q, want editor", got)
-	}
-}
-
-// TestProjectGrant_ViewerFloor: a grant with no override on a user with
-// no instance role still confers viewer.
-func TestProjectGrant_ViewerFloor(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	seedUser(t, d, "u1")
-	if _, err := d.AddProjectGrant(ctx, "p1", "u1", "", ""); err != nil {
-		t.Fatalf("add grant: %v", err)
-	}
-	ten, _ := d.ListUserTenancy(ctx, "u1")
-	if got := projectRoleOn(ten, "p1"); got != ProjectRoleViewer {
-		t.Errorf("floor role = %q, want viewer", got)
-	}
-}
-
-// TestProjectGrant_ViaGroup: a group grant reaches every member.
-func TestProjectGrant_ViaGroup(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	seedUser(t, d, "u1")
-	seedGroupWithRole(t, d, "g1", InstanceRoleViewer)
-	if err := d.AddUserToGroup(ctx, "u1", "g1"); err != nil {
-		t.Fatalf("add to group: %v", err)
-	}
-	if _, err := d.AddProjectGrant(ctx, "p1", "", "g1", ProjectRoleEditor); err != nil {
-		t.Fatalf("add group grant: %v", err)
-	}
-	ten, _ := d.ListUserTenancy(ctx, "u1")
-	if got := projectRoleOn(ten, "p1"); got != ProjectRoleEditor {
-		t.Errorf("group-granted role = %q, want editor", got)
-	}
-}
-
-// TestProjectGrant_HighestWins: direct viewer grant + group editor grant
-// on the same project → editor.
-func TestProjectGrant_HighestWins(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	seedUser(t, d, "u1")
-	seedGroupWithRole(t, d, "g1", InstanceRoleViewer)
-	_ = d.AddUserToGroup(ctx, "u1", "g1")
-	if _, err := d.AddProjectGrant(ctx, "p1", "u1", "", ProjectRoleViewer); err != nil {
-		t.Fatalf("user grant: %v", err)
-	}
-	if _, err := d.AddProjectGrant(ctx, "p1", "", "g1", ProjectRoleEditor); err != nil {
-		t.Fatalf("group grant: %v", err)
-	}
-	ten, _ := d.ListUserTenancy(ctx, "u1")
-	if got := projectRoleOn(ten, "p1"); got != ProjectRoleEditor {
-		t.Errorf("highest-wins role = %q, want editor", got)
 	}
 }
 

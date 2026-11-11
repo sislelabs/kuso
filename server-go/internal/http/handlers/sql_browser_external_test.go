@@ -18,31 +18,28 @@ import (
 // means the browser is permanently unavailable for a database that was never
 // dangerous. Skip provisioning for external addons; keep it everywhere else.
 
-func TestNeedsBrowserRole_InClusterAddonStillProvisions(t *testing.T) {
-	addon := &kube.KusoAddon{Spec: kube.KusoAddonSpec{Kind: "postgres"}}
-	if !needsBrowserRole(addon) {
-		t.Error("in-cluster postgres must still use the restricted role — its admin user is a superuser")
+func TestNeedsBrowserRole(t *testing.T) {
+	cases := []struct {
+		name     string
+		external *kube.KusoAddonExternal
+		want     bool
+		why      string
+	}{
+		{"InClusterAddonStillProvisions", nil, true,
+			"in-cluster postgres must still use the restricted role — its admin user is a superuser"},
+		{"ExternalAddonSkips", &kube.KusoAddonExternal{SecretName: "tickero-psdb-external"}, false,
+			"external addons cannot CREATE ROLE and hold no superuser; provisioning can only fail"},
+		// An external addon whose secret names no source is not external in practice.
+		{"EmptyExternalSecretStillProvisions", &kube.KusoAddonExternal{}, true,
+			"an external block with no secretName is not an external addon"},
 	}
-}
-
-func TestNeedsBrowserRole_ExternalAddonSkips(t *testing.T) {
-	addon := &kube.KusoAddon{Spec: kube.KusoAddonSpec{
-		Kind:     "postgres",
-		External: &kube.KusoAddonExternal{SecretName: "tickero-psdb-external"},
-	}}
-	if needsBrowserRole(addon) {
-		t.Error("external addons cannot CREATE ROLE and hold no superuser; provisioning can only fail")
-	}
-}
-
-// An external addon whose secret names no source is not external in practice.
-func TestNeedsBrowserRole_EmptyExternalSecretStillProvisions(t *testing.T) {
-	addon := &kube.KusoAddon{Spec: kube.KusoAddonSpec{
-		Kind:     "postgres",
-		External: &kube.KusoAddonExternal{},
-	}}
-	if !needsBrowserRole(addon) {
-		t.Error("an external block with no secretName is not an external addon")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			addon := &kube.KusoAddon{Spec: kube.KusoAddonSpec{Kind: "postgres", External: tc.external}}
+			if got := needsBrowserRole(addon); got != tc.want {
+				t.Errorf("needsBrowserRole = %v, want %v: %s", got, tc.want, tc.why)
+			}
+		})
 	}
 }
 

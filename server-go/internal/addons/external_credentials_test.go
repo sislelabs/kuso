@@ -66,19 +66,6 @@ func TestAdd_ExternalCredentials_CreatesSourceSecret(t *testing.T) {
 	if got := string(conn.Data["DATABASE_URL"]); got == "" {
 		t.Error("conn secret is missing DATABASE_URL")
 	}
-}
-
-func TestAdd_ExternalCredentials_RecordsSecretNameOnSpec(t *testing.T) {
-	t.Parallel()
-	s := fakeServiceWithSecrets(t, seedProj("alpha"))
-
-	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
-		Name:                "psdb",
-		Kind:                "postgres",
-		ExternalCredentials: map[string]string{"DATABASE_URL": "postgres://u:p@h:5432/d"},
-	}); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
 
 	addon, err := s.Kube.GetKusoAddon(context.Background(), "kuso", "alpha-psdb")
 	if err != nil {
@@ -91,34 +78,34 @@ func TestAdd_ExternalCredentials_RecordsSecretNameOnSpec(t *testing.T) {
 	}
 }
 
-// Supplying both is ambiguous: one names a Secret to adopt, the other asks to
-// create one. Refuse rather than silently pick.
-func TestAdd_ExternalCredentials_ConflictsWithSecretName(t *testing.T) {
+func TestAdd_ExternalCredentials_RejectsInvalid(t *testing.T) {
 	t.Parallel()
-	s := fakeServiceWithSecrets(t, seedProj("alpha"))
-
-	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
-		Name:                "psdb",
-		Kind:                "postgres",
-		External:            &kube.KusoAddonExternal{SecretName: "someone-elses-secret"},
-		ExternalCredentials: map[string]string{"DATABASE_URL": "postgres://u:p@h:5432/d"},
-	})
-	if !errors.Is(err, ErrInvalid) {
-		t.Errorf("got %v, want ErrInvalid for external + externalCredentials", err)
+	cases := []struct {
+		name string
+		req  CreateAddonRequest
+	}{
+		// Supplying both is ambiguous: one names a Secret to adopt, the
+		// other asks to create one. Refuse rather than silently pick.
+		{"ConflictsWithSecretName", CreateAddonRequest{
+			Name:                "psdb",
+			Kind:                "postgres",
+			External:            &kube.KusoAddonExternal{SecretName: "someone-elses-secret"},
+			ExternalCredentials: map[string]string{"DATABASE_URL": "postgres://u:p@h:5432/d"},
+		}},
+		{"RequiresConnectionURL", CreateAddonRequest{
+			Name:                "psdb",
+			Kind:                "postgres",
+			ExternalCredentials: map[string]string{"POSTGRES_HOST": "ext.example.com"},
+		}},
 	}
-}
-
-func TestAdd_ExternalCredentials_RequiresConnectionURL(t *testing.T) {
-	t.Parallel()
-	s := fakeServiceWithSecrets(t, seedProj("alpha"))
-
-	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
-		Name:                "psdb",
-		Kind:                "postgres",
-		ExternalCredentials: map[string]string{"POSTGRES_HOST": "ext.example.com"},
-	})
-	if !errors.Is(err, ErrInvalid) {
-		t.Errorf("got %v, want ErrInvalid when no connection URL key is supplied", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := fakeServiceWithSecrets(t, seedProj("alpha"))
+			if _, err := s.Add(context.Background(), "alpha", tc.req); !errors.Is(err, ErrInvalid) {
+				t.Errorf("got %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 

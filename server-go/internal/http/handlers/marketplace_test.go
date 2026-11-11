@@ -71,15 +71,6 @@ func TestMarketplace_Get_OK(t *testing.T) {
 	}
 }
 
-func TestMarketplace_Get_NotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/nope", nil)
-	w := httptest.NewRecorder()
-	mktRouter().ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
-	}
-}
-
 func TestMarketplace_Icon_OK(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/uptime-kuma/icon", nil)
 	w := httptest.NewRecorder()
@@ -92,15 +83,6 @@ func TestMarketplace_Icon_OK(t *testing.T) {
 	}
 	if w.Body.Len() == 0 {
 		t.Fatal("empty icon body")
-	}
-}
-
-func TestMarketplace_Icon_NotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/nope/icon", nil)
-	w := httptest.NewRecorder()
-	mktRouter().ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
 	}
 }
 
@@ -127,22 +109,26 @@ func TestMarketplace_Render_OK(t *testing.T) {
 	}
 }
 
-func TestMarketplace_Render_MissingRequired(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/marketplace/uptime-kuma/render",
-		strings.NewReader(`{"project":"mysite","answers":{}}`))
-	w := httptest.NewRecorder()
-	mktRouter().ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
+// TestMarketplace_ErrorStatuses: unknown apps 404 on every route, and a
+// render missing a required answer is a 400.
+func TestMarketplace_ErrorStatuses(t *testing.T) {
+	cases := []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"Get_NotFound", http.MethodGet, "/api/marketplace/nope", "", http.StatusNotFound},
+		{"Icon_NotFound", http.MethodGet, "/api/marketplace/nope/icon", "", http.StatusNotFound},
+		{"Render_MissingRequired", http.MethodPost, "/api/marketplace/uptime-kuma/render", `{"project":"mysite","answers":{}}`, http.StatusBadRequest},
+		{"Render_UnknownApp", http.MethodPost, "/api/marketplace/nope/render", `{"project":"x","answers":{}}`, http.StatusNotFound},
 	}
-}
-
-func TestMarketplace_Render_UnknownApp(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/marketplace/nope/render",
-		strings.NewReader(`{"project":"x","answers":{}}`))
-	w := httptest.NewRecorder()
-	mktRouter().ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+			mktRouter().ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("want %d, got %d", tc.want, w.Code)
+			}
+		})
 	}
 }

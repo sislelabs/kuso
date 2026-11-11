@@ -38,25 +38,29 @@ type capturingAuditor struct{ entries []audit.Entry }
 
 func (c *capturingAuditor) Log(_ context.Context, e audit.Entry) { c.entries = append(c.entries, e) }
 
-func TestApply_RefusesUnattendedUnsafe(t *testing.T) {
-	r := &Remediator{Now: fixedClock}
-	iss := reconcilehealth.Issue{
-		Resource: "tickero-queue",
-		Kind:     reconcilehealth.KindSpecMismatch,
-		Action:   reconcilehealth.ActionForceReconcile,
-		Safe:     false, // spec-mismatch needs human direction
+func TestApply_Refuses(t *testing.T) {
+	cases := []struct {
+		name string
+		iss  reconcilehealth.Issue
+		auto bool
+	}{
+		// auto=true must refuse an unsafe issue: spec-mismatch needs human direction.
+		{"UnattendedUnsafe", reconcilehealth.Issue{
+			Resource: "tickero-queue",
+			Kind:     reconcilehealth.KindSpecMismatch,
+			Action:   reconcilehealth.ActionForceReconcile,
+			Safe:     false,
+		}, true},
+		// An issue with no automated action errors even when attended.
+		{"NoAction", reconcilehealth.Issue{Resource: "x", Action: reconcilehealth.ActionNone}, false},
 	}
-	// auto=true must refuse an unsafe issue.
-	if _, err := r.Apply(context.Background(), iss, "system", true); err == nil {
-		t.Fatal("expected unattended remediation of an unsafe issue to be refused")
-	}
-}
-
-func TestApply_NoActionErrors(t *testing.T) {
-	r := &Remediator{Now: fixedClock}
-	iss := reconcilehealth.Issue{Resource: "x", Action: reconcilehealth.ActionNone}
-	if _, err := r.Apply(context.Background(), iss, "u", false); err == nil {
-		t.Fatal("expected an error when the issue has no automated action")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Remediator{Now: fixedClock}
+			if _, err := r.Apply(context.Background(), tc.iss, "u", tc.auto); err == nil {
+				t.Fatal("expected Apply to refuse")
+			}
+		})
 	}
 }
 

@@ -270,55 +270,61 @@ func TestCloneRefMissing_DoesNotSwallowRealFailures(t *testing.T) {
 	}
 }
 
-func TestClassify_SignalBeatsLogs(t *testing.T) {
-	// An OOMKilled pod whose logs also mention "address already in use"
-	// from an earlier boot still classifies as OOM.
-	got := Classify(
-		[]string{"Error: address already in use :::3000"},
-		Signal{Reason: "OOMKilled"},
-	)
-	if got.Kind != KindOOM {
-		t.Errorf("Kind = %q, want OOM (signal should beat log regex)", got.Kind)
-	}
-}
-
-func TestClassify_RecentMostLineWins(t *testing.T) {
-	// When two log detectors could match, the more-recent line (further
-	// down the slice) wins — the failure that took the pod down was
-	// the last thing that happened.
-	got := Classify(
-		[]string{
-			"Missing env var DATABASE_URL",        // older
-			"panic: runtime error: nil ptr deref", // newer
+// TestClassify_Precedence covers which detector wins when several match.
+func TestClassify_Precedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		lines     []string
+		sig       Signal
+		wantKind  Kind
+		wantRemed bool
+	}{
+		{
+			// An OOMKilled pod whose logs also mention "address already in use"
+			// from an earlier boot still classifies as OOM.
+			name:     "SignalBeatsLogs",
+			lines:    []string{"Error: address already in use :::3000"},
+			sig:      Signal{Reason: "OOMKilled"},
+			wantKind: KindOOM,
 		},
-		Signal{},
-	)
-	if got.Kind != KindCrashLoop {
-		t.Errorf("Kind = %q, want CrashLoop (most recent line)", got.Kind)
-	}
-}
-
-func TestClassify_SpecificBuildDetectorBeatsGenericLaterLine(t *testing.T) {
-	// A build log prints the SPECIFIC root cause (lockfile drift) early
-	// and a GENERIC "build failed" / "command failed with exit code"
-	// line at the very end. A naive reverse LINE walk would let the
-	// generic tail win because it's later in the buffer. The build-
-	// specific detector must win regardless of line position.
-	got := Classify(
-		[]string{
-			"using pnpm@9.15.0",
-			"ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\"", // specific, early
-			"#14 ERROR: process \"/bin/sh -c pnpm install\" did not complete",
-			"command failed with exit code 1", // generic, LATE
+		{
+			// When two log detectors could match, the more-recent line (further
+			// down the slice) wins — the failure that took the pod down was
+			// the last thing that happened.
+			name: "RecentMostLineWins",
+			lines: []string{
+				"Missing env var DATABASE_URL",        // older
+				"panic: runtime error: nil ptr deref", // newer
+			},
+			wantKind: KindCrashLoop,
 		},
-		Signal{},
-	)
-	if got.Kind != KindLockfileDrift {
-		t.Errorf("Kind = %q, want %q (specific build detector must beat generic later line)",
-			got.Kind, KindLockfileDrift)
+		{
+			// A build log prints the SPECIFIC root cause (lockfile drift) early
+			// and a GENERIC "build failed" / "command failed with exit code"
+			// line at the very end. A naive reverse LINE walk would let the
+			// generic tail win because it's later in the buffer. The build-
+			// specific detector must win regardless of line position.
+			name: "SpecificBuildDetectorBeatsGenericLaterLine",
+			lines: []string{
+				"using pnpm@9.15.0",
+				"ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\"", // specific, early
+				"#14 ERROR: process \"/bin/sh -c pnpm install\" did not complete",
+				"command failed with exit code 1", // generic, LATE
+			},
+			wantKind:  KindLockfileDrift,
+			wantRemed: true,
+		},
 	}
-	if got.Remediation == nil {
-		t.Error("expected the lockfile-drift Remediation, got nil")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(tc.lines, tc.sig)
+			if got.Kind != tc.wantKind {
+				t.Errorf("Kind = %q, want %q", got.Kind, tc.wantKind)
+			}
+			if tc.wantRemed && got.Remediation == nil {
+				t.Error("expected a Remediation, got nil")
+			}
+		})
 	}
 }
 

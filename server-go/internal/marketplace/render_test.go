@@ -52,23 +52,36 @@ func TestRenderTemplate_Substitutes(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_MissingRequired(t *testing.T) {
-	m := mustManifest(t, Prompt{Key: "host", Title: "Host", Kind: "domain", Required: true},
-		Prompt{Key: "admin_email", Title: "E", Kind: "string", Required: true})
-	_, _, err := RenderTemplate(m, []byte(tmplWithPrompt), "shop",
-		map[string]string{"host": "app.example.com"})
-	if !errors.Is(err, ErrRender) {
-		t.Fatalf("want ErrRender for missing required answer, got %v", err)
+func TestRenderTemplate_RejectsWithErrRender(t *testing.T) {
+	cases := []struct {
+		name    string
+		prompts []Prompt
+		tmpl    string
+		answers map[string]string
+	}{
+		{
+			name: "MissingRequired",
+			prompts: []Prompt{{Key: "host", Title: "Host", Kind: "domain", Required: true},
+				{Key: "admin_email", Title: "E", Kind: "string", Required: true}},
+			tmpl:    tmplWithPrompt,
+			answers: map[string]string{"host": "app.example.com"},
+		},
+		{
+			// Template references a token with no matching prompt.
+			name:    "UnknownToken",
+			prompts: []Prompt{{Key: "host", Title: "H", Kind: "domain", Required: true}},
+			tmpl:    strings.Replace(tmplWithPrompt, "${{ prompt.admin_email }}", "${{ prompt.nope }}", 1),
+			answers: map[string]string{"host": "h.example.com"},
+		},
 	}
-}
-
-func TestRenderTemplate_UnknownToken(t *testing.T) {
-	// Template references a token with no matching prompt.
-	bad := strings.Replace(tmplWithPrompt, "${{ prompt.admin_email }}", "${{ prompt.nope }}", 1)
-	m := mustManifest(t, Prompt{Key: "host", Title: "H", Kind: "domain", Required: true})
-	_, _, err := RenderTemplate(m, []byte(bad), "shop", map[string]string{"host": "h.example.com"})
-	if !errors.Is(err, ErrRender) {
-		t.Fatalf("want ErrRender for unknown token, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := mustManifest(t, tc.prompts...)
+			_, _, err := RenderTemplate(m, []byte(tc.tmpl), "shop", tc.answers)
+			if !errors.Is(err, ErrRender) {
+				t.Fatalf("want ErrRender, got %v", err)
+			}
+		})
 	}
 }
 

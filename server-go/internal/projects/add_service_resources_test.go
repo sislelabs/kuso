@@ -22,74 +22,6 @@ var mediumRes = map[string]any{
 	"limits":   map[string]any{"memory": "1Gi"},
 }
 
-func TestAddService_AppliesDefaultPodSizeWhenNoResources(t *testing.T) {
-	t.Parallel()
-	for _, rt := range []string{"dockerfile", "worker"} {
-		t.Run(rt, func(t *testing.T) {
-			s := defaultPodFixture(t, mediumRes)
-			req := CreateServiceRequest{Name: "web", Runtime: rt}
-			if rt == "worker" {
-				req.FromService = "api"
-				req.Command = []string{"node", "worker.js"}
-			}
-			created, err := s.AddService(context.Background(), "alpha", req)
-			if err != nil {
-				t.Fatalf("AddService: %v", err)
-			}
-			if !reflect.DeepEqual(created.Spec.Resources, mediumRes) {
-				t.Fatalf("service resources = %v, want %v", created.Spec.Resources, mediumRes)
-			}
-			env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
-			if err != nil {
-				t.Fatalf("production env: %v", err)
-			}
-			if !reflect.DeepEqual(env.Spec.Resources, mediumRes) {
-				t.Fatalf("production env resources = %v, want %v", env.Spec.Resources, mediumRes)
-			}
-		})
-	}
-}
-
-func TestAddService_ExplicitResourcesWinOverDefault(t *testing.T) {
-	t.Parallel()
-	s := defaultPodFixture(t, mediumRes)
-	mine := map[string]any{"requests": map[string]any{"memory": "64Mi"}}
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Resources: &mine})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
-	}
-	if !reflect.DeepEqual(created.Spec.Resources, mine) {
-		t.Fatalf("resources = %v, want the request's %v", created.Spec.Resources, mine)
-	}
-}
-
-// An explicit empty map opts this one service out of the default.
-func TestAddService_ExplicitEmptyResourcesSkipsDefault(t *testing.T) {
-	t.Parallel()
-	s := defaultPodFixture(t, mediumRes)
-	empty := map[string]any{}
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Resources: &empty})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
-	}
-	if created.Spec.Resources != nil {
-		t.Fatalf("resources = %v, want none", created.Spec.Resources)
-	}
-}
-
-// default pod size "none" → the hook yields nil → no resources.
-func TestAddService_NoDefaultLeavesResourcesEmpty(t *testing.T) {
-	t.Parallel()
-	s := defaultPodFixture(t, nil)
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile"})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
-	}
-	if created.Spec.Resources != nil {
-		t.Fatalf("resources = %v, want none", created.Spec.Resources)
-	}
-}
-
 var largeRes = map[string]any{
 	"requests": map[string]any{"cpu": "250m", "memory": "512Mi"},
 	"limits":   map[string]any{"memory": "2Gi"},
@@ -107,42 +39,69 @@ func sizedFixture(t *testing.T) *Service {
 	return s
 }
 
-// A named size (e.g. a marketplace app's preset) beats the instance default.
-func TestAddService_NamedSizeBeatsDefault(t *testing.T) {
+func TestAddService_PodResources(t *testing.T) {
 	t.Parallel()
-	s := sizedFixture(t)
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "large"})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
-	}
-	if !reflect.DeepEqual(created.Spec.Resources, largeRes) {
-		t.Fatalf("resources = %v, want large %v", created.Spec.Resources, largeRes)
-	}
-}
-
-func TestAddService_ExplicitResourcesBeatNamedSize(t *testing.T) {
-	t.Parallel()
-	s := sizedFixture(t)
 	mine := map[string]any{"requests": map[string]any{"memory": "64Mi"}}
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "large", Resources: &mine})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
+	empty := map[string]any{}
+	cases := []struct {
+		name    string
+		def     map[string]any // instance default; ignored when sized
+		sized   bool
+		runtime string
+		size    string
+		res     *map[string]any
+		want    map[string]any
+		// checkEnv also asserts the production env carries the resources.
+		checkEnv bool
+	}{
+		{name: "AppliesDefaultPodSizeWhenNoResources/dockerfile", def: mediumRes, runtime: "dockerfile", want: mediumRes, checkEnv: true},
+		{name: "AppliesDefaultPodSizeWhenNoResources/worker", def: mediumRes, runtime: "worker", want: mediumRes, checkEnv: true},
+		{name: "ExplicitResourcesWinOverDefault", def: mediumRes, runtime: "dockerfile", res: &mine, want: mine},
+		// An explicit empty map opts this one service out of the default.
+		{name: "ExplicitEmptyResourcesSkipsDefault", def: mediumRes, runtime: "dockerfile", res: &empty, want: nil},
+		// default pod size "none" → the hook yields nil → no resources.
+		{name: "NoDefaultLeavesResourcesEmpty", def: nil, runtime: "dockerfile", want: nil},
+		// A named size (e.g. a marketplace app's preset) beats the instance default.
+		{name: "NamedSizeBeatsDefault", sized: true, runtime: "dockerfile", size: "large", want: largeRes},
+		{name: "ExplicitResourcesBeatNamedSize", sized: true, runtime: "dockerfile", size: "large", res: &mine, want: mine},
+		// A preset the admin deleted falls back to the default rather than
+		// failing the create.
+		{name: "UnknownSizeFallsBackToDefault", sized: true, runtime: "dockerfile", size: "gone", want: mediumRes},
 	}
-	if !reflect.DeepEqual(created.Spec.Resources, mine) {
-		t.Fatalf("resources = %v, want %v", created.Spec.Resources, mine)
-	}
-}
-
-// A preset the admin deleted falls back to the default rather than failing
-// the create.
-func TestAddService_UnknownSizeFallsBackToDefault(t *testing.T) {
-	t.Parallel()
-	s := sizedFixture(t)
-	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "web", Runtime: "dockerfile", Size: "gone"})
-	if err != nil {
-		t.Fatalf("AddService: %v", err)
-	}
-	if !reflect.DeepEqual(created.Spec.Resources, mediumRes) {
-		t.Fatalf("resources = %v, want default %v", created.Spec.Resources, mediumRes)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var s *Service
+			if tc.sized {
+				s = sizedFixture(t)
+			} else {
+				s = defaultPodFixture(t, tc.def)
+			}
+			req := CreateServiceRequest{Name: "web", Runtime: tc.runtime, Size: tc.size, Resources: tc.res}
+			if tc.runtime == "worker" {
+				req.FromService = "api"
+				req.Command = []string{"node", "worker.js"}
+			}
+			created, err := s.AddService(context.Background(), "alpha", req)
+			if err != nil {
+				t.Fatalf("AddService: %v", err)
+			}
+			if tc.want == nil {
+				if created.Spec.Resources != nil {
+					t.Fatalf("resources = %v, want none", created.Spec.Resources)
+				}
+			} else if !reflect.DeepEqual(created.Spec.Resources, tc.want) {
+				t.Fatalf("service resources = %v, want %v", created.Spec.Resources, tc.want)
+			}
+			if !tc.checkEnv {
+				return
+			}
+			env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+			if err != nil {
+				t.Fatalf("production env: %v", err)
+			}
+			if !reflect.DeepEqual(env.Spec.Resources, tc.want) {
+				t.Fatalf("production env resources = %v, want %v", env.Spec.Resources, tc.want)
+			}
+		})
 	}
 }
