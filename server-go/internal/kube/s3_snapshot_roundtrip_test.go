@@ -71,7 +71,7 @@ func TestS3Snapshot_EncryptedRoundTrip_Docker(t *testing.T) {
 		t.Fatalf("network: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		_, _ = run("rm", "-f", id+"-addon", id+"-store")
+		_, _ = run("rm", "-fv", id+"-addon", id+"-store")
 		_, _ = run("network", "rm", id)
 	})
 	for _, c := range []string{"addon", "store"} {

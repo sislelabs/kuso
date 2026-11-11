@@ -80,7 +80,7 @@ func TestRestoreDrill_RoundTrip_Docker(t *testing.T) {
 		t.Fatalf("network: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		_, _ = run("rm", "-f", id+"-pg")
+		_, _ = run("rm", "-fv", id+"-pg")
 		_, _ = run("network", "rm", id)
 	})
 	if out, err := run("run", "-d", "--name", id+"-pg", "--network", id,

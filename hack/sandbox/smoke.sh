@@ -39,7 +39,17 @@ for g in ${groups//,/ }; do
   [[ -f "${SANDBOX_DIR}/smoke/${g}.sh" ]] || die "unknown smoke group: ${g} (have: ${ALL_GROUPS[*]})"
 done
 
+# A node under pressure evicts pods and schedules none, so every check
+# after it would sit out its full timeout. Stop before the group instead.
+node_pressure() {
+  node_kubectl get nodes -o jsonpath='{range .items[*].spec.taints[*]}{.key}{"\n"}{end}' 2>/dev/null |
+    grep -E 'node.kubernetes.io/(disk|memory|pid)-pressure' | sort -u
+}
+
 for g in ${groups//,/ }; do
+  if p="$(node_pressure)" && [[ -n "$p" ]]; then
+    die "sandbox node is tainted ${p//$'\n'/, }; free Docker disk (make sandbox-doctor) and rerun SMOKE=${g}"
+  fi
   run_group "$g"
 done
 

@@ -27,7 +27,19 @@ bk_latest_key() {
 bk_has_new_key() { local k; k="$(bk_latest_key "$1" "$2")"; [[ -n "$k" && "$k" != "$3" ]]; }
 
 # bk_job_done <job>: the Job finished successfully (fails fast on failure).
-bk_job_succeeded() { [[ "$(node_kubectl -n "$BK_NS" get job "$1" -o jsonpath='{.status.succeeded}' 2>/dev/null)" == "1" ]]; }
+# bk_job_succeeded <job>: 0 once it succeeded, 2 (stop waiting) when it
+# failed or never started, after printing why to stderr.
+bk_job_succeeded() {
+  local st
+  if [[ -z "$1" ]]; then echo "no job was started" >&3; return 2; fi
+  st="$(node_kubectl -n "$BK_NS" get job "$1" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null)"
+  [[ "$st" == 1/* ]] && return 0
+  if [[ "${st#*/}" =~ ^[1-9] ]]; then
+    node_kubectl -n "$BK_NS" logs "job/$1" --all-containers --tail=20 >&3 2>&1 || true
+    return 2
+  fi
+  return 1
+}
 
 # bk_restore <args...>: start a restore and print its job name. The CLI
 # may print a pre-restore snapshot line first.

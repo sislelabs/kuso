@@ -6,6 +6,8 @@ RESULTS="${STATE_DIR}/smoke-results"
 mkdir -p "$STATE_DIR"
 : > "$RESULTS"
 CURRENT_GROUP=""
+# fd 3 reaches the terminal from probes whose output eventually discards.
+exec 3>&2
 
 step() { printf '\n\033[1;34m[%s]\033[0m %s\n' "$CURRENT_GROUP" "$*"; }
 pass() { printf '  \033[1;32mPASS\033[0m %s\n' "$*"; echo "PASS ${CURRENT_GROUP}: $*" >> "$RESULTS"; }
@@ -26,11 +28,14 @@ require() {
   if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; exit 1; fi
 }
 
-# eventually <seconds> <command...>: retry until it succeeds.
+# eventually <seconds> <command...>: retry until it succeeds. A command
+# exiting 2 has failed for good (a Job marked Failed), so stop waiting.
 eventually() {
-  local deadline=$((SECONDS + $1)); shift
+  local deadline=$((SECONDS + $1)) rc; shift
   while (( SECONDS < deadline )); do
     "$@" >/dev/null 2>&1 && return 0
+    rc=$?
+    (( rc == 2 )) && return 1
     sleep 3
   done
   return 1

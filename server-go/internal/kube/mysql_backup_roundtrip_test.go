@@ -97,7 +97,7 @@ func TestMySQLBackupRestore_Docker(t *testing.T) {
 		t.Fatalf("network: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		_, _ = run("rm", "-f", id+"-db")
+		_, _ = run("rm", "-fv", id+"-db")
 		_, _ = run("volume", "rm", "-f", id+"-store")
 		_, _ = run("network", "rm", id)
 	})

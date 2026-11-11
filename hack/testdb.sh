@@ -57,7 +57,7 @@ start() {
 			wait_ready "$name"
 			return 0
 		fi
-		docker rm -f "$name" >/dev/null 2>&1 || true
+		docker rm -fv "$name" >/dev/null 2>&1 || true
 	done
 	echo "no free host port in $port..$((port + 49))" >&2
 	return 1
@@ -83,7 +83,7 @@ cmd_up() {
 	if running "$SESSION"; then
 		say "session DB already up"
 	else
-		docker rm -f "$SESSION" >/dev/null 2>&1 || true
+		docker rm -fv "$SESSION" >/dev/null 2>&1 || true
 		start "$SESSION" "$BASE_PORT"
 	fi
 	local p
@@ -97,7 +97,7 @@ cmd_down() {
 	ids=$(docker ps -aq --filter "label=$LABEL=$ROOT")
 	if [ -n "$ids" ]; then
 		# shellcheck disable=SC2086
-		docker rm -f $ids >/dev/null
+		docker rm -fv $ids >/dev/null
 		say "removed $(echo "$ids" | wc -l | tr -d ' ') container(s)"
 	else
 		say "nothing to remove"
@@ -125,7 +125,7 @@ with_db() {
 	fi
 	cleanup() {
 		if [ "$ephemeral" = 1 ]; then
-			docker rm -f "$server" >/dev/null 2>&1 || true
+			docker rm -fv "$server" >/dev/null 2>&1 || true
 		else
 			# pgtestexec drops its per-package databases itself; this also
 			# catches the ones an interrupted run left behind.
