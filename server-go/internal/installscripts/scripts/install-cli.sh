@@ -8,8 +8,9 @@
 #      (sislelabs/kuso releases). Binaries are named
 #      kuso-${OS}-${ARCH} — produced by hack/release.sh on every
 #      tagged version.
-#      The binary is checked against the release's SHA256SUMS when
-#      that asset exists (releases before it only get a warning).
+#      The binary is checked against the release's SHA256SUMS. A release
+#      without one (or a host without sha256sum/shasum) is refused unless
+#      KUSO_CLI_ALLOW_UNVERIFIED=1.
 #   2. Fall back to building the same tag from source if git + Go are
 #      on PATH (the CLI module path is `kuso`, so `go install` from
 #      GitHub can't resolve it).
@@ -91,13 +92,22 @@ sha256_file() {
   fi
 }
 
-# verify_checksum <file>: dies on a mismatch; warns when the release has
-# no SHA256SUMS (published before it existed) or no hashing tool exists.
+# unverified <reason>: refuses, unless KUSO_CLI_ALLOW_UNVERIFIED=1.
+unverified() {
+  if [ "${KUSO_CLI_ALLOW_UNVERIFIED:-0}" = "1" ]; then
+    warn "$1 — installing without a checksum check (KUSO_CLI_ALLOW_UNVERIFIED=1)"
+    return 0
+  fi
+  die "$1 — refusing to install an unverified binary. Set KUSO_CLI_ALLOW_UNVERIFIED=1 to accept it"
+}
+
+# verify_checksum <file>: dies on a mismatch, and on a missing
+# SHA256SUMS or hashing tool unless KUSO_CLI_ALLOW_UNVERIFIED=1.
 verify_checksum() {
   SUMS="$(mktemp)"
   if ! curl -fsSL -o "$SUMS" "https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS" 2>/dev/null; then
     rm -f "$SUMS"
-    warn "release ${VERSION} has no SHA256SUMS — installing without a checksum check"
+    unverified "release ${VERSION} has no SHA256SUMS"
     return 0
   fi
   want="$(awk -v a="$ASSET" '$2 == a || $2 == "*"a {print $1}' "$SUMS" | head -n1)"
@@ -105,7 +115,7 @@ verify_checksum() {
   [ -n "$want" ] || die "SHA256SUMS for ${VERSION} has no entry for ${ASSET} — refusing to install"
   got="$(sha256_file "$1")"
   if [ -z "$got" ]; then
-    warn "no sha256sum/shasum on PATH — installing without a checksum check"
+    unverified "no sha256sum/shasum on PATH"
     return 0
   fi
   [ "$got" = "$want" ] || die "checksum mismatch for ${ASSET}: got ${got}, SHA256SUMS says ${want} — refusing to install"
