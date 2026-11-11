@@ -419,7 +419,8 @@ func main() {
 	// replicas the scanner falls back to its heuristic.
 	podKinds := errorscan.NewPodKinds()
 	if !vulnscan.Disabled() {
-		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate")}
+		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate"),
+			FailClosed: os.Getenv("KUSO_VULN_GATE_FAIL_CLOSED") == "true"}
 	}
 	// Outbox worker pool — drains the NotificationOutbox table with
 	// exponential backoff. The dispatcher's Emit path enqueues one
@@ -1052,7 +1053,7 @@ func main() {
 				// *Gate there would read as "gate present" and panic.
 				if vulnGate != nil {
 					buildPoller.VulnGate = vulnGate
-					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block"
+					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block" || vulnGate.FailClosed
 				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}

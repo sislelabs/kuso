@@ -40,6 +40,11 @@ type Gate struct {
 	Digests DigestResolver
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// FailClosed turns every fail-open outcome (scanner error, failed
+	// scan, open breaker) into a block. Opt-in
+	// (KUSO_VULN_GATE_FAIL_CLOSED=true): a broken scanner then stops
+	// every gated deploy.
+	FailClosed bool
 
 	mu         sync.Mutex
 	settings   db.VulnScanSettings
@@ -140,6 +145,21 @@ func (g *Gate) failOpen(ctx context.Context, v builds.VulnGateVerdict) (builds.V
 
 // Check implements builds.VulnGate.
 func (g *Gate) Check(ctx context.Context, req builds.VulnGateRequest) (builds.VulnGateVerdict, error) {
+	v, err := g.check(ctx, req)
+	if !g.FailClosed {
+		return v, err
+	}
+	reason := v.Message
+	if err != nil {
+		reason = err.Error()
+	} else if v.Decision != builds.VulnFailOpen {
+		return v, nil
+	}
+	return builds.VulnGateVerdict{Decision: builds.VulnBlock, Message: "vulnerability gate could not verify this image (" + reason +
+		"); not deployed because the gate fails closed (KUSO_VULN_GATE_FAIL_CLOSED=true). Redeploy to scan again."}, nil
+}
+
+func (g *Gate) check(ctx context.Context, req builds.VulnGateRequest) (builds.VulnGateVerdict, error) {
 	pass := builds.VulnGateVerdict{Decision: builds.VulnPass}
 	st, err := g.loadSettings(ctx)
 	if err != nil {
