@@ -3,6 +3,7 @@ package kube
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -35,20 +36,43 @@ func renderedPruneBlock(t *testing.T, kind string, sets ...string) string {
 	return out[start : end+len(pruneEnd)]
 }
 
-func requireBackupImage(t *testing.T) string {
+// requireDocker gates the tests that run real images. They are opt-in
+// (KUSO_TEST_DOCKER=1, `make test-docker`, a separate CI step) because they
+// dominate the suite's wall time; once opted in, a missing docker or an
+// unpullable image fails instead of skipping, so CI can't go green by not
+// running them. `make test-docker` selects them by the _Docker name suffix.
+func requireDocker(t *testing.T) string {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("-short: skipping docker-backed prune test")
+	if top, _, _ := strings.Cut(t.Name(), "/"); !strings.HasSuffix(top, "_Docker") {
+		t.Fatalf("%s runs docker but is not named *_Docker, so make test-docker would never select it", t.Name())
+	}
+	if os.Getenv("KUSO_TEST_DOCKER") == "" {
+		t.Skip("docker-backed test: set KUSO_TEST_DOCKER=1 (make test-docker) to run it")
 	}
 	docker, err := exec.LookPath("docker")
 	if err != nil {
-		t.Skip("docker not found; skipping prune test")
+		t.Fatal("KUSO_TEST_DOCKER is set but docker is not on PATH")
 	}
-	if exec.Command(docker, "image", "inspect", backupImage).Run() != nil {
-		if out, err := exec.Command(docker, "pull", "-q", "--platform", "linux/amd64", backupImage).CombinedOutput(); err != nil {
-			t.Skipf("cannot pull %s: %v\n%s", backupImage, err, out)
-		}
+	return docker
+}
+
+// ensureImage pulls img (with extra pull flags such as --platform) unless
+// it is already present.
+func ensureImage(t *testing.T, docker, img string, flags ...string) {
+	t.Helper()
+	if exec.Command(docker, "image", "inspect", img).Run() == nil {
+		return
 	}
+	args := append(append([]string{"pull", "-q"}, flags...), img)
+	if out, err := exec.Command(docker, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cannot pull %s: %v\n%s", img, err, out)
+	}
+}
+
+func requireBackupImage(t *testing.T) string {
+	t.Helper()
+	docker := requireDocker(t)
+	ensureImage(t, docker, backupImage, "--platform", "linux/amd64")
 	return docker
 }
 
@@ -140,7 +164,7 @@ var fileKinds = []struct {
 	{"mysql", "mysql", nil},
 }
 
-func TestBackupPrune_DeletesOnlyExpiredObjects(t *testing.T) {
+func TestBackupPrune_DeletesOnlyExpiredObjects_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 
@@ -171,7 +195,7 @@ func TestBackupPrune_DeletesOnlyExpiredObjects(t *testing.T) {
 	}
 }
 
-func TestBackupPrune_S3SnapshotPrefixes(t *testing.T) {
+func TestBackupPrune_S3SnapshotPrefixes_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 	block := renderedPruneBlock(t, "s3")
@@ -194,7 +218,7 @@ func TestBackupPrune_S3SnapshotPrefixes(t *testing.T) {
 // If every backup is past retention (the job has been failing for weeks),
 // the newest three must survive: expiring the last good copy is worse than
 // keeping a stale one.
-func TestBackupPrune_KeepsNewestThreeEvenWhenAllExpired(t *testing.T) {
+func TestBackupPrune_KeepsNewestThreeEvenWhenAllExpired_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 
@@ -239,7 +263,7 @@ func TestBackupPrune_KeepsNewestThreeEvenWhenAllExpired(t *testing.T) {
 // KEEP_MIN counts per series. A tenant whose per-DB dump failed on the
 // last runs used to lose every copy once those were past retention,
 // because the newest three RUN stamps all lacked its dumps.
-func TestBackupPrune_KeepsNewestThreePerTenantSeries(t *testing.T) {
+func TestBackupPrune_KeepsNewestThreePerTenantSeries_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 	block := renderedPruneBlock(t, "postgres")
@@ -261,7 +285,7 @@ func TestBackupPrune_KeepsNewestThreePerTenantSeries(t *testing.T) {
 // from production) gets no new dumps, so KEEP_MIN held its last copies
 // forever. Once the run listed the live databases, the series ages out
 // like any dump; a live tenant and an unknown listing keep KEEP_MIN.
-func TestBackupPrune_DroppedDatabaseSeriesAgesOut(t *testing.T) {
+func TestBackupPrune_DroppedDatabaseSeriesAgesOut_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 	block := renderedPruneBlock(t, "postgres")
@@ -290,7 +314,7 @@ func TestBackupPrune_DroppedDatabaseSeriesAgesOut(t *testing.T) {
 }
 
 // Anything short of a clean listing must delete nothing.
-func TestBackupPrune_FailsSafe(t *testing.T) {
+func TestBackupPrune_FailsSafe_Docker(t *testing.T) {
 	docker := requireBackupImage(t)
 	now := time.Now().UTC()
 	var old []string

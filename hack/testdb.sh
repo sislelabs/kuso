@@ -5,8 +5,8 @@
 #   hack/testdb.sh up                 start this worktree's session DB, print its DSN
 #   hack/testdb.sh down               remove the session DB and any leftover run DBs
 #   hack/testdb.sh status             show this worktree's containers
-#   hack/testdb.sh all                go test -race -p 1 ./... in every go.work module
-#   hack/testdb.sh pkg <pkg>...       go test -race -p 1 on the given packages
+#   hack/testdb.sh all                go test -race ./... in every go.work module
+#   hack/testdb.sh pkg <pkg>...       go test -race on the given packages
 #   hack/testdb.sh changed [base]     go test the packages touched since base (origin/main)
 #
 # Env: TEST_PG_PORT (preferred host port), TEST_PG_CONTAINER (session
@@ -15,7 +15,9 @@
 # Each invocation gets its own database: on the session container when one
 # is up (created and dropped around the run), otherwise on a fresh container
 # removed on exit. Two runs never share a database, so the truncating tests
-# cannot clobber each other; -p 1 is still needed within one run.
+# cannot clobber each other. Within a run, go test -exec with
+# server-go/cmd/pgtestexec gives every package's test binary its own database
+# (<run db>_<pid>_<hex>), so packages run in parallel instead of under -p 1.
 set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
@@ -125,7 +127,12 @@ with_db() {
 		if [ "$ephemeral" = 1 ]; then
 			docker rm -f "$server" >/dev/null 2>&1 || true
 		else
-			psql_in "$server" "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null 2>&1 || true
+			# pgtestexec drops its per-package databases itself; this also
+			# catches the ones an interrupted run left behind.
+			local d
+			for d in $db $(psql_in "$server" "SELECT datname FROM pg_database WHERE datname LIKE '${db}\_%'" 2>/dev/null); do
+				psql_in "$server" "DROP DATABASE IF EXISTS $d WITH (FORCE)" >/dev/null 2>&1 || true
+			done
 		fi
 	}
 	trap cleanup EXIT
@@ -148,8 +155,18 @@ with_db() {
 	return "$rc"
 }
 
+# build_exec: the go test -exec wrapper that gives each package's test
+# binary its own database.
+build_exec() {
+	local dir=${TMPDIR:-/tmp}/kuso-pgtestexec-$SUM
+	mkdir -p "$dir"
+	(cd "$ROOT/server-go" && go build -o "$dir/pgtestexec" ./cmd/pgtestexec)
+	PGTESTEXEC=$dir/pgtestexec
+}
+
 go_test_flags() {
-	GOFLAGS_EXTRA=(-race -p 1)
+	build_exec
+	GOFLAGS_EXTRA=(-race -exec "$PGTESTEXEC")
 	[ -n "${RUN:-}" ] && GOFLAGS_EXTRA+=(-run "$RUN")
 	if [ -n "${ARGS:-}" ]; then
 		# shellcheck disable=SC2206
@@ -166,15 +183,12 @@ run_module() {
 	(cd "$dir" && go test "${GOFLAGS_EXTRA[@]}" "$@")
 }
 
+# run_all: every go.work module in one go test, so compiles and packages of
+# all modules share the parallelism (patterns are module paths, which
+# workspace mode resolves from the repo root).
 run_all() {
-	local m failed=()
-	for m in $(go list -m -f '{{.Dir}}'); do
-		run_module "$m" ./... || failed+=("$m")
-	done
-	if [ ${#failed[@]} -gt 0 ]; then
-		echo "FAILED modules: ${failed[*]}" >&2
-		return 1
-	fi
+	# shellcheck disable=SC2046
+	run_module "$ROOT" $(go list -m -f '{{.Path}}/...')
 }
 
 # module_of <path>: the go.work module a path (relative to the repo root or

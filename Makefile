@@ -33,8 +33,9 @@ help:
 	@echo "  make typecheck    # tsc on web/"
 	@echo "  make web          # pnpm --dir web build"
 	@echo "  make test         # go test ./... in every go.work module"
-	@echo "  make test-db      # same, plus the Postgres-backed tests (-race -p 1,"
-	@echo "                    # throwaway postgres:16-alpine via docker) — what CI runs"
+	@echo "  make test-db      # same, plus the Postgres-backed tests (-race, one DB per"
+	@echo "                    # package on a throwaway postgres:16-alpine) — what CI runs"
+	@echo "  make test-docker  # the *_Docker tests that run real images (CI runs them too)"
 	@echo "  make test-pkg PKG=./internal/addons/... [RUN=TestX] [ARGS=-count=2]"
 	@echo "  make test-changed # packages touched since origin/main + dependents"
 	@echo "  make test-db-up / test-db-down   # keep this worktree's test DB alive"
@@ -95,16 +96,17 @@ typecheck:
 	@cd web && pnpm typecheck
 
 # Every go.work module (server-go, cli, mcp, compose, coolify, api/apiv1),
-# read from go.work the same way .github/workflows/test.yml does.
+# read from go.work the same way .github/workflows/test.yml does. One go
+# test over all module paths, so packages of every module build and run in
+# parallel.
 test:
-	@set -e; for m in $$(go list -m -f '{{.Dir}}'); do \
-		echo "==> go test $$m"; (cd "$$m" && go test ./...); \
-	done
+	@go test $$(go list -m -f '{{.Path}}/...')
 
-# test-db: the CI-equivalent run (go test -race -p 1 ./... in every module
-# with KUSO_TEST_PG_DSN set). ~30 test files t.Skip() without the DSN, so
-# `make test` alone never exercises them. -p 1 is required: the packages of
-# one run share a database and truncate tables in t.Cleanup.
+# test-db: the CI-equivalent run (go test -race ./... in every module with
+# KUSO_TEST_PG_DSN set). ~30 test files t.Skip() without the DSN, so
+# `make test` alone never exercises them. The DB tests truncate tables in
+# t.Cleanup, so packages must not share a database: go test -exec runs each
+# package's binary under server-go/cmd/pgtestexec, which gives it its own.
 #
 # hack/testdb.sh gives every invocation its own database, so these targets
 # can run concurrently from several worktrees (or twice in one): on this
@@ -128,9 +130,15 @@ BASE ?= origin/main
 TESTDB = TEST_PG_PORT="$(TEST_PG_PORT)" TEST_PG_CONTAINER="$(TEST_PG_CONTAINER)" \
 	MOD="$(MOD)" RUN="$(RUN)" ARGS="$(ARGS)" bash hack/testdb.sh
 
-.PHONY: test-pkg test-changed test-db-up test-db-down
+.PHONY: test-pkg test-changed test-db-up test-db-down test-docker
 test-db:
 	@$(TESTDB) all
+
+# test-docker: the tests that run real images (backup prune in the backup
+# image, the s3 snapshot round trip against two MinIOs). They skip unless
+# KUSO_TEST_DOCKER=1 and are selected by their _Docker name suffix.
+test-docker:
+	@cd server-go && KUSO_TEST_DOCKER=1 go test -race -run '_Docker$$' ./...
 
 test-pkg:
 	@if [ -z "$(PKG)" ]; then echo "usage: make test-pkg PKG=./internal/addons/... [RUN=TestName] [ARGS=...]" >&2; exit 2; fi
