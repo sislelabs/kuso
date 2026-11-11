@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# kubectl against the current sandbox instance. Uses the host's kubectl
+# when there is one, otherwise the copy inside the node container.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if command -v kubectl >/dev/null && [[ -f "${STATE_DIR}/kubeconfig" ]]; then
+  KUBECONFIG="${STATE_DIR}/kubeconfig" exec kubectl "$@"
+fi
+node_running || die "sandbox ${KUSO_SANDBOX_NAME} is not running"
+tty=(-i); [[ -t 0 ]] && tty=(-it)
+exec docker exec "${tty[@]}" "$NODE" kubectl "$@"

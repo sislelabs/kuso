@@ -39,7 +39,8 @@ help:
 	@echo "  SANDBOX (disposable kuso in Docker, built from this tree):"
 	@echo "  make sandbox-up       # build images, start k3s in docker, install kuso"
 	@echo "  make sandbox-reload   # rebuild + restart server and operator"
-	@echo "  make sandbox-smoke    # scripted end-to-end check against the sandbox"
+	@echo "  make sandbox-smoke    # scripted end-to-end check (SMOKE=isolation,backup,... for more)"
+	@echo "  make sandbox-doctor   # Docker disk + every sandbox instance's ports/memory"
 	@echo "  make sandbox-down     # delete containers, volumes and local state"
 	@echo ""
 	@echo "  Local-only escape hatch (you almost never want this):"
@@ -147,7 +148,7 @@ verify-parity:
 
 # The sandbox applies deploy/*.yaml from its own list; this fails when a
 # manifest was added to deploy/ without deciding whether the sandbox gets it.
-.PHONY: verify-sandbox sandbox-up sandbox-reload sandbox-smoke sandbox-down
+.PHONY: verify-sandbox sandbox-up sandbox-reload sandbox-smoke sandbox-down sandbox-doctor
 verify-sandbox:
 	@bash hack/sandbox/check-drift.sh
 
@@ -164,6 +165,9 @@ sandbox-smoke:
 
 sandbox-down:
 	@bash hack/sandbox/down.sh
+
+sandbox-doctor:
+	@bash hack/sandbox/doctor.sh
 
 # hooks-install points git at hack/hooks/ for its hooks (currently just
 # pre-push). The merge gate is GitHub Actions (.github/workflows/test.yml);

@@ -16,6 +16,7 @@ services:
       - --kubelet-arg=eviction-hard=imagefs.available<1%,nodefs.available<1%
       - --kubelet-arg=eviction-minimum-reclaim=imagefs.available=1%,nodefs.available=1%
     privileged: true
+    depends_on: [mirror]
     restart: unless-stopped
     tmpfs:
       - /run
@@ -41,6 +42,20 @@ services:
       - "[::1]:${KUSO_SANDBOX_PORT:-80}:80"
       - "127.0.0.1:${KUSO_SANDBOX_API_PORT:-16443}:6443"
 
+  # Holds host-arch builds of the ghcr.io/sislelabs/* images platform Jobs
+  # run (backup, env-detect, nixpacks). The node's containerd tries it
+  # before ghcr.io (registries.yaml), so imagePullPolicy: Always pulls
+  # get the arm64 build instead of the amd64-only release image. Anything
+  # it doesn't hold falls through to ghcr.io.
+  mirror:
+    image: registry:3.1.2
+    container_name: ${KUSO_SANDBOX_NAME:-kuso-sandbox}-mirror
+    restart: unless-stopped
+    environment:
+      OTEL_TRACES_EXPORTER: none
+    volumes:
+      - mirror:/var/lib/registry
+
   # kubectl + helm. Shares the node's network namespace so the kubeconfig's
   # https://127.0.0.1:6443 works unmodified. Run on demand, never as a daemon.
   tools:
@@ -50,6 +65,8 @@ services:
     environment:
       KUBECONFIG: /kube/kubeconfig.yaml
       KUSO_SANDBOX_PORT: ${KUSO_SANDBOX_PORT:-80}
+      KUSO_SANDBOX_S3: ${KUSO_SANDBOX_S3:-1}
+      KUSO_SANDBOX_STATE: /repo/hack/sandbox/.state/${KUSO_SANDBOX_NAME:-kuso-sandbox}
     volumes:
       - kubeconfig:/kube:ro
       - ../..:/repo:ro
@@ -59,3 +76,4 @@ services:
 volumes:
   k3s:
   kubeconfig:
+  mirror:

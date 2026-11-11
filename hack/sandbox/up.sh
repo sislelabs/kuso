@@ -5,19 +5,33 @@
 # Safe to re-run. See README.md.
 
 set -euo pipefail
+SANDBOX_ALLOCATE_PORTS=1
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v docker >/dev/null || die "docker is required"
 docker info >/dev/null 2>&1 || die "the docker daemon is not reachable"
 mkdir -p "$STATE_DIR"
 
-IMAGES=(server operator nixpacks env-detect)
+disk_guard
+
+printf 'KUSO_SANDBOX_PORT=%s\nKUSO_SANDBOX_API_PORT=%s\n' "$KUSO_SANDBOX_PORT" "$KUSO_SANDBOX_API_PORT" > "${STATE_DIR}/ports.env"
+echo "$KUSO_SANDBOX_NAME" > "${STATE_ROOT}/current"
+
+# Throwaway key for the sandbox-only GitHub App (see bootstrap.sh).
+if [[ ! -f "${STATE_DIR}/github-app.pem" ]]; then
+  openssl genrsa -out "${STATE_DIR}/github-app.pem" 2048 2>/dev/null \
+    || die "openssl is required to generate the sandbox GitHub App key"
+fi
+
+IMAGES=(server operator nixpacks env-detect backup)
+# Images platform Jobs pull from ghcr.io, some with PullAlways.
+MIRRORED=(nixpacks env-detect backup)
 
 if [[ "${KUSO_SANDBOX_SKIP_BUILD:-0}" != "1" ]]; then
   for img in "${IMAGES[@]}"; do build_image "$img"; done
 fi
 
-log "starting the k3s node"
+log "starting the k3s node (instance ${KUSO_SANDBOX_NAME})"
 compose up -d node >/dev/null
 
 log "waiting for the node to be Ready"
@@ -36,6 +50,7 @@ for img in "${IMAGES[@]}"; do
   import_image "$img"
   [[ -n "$before" && "$before" != "$(cat "$marker")" ]] && replaced+=("$img")
 done
+for img in "${MIRRORED[@]}"; do mirror_image "$img"; done
 
 compose --profile tools run --rm -T tools /repo/hack/sandbox/bootstrap.sh
 
@@ -84,17 +99,31 @@ done
 "${SANDBOX_DIR}/kuso" login --api "$SANDBOX_API_URL" -u admin -p "$SANDBOX_ADMIN_PASSWORD" >/dev/null \
   || die "kuso login against ${SANDBOX_API_URL} failed"
 
+if [[ "${KUSO_SANDBOX_S3:-1}" == "1" ]]; then
+  log "pointing backup settings at the sandbox S3"
+  "${SANDBOX_DIR}/kuso" backup settings set --bucket kuso-backups \
+    --endpoint http://s3.sandbox.test --region us-east-1 \
+    --access-key-id kuso-sandbox --secret-access-key kuso-sandbox-s3-secret \
+    --allow-insecure-http >/dev/null \
+    || die "saving the backup settings failed"
+fi
+
+name_env=""
+[[ "$KUSO_SANDBOX_NAME" != "$DEFAULT_SANDBOX_NAME" ]] && name_env="KUSO_SANDBOX_NAME=${KUSO_SANDBOX_NAME} "
 cat <<MSG
 
-kuso sandbox is up.
+kuso sandbox "${KUSO_SANDBOX_NAME}" is up (now the default instance for this checkout).
 
   UI / API   ${SANDBOX_API_URL}
   Login      admin / ${SANDBOX_ADMIN_PASSWORD}
   CLI        hack/sandbox/kuso <command>      (already logged in; never touches ~/.kuso)
-  kubectl    KUBECONFIG=hack/sandbox/.state/kubeconfig kubectl ...
+  kubectl    hack/sandbox/kubectl ...
   Services   http://<service>.<project>.${SANDBOX_DOMAIN}${SANDBOX_PORT_SUFFIX}
+             hack/sandbox/curl <service>.<project>.${SANDBOX_DOMAIN}/path
+  Backup S3  http://s3.sandbox.test (in-cluster), bucket kuso-backups
+  Webhooks   hack/sandbox/gh-event --help
 
-  make sandbox-reload   rebuild + restart server and operator
-  make sandbox-smoke    scripted end-to-end check
-  make sandbox-down     delete everything
+  ${name_env}make sandbox-reload   rebuild + restart server and operator
+  ${name_env}make sandbox-smoke    scripted end-to-end check
+  ${name_env}make sandbox-down     delete everything
 MSG

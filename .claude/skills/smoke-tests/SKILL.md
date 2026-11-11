@@ -56,9 +56,12 @@ A disposable single-node kuso (k3s in Docker) built from the working tree. See `
 ```bash
 make sandbox-up       # build images, start k3s, install kuso, log the CLI in
 make sandbox-smoke    # project → dockerfile + nixpacks builds → live HTTP → postgres addon → rebuild → rollback → delete
+SMOKE=isolation,backup,preview,sleep,registry make sandbox-smoke   # opt-in scenario groups (or SMOKE=all)
 make sandbox-down
 ```
 
-What it catches: real operator + server install, the full deploy lifecycle. Minutes, not seconds. Required tools: Docker, `curl`, `jq`.
+Parallel agents: `KUSO_SANDBOX_NAME=<lane> make sandbox-up` gives each its own instance on free ports; later commands in that checkout target it. Check `make sandbox-doctor` first: ~1.6 GB RAM and ~8.5 GB disk per instance.
+
+What it catches: real operator + server install, the full deploy lifecycle, backups/restore against a bundled S3, PR previews from signed webhooks (`hack/sandbox/gh-event`), scale-to-zero, network isolation, registry auth. Minutes, not seconds. Required tools: Docker, `curl`, `jq`, `openssl`.
 
 When you've shipped a change and want to know what's covered, the order is: run Level 1 first (cheap, broad). If it passes, run Level 2 if you touched `mcp/`. Run Level 3 if you touched `operator/`. Run Level 4 for anything that changes deploy behaviour. Don't skip Level 3 on operator changes — CRD bugs are how you spend a Saturday afternoon hunting a typo.

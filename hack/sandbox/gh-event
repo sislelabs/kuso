@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# Send a signed GitHub-style webhook delivery to the current sandbox, as
+# the sandbox-only GitHub App would receive it (see bootstrap.sh).
+#
+#   gh-event push <owner/repo> <branch> [--sha <sha>]
+#   gh-event pr <opened|synchronize|reopened|closed> <owner/repo> <number>
+#            [--head <branch>] [--base <branch>] [--sha <sha>]
+#
+# The SHA defaults to what GitHub has right now for the branch (push) or
+# refs/pull/<number>/head (pr), read anonymously with git ls-remote. The
+# server answers 204 and dispatches in the background; follow it with
+# `hack/sandbox/kubectl -n kuso logs deploy/kuso-server | grep github`.
+#
+# Projects must keep GitHub installation id 0 (the default): the App's
+# credentials are fake, so any real API call would fail.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+usage() { sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+[[ $# -ge 1 ]] || usage 1
+[[ "$1" == "-h" || "$1" == "--help" ]] && usage 0
+command -v jq >/dev/null || die "jq is required"
+command -v openssl >/dev/null || die "openssl is required"
+
+kind="$1"; shift
+sha="" head="" base="main" action="" number=""
+case "$kind" in
+  push)
+    [[ $# -ge 2 ]] || usage 1
+    repo="$1" branch="$2"; shift 2 ;;
+  pr)
+    [[ $# -ge 3 ]] || usage 1
+    action="$1" repo="$2" number="$3"; shift 3
+    [[ "$action" =~ ^(opened|synchronize|reopened|closed)$ ]] || die "unknown pull_request action: ${action}"
+    [[ "$number" =~ ^[0-9]+$ ]] || die "PR number must be numeric" ;;
+  *) usage 1 ;;
+esac
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --sha)  sha="$2"; shift 2 ;;
+    --head) head="$2"; shift 2 ;;
+    --base) base="$2"; shift 2 ;;
+    *) die "unknown flag: $1" ;;
+  esac
+done
+[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "repo must be owner/name"
+
+remote_sha() {
+  git ls-remote "https://github.com/${repo}" "$1" 2>/dev/null | awk 'NR==1 {print $1}'
+}
+
+if [[ "$kind" == "push" ]]; then
+  [[ -n "$sha" ]] || sha="$(remote_sha "refs/heads/${branch}")"
+  [[ -n "$sha" ]] || die "could not resolve ${repo}@${branch}; pass --sha"
+  event=push
+  payload="$(jq -nc --arg repo "$repo" --arg ref "refs/heads/${branch}" --arg sha "$sha" '{
+    ref: $ref, before: ("0" * 40), after: $sha, created: false, deleted: false,
+    repository: { full_name: $repo, default_branch: "main",
+                  clone_url: ("https://github.com/" + $repo + ".git"),
+                  html_url: ("https://github.com/" + $repo) },
+    head_commit: { id: $sha, message: "sandbox push", author: { name: "sandbox", email: "sandbox@kuso.localhost" } },
+    pusher: { name: "sandbox", email: "sandbox@kuso.localhost" },
+    installation: { id: 0 }
+  }')"
+else
+  [[ -n "$head" ]] || head="sandbox-pr-${number}"
+  [[ -n "$sha" ]] || sha="$(remote_sha "refs/pull/${number}/head")"
+  [[ -n "$sha" ]] || sha="$(remote_sha "refs/heads/${head}")"
+  [[ -n "$sha" ]] || die "could not resolve a head SHA for ${repo}#${number}; pass --sha or --head <existing branch>"
+  event=pull_request
+  state=open; [[ "$action" == "closed" ]] && state=closed
+  payload="$(jq -nc --arg repo "$repo" --arg action "$action" --argjson n "$number" \
+      --arg head "$head" --arg base "$base" --arg sha "$sha" --arg state "$state" '{
+    action: $action, number: $n,
+    pull_request: {
+      number: $n, state: $state, title: ("sandbox PR #" + ($n|tostring)), body: "",
+      merged: false, user: { login: "sandbox" }, author_association: "OWNER", labels: [],
+      head: { ref: $head, sha: $sha, repo: { full_name: $repo } },
+      base: { ref: $base, repo: { full_name: $repo } }
+    },
+    repository: { full_name: $repo, default_branch: "main",
+                  clone_url: ("https://github.com/" + $repo + ".git"),
+                  html_url: ("https://github.com/" + $repo) },
+    sender: { login: "sandbox" },
+    installation: { id: 0 }
+  }')"
+fi
+
+secret="$(docker exec "$NODE" kubectl -n kuso get secret kuso-github-app \
+  -o jsonpath='{.data.GITHUB_APP_WEBHOOK_SECRET}' 2>/dev/null | base64 -d)" \
+  || die "sandbox ${KUSO_SANDBOX_NAME} has no kuso-github-app Secret; re-run make sandbox-up"
+[[ -n "$secret" ]] || die "kuso-github-app has no webhook secret"
+sig="sha256=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')"
+delivery="sandbox-$(date +%s)-$RANDOM$RANDOM"
+
+code="$(curl -sS -o /dev/stderr -w '%{http_code}' --max-time 15 \
+  -H "Host: ${SANDBOX_DOMAIN}" -H 'Content-Type: application/json' \
+  -H "X-GitHub-Event: ${event}" -H "X-GitHub-Delivery: ${delivery}" \
+  -H "X-Hub-Signature-256: ${sig}" \
+  --data-binary "$payload" "http://127.0.0.1:${KUSO_SANDBOX_PORT}/api/webhooks/github")"
+echo "${event}${action:+ ${action}} ${repo} ${sha:0:12} -> HTTP ${code} (delivery ${delivery})"
+[[ "$code" =~ ^2 ]]
