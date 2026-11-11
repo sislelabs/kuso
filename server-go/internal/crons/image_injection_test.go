@@ -71,3 +71,24 @@ func TestAddProject_AcceptsRealImageRefs(t *testing.T) {
 		}
 	}
 }
+
+// ISO-8: a command cron's pod must carry an env label, or env isolation
+// treats it as legacy and lets it reach every env and addon.
+func TestAddProject_CommandCronRunsAsProduction(t *testing.T) {
+	s := cronFakeService(t)
+	for kind, want := range map[string]string{"command": "production", "http": ""} {
+		req := CreateProjectCronRequest{Name: "job-" + kind, Kind: kind, Schedule: "0 * * * *"}
+		if kind == "command" {
+			req.Command, req.Image = []string{"true"}, &kube.KusoImage{Repository: "alpine", Tag: "3.20"}
+		} else {
+			req.URL = "https://example.com/ping"
+		}
+		cr, err := s.AddProject(context.Background(), "alpha", req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cr.Spec.EnvScope != want {
+			t.Errorf("%s cron envScope = %q, want %q", kind, cr.Spec.EnvScope, want)
+		}
+	}
+}

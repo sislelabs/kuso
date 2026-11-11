@@ -2056,7 +2056,12 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 	}
 	h.Svc.EnrichEnvWithManagedSecretKeys(ctx, project, out)
 	maskEnvIfNeeded(ctx, h.DB, project, out)
-	writeJSON(w, http.StatusCreated, out)
+	// The env CR plus what it inherits from production (ISO-3), so the
+	// CLI and UI can say so at create time.
+	writeJSON(w, http.StatusCreated, struct {
+		*kube.KusoEnvironment
+		Warnings []string `json:"warnings,omitempty"`
+	}{out, h.Svc.NamedEnvInheritanceWarnings(ctx, project, chi.URLParam(r, "service"), req.Name)})
 }
 
 func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request) {

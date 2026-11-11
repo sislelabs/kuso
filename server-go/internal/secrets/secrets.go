@@ -59,6 +59,13 @@ type Service struct {
 	// project lock holder.
 	serviceLocksMu sync.Mutex
 	serviceLocks   map[string]*sync.Mutex
+
+	// OnKeyChanged runs after a service- or env-scoped key is set or
+	// unset. Wired to projects.ResyncServiceSharedKey: a subscribed shared
+	// key is an inline secretKeyRef on the env, and inline env beats
+	// envFrom, so the scoped value only reaches the pod once the env is
+	// re-resolved (ISO-2). nil = no resync (tests).
+	OnKeyChanged func(ctx context.Context, project, service, key string) error
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -296,6 +303,23 @@ func (s *Service) SetKey(ctx context.Context, project, service, env, key, value 
 // *ShadowedError so the caller can surface the conflict to the
 // user before silently diverging values.
 func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, value string, opts SetOptions) error {
+	if err := s.setKey(ctx, project, service, env, key, value, opts); err != nil {
+		return err
+	}
+	return s.keyChanged(ctx, project, service, key)
+}
+
+func (s *Service) keyChanged(ctx context.Context, project, service, key string) error {
+	if s.OnKeyChanged == nil {
+		return nil
+	}
+	if err := s.OnKeyChanged(ctx, project, service, key); err != nil {
+		return fmt.Errorf("%s was written but its envs were not re-resolved, retry the write: %w", key, err)
+	}
+	return nil
+}
+
+func (s *Service) setKey(ctx context.Context, project, service, env, key, value string, opts SetOptions) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
@@ -344,6 +368,13 @@ func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, va
 // API means the path was already gone — concurrent UnsetKey for the
 // same key returns ErrNotFound rather than silently succeeding twice.
 func (s *Service) UnsetKey(ctx context.Context, project, service, env, key string) error {
+	if err := s.unsetKey(ctx, project, service, env, key); err != nil {
+		return err
+	}
+	return s.keyChanged(ctx, project, service, key)
+}
+
+func (s *Service) unsetKey(ctx context.Context, project, service, env, key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}

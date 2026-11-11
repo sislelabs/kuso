@@ -48,7 +48,10 @@ spec:
             matchLabels:
               kuso.sislelabs.com/project: {{ $project | quote }}
               kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
-        {{- if not $credentialless }}
+        {{- /* An env clone (spec.envScope set, ISO-4) admits only its
+               subscribers: a production pod holding a staging DSN should
+               fail, not quietly work. */}}
+        {{- if and (not $credentialless) (not .Values.envScope) }}
         # Production pods reaching a production DB with hand-copied
         # credentials keep working; only non-production envs are refused.
         - podSelector:

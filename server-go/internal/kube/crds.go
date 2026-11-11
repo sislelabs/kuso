@@ -574,7 +574,16 @@ func (c *Client) DeleteKusoBuild(ctx context.Context, namespace, name string) er
 // already-validated production addon's spec into a new env's namespace.
 func (c *Client) CreateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {
 	a.Spec.PodHardening = true
+	StampAddonEnvScope(a)
 	return create[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
+}
+
+// StampAddonEnvScope copies a non-production env label onto spec.envScope,
+// where the addon chart can see it. Create paths only.
+func StampAddonEnvScope(a *KusoAddon) {
+	if sc := a.Labels[LabelEnv]; sc != "" && sc != "production" {
+		a.Spec.EnvScope = sc
+	}
 }
 
 // UpdateKusoAddon replaces an existing KusoAddon's spec. Used by the

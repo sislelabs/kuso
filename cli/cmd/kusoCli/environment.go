@@ -69,6 +69,12 @@ var runEnvironmentAdd = func(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("environment %s-%s-%s added (branch=%s, host=%s)\n", args[0], args[1], args[2], environmentAddBranch, host)
 	}
+	if ws, ok := data["warnings"].([]any); ok && len(ws) > 0 {
+		fmt.Println("WARNING: this env starts with production's secret values:")
+		for _, w := range ws {
+			fmt.Printf("  %v\n", w)
+		}
+	}
 	fmt.Printf("trigger the first build with: kuso build trigger %s %s --branch %s\n", args[0], args[1], environmentAddBranch)
 	return nil
 }

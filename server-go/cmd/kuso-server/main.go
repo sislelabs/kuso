@@ -41,6 +41,7 @@ import (
 	"kuso/server/internal/cronwatch"
 	"kuso/server/internal/db"
 	"kuso/server/internal/drains"
+	"kuso/server/internal/envisolation"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/gitremote"
@@ -783,6 +784,11 @@ func main() {
 		// shared-secret set must attach the key to services that subscribed
 		// before it existed — see projectsecrets.Service.OnKeySet.
 		projectSecretSvc.OnKeySet = projSvc.ResyncSharedKeySubscribers
+		// A scoped override of a subscribed shared key must re-resolve the
+		// envs, or the inline shared ref keeps winning (ISO-2).
+		if secSvc != nil {
+			secSvc.OnKeyChanged = projSvc.ResyncServiceSharedKey
+		}
 		// Same resolver on the crons service so its onFailure webhook
 		// secretRef ownership check (HIGH-1) can tell whether a signing-key
 		// secret name belongs to the cron's own project.
@@ -1590,6 +1596,14 @@ func main() {
 				Logger: logger.With("component", "nodewatch"),
 			}
 			goSafe(logger, "nodewatch", func() { watcher.Run(workCtx) })
+			// Event-driven with a slow safety tick, so no heartbeat.
+			isoSyncer := &envisolation.Syncer{
+				Kube:         kubeClient,
+				HomeNS:       *namespace,
+				Logger:       logger.With("component", "envisolation-sync"),
+				BlockNodeIPs: envisolation.NodeIPBlockEnabled(),
+			}
+			goSafe(logger, "envisolation-sync", func() { isoSyncer.Run(workCtx) })
 			// Uptime checks: ping every production web service and notify
 			// on down/recovered. Registered only when it will run and
 			// beat, like scaledown.

@@ -72,7 +72,7 @@ func scanFixture(t *testing.T) (*dynamicfake.FakeDynamicClient, *fake.Clientset)
 		obj *unstructured.Unstructured
 	}{
 		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("alpha", "kuso", "alpha"), Status: cond("Irreconcilable", "True", "chart render failed")})},
-		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("beta", "kuso", "beta"), Spec: kube.KusoProjectSpec{Namespace: "kuso-beta"}})},
+		{kube.GVRProjects, toUnstructured(t, "KusoProject", &kube.KusoProject{ObjectMeta: meta("beta", "kuso", "beta"), Spec: kube.KusoProjectSpec{Namespace: "kuso-beta", NetworkPolicy: isolated()}})},
 		{kube.GVRAddons, toUnstructured(t, "KusoAddon", &kube.KusoAddon{ObjectMeta: meta("alpha-db", "kuso", "alpha"), Status: failed})},
 		{kube.GVRAddons, toUnstructured(t, "KusoAddon", &kube.KusoAddon{ObjectMeta: meta("alpha-cache", "kuso", "alpha")})},
 		{kube.GVRAddons, toUnstructured(t, "KusoAddon", &kube.KusoAddon{ObjectMeta: meta("beta-db", "kuso-beta", "beta")})},

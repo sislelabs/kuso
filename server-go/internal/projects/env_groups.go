@@ -77,7 +77,17 @@ type CreateEnvGroupRequest struct {
 	// to "fresh" so a typo or an addon added later doesn't silently
 	// share production data.
 	AddonPolicy map[string]AddonPolicy `json:"addonPolicy,omitempty"`
+	// SharedKeys is "inherit" (default: each clone keeps its source's
+	// project shared-secret subscriptions, with production's values) or
+	// "none" (clones subscribe to no shared keys; give them their own
+	// values with `kuso secret set --env`).
+	SharedKeys string `json:"sharedKeys,omitempty"`
 }
+
+const (
+	SharedKeysInherit = "inherit"
+	SharedKeysNone    = "none"
+)
 
 // EnvGroupSummary is what the API returns for list / detail endpoints.
 type EnvGroupSummary struct {
@@ -299,6 +309,11 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	}
 	if !envGroupNameRE.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: env name must be lowercase letters/digits/dashes (≤32 chars)", ErrInvalid)
+	}
+	switch req.SharedKeys {
+	case "", SharedKeysInherit, SharedKeysNone:
+	default:
+		return nil, fmt.Errorf("%w: sharedKeys must be %q or %q", ErrInvalid, SharedKeysInherit, SharedKeysNone)
 	}
 	for _, prefix := range []string{"pr-", "preview-"} {
 		if strings.HasPrefix(req.Name, prefix) {
@@ -712,8 +727,17 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			svcEnvFrom = filterEnvFromForSubscription(svcEnvFrom, subs, projectAddonConns, project)
 		}
 		envEnvVars := newEnvVars
-		if item.svc.Spec.SharedEnvKeys != nil {
-			merged, pruned, err := s.resolveSharedEnvKeysForEnv(ctx, ns, project, item.svc.Spec.SharedEnvKeys, newEnvVars, nil, svcEnvFrom, nil)
+		sharedKeys := item.svc.Spec.SharedEnvKeys
+		if req.SharedKeys == SharedKeysNone {
+			sharedKeys = []string{}
+		} else if inherited := s.inheritedSharedKeys(ctx, ns, project, sharedKeys); len(inherited) > 0 {
+			// ISO-3: these carry production's live value into the group and
+			// were the one inheritance the create output never mentioned.
+			hostWarnings = append(hostWarnings, fmt.Sprintf("%s: %d project shared secret(s) inherited with production's value (%s); give the group its own with `kuso secret set %s %s KEY VALUE --force`, or create the group with shared keys off",
+				newSvcShort, len(inherited), strings.Join(inherited, ", "), project, newSvcShort))
+		}
+		if sharedKeys != nil {
+			merged, pruned, err := s.resolveSharedEnvKeysForEnv(ctx, ns, project, sharedKeys, newEnvVars, nil, svcEnvFrom, nil)
 			if err != nil {
 				return nil, failCreate(fmt.Errorf("resolve shared env keys for %s: %w", item.short, err))
 			}
@@ -725,6 +749,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		// service after create.
 		clonedSpec := cloneServiceSpec(item.svc.Spec, project, req.Name)
 		clonedSpec.EnvVars = newEnvVars
+		clonedSpec.SharedEnvKeys = sharedKeys
 		// A worker whose image source is cloned too must follow the clone;
 		// left verbatim, every PRODUCTION build of the source got promoted
 		// onto this group's worker.

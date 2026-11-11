@@ -158,42 +158,77 @@ func (d *Dispatcher) NotifyDroppedDelivery(installationID int64, event, delivery
 	})
 }
 
-// closedPRTombstoneTTL bounds how long a PR close blocks a late
-// opened/synchronize for the same PR. Out-of-order deliveries arrive
-// seconds apart; a day is generous and keeps the map small.
+// closedPRTombstoneTTL bounds how long the in-process fallback remembers
+// a close (no DB: tests, DB-less installs). The DB copy is pruned after a
+// week by db.MarkGithubPRClosed.
 const closedPRTombstoneTTL = 24 * time.Hour
 
 func prKey(repo string, number int) string {
 	return strings.ToLower(repo) + "#" + strconv.Itoa(number)
 }
 
-// markPRClosed records that a PR was closed, so a synchronize or opened
-// that reaches us afterwards doesn't rebuild the preview.
-func (d *Dispatcher) markPRClosed(repo string, number int) {
+// markPRClosed records that a PR was closed at closedAt, so a synchronize
+// or opened that was sent before the close and reaches us afterwards
+// doesn't rebuild the preview. The tombstone lives in Postgres when the
+// dispatcher has one, so every replica sees it and a restart keeps it; the
+// in-process copy is the fallback when the DB is absent or fails.
+func (d *Dispatcher) markPRClosed(ctx context.Context, repo string, number int, closedAt time.Time) {
 	d.closedMu.Lock()
-	defer d.closedMu.Unlock()
 	if d.closedPRs == nil {
 		d.closedPRs = map[string]time.Time{}
 	}
-	now := time.Now()
 	for k, at := range d.closedPRs {
-		if now.Sub(at) > closedPRTombstoneTTL {
+		if time.Since(at) > closedPRTombstoneTTL {
 			delete(d.closedPRs, k)
 		}
 	}
-	d.closedPRs[prKey(repo, number)] = now
+	d.closedPRs[prKey(repo, number)] = closedAt
+	d.closedMu.Unlock()
+	if d.DB != nil {
+		if err := d.DB.MarkGithubPRClosed(ctx, repo, number, closedAt); err != nil {
+			d.Logger.Warn("record PR close", "repo", repo, "pr", number, "err", err)
+		}
+	}
 }
 
-// clearPRClosed drops the tombstone on reopen.
-func (d *Dispatcher) clearPRClosed(repo string, number int) {
+// clearPRClosed drops the tombstone: the PR was reopened, or opened anew.
+func (d *Dispatcher) clearPRClosed(ctx context.Context, repo string, number int) {
 	d.closedMu.Lock()
-	defer d.closedMu.Unlock()
 	delete(d.closedPRs, prKey(repo, number))
+	d.closedMu.Unlock()
+	if d.DB != nil {
+		if err := d.DB.ClearGithubPRClosed(ctx, repo, number); err != nil {
+			d.Logger.Warn("clear PR close", "repo", repo, "pr", number, "err", err)
+		}
+	}
 }
 
-func (d *Dispatcher) prClosed(repo string, number int) bool {
+func (d *Dispatcher) prClosedAt(ctx context.Context, repo string, number int) (time.Time, bool) {
+	if d.DB != nil {
+		at, ok, err := d.DB.GithubPRClosedAt(ctx, repo, number)
+		if err == nil {
+			return at, ok
+		}
+		d.Logger.Warn("read PR close", "repo", repo, "pr", number, "err", err)
+	}
 	d.closedMu.Lock()
 	defer d.closedMu.Unlock()
 	at, ok := d.closedPRs[prKey(repo, number)]
-	return ok && time.Since(at) <= closedPRTombstoneTTL
+	return at, ok && time.Since(at) <= closedPRTombstoneTTL
+}
+
+// sentBeforeClose reports whether an opened/synchronize delivery predates
+// the PR's recorded close. Both times come from GitHub's payloads, so they
+// share a clock; GitHub stamps whole seconds, and a tie counts as before.
+// A delivery without timestamps (hand-built ones) can't be ordered: a
+// synchronize is assumed late, an opened is a new PR.
+func (d *Dispatcher) sentBeforeClose(ctx context.Context, repo string, number int, action string, sentAt time.Time) bool {
+	closedAt, ok := d.prClosedAt(ctx, repo, number)
+	if !ok {
+		return false
+	}
+	if !sentAt.IsZero() {
+		return !sentAt.After(closedAt)
+	}
+	return action == "synchronize"
 }

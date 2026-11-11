@@ -217,6 +217,12 @@ type prEvent struct {
 	Number      int    `json:"number"`
 	PullRequest struct {
 		State string `json:"state"`
+		// GitHub's own timestamps order a late delivery against the close
+		// (null closed_at decodes to the zero time).
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		ClosedAt  time.Time `json:"closed_at"`
+
 		Title string `json:"title"`
 		Body  string `json:"body"`
 		User  struct {
@@ -551,13 +557,27 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 
 	switch pr.Action {
 	case "closed":
-		d.markPRClosed(repoFullName, pr.Number)
+		closedAt := pr.PullRequest.ClosedAt
+		if closedAt.IsZero() {
+			closedAt = pr.PullRequest.UpdatedAt
+		}
+		if closedAt.IsZero() {
+			closedAt = time.Now()
+		}
+		d.markPRClosed(ctx, repoFullName, pr.Number, closedAt)
 	case "reopened":
-		d.clearPRClosed(repoFullName, pr.Number)
+		d.clearPRClosed(ctx, repoFullName, pr.Number)
 	case "opened", "synchronize":
-		if d.prClosed(repoFullName, pr.Number) {
+		sentAt := pr.PullRequest.UpdatedAt
+		if sentAt.IsZero() {
+			sentAt = pr.PullRequest.CreatedAt
+		}
+		if d.sentBeforeClose(ctx, repoFullName, pr.Number, pr.Action, sentAt) {
 			d.Logger.Info("preview skipped: PR already closed", "repo", repoFullName, "pr", pr.Number, "action", pr.Action)
 			return nil
+		}
+		if pr.Action == "opened" {
+			d.clearPRClosed(ctx, repoFullName, pr.Number)
 		}
 	}
 

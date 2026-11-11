@@ -90,7 +90,7 @@ export async function createEnvironment(
   project: string,
   service: string,
   body: CreateServiceEnvBody
-): Promise<KusoEnvironment> {
+): Promise<KusoEnvironment & { warnings?: string[] }> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs`,
     { method: "POST", body }
@@ -142,7 +142,12 @@ export async function getEnvGroup(
 
 export async function createEnvGroup(
   project: string,
-  body: { name: string; addonPolicy?: Record<string, "fresh" | "shared"> },
+  body: {
+    name: string;
+    addonPolicy?: Record<string, "fresh" | "shared">;
+    // "none": clones don't inherit production's project shared secrets.
+    sharedKeys?: "inherit" | "none";
+  },
 ): Promise<EnvGroupSummary> {
   return api(`/api/projects/${encodeURIComponent(project)}/env-groups`, {
     method: "POST",

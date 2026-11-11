@@ -63,12 +63,17 @@ export function ServiceEnvironmentForm({
       if ("error" in body) throw new Error(body.error);
       return createEnvironment(project, service, body);
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["projects", project] });
       toast.success(
         `Environment "${form.name.trim()}" added to ${service}. Push to ${form.branch.trim()} or trigger a build to deploy it.`,
         { duration: 8000 },
       );
+      // Secrets it reads with production's value; a per-env value needs
+      // an explicit override.
+      for (const w of res?.warnings ?? []) {
+        toast.warning(w, { duration: 15000 });
+      }
       onCreated(form.name.trim());
     },
     onError: (e) => setError(friendlyApiError(e, "Failed to create environment")),

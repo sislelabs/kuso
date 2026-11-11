@@ -106,6 +106,9 @@ type KusoProjectNetworkPolicy struct {
 	PlatformNamespace      string   `json:"platformNamespace,omitempty"`
 	ExtraBlockCIDRs        []string `json:"extraBlockCIDRs,omitempty"`
 	ExtraIngressNamespaces []string `json:"extraIngressNamespaces,omitempty"`
+	// NodeBlockCIDRs is written by the server (envisolation.Syncer) with
+	// the nodes' public IPs; ExtraBlockCIDRs stays the operator's own list.
+	NodeBlockCIDRs []string `json:"nodeBlockCIDRs,omitempty"`
 	// EnvIsolation turns on the env-aware ingress rules (ISO-3). Only
 	// flipped through the env-isolation endpoint, which refuses while
 	// any env pod is still unlabelled.
@@ -1078,6 +1081,12 @@ type KusoAddonSpec struct {
 	// create (kube.CreateKusoAddon, addons.createAddon): turning it on
 	// for a live addon changes its pod template and restarts the DB.
 	PodHardening bool `json:"podHardening,omitempty"`
+	// EnvScope is the non-production env (staging, qa, preview-pr-N) an
+	// env clone belongs to; empty for a project's own addon. Set only at
+	// create (StampAddonEnvScope). The chart admits production pods to an
+	// addon only when it is empty (ISO-4), so older clones keep their
+	// reachability.
+	EnvScope string `json:"envScope,omitempty"`
 	// UseInstanceAddon points at an instance-shared database server
 	// registered by an admin (Model 2). The kuso server creates an
 	// isolated database on the shared server for this project and

@@ -165,6 +165,32 @@ func TestSetKey_FirstWriteCreatesSecret(t *testing.T) {
 	}
 }
 
+// ISO-2: every scoped set/unset re-resolves the service's envs, and a
+// failed re-resolve is reported rather than reading as success.
+func TestKeyWrites_RunOnKeyChanged(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedEnv("alpha-web-staging", "alpha", "web", "staging", nil))
+	var calls []string
+	s.OnKeyChanged = func(_ context.Context, project, service, key string) error {
+		calls = append(calls, project+"/"+service+"/"+key)
+		return nil
+	}
+	ctx := context.Background()
+	if err := s.SetKeyOpts(ctx, "alpha", "web", "staging", "STRIPE_KEY", "sk_test", SetOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UnsetKey(ctx, "alpha", "web", "staging", "STRIPE_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0] != "alpha/web/STRIPE_KEY" || calls[1] != calls[0] {
+		t.Fatalf("OnKeyChanged calls = %v", calls)
+	}
+	s.OnKeyChanged = func(context.Context, string, string, string) error { return errors.New("boom") }
+	if err := s.SetKeyOpts(ctx, "alpha", "web", "staging", "STRIPE_KEY", "x", SetOptions{Force: true}); err == nil {
+		t.Fatal("resync failure swallowed")
+	}
+}
+
 func TestSetKey_AdditiveOnExisting(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedEnv("alpha-web-production", "alpha", "web", "production", []string{"alpha-web-secrets"}))

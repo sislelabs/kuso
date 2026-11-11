@@ -123,6 +123,35 @@ func TestClassifyEnv_FailedIsCritical(t *testing.T) {
 	}
 }
 
+func isolated() *kube.KusoProjectNetworkPolicy {
+	on := true
+	return &kube.KusoProjectNetworkPolicy{EnvIsolation: &on, IsolateNonProdEnvs: &on}
+}
+
+// ISO-5: projects from before env isolation are surfaced, not changed.
+func TestClassifyProjectIsolation(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name string
+		np   *kube.KusoProjectNetworkPolicy
+		want Severity
+	}{
+		{"pre-ISO project", nil, SeverityWarning},
+		{"explicitly off", &kube.KusoProjectNetworkPolicy{EnvIsolation: &off}, SeverityWarning},
+		{"prod-only isolation", &kube.KusoProjectNetworkPolicy{EnvIsolation: &on}, SeverityInfo},
+		{"fully isolated", isolated(), ""},
+		{"netpol disabled", &kube.KusoProjectNetworkPolicy{Enabled: &off}, ""},
+	} {
+		iss, ok := ClassifyProjectIsolation(&kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Spec: kube.KusoProjectSpec{NetworkPolicy: tc.np}})
+		if ok != (tc.want != "") || iss.Severity != tc.want {
+			t.Errorf("%s: got %v %q, want %q", tc.name, ok, iss.Severity, tc.want)
+		}
+		if ok && (iss.Kind != KindEnvIsolationOff || iss.Action != ActionNone || iss.RunbookCmd != "kuso project isolation enable p") {
+			t.Errorf("%s: %+v", tc.name, iss)
+		}
+	}
+}
+
 func TestClassifyProject(t *testing.T) {
 	ok := &kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Status: cond("ReleaseFailed", "False", "")}
 	if _, bad := ClassifyProject(ok); bad {

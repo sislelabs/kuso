@@ -109,7 +109,14 @@
                 "type": "boolean"
               },
               "knownEnvScopes": {
-                "description": "Extra env scopes treated as isolated, on top of the ones read from the project's env CRs.",
+                "description": "Env scopes treated as isolated, on top of the ones read from the project's env CRs. kuso-server keeps it equal to those scopes so a new env re-renders the project at once.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "nodeBlockCIDRs": {
+                "description": "Public node IPs excepted from public egress. Written by kuso-server from the Node objects; set KUSO_BLOCK_NODE_IPS=off on kuso-server to clear it.",
                 "items": {
                   "type": "string"
                 },

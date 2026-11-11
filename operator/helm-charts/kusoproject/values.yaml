@@ -71,6 +71,11 @@ networkPolicy:
   # Empty by default — single-node k3s installs that bind the
   # apiserver to 127.0.0.1 don't need it.
   extraBlockCIDRs: []
+  # Public node IPs, written by kuso-server from the Node objects (ISO-7):
+  # pods with public egress must not reach kubelet/apiserver/etcd or
+  # anything else bound on a node's public interface. Rendered after
+  # extraBlockCIDRs, skipping duplicates.
+  nodeBlockCIDRs: []
   # Extra namespaces whose pods may ingress into project pods.
   # Useful when the cluster's ingress controller or monitoring
   # tooling lives outside the standard kuso/traefik/cert-manager
@@ -93,7 +98,8 @@ networkPolicy:
   # With envIsolation on, also isolate non-production envs from each other
   # (ISO-4): a pod labelled env=<scope> accepts project traffic only from
   # the same env and from unlabelled pods. Scopes come from the project's
-  # env CRs (plus knownEnvScopes). New projects get it on; existing ones
+  # env CRs (plus knownEnvScopes, which kuso-server keeps equal to them so
+  # a new env re-renders the project at once). New projects get it on; existing ones
   # opt in with PUT /api/projects/<p>/env-isolation
   # {"enabled":true,"nonProductionEnvs":true}.
   isolateNonProdEnvs: false

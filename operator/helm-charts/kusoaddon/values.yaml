@@ -112,6 +112,13 @@ useInstanceAddon: ""
 # pod template, and so the running DB, is untouched) until opted in.
 podHardening: false
 
+# envScope: the non-production env this addon is a clone for (set by
+# kuso-server at create). Non-empty drops the production-pod clause from
+# the <addon>-subscribers NetworkPolicy, so only the env's subscribers get
+# in. Empty (every project addon, and clones created before this field)
+# keeps production pods admitted.
+envScope: ""
+
 # pooler: opt-in PgBouncer in front of a kind=postgres addon. When
 # enabled, single-node addons get a self-managed 1-replica PgBouncer
 # Deployment; HA (CNPG) addons get a CNPG-native Pooler CRD. Reach it

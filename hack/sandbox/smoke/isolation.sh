@@ -80,6 +80,45 @@ isolation_main() {
     echo "  info: production -> staging (${a_peer} -> ${a_stg}) is refused"
   fi
   check "through traefik: web.${ISO_A} answers" eventually 60 http_200 "web.${ISO_A}.${SANDBOX_DOMAIN}" /
+
+  step "env isolation reported on for a new project (ISO-5)"
+  check "isolation status: on" test "$("$K" project isolation status "$ISO_A" -o json | jq -r '.enabled and .nonProductionEnvs')" == "true"
+
+  step "a new named env gets its own policy without waiting for the 30m reconcile (ISO-1)"
+  "$K" environment add "$ISO_A" web qa --branch main >/dev/null
+  local a_qa
+  eventually 120 test -n "$(iso_env "$ISO_A" web qa)" || true
+  a_qa="$(iso_env "$ISO_A" web qa)"
+  require "qa env resolved" test -n "$a_qa"
+  check "intra-env policy for qa rendered within 2m" eventually 120 iso_scope_policy "$ISO_A" qa
+  require "${a_qa} is ready" eventually 240 iso_ready "$a_qa"
+  check "staging -> qa: ${a_stg} -> ${a_qa} refused" never 20 iso_reach "$a_stg" "$a_qa"
+
+  step "a per-env value overrides a subscribed shared key (ISO-2)"
+  "$K" shared-secret set "$ISO_A" STRIPE_KEY=sk_live_shared >/dev/null
+  "$K" env share "$ISO_A" web STRIPE_KEY >/dev/null
+  check "production reads the shared value" eventually 180 iso_env_is "$a_web" STRIPE_KEY sk_live_shared
+  "$K" secret set "$ISO_A" web STRIPE_KEY sk_test_staging --env staging --force >/dev/null
+  check "staging reads its own value" eventually 180 iso_env_is "$a_stg" STRIPE_KEY sk_test_staging
+  check "production still reads the shared value" iso_env_is "$a_web" STRIPE_KEY sk_live_shared
+}
+
+# iso_scope_policy <project> <scope>: the project release rendered the
+# intra-env NetworkPolicy for that env scope.
+iso_scope_policy() {
+  node_kubectl get networkpolicies -A -o json \
+    | jq -e --arg p "$1" --arg s "$2" '[.items[]
+        | select(.metadata.name | startswith($p + "-intra-env-"))
+        | select(.metadata.annotations["kuso.sislelabs.com/env"] == $s)] | length > 0' >/dev/null
+}
+
+# iso_env_is <env CR> <KEY> <value>: a running pod of the env sees KEY=value.
+iso_env_is() {
+  local ns pod
+  ns="$(iso_ns "$1")"
+  pod="$(node_kubectl -n "$ns" get pods -l "app.kubernetes.io/instance=$1" \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "$pod" ]] && [[ "$(node_kubectl -n "$ns" exec "$pod" -- printenv "$2" 2>/dev/null)" == "$3" ]]
 }
 
 isolation_cleanup() {

@@ -13,6 +13,9 @@ import "github.com/go-resty/resty/v2"
 type CreateEnvGroupRequest struct {
 	Name        string            `json:"name"`
 	AddonPolicy map[string]string `json:"addonPolicy,omitempty"`
+	// SharedKeys "none" clones every service with no project shared-secret
+	// subscription; empty keeps the source's (production values).
+	SharedKeys string `json:"sharedKeys,omitempty"`
 }
 
 func (k *KusoClient) ListEnvGroups(project string) (*resty.Response, error) {
