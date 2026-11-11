@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -163,4 +164,34 @@ func (i *Issuer) Verify(tokenStr string) (*Claims, error) {
 		return nil, errors.New("auth: token invalid")
 	}
 	return &c, nil
+}
+
+// wsTicketAudPrefix marks a WebSocket ticket: a short-lived token minted
+// over /api (so it carries the CSRF and console-origin checks) that opens
+// exactly one /ws/ path. Browsers present it instead of the session
+// cookie, which any script on the kuso origin would otherwise ride.
+const wsTicketAudPrefix = "kuso-ws:"
+
+// WSTicketTTL bounds how long a minted ticket can open its socket.
+const WSTicketTTL = 60 * time.Second
+
+// SignWSTicket mints a ticket for path from the caller's verified claims.
+func (i *Issuer) SignWSTicket(c Claims, path string) (string, error) {
+	t := Claims{
+		UserID: c.UserID, Username: c.Username, Role: c.Role,
+		UserGroups: c.UserGroups, Permissions: c.Permissions, Strategy: c.Strategy,
+	}
+	t.Audience = jwt.ClaimStrings{wsTicketAudPrefix + path}
+	return i.signWith(t, time.Now().Add(WSTicketTTL), false)
+}
+
+// WSTicketPath returns the /ws/ path a ticket opens, and false for any
+// other token.
+func (c *Claims) WSTicketPath() (string, bool) {
+	for _, a := range c.Audience {
+		if p, ok := strings.CutPrefix(a, wsTicketAudPrefix); ok {
+			return p, true
+		}
+	}
+	return "", false
 }

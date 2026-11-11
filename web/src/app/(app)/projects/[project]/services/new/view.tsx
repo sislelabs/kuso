@@ -36,6 +36,7 @@ import { RegistryLoginInline, RuntimeConstraints } from "./ImageHelp";
 import { reportCreateOutcome } from "./reportCreateOutcome";
 import { ConnectAddons, connectedByDefault, existingAddons, subscriptionFor, type ExistingAddon } from "./ConnectAddons";
 import { servicePageHref } from "@/components/service/workspace/hrefs";
+import { useCanOnProject, Perms } from "@/features/auth";
 
 // Addon kinds a scan suggestion can turn into with one click — the
 // scanner also reports kinds kuso has no chart for (kafka, memcached…).
@@ -78,6 +79,9 @@ export function AddServiceView() {
   const repoSources = useRepoSources();
   const projectAddons = useAddons(project);
   const registryCreds = useRegistryCredentials(project);
+  // An image, or a worker's command, picks code that runs with the
+  // service's secrets; the server takes the project admin role for it.
+  const canExec = useCanOnProject(project, Perms.SecretsRead);
 
   // "repo" builds from git; "image" deploys a pre-built OCI image (no
   // build, no GitHub App), so an install without the App can still get
@@ -395,13 +399,14 @@ export function AddServiceView() {
             />
             <SourceCard
               active={source === "image"}
+              disabled={!canExec}
               onClick={() => {
                 setSource("image");
                 setFieldErrors({});
               }}
               icon={<Box className="h-4 w-4" />}
               title="Pre-built image"
-              hint="your CI publishes an image; kuso runs it as-is"
+              hint={canExec ? "your CI publishes an image; kuso runs it as-is" : "Project admins only: the image runs with the service's secrets"}
             />
           </div>
 
@@ -731,10 +736,14 @@ export function AddServiceView() {
                       <SegmentedControl
                         label="Service type"
                         value={kind}
-                        options={[
-                          { value: "web", label: "Web service" },
-                          { value: "worker", label: "Worker" },
-                        ]}
+                        options={
+                          canExec
+                            ? [
+                                { value: "web", label: "Web service" },
+                                { value: "worker", label: "Worker" },
+                              ]
+                            : [{ value: "web", label: "Web service" }]
+                        }
                         onChange={(k) => {
                           setKind(k);
                           clearFieldError("fromService");
@@ -987,12 +996,14 @@ function Step({
 
 function SourceCard({
   active,
+  disabled,
   onClick,
   icon,
   title,
   hint,
 }: {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   title: string;
@@ -1002,9 +1013,10 @@ function SourceCard({
     <button
       type="button"
       aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
       className={
-        "flex flex-col gap-1 rounded-md border px-3 py-2.5 text-left transition-colors " +
+        "flex flex-col gap-1 rounded-md border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 " +
         (active
           ? "border-[var(--accent)] bg-[var(--accent-subtle)]"
           : "border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)]")

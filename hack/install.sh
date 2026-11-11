@@ -758,6 +758,8 @@ if [[ "$REG_MINT" == "1" ]] && ! kubectl -n kuso get secret kuso-registry-auth >
 fi
 if [[ "$REG_MINT" == "1" ]]; then rm -f "$REG_MINT_FILE"; fi
 kuso_manifest "deploy/registry.yaml" | kubectl apply -f - >/dev/null
+kuso_manifest "deploy/vulnscan-egress.yaml" | kubectl apply -f - >/dev/null \
+  || warn "deploy/vulnscan-egress.yaml apply failed — vulnerability scans run without an egress policy"
 # With auth just minted the registry waits for kuso-server to hash the
 # password (section 11), so its readiness is checked after the server.
 if [[ "$REG_MINT" != "1" ]]; then

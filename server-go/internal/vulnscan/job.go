@@ -3,6 +3,8 @@ package vulnscan
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -10,6 +12,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/builds"
 )
 
 const (
@@ -60,7 +64,8 @@ type jobSpec struct {
 // buildJob renders the scan Job. It deliberately carries no project
 // label (project NetworkPolicies select on it and would cut registry and
 // DB egress) and runs under the namespace's default ServiceAccount with
-// no token.
+// no token. Its egress is bounded by deploy/vulnscan-egress.yaml, which
+// selects the app.kubernetes.io/name label below.
 func buildJob(s jobSpec) *batchv1.Job {
 	name := JobName(s.ScanID)
 	labels := map[string]string{
@@ -206,6 +211,40 @@ func ImageHost(ref string) string {
 	}
 	return "docker.io"
 }
+
+// checkScanTarget refuses an image whose registry is cluster-internal or
+// a private address (SEC-7): an editor picks image.repository, and the
+// scan Job would otherwise make registry requests to that host from the
+// platform namespace and report back how it answered. The kuso registry
+// is the one internal host a scan legitimately reaches.
+func checkScanTarget(ref string) error {
+	host := ImageHost(ref)
+	if host == builds.RegistryHost {
+		return nil
+	}
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.ToLower(strings.Trim(name, "[]"))
+	if ip, err := netip.ParseAddr(name); err == nil {
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || cgnat.Contains(ip.Unmap()) {
+			return fmt.Errorf("image registry %s is a private address; only public registries and the kuso registry are scanned", host)
+		}
+		return nil
+	}
+	if !strings.Contains(name, ".") || name == "localhost" {
+		return fmt.Errorf("image registry %s is not a public hostname; only public registries and the kuso registry are scanned", host)
+	}
+	for _, suffix := range []string{".svc", ".cluster.local", ".local", ".internal", ".localhost"} {
+		if strings.HasSuffix(name, suffix) {
+			return fmt.Errorf("image registry %s is cluster-internal; only public registries and the kuso registry are scanned", host)
+		}
+	}
+	return nil
+}
+
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // ImageRepo strips the tag and/or digest from an image reference.
 func ImageRepo(ref string) string {

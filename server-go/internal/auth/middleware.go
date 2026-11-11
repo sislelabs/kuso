@@ -102,6 +102,11 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				httperr.Write(w, http.StatusUnauthorized, msg)
 				return
 			}
+			// A WebSocket ticket opens one socket; it is not a session.
+			if _, isTicket := claims.WSTicketPath(); isTicket {
+				httperr.Write(w, http.StatusUnauthorized, "unauthorized: a WebSocket ticket is not an API token")
+				return
+			}
 			// Revocation check after signature/expiry. Two probes
 			// (per-jti RevokedToken + per-user invalidation
 			// watermark) folded into one hook so the middleware

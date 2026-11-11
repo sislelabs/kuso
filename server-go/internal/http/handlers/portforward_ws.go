@@ -75,24 +75,10 @@ func (h *PortForwardWSHandler) Mount(r chi.Router) {
 // PortForward upgrades to a WebSocket and tunnels one TCP connection
 // through to the addon's primary pod on its Service's target port.
 func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Request) {
-	jwtTok := extractWSBearer(r)
-	if jwtTok == "" {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	claims, respHeader, ok := authenticateWS(w, r, h.Issuer)
+	if !ok {
 		return
 	}
-	claims, err := h.Issuer.Verify(jwtTok)
-	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	// Revocation: Verify only checks signature + expiry. On the public
-	// router (no auth middleware) we must consult the revocation hook
-	// ourselves, else a revoked token still tunnels to a DB until expiry.
-	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// Admin-only: a port-forward to a database is a strictly
 	// elevated capability — not even the deployer role gets one.
 	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
@@ -128,10 +114,6 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	respHeader := http.Header{}
-	if sp := r.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
-		respHeader.Set("Sec-WebSocket-Protocol", "kuso.bearer")
-	}
 	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		return // upgrader wrote its own error

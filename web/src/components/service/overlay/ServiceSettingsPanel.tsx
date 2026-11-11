@@ -194,6 +194,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const patch = usePatchService(project, service);
   const canWrite = useCanOnProject(project, Perms.ServicesWrite);
+  // Command, image, release hook and build command/images run code with
+  // the service's secrets; the server takes the project admin role for them.
+  const canExec = useCanOnProject(project, Perms.SecretsRead);
 
   // setState keeps the cards' React setState signature. It reads the
   // latest staged fields from the store (not a render snapshot) so two
@@ -416,9 +419,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
             <SleepSection state={state} setState={setState} />
             <PlacementSection state={state} setState={setState} />
             <VolumesSection state={state} setState={setState} existingVolumes={baseline.volumes} />
-            <BuildSection state={state} setState={setState} project={project} />
-            <DeploySection project={project} service={service} state={state} setState={setState} />
-            <ReleaseSection state={state} setState={setState} />
+            <BuildSection state={state} setState={setState} project={project} canExec={canExec} />
+            <DeploySection project={project} service={service} state={state} setState={setState} canExec={canExec} />
+            <ReleaseSection state={state} setState={setState} canExec={canExec} />
             {healthcheckApplies && (
               <HealthcheckSection state={state} setState={setState} project={project} service={service} env={envName} />
             )}

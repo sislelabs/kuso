@@ -102,6 +102,42 @@ func TestCheckConfigRepoBinding(t *testing.T) {
 	}
 }
 
+// SEC-1 (2026-11-10): a push may change how a service runs only when the
+// pushed repo builds that service; an image service, or a service on
+// another repo, needs `kuso apply` by a project admin.
+func TestCheckConfigExecChanges(t *testing.T) {
+	proj := &kube.KusoProject{Spec: kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/org/app"}}}
+	worker := unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "p-worker"},
+		"spec":     map[string]any{"repo": map[string]any{"url": "https://github.com/org/worker"}},
+	}}
+	tool := unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "p-tool"},
+		"spec":     map[string]any{"runtime": "image"},
+	}}
+	svcs := []unstructured.Unstructured{worker, tool}
+	f := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "api"}, {Name: "worker"}, {Name: "tool"}}}
+	plan := func(names ...string) *spec.Plan {
+		p := &spec.Plan{}
+		for _, n := range names {
+			p.ExecChanges = append(p.ExecChanges, spec.ExecChange{Resource: "service:" + n, Fields: []string{"command"}})
+		}
+		return p
+	}
+
+	if err := checkConfigExecChanges(plan("api"), f, proj, svcs, "org/app"); err != nil {
+		t.Errorf("own-repo command change refused: %v", err)
+	}
+	if err := checkConfigExecChanges(plan(), f, proj, svcs, "org/app"); err != nil {
+		t.Errorf("no exec changes refused: %v", err)
+	}
+	for _, name := range []string{"worker", "tool"} {
+		if err := checkConfigExecChanges(plan(name), f, proj, svcs, "org/app"); !errors.Is(err, ErrConfigExecNotAllowed) {
+			t.Errorf("%s: err = %v, want ErrConfigExecNotAllowed", name, err)
+		}
+	}
+}
+
 func TestConfigPruneAllowed(t *testing.T) {
 	if configPruneAllowed(&kube.KusoProject{}) {
 		t.Error("prune must be off when configAsCode is unset")

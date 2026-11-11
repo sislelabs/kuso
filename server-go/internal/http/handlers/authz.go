@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
@@ -390,6 +391,16 @@ func callerHasProjectPerm(ctx context.Context, dbConn *db.DB, project string, wa
 // connection values / export a project? Admin-only (secrets:read).
 func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bool {
 	return callerHasProjectPerm(ctx, dbConn, project, auth.PermSecretsRead)
+}
+
+// refuseExecFields answers a non-admin's attempt to set a service field
+// that picks code run with the service's secrets (projects.ExecPatchFields).
+// That is the same capability as reading the secrets, so it carries the
+// same project admin requirement as runs, crons and the pod shell (SEC-1).
+func refuseExecFields(w http.ResponseWriter, fields []string) {
+	writeErr(w, http.StatusForbidden, fmt.Sprintf(
+		"forbidden: changing %s requires the project admin role, because it runs code with the service's secrets",
+		strings.Join(fields, ", ")))
 }
 
 // callerCanRunSQL — may the caller use the SQL browser (list tables /

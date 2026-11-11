@@ -80,6 +80,7 @@ func TestCreate_RejectsUnsafeNamespace(t *testing.T) {
 		{"derived name hits reserved", "operator-system", "", ErrInvalid},
 		{"another project's namespace", "evil", "kuso-koreni", ErrConflict},
 		{"pre-existing namespace kuso doesn't manage", "evil", "payments", ErrConflict},
+		{"future project's derived namespace", "evil", "kuso-payments", ErrInvalid},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

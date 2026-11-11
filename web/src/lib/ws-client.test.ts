@@ -23,6 +23,7 @@ class FakeWebSocket {
   static CLOSED = 3;
 
   url: string;
+  protocols: string[] | undefined;
   readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
   onopen: (() => void) | null = null;
@@ -30,8 +31,9 @@ class FakeWebSocket {
   onclose: ((e: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -73,6 +75,7 @@ function makeWS(opts: { maxAttempts?: number; onFrame?: (f: unknown) => void } =
     onFrame: opts.onFrame ?? (() => {}),
     onStatus: (status, info) => statuses.push({ status, code: info?.code }),
     maxAttempts: opts.maxAttempts,
+    protocols: () => ["kuso.ticket", "t"],
   });
 }
 
@@ -252,6 +255,7 @@ describe("refused upgrades (401/403/429 all surface as 1006 before open)", () =>
       onStatus: (status, info) => statuses.push({ status, code: info?.code, ...(info?.gaveUp ? { gaveUp: true } : {}) } as { status: WSStatus; code?: number }),
       onHandshakeFailure: probe,
       maxHandshakeFailures,
+      protocols: () => ["kuso.ticket", "t"],
     });
   }
 
@@ -289,6 +293,40 @@ describe("refused upgrades (401/403/429 all surface as 1006 before open)", () =>
     await vi.advanceTimersByTimeAsync(500);
     expect(probe).not.toHaveBeenCalled();
     expect(socketCount()).toBe(2);
+  });
+});
+
+describe("ticket auth", () => {
+  it("presents a fresh ticket in the subprotocol on every attempt", async () => {
+    let n = 0;
+    const ws = new ReconnectingWS({
+      path: "/ws/projects/p/services/s/logs?env=production",
+      onFrame: () => {},
+      protocols: async (path) => ["kuso.ticket", `${path}-${++n}`],
+    });
+    ws.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastSocket().protocols).toEqual(["kuso.ticket", "/ws/projects/p/services/s/logs?env=production-1"]);
+    lastSocket().serverClose(1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socketCount()).toBe(2);
+    expect(lastSocket().protocols?.[1]).toMatch(/-2$/);
+  });
+
+  it("a failed ticket mint counts as a refused handshake", async () => {
+    const probe = vi.fn(async () => "stop" as const);
+    const ws = new ReconnectingWS({
+      path: "/ws/x",
+      onFrame: () => {},
+      onHandshakeFailure: probe,
+      protocols: async () => {
+        throw new Error("401");
+      },
+    });
+    ws.open();
+    await vi.runAllTimersAsync();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(socketCount()).toBe(0);
   });
 });
 

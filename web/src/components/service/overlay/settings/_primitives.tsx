@@ -151,6 +151,18 @@ export interface FormState {
 export interface SectionProps {
   state: FormState;
   setState: React.Dispatch<React.SetStateAction<FormState>>;
+  // false locks the fields that choose code run with the service's
+  // secrets (command, image, release hook, build command and images,
+  // build args). The server requires the project admin role for them.
+  canExec?: boolean;
+}
+
+export const EXEC_LOCK_HINT =
+  "Only a project admin can change this: it picks code that runs with the service's secrets.";
+
+export function ExecLockNote({ locked }: { locked: boolean }) {
+  if (!locked) return null;
+  return <Callout>{EXEC_LOCK_HINT}</Callout>;
 }
 
 export interface NodeSummary {

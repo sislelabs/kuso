@@ -161,6 +161,10 @@ func (w *Worker) fail(ctx context.Context, s db.VulnScan, msg string) {
 
 // start creates the scan's Job (and its credentials Secret).
 func (w *Worker) start(ctx context.Context, s db.VulnScan) {
+	if err := checkScanTarget(s.ImageRef); err != nil {
+		w.fail(ctx, s, err.Error())
+		return
+	}
 	if err := w.ensureCachePVC(ctx); err != nil {
 		w.fail(ctx, s, "create trivy cache volume: "+err.Error())
 		return

@@ -3,12 +3,12 @@
 import { Rocket } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { Section, Field, SwitchField, WithSuffix, monoInputClass, type SectionProps } from "./_primitives";
+import { Section, Field, SwitchField, WithSuffix, ExecLockNote, monoInputClass, type SectionProps } from "./_primitives";
 
 // ReleaseSection configures the pre-deploy release hook: a one-off Job
 // that runs before a rollout is promoted (migrations, etc). Empty
 // command = no hook (the default for every service).
-export function ReleaseSection({ state, setState }: SectionProps) {
+export function ReleaseSection({ state, setState, canExec = true }: SectionProps) {
   const hasHook = state.releaseCommand.trim().length > 0;
 
   return (
@@ -20,12 +20,14 @@ export function ReleaseSection({ state, setState }: SectionProps) {
       description="A one-off job that runs with the new image and the service's variables before the rollout is promoted, e.g. database migrations. A non-zero exit fails the deploy and the old version keeps serving."
       footerNote="Applies from the next deploy."
     >
+      <ExecLockNote locked={!canExec} />
       <Field label="Command" hint="Blank means no hook." htmlFor="release-command">
         <Input
           id="release-command"
           value={state.releaseCommand}
           onChange={(e) => setState((s) => ({ ...s, releaseCommand: e.target.value }))}
           placeholder="e.g. npm run migrate"
+          disabled={!canExec}
           className={monoInputClass}
           spellCheck={false}
         />

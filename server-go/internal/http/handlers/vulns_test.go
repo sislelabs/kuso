@@ -169,6 +169,31 @@ func TestVulns_IgnoresCRUD(t *testing.T) {
 	}
 }
 
+// SEC-5: under enforce an ignore lifts a deploy block, so an editor must
+// not be able to add one; outside enforce they still can.
+func TestVulns_EditorIgnoreBlockedUnderEnforce(t *testing.T) {
+	rig := newVulnsRig(t, stubLive{})
+	ctx := context.Background()
+	seedUserWithProjectRole(t, rig.h.DB, "ed-vuln", "shop", db.ProjectRoleEditor)
+	editor := &auth.Claims{UserID: "ed-vuln", Username: "ed"}
+	base := "/api/projects/shop/services/web/vulns/ignores"
+
+	if rec, _ := rig.do(t, editor, http.MethodPost, base, `{"vulnId":"CVE-2024-1","reason":"x"}`); rec.Code != 201 {
+		t.Fatalf("editor ignore under report: %d, want 201", rec.Code)
+	}
+	st := db.DefaultVulnScanSettings()
+	st.Mode = "enforce"
+	if err := rig.h.DB.SetVulnScanSettings(ctx, st, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := rig.do(t, editor, http.MethodPost, base, `{"vulnId":"CVE-2024-2","reason":"x"}`); rec.Code != 403 {
+		t.Fatalf("editor ignore under enforce: %d, want 403", rec.Code)
+	}
+	if rec, _ := rig.do(t, adminClaims, http.MethodPost, base, `{"vulnId":"CVE-2024-2","reason":"x"}`); rec.Code != 201 {
+		t.Fatalf("admin ignore under enforce: %d, want 201", rec.Code)
+	}
+}
+
 func TestVulns_ServiceShowAndScan(t *testing.T) {
 	im := &db.VulnImage{Digest: vulnDigest, ImageRef: "r/web@" + vulnDigest, OwnerKind: db.VulnOwnerService,
 		Project: "shop", Service: "web", Env: "production", Namespace: "kuso", Workload: "shop-web-production"}

@@ -25,6 +25,7 @@ import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { useWakeService } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
+import { wsTicketProtocols } from "@/lib/ws-client";
 
 type Status = "connecting" | "open" | "closed";
 
@@ -79,47 +80,61 @@ export function ServiceTerminalPanel({
     fit.fit();
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url =
-      `${proto}//${window.location.host}` +
-      `/ws/projects/${encodeURIComponent(project)}` +
-      `/services/${encodeURIComponent(service)}/terminal` +
-      `?env=${encodeURIComponent(env)}`;
-    const ws = new WebSocket(url);
-    ws.binaryType = "arraybuffer";
+    const path = `/ws/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/terminal`;
+    const url = `${proto}//${window.location.host}${path}?env=${encodeURIComponent(env)}`;
+    // The socket opens once a one-time ticket is minted (the server
+    // refuses a browser upgrade that only carries the session cookie).
+    let ws: WebSocket | null = null;
+    let disposed = false;
 
     const sendResize = () => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
       }
     };
 
-    ws.onopen = () => {
-      setStatus("open");
-      // Push the initial terminal size so the pod's shell wraps
-      // correctly from the first prompt.
-      sendResize();
-      term.focus();
+    const attach = (sock: WebSocket) => {
+      sock.binaryType = "arraybuffer";
+      sock.onopen = () => {
+        setStatus("open");
+        // Push the initial terminal size so the pod's shell wraps
+        // correctly from the first prompt.
+        sendResize();
+        term.focus();
+      };
+      sock.onmessage = (e) => {
+        if (typeof e.data === "string") {
+          term.write(e.data);
+        } else {
+          term.write(new Uint8Array(e.data as ArrayBuffer));
+        }
+      };
+      sock.onclose = (e) => {
+        setStatus("closed");
+        if (e.code !== 1000) {
+          term.write(
+            `\r\n\x1b[33m[kuso] connection closed${e.reason ? ": " + e.reason : ""}\x1b[0m\r\n`,
+          );
+        }
+      };
+      sock.onerror = () => setStatus("closed");
     };
-    ws.onmessage = (e) => {
-      if (typeof e.data === "string") {
-        term.write(e.data);
-      } else {
-        term.write(new Uint8Array(e.data as ArrayBuffer));
-      }
-    };
-    ws.onclose = (e) => {
-      setStatus("closed");
-      if (e.code !== 1000) {
-        term.write(
-          `\r\n\x1b[33m[kuso] connection closed${e.reason ? ": " + e.reason : ""}\x1b[0m\r\n`,
-        );
-      }
-    };
-    ws.onerror = () => setStatus("closed");
+    wsTicketProtocols(path).then(
+      (protocols) => {
+        if (disposed) return;
+        ws = new WebSocket(url, protocols);
+        attach(ws);
+      },
+      () => {
+        if (disposed) return;
+        setStatus("closed");
+        term.write("\r\n\x1b[33m[kuso] couldn't open a session (sign in again?)\x1b[0m\r\n");
+      },
+    );
 
     // Keystrokes → stdin.
     const dataDisp = term.onData((d) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(d);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
     });
     // Terminal resize → fit + notify the pod's TTY.
     const resizeDisp = term.onResize(() => sendResize());
@@ -145,11 +160,14 @@ export function ServiceTerminalPanel({
       // Detach before closing: the old socket's onclose fires after a
       // "New session" remount and would mark the new session "closed"
       // and write into this disposed terminal.
-      ws.onopen = null;
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.close();
+      disposed = true;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+      }
       term.dispose();
     };
   }, [project, service, env, sessionKey, blocked]);

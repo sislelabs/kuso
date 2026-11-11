@@ -94,6 +94,7 @@ if ! kubectl -n kuso get deployment kuso-registry >/dev/null 2>&1; then
     || kubectl -n kuso create secret generic kuso-buildkitd-tls --from-literal=enabled=true >/dev/null
 fi
 manifest registry | kubectl apply -f - >/dev/null
+manifest vulnscan-egress | kubectl apply -f - >/dev/null
 
 log "buildkitd"
 manifest buildkitd | kubectl apply -f - >/dev/null
