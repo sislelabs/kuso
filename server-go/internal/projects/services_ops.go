@@ -1178,11 +1178,13 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if host != "" && !validHostname(host) {
 		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 	}
-	if host == "" {
-		host = customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
+	generated := customEnvHost(service, project, req.Name, proj.Spec.BaseDomain)
+	check := s.checkClaimedHostsFree
+	if host == "" || host == generated {
+		host, check = generated, s.checkHostsFree
 	}
 	if svc.Spec.Runtime != "worker" {
-		if err := s.checkHostsFree(ctx, project, "", host); err != nil {
+		if err := check(ctx, project, "", host); err != nil {
 			return nil, err
 		}
 	}

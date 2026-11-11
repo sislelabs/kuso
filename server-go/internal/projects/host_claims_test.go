@@ -230,9 +230,13 @@ func TestHostClaims_InstanceDomainSubtree(t *testing.T) {
 		seedProject("alpha", kube.KusoProjectSpec{}),
 		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
 		seedHostedEnv("alpha", "web", "production", "alpha-web-production", "web.alpha.kuso.example.com"),
+		seedHostedEnv("alpha", "web", "staging", "alpha-web-staging", "web-staging.alpha.kuso.example.com"),
 	)
 	ctx := context.Background()
-	for _, h := range []string{"api.beta.kuso.example.com", "beta.kuso.example.com", "other.kuso.example.com", "staging-beta.kuso.example.com"} {
+	// SEC-5: "victim-alpha" is the apex of a project named victim-alpha;
+	// only a real env group of alpha may use the "<env>-alpha" shape.
+	for _, h := range []string{"api.beta.kuso.example.com", "beta.kuso.example.com", "other.kuso.example.com", "staging-beta.kuso.example.com",
+		"victim-alpha.kuso.example.com", "production-alpha.kuso.example.com"} {
 		if _, err := s.AddEnvDomain(ctx, "alpha", "web", "production", h, ""); !errors.Is(err, ErrConflict) {
 			t.Errorf("AddEnvDomain(%q) err = %v, want ErrConflict", h, err)
 		}
