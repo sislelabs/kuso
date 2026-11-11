@@ -35,7 +35,8 @@ func TestBuildScript_CacheExportFailureAfterPush(t *testing.T) {
 		}
 		stub("buildctl", "cat <<'LOG'\n"+buildctlOut+"\nLOG\nexit "+strconv.Itoa(buildctlRC)+"\n")
 		stub("wget", "echo '  HTTP/1.1 200 OK' >&2\necho '  Docker-Content-Digest: "+servedDigest+"' >&2\n")
-		cmd := exec.Command("bash", "-c", tail)
+		// buildctl's rc and log go to fixed /tmp paths; parallel runs would race on them.
+		cmd := exec.Command("bash", "-c", strings.ReplaceAll(tail, "/tmp/", dir+"/"))
 		cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "IMAGE="+image, "INSECURE=true", "TMPDIR="+dir)
 		cmd.Dir = dir
 		err := cmd.Run()

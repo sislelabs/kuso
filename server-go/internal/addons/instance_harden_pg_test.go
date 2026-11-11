@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"testing"
@@ -32,7 +33,21 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
+	// HardenInstanceServer acts on the whole server (roles and database ACLs
+	// are cluster-wide): concurrent runs against one server take turns, and
+	// kuso-stamped tenants other tests left behind are counted in and put
+	// back afterwards.
+	lockConn, err := admin.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('kuso-test-harden-instance'))`); err != nil {
+		t.Fatal(err)
+	}
+	// Registered first so it runs last: the lock covers the restore below.
+	t.Cleanup(func() { _ = lockConn.Close() })
+
+	suffix := uniqueProject(t)
 	a, b, reader, unstamped := "hd_a_"+suffix, "hd_b_"+suffix, "hd_reader_"+suffix, "hd_other_"+suffix
 	exec := func(q string) {
 		t.Helper()
@@ -40,6 +55,34 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
+	names := func(q string) []string {
+		t.Helper()
+		rows, err := admin.QueryContext(ctx, q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+	shared := []string{"postgres", "template1", adminDB}
+	// A run killed before its cleanup leaves these locked.
+	for _, d := range shared {
+		exec(fmt.Sprintf(`GRANT CONNECT ON DATABASE %s TO PUBLIC`, pq.QuoteIdentifier(d)))
+	}
+	foreignOpen := names(`SELECT datname FROM pg_database
+		 WHERE NOT datistemplate AND shobj_description(oid, 'pg_database') LIKE 'kuso-addon:%'
+		   AND has_database_privilege('public', oid, 'CONNECT')`)
+	foreignUnlimited := names(`SELECT r.rolname FROM pg_database d JOIN pg_roles r ON r.rolname = d.datname
+		 WHERE NOT d.datistemplate AND shobj_description(d.oid, 'pg_database') LIKE 'kuso-addon:%'
+		   AND r.rolconnlimit = -1`)
 	for _, r := range []string{a, b, reader} {
 		exec(fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD 'pw'`, pq.QuoteIdentifier(r)))
 	}
@@ -50,8 +93,11 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	exec(fmt.Sprintf(`COMMENT ON DATABASE %s IS 'kuso-addon:p/b'`, pq.QuoteIdentifier(b)))
 	t.Cleanup(func() {
 		c := context.Background()
-		for _, d := range []string{"postgres", "template1", adminDB} {
+		for _, d := range append(shared, foreignOpen...) {
 			_, _ = admin.ExecContext(c, fmt.Sprintf(`GRANT CONNECT ON DATABASE %s TO PUBLIC`, pq.QuoteIdentifier(d)))
+		}
+		for _, r := range foreignUnlimited {
+			_, _ = admin.ExecContext(c, fmt.Sprintf(`ALTER ROLE %s CONNECTION LIMIT -1`, pq.QuoteIdentifier(r)))
 		}
 		for _, d := range []string{a, b, unstamped} {
 			_, _ = admin.ExecContext(c, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, d)
@@ -94,8 +140,17 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("harden: %v", err)
 	}
-	if res.TenantLocked != 2 || res.LimitsSet != 2 || len(res.SharedLocked) != 3 {
-		t.Fatalf("result = %+v, want 2 tenants locked, 2 limits, 3 shared", res)
+	wantShared, gotShared := map[string]bool{}, map[string]bool{}
+	for _, d := range shared {
+		wantShared[d] = true
+	}
+	for _, d := range res.SharedLocked {
+		gotShared[d] = true
+	}
+	if res.TenantLocked != 2+len(foreignOpen) || res.LimitsSet != 2+len(foreignUnlimited) ||
+		len(res.SharedLocked) != len(wantShared) || !maps.Equal(gotShared, wantShared) {
+		t.Fatalf("result = %+v, want %d tenants locked, %d limits, shared %v (other kuso tenants: open %v, unlimited %v)",
+			res, 2+len(foreignOpen), 2+len(foreignUnlimited), shared, foreignOpen, foreignUnlimited)
 	}
 	if err := own.PingContext(ctx); err != nil {
 		t.Fatalf("open tenant session cut by the heal: %v", err)
@@ -132,13 +187,23 @@ func TestHardenInstanceServer_PG(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, a).Scan(&limit); err != nil {
 		t.Fatal(err)
 	}
-	var maxConns int
-	if err := admin.QueryRowContext(ctx, `SELECT current_setting('max_connections')::int`).Scan(&maxConns); err != nil {
+	var maxConns, reserved, stamped int
+	if err := admin.QueryRowContext(ctx, `
+		SELECT current_setting('max_connections')::int,
+		       current_setting('superuser_reserved_connections')::int
+		         + COALESCE(NULLIF(current_setting('reserved_connections', true), ''), '0')::int,
+		       (SELECT count(*) FROM pg_roles WHERE rolcanlogin AND shobj_description(oid, 'pg_authid') LIKE 'kuso-addon:%')`).
+		Scan(&maxConns, &reserved, &stamped); err != nil {
 		t.Fatal(err)
 	}
-	// Unstamped roles are not counted as tenants, so a is the lone tenant.
-	if want := max(maxConns/2, instanceConnLimitFloor); limit != want {
-		t.Errorf("rolconnlimit = %d, want %d", limit, want)
+	// Unstamped roles are not counted as tenants, so on a clean server a is
+	// the lone tenant; stamped roles other tests left behind split it.
+	want := max(maxConns/2, instanceConnLimitFloor)
+	if stamped > 1 {
+		want = defaultInstanceConnLimit(maxConns, reserved, stamped, 1)
+	}
+	if limit != want {
+		t.Errorf("rolconnlimit = %d, want %d (%d stamped tenant roles)", limit, want, stamped)
 	}
 
 	// Idempotent, and an admin-tuned limit survives.

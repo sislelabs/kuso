@@ -35,6 +35,9 @@ help:
 	@echo "  make test         # go test ./... in every go.work module"
 	@echo "  make test-db      # same, plus the Postgres-backed tests (-race -p 1,"
 	@echo "                    # throwaway postgres:16-alpine via docker) — what CI runs"
+	@echo "  make test-pkg PKG=./internal/addons/... [RUN=TestX] [ARGS=-count=2]"
+	@echo "  make test-changed # packages touched since origin/main + dependents"
+	@echo "  make test-db-up / test-db-down   # keep this worktree's test DB alive"
 	@echo ""
 	@echo "  SANDBOX (disposable kuso in Docker, built from this tree):"
 	@echo "  make sandbox-up       # build images, start k3s in docker, install kuso"
@@ -98,29 +101,49 @@ test:
 		echo "==> go test $$m"; (cd "$$m" && go test ./...); \
 	done
 
-# test-db: the CI-equivalent run. ~20 test files t.Skip() without
-# KUSO_TEST_PG_DSN (repository layer, migrations, rate limiter), so
-# `make test` alone never exercises them. -p 1 is required: the packages
-# share one database and truncate tables in t.Cleanup. The container is
-# removed on exit, pass or fail.
-TEST_PG_PORT ?= 54329
-TEST_PG_CONTAINER ?= kuso-test-pg
+# test-db: the CI-equivalent run (go test -race -p 1 ./... in every module
+# with KUSO_TEST_PG_DSN set). ~30 test files t.Skip() without the DSN, so
+# `make test` alone never exercises them. -p 1 is required: the packages of
+# one run share a database and truncate tables in t.Cleanup.
+#
+# hack/testdb.sh gives every invocation its own database, so these targets
+# can run concurrently from several worktrees (or twice in one): on this
+# worktree's session container when `make test-db-up` started one, else on
+# a fresh container that is removed on exit. Container name and preferred
+# host port derive from the worktree path; TEST_PG_CONTAINER / TEST_PG_PORT
+# override them. Output is teed to .testlogs/.
+#
+#   make test-db
+#   make test-pkg PKG=./internal/addons/...          # module-relative: MOD=server-go
+#   make test-pkg PKG="cli/pkg/... server-go/internal/db" RUN=TestFoo ARGS="-count=2 -shuffle=on"
+#   make test-changed [BASE=origin/main]             # touched packages + in-module dependents
+#   make test-db-up / test-db-down                   # keep one DB alive for a session
+TEST_PG_PORT ?=
+TEST_PG_CONTAINER ?=
+PKG ?=
+MOD ?= server-go
+RUN ?=
+ARGS ?=
+BASE ?= origin/main
+TESTDB = TEST_PG_PORT="$(TEST_PG_PORT)" TEST_PG_CONTAINER="$(TEST_PG_CONTAINER)" \
+	MOD="$(MOD)" RUN="$(RUN)" ARGS="$(ARGS)" bash hack/testdb.sh
+
+.PHONY: test-pkg test-changed test-db-up test-db-down
 test-db:
-	@set -e; \
-	docker rm -f $(TEST_PG_CONTAINER) >/dev/null 2>&1 || true; \
-	trap 'docker rm -f $(TEST_PG_CONTAINER) >/dev/null 2>&1 || true' EXIT; \
-	docker run -d --name $(TEST_PG_CONTAINER) -p $(TEST_PG_PORT):5432 \
-		-e POSTGRES_USER=kuso -e POSTGRES_PASSWORD=kuso -e POSTGRES_DB=kuso_test \
-		postgres:16-alpine >/dev/null; \
-	for i in $$(seq 1 30); do \
-		docker exec $(TEST_PG_CONTAINER) pg_isready -h 127.0.0.1 -U kuso -d kuso_test >/dev/null 2>&1 && break; \
-		[ $$i -eq 30 ] && { echo "postgres never became ready" >&2; exit 1; }; \
-		sleep 1; \
-	done; \
-	export KUSO_TEST_PG_DSN="postgres://kuso:kuso@localhost:$(TEST_PG_PORT)/kuso_test?sslmode=disable"; \
-	for m in $$(go list -m -f '{{.Dir}}'); do \
-		echo "==> go test -race -p 1 $$m"; (cd "$$m" && go test -race -p 1 ./...); \
-	done
+	@$(TESTDB) all
+
+test-pkg:
+	@if [ -z "$(PKG)" ]; then echo "usage: make test-pkg PKG=./internal/addons/... [RUN=TestName] [ARGS=...]" >&2; exit 2; fi
+	@$(TESTDB) pkg $(PKG)
+
+test-changed:
+	@$(TESTDB) changed $(BASE)
+
+test-db-up:
+	@$(TESTDB) up
+
+test-db-down:
+	@$(TESTDB) down
 
 # verify: lightweight CI gate. Runs typechecks + tests + a CLI/API
 # parity grep that catches new HTTP routes added without a matching

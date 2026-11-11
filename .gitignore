@@ -83,3 +83,6 @@ server-go/internal/web/dist/*
 .worktrees/
 migration/
 /hack/sandbox/.state/
+
+# go test logs from hack/testdb.sh
+.testlogs/

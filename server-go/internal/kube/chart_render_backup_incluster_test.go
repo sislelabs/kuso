@@ -112,7 +112,8 @@ func runInClusterBackup(t *testing.T, script, nc, psql string) (string, bool, er
 			t.Fatal(err)
 		}
 	}
-	cmd := pipefailShell(t, script)
+	// The script stages the dump in /tmp; parallel runs would race on it.
+	cmd := pipefailShell(t, strings.ReplaceAll(script, "/tmp/", dir+"/"))
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),

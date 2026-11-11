@@ -118,7 +118,8 @@ func runExternalBackup(t *testing.T, script, pgIsReady, psql string) (string, bo
 			t.Fatal(err)
 		}
 	}
-	cmd := pipefailShell(t, script)
+	// The script stages the dump in /tmp; parallel runs would race on it.
+	cmd := pipefailShell(t, strings.ReplaceAll(script, "/tmp/", dir+"/"))
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + ":" + os.Getenv("PATH"),
