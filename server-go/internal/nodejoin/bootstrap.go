@@ -65,6 +65,8 @@ type MintedToken struct {
 	OneLiner  string            `json:"oneLiner"`
 	Labels    map[string]string `json:"labels"`
 	NodeName  string            `json:"nodeName,omitempty"`
+	// Warning is set when the node will join with the k3s server token.
+	Warning string `json:"warning,omitempty"`
 }
 
 // GenerateJTI returns a 128-bit random base64url-encoded identifier.

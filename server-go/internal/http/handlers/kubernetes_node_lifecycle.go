@@ -75,6 +75,10 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Credentials = creds
+	if err := nodejoin.CheckJoinTokenPolicy(); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	token, err := nodejoin.ReadServerToken()
 	if err != nil {
 		h.Logger.Error("read k3s token", "err", err)

@@ -121,6 +121,10 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	if err := nodejoin.CheckJoinTokenPolicy(); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	ttl := nodejoin.DefaultTokenTTL
 	if body.TTLSeconds > 0 {
 		ttl = time.Duration(body.TTLSeconds) * time.Second
@@ -178,7 +182,15 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 		OneLiner:  nodejoin.BuildOneLiner(publicURL, jti),
 		Labels:    body.Labels,
 		NodeName:  body.NodeName,
+		Warning:   serverTokenWarning(),
 	})
+}
+
+func serverTokenWarning() string {
+	if nodejoin.UsingServerToken() {
+		return nodejoin.ServerTokenJoinWarning
+	}
+	return ""
 }
 
 // ListPending returns unconsumed, unrevoked, unexpired tokens. The UI
@@ -352,6 +364,10 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if err := nodejoin.CheckJoinTokenPolicy(); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	k3sToken, err := nodejoin.ReadServerToken()
 	if err != nil {
 		h.Logger.Error("nodejoin: read k3s token", "err", err)
