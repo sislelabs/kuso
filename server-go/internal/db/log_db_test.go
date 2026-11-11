@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -52,6 +54,44 @@ func TestLogDB_InsertSearch(t *testing.T) {
 	}
 	if deleted != 2 {
 		t.Errorf("PruneLogsOlderThan: deleted %d, want 2", deleted)
+	}
+}
+
+// SCL-4: a 1-2 character query can't use the trigram index and was a
+// full-table seq scan; anything slow is cut off server-side; alert
+// counts stop at the cap.
+func TestLogDB_SearchBounds(t *testing.T) {
+	d := openTestDB(t).AsLogDB()
+	ctx := context.Background()
+	if _, err := d.SearchLogs(ctx, SearchLogsRequest{Project: "alpha", Query: " ab "}); !errors.Is(err, ErrLogQueryTooShort) {
+		t.Fatalf("2-char query: got %v, want ErrLogQueryTooShort", err)
+	}
+
+	prevTimeout := logQueryTimeout
+	logQueryTimeout = "50ms"
+	err := d.withLogQueryTimeout(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `SELECT pg_sleep(1)`)
+		return err
+	})
+	logQueryTimeout = prevTimeout
+	if !errors.Is(err, ErrLogSearchTooBroad) {
+		t.Fatalf("slow query: got %v, want ErrLogSearchTooBroad", err)
+	}
+
+	now := time.Now().UTC()
+	lines := make([]LogLine, 5)
+	for i := range lines {
+		lines[i] = LogLine{Ts: now, Pod: "p", Project: "alpha", Service: "web", Line: "error here"}
+	}
+	if err := d.InsertLogLines(ctx, lines); err != nil {
+		t.Fatal(err)
+	}
+	prevCap := logCountCap
+	logCountCap = 3
+	defer func() { logCountCap = prevCap }()
+	n, err := d.CountLogMatches(ctx, "alpha", "web", "error", time.Time{})
+	if err != nil || n != 3 || !LogCountCapped(n) {
+		t.Fatalf("capped count: n=%d err=%v, want 3 and capped", n, err)
 	}
 }
 

@@ -225,6 +225,55 @@ func (d *LogDB) PodLogTail(ctx context.Context, project, service, podPrefix stri
 // MaxLogSearchLimit caps a single page of log search results.
 const MaxLogSearchLimit = 500
 
+// MinLogQueryRunes is the shortest substring query SearchLogs accepts.
+// The trigram index can't serve a 1-2 character ILIKE, so such a query
+// was a parallel seq scan of the whole LogLine.
+const MinLogQueryRunes = 3
+
+var (
+	// ErrLogQueryTooShort: a non-empty query under MinLogQueryRunes.
+	ErrLogQueryTooShort = errors.New("log search query too short")
+	// ErrLogSearchTooBroad: the query hit logQueryTimeout (or its caller's
+	// deadline) before finding enough rows.
+	ErrLogSearchTooBroad = errors.New("log search too broad")
+)
+
+// logQueryTimeout caps one log search / alert count server-side, so a
+// scan that the planner can't bound gives up instead of holding a pooled
+// connection and parallel workers for the role's full 60s.
+var logQueryTimeout = "8s"
+
+// logCountCap bounds CountLogMatches: alert rules compare against a
+// threshold, so counting past it only costs scan time.
+var logCountCap = 10_000
+
+// withLogQueryTimeout runs fn in a read transaction carrying
+// logQueryTimeout. SET LOCAL is transaction-scoped, so it is safe behind
+// the transaction-mode pooler.
+func (d *LogDB) withLogQueryTimeout(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := d.DB.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '`+logQueryTimeout+`'`); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		if isQueryCanceled(err) {
+			return fmt.Errorf("%w: %w", ErrLogSearchTooBroad, err)
+		}
+		return err
+	}
+	return tx.Commit()
+}
+
+// isQueryCanceled reports a statement_timeout or cancel (SQLSTATE 57014).
+func isQueryCanceled(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "57014"
+}
+
 // ClampLogLimit normalises a caller-supplied page size. Exported so the
 // HTTP layer can distinguish a full page from a short one (and so emit
 // a paging cursor) without duplicating the clamp and drifting from it.
@@ -241,6 +290,9 @@ func ClampLogLimit(limit int) int {
 func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLine, error) {
 	limit := ClampLogLimit(req.Limit)
 	q := strings.TrimSpace(req.Query)
+	if q != "" && utf8.RuneCountInString(q) < MinLogQueryRunes {
+		return nil, fmt.Errorf("%w: need at least %d characters", ErrLogQueryTooShort, MinLogQueryRunes)
+	}
 	var sqlStr strings.Builder
 	args := []any{}
 	n := 0
@@ -299,25 +351,28 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 	}
 	args = append(args, limit)
 
-	rows, err := d.QueryContext(ctx, sqlStr.String(), args...)
+	out := []LogLine{}
+	err := d.withLogQueryTimeout(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, sqlStr.String(), args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ll LogLine
+			var ts sql.NullTime
+			if err := rows.Scan(&ll.ID, &ts, &ll.Pod, &ll.Project, &ll.Service, &ll.Env, &ll.Line); err != nil {
+				return fmt.Errorf("scan: %w", err)
+			}
+			if ts.Valid {
+				ll.Ts = ts.Time
+			}
+			out = append(out, ll)
+		}
+		return rows.Err()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("search logs: %w", err)
-	}
-	defer rows.Close()
-	out := []LogLine{}
-	for rows.Next() {
-		var ll LogLine
-		var ts sql.NullTime
-		if err := rows.Scan(&ll.ID, &ts, &ll.Pod, &ll.Project, &ll.Service, &ll.Env, &ll.Line); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		if ts.Valid {
-			ll.Ts = ts.Time
-		}
-		out = append(out, ll)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	// Forward pages are fetched oldest-first (so the LIMIT keeps the rows
 	// nearest the anchor) but returned newest-first like every other page.
@@ -330,7 +385,7 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 }
 
 // CountLogMatches is the alert-rule helper: how many matches in a
-// given window. Empty query counts every line.
+// given window, capped at logCountCap. Empty query counts every line.
 //
 // Window safety: even if the alert rule says "last 7 days" we cap
 // the actual scan at 24h. Anything wider would be a sequential scan
@@ -348,7 +403,7 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 	args := []any{}
 	p := 0
 	var sqlStr strings.Builder
-	sqlStr.WriteString(`SELECT COUNT(*) FROM "LogLine" WHERE 1=1`)
+	sqlStr.WriteString(`SELECT COUNT(*) FROM (SELECT 1 FROM "LogLine" WHERE 1=1`)
 	if q != "" {
 		p++
 		fmt.Fprintf(&sqlStr, ` AND line ILIKE $%d ESCAPE '\'`, p)
@@ -369,13 +424,21 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 		fmt.Fprintf(&sqlStr, ` AND ts >= $%d`, p)
 		args = append(args, since.UTC())
 	}
-	row := d.QueryRowContext(ctx, sqlStr.String(), args...)
+	p++
+	fmt.Fprintf(&sqlStr, ` LIMIT $%d) m`, p)
+	args = append(args, logCountCap)
 	var n int
-	if err := row.Scan(&n); err != nil {
+	err := d.withLogQueryTimeout(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, sqlStr.String(), args...).Scan(&n)
+	})
+	if err != nil {
 		return 0, fmt.Errorf("count log matches: %w", err)
 	}
 	return n, nil
 }
+
+// LogCountCapped reports whether a CountLogMatches result hit its cap.
+func LogCountCapped(n int) bool { return n >= logCountCap }
 
 // PruneLogsOlderThan deletes rows older than `before` in chunks of
 // at most 50k per statement. Returns the total rows removed.

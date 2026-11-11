@@ -51,6 +51,19 @@ import {
 } from "./logViewStore";
 import type { LogRange, LogViewState } from "./logViewStore";
 
+// The archive's substring search needs a trigram; shorter queries scan
+// the whole table and the server rejects them.
+const MIN_ARCHIVE_QUERY = 3;
+
+// retainedSpan is the archive's real depth when the byte budget keeps
+// less than the configured days, else null (nothing worth saying).
+function retainedSpan(r: ArchivePage["retention"]): string | null {
+  if (!r?.oldestTs) return null;
+  const hours = (Date.now() - Date.parse(r.oldestTs)) / 3_600_000;
+  if (!Number.isFinite(hours) || hours >= r.configuredDays * 24 - 1) return null;
+  return hours < 48 ? `${Math.max(1, Math.floor(hours))} hours` : `${Math.floor(hours / 24)} days`;
+}
+
 // One row in the viewer, from either the live tail or the archive.
 export interface ViewLine {
   key: string;
@@ -407,6 +420,10 @@ export function LogViewer({
 
   const commitQuery = (q: string, toArchive: boolean) => {
     const t = q.trim();
+    if (toArchive && t && t.length < MIN_ARCHIVE_QUERY) {
+      toast.error(`Search needs at least ${MIN_ARCHIVE_QUERY} characters`);
+      return;
+    }
     if (t) setRecent(rememberQuery(t));
     const patch: Partial<LogViewState> = { q: t, focus: null };
     if (toArchive && live) patch.range = { kind: "preset", preset: "24h" };
@@ -486,6 +503,7 @@ export function LogViewer({
     return out;
   }, [visible, withDate]);
   const filtersActive = view.levels.length > 0 || !!view.pod;
+  const keptFor = retainedSpan(archive.data?.pages[0]?.retention);
   const loading = live ? stream.connection === "connecting" && rows.length === 0 : archive.isPending;
   const narrow = useNarrow();
   const approxTimes = live && rows.some((r) => r.approx || r.backlog);
@@ -556,7 +574,7 @@ export function LogViewer({
             {draft.trim() && (live || draft.trim() !== view.q) && (
               <button
                 type="submit"
-                title={live ? "Search the 7-day archive" : "Search"}
+                title={live ? "Search the archive" : "Search"}
                 className="inline-flex items-center gap-0.5 rounded border border-[var(--border-subtle)] px-1 py-0.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
                 <CornerDownLeft className="h-3 w-3" />
@@ -743,7 +761,7 @@ export function LogViewer({
                   Load older lines
                 </button>
               ) : (
-                `Start of results for the ${view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : "selected window"}`
+                `Start of results for the ${view.range.kind === "preset" ? `last ${timeRangeSpan(view.range.preset)}` : "selected window"}${keptFor ? ` · logs kept: last ${keptFor}` : ""}`
               )}
             </div>
           )}
@@ -1453,7 +1471,7 @@ function EmptyLogs({
   } else {
     title = query ? `No matches for “${query}” in the last ${rangeText}` : `No logs in the last ${rangeText}`;
     body = query
-      ? "Search is a case-insensitive substring match over the 7-day archive."
+      ? "Search is a case-insensitive substring match over the log archive."
       : "The service may be sleeping, stopped, or not deployed yet — or it simply hasn't logged anything.";
     const wider = ["24h", "7d"].filter((p) => rangeMs(p) > rangeMs(currentPreset));
     for (const p of wider) {

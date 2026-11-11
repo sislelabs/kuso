@@ -16,6 +16,9 @@ export interface ArchivePage {
   nextBeforeId?: number;
   // Echoed by servers that honour the afterId forward cursor.
   afterId?: number;
+  // How far back the archive really goes; the byte budget can cut it
+  // well short of the configured days. Only on the newest page.
+  retention?: { oldestTs?: string; configuredDays: number };
 }
 
 // LogScope selects the per-service or the project-wide search endpoint.

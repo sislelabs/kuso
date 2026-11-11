@@ -352,8 +352,12 @@ func (e *Engine) evaluate(ctx context.Context, r *db.AlertRule, now time.Time) (
 		if int64(n) < threshold {
 			return false, "", nil
 		}
-		body := fmt.Sprintf("`%s` matched %d times in %s on %s/%s",
-			summary(r.Query, 80), n, window, r.Project, r.Service)
+		count := fmt.Sprint(n)
+		if db.LogCountCapped(n) {
+			count += "+"
+		}
+		body := fmt.Sprintf("`%s` matched %s times in %s on %s/%s",
+			summary(r.Query, 80), count, window, r.Project, r.Service)
 		return true, body, nil
 	case db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
 		threshold := 80.0

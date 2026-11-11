@@ -86,6 +86,27 @@ func TestDecideBudget_UnknownVolumePausesFarOverBudget(t *testing.T) {
 	}
 }
 
+func TestDecideRetentionWarn(t *testing.T) {
+	const h = time.Hour
+	cases := []struct {
+		name          string
+		prev, pruning bool
+		window        time.Duration
+		want          bool
+	}{
+		{"budget prunes to hours", false, true, 3 * h, true},
+		{"short history without budget pruning is a fresh install", false, false, 3 * h, false},
+		{"budget prunes but window is long enough", false, true, 48 * h, false},
+		{"stays raised inside the hysteresis band", true, true, 26 * h, true},
+		{"clears above the band", true, true, 31 * h, false},
+	}
+	for _, tc := range cases {
+		if got := decideRetentionWarn(tc.prev, tc.pruning, tc.window, 24*h); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestPruneOldestBounded_StopsAtPerTickCap(t *testing.T) {
 	var calls []int
 	prune := func(_ context.Context, n int) (int64, error) {

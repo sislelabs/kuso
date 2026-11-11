@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -36,7 +38,24 @@ const deferredIndexTable = "LogLine"
 
 var deferredIndexes = []deferredIndex{
 	{name: "LogLine_project_service_id_idx", def: `("project", "service", "id" DESC)`, migration: 12},
-	{name: "LogLine_line_trgm_idx", def: `USING GIN ("line" gin_trgm_ops)`},
+	{name: logTrigramIndex, def: `USING GIN ("line" gin_trgm_ops)`},
+}
+
+// logTrigramIndex serves substring log search and log-match alerts. It
+// is ~40% of every LogLine row's bytes, so under the byte budget it
+// costs that share of retention; KUSO_LOG_SEARCH_INDEX=none trades fast
+// substring search (it then scans within the statement timeout) for
+// roughly 1.7x more history.
+const logTrigramIndex = "LogLine_line_trgm_idx"
+
+// LogTrigramIndexEnabled is false when KUSO_LOG_SEARCH_INDEX is "none"
+// (or "off"). Anything else, including unset, keeps the index.
+func LogTrigramIndexEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("KUSO_LOG_SEARCH_INDEX"))) {
+	case "none", "off", "false":
+		return false
+	}
+	return true
 }
 
 // deferredIndexAdvisoryLockKey serialises builders across replicas.
@@ -113,6 +132,12 @@ func (d *DB) BuildDeferredIndexes(ctx context.Context, logger *slog.Logger) erro
 
 	var errs []error
 	for _, ix := range deferredIndexes {
+		if ix.name == logTrigramIndex && !LogTrigramIndexEnabled() {
+			if err := dropDeferredIndex(ctx, conn, ix.name, partitioned, logger); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", ix.name, err))
+			}
+			continue
+		}
 		if err := d.buildDeferredIndex(ctx, conn, ix, partitioned, logger); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ix.name, err))
 		}
@@ -151,6 +176,33 @@ func (d *DB) buildDeferredIndex(ctx context.Context, conn *sql.Conn, ix deferred
 	}
 	logger.Info("deferred indexes: built", "index", ix.name, "took", time.Since(start).Round(time.Millisecond))
 	return d.recordDeferredMigration(ctx, conn, ix)
+}
+
+// dropDeferredIndex removes an index the operator opted out of. On a
+// regular table CONCURRENTLY never blocks inserts; a partitioned parent
+// can't drop concurrently, so a short lock_timeout keeps the brief
+// exclusive lock from queueing log inserts behind a long reader.
+func dropDeferredIndex(ctx context.Context, conn *sql.Conn, name string, partitioned bool, logger *slog.Logger) error {
+	var exists bool
+	if err := conn.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, quoteIdent(name)).Scan(&exists); err != nil {
+		return fmt.Errorf("inspect: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	logger.Info("deferred indexes: dropping opted-out index", "index", name)
+	stmt := `DROP INDEX CONCURRENTLY IF EXISTS ` + quoteIdent(name)
+	if partitioned {
+		if _, err := conn.ExecContext(ctx, `SET lock_timeout = '5s'`); err != nil {
+			return err
+		}
+		defer func() { _, _ = conn.ExecContext(context.Background(), `RESET lock_timeout`) }()
+		stmt = `DROP INDEX IF EXISTS ` + quoteIdent(name)
+	}
+	if _, err := conn.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("drop: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) recordDeferredMigration(ctx context.Context, conn *sql.Conn, ix deferredIndex) error {

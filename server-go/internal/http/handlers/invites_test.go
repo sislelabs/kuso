@@ -226,6 +226,11 @@ func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
 		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1','t',NOW(),NOW())`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	if err := d.AsLogDB().InsertLogLines(context.Background(), []db.LogLine{
+		{Ts: time.Now().Add(-3 * time.Hour), Pod: "p", Project: "a", Service: "a-web", Line: "x"},
+	}); err != nil {
+		t.Fatalf("seed log: %v", err)
+	}
 
 	tok := mintToken(t, iss, "admin", auth.PermSettingsAdmin)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
@@ -240,6 +245,10 @@ func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
 		PoolOpen    int    `json:"poolOpen"`
 		PoolInUse   int    `json:"poolInUse"`
 		PoolIdle    int    `json:"poolIdle"`
+		Logs        struct {
+			EffectiveRetentionHours int `json:"effectiveRetentionHours"`
+			ConfiguredRetentionDays int `json:"configuredRetentionDays"`
+		} `json:"logs"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -249,6 +258,10 @@ func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
 	// and the new field shape is reachable.
 	if snap.PoolOpen < 0 {
 		t.Errorf("negative pool counter: %+v", snap)
+	}
+	// SCL-3: the effective log window is visible next to the configured one.
+	if snap.Logs.EffectiveRetentionHours != 3 || snap.Logs.ConfiguredRetentionDays != 7 {
+		t.Errorf("logs retention = %+v, want 3h effective / 7d configured", snap.Logs)
 	}
 }
 

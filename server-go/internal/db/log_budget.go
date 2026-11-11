@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 )
 
 // LogStorageStats is the input to the LogLine byte budget (SCL-1). Every
@@ -75,6 +77,27 @@ func (d *LogDB) LogStorageStats(ctx context.Context) (LogStorageStats, error) {
 		return s, fmt.Errorf("log row width: %w", err)
 	}
 	return s, nil
+}
+
+// OldestLogTs is the ts of the oldest stored line (zero when empty): the
+// effective retention once the byte budget, not the day limit, is what
+// prunes. min(ts) is served from LogLine_ts_idx, partitioned or not.
+func (d *LogDB) OldestLogTs(ctx context.Context) (time.Time, error) {
+	var ts sql.NullTime
+	if err := d.DB.DB.QueryRowContext(ctx, `SELECT min("ts") FROM "LogLine"`).Scan(&ts); err != nil {
+		return time.Time{}, fmt.Errorf("oldest log ts: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return ts.Time, nil
+}
+
+// HasLogTrigramIndex reports whether the pg_trgm search index exists.
+func (d *LogDB) HasLogTrigramIndex(ctx context.Context) (bool, error) {
+	var ok bool
+	err := d.DB.DB.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, quoteIdent(logTrigramIndex)).Scan(&ok)
+	return ok, err
 }
 
 // PruneOldestLogs deletes up to n of the oldest LogLine rows (by ts) in

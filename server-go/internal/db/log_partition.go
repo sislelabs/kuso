@@ -308,7 +308,9 @@ func (d *DB) MigrateLogLineToPartitioned(ctx context.Context, logger *slog.Logge
 	`); err != nil {
 		return fmt.Errorf("seed serial above legacy ids: %w", err)
 	}
-	if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_line_trgm_idx" ON "LogLine" USING GIN ("line" gin_trgm_ops)`); err != nil {
+	if !LogTrigramIndexEnabled() {
+		logger.Info("log-partition: trigram index skipped (KUSO_LOG_SEARCH_INDEX=none)")
+	} else if _, err := d.ExecContext(ctx, `CREATE INDEX "LogLine_line_trgm_idx" ON "LogLine" USING GIN ("line" gin_trgm_ops)`); err != nil {
 		// pg_trgm missing → the schema apply also skipped it. Not
 		// fatal — alert performance is degraded but logs work.
 		logger.Warn("log-partition: trigram index skipped", "err", err)

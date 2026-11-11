@@ -84,3 +84,39 @@ func TestDeferredIndexes_NotBuiltInOpen_ThenBuiltAndRecorded(t *testing.T) {
 		t.Errorf("INVALID index not repaired: exists=%v valid=%v", exists, valid)
 	}
 }
+
+// SCL-3: KUSO_LOG_SEARCH_INDEX=none drops the trigram index (the largest
+// per-row cost) and leaves the other LogLine indexes alone; unsetting it
+// brings the index back on the next build.
+func TestDeferredIndexes_TrigramOptOut(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	ldb := d.AsLogDB()
+	if err := d.BuildDeferredIndexes(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := ldb.HasLogTrigramIndex(ctx); !ok {
+		t.Skip("pg_trgm unavailable in the test database")
+	}
+
+	t.Setenv("KUSO_LOG_SEARCH_INDEX", "none")
+	if err := d.BuildDeferredIndexes(ctx, nil); err != nil {
+		t.Fatalf("build with opt-out: %v", err)
+	}
+	if ok, _ := ldb.HasLogTrigramIndex(ctx); ok {
+		t.Fatal("trigram index survived KUSO_LOG_SEARCH_INDEX=none")
+	}
+	var other bool
+	_ = d.QueryRowContext(ctx, `SELECT to_regclass('"LogLine_project_service_id_idx"') IS NOT NULL`).Scan(&other)
+	if !other {
+		t.Fatal("opt-out dropped an unrelated LogLine index")
+	}
+
+	t.Setenv("KUSO_LOG_SEARCH_INDEX", "")
+	if err := d.BuildDeferredIndexes(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := ldb.HasLogTrigramIndex(ctx); !ok {
+		t.Fatal("trigram index not rebuilt after opting back in")
+	}
+}

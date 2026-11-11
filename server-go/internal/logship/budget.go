@@ -58,9 +58,16 @@ const (
 	unknownVolumePauseFactor  = 2.0
 	unknownVolumeResumeFactor = 1.5
 
-	cnpgClusterName  = "kuso-postgres"
-	logStorageAlarm  = "control-plane-db"
-	diskWarnAdvisory = "LogLine is pruned to its byte budget (KUSO_LOG_MAX_BYTES) but DELETE does not shrink files; reclaim space with VACUUM FULL \"LogLine\" in a maintenance window, set KUSO_LOG_PARTITIONING=true, or grow the kuso-postgres volume"
+	cnpgClusterName   = "kuso-postgres"
+	logStorageAlarm   = "control-plane-db"
+	logRetentionAlarm = "log-retention"
+	// defaultRetentionWarn: warn when the byte budget leaves less than
+	// this much history (KUSO_LOG_RETENTION_WARN_HOURS overrides).
+	defaultRetentionWarn = 24 * time.Hour
+	// retentionClearFactor: hysteresis, so a window hovering at the
+	// threshold doesn't flap the alarm.
+	retentionClearFactor = 1.25
+	diskWarnAdvisory     = "LogLine is pruned to its byte budget (KUSO_LOG_MAX_BYTES) but DELETE does not shrink files; reclaim space with VACUUM FULL \"LogLine\" in a maintenance window, set KUSO_LOG_PARTITIONING=true, or grow the kuso-postgres volume"
 )
 
 var cnpgClustersGVR = schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
@@ -82,6 +89,9 @@ type budgetState struct {
 	diskWarn      bool
 	diskWarnSince time.Time
 	paused        bool
+
+	retentionWarn      bool
+	retentionWarnSince time.Time
 }
 
 type budgetDecision struct {
@@ -222,6 +232,7 @@ func (s *Shipper) enforceBudget(ctx context.Context) {
 	}
 	d := decideBudget(cfg, st, s.budget)
 	s.applyBudgetFlags(cfg, st, d)
+	defer s.checkRetention(ctx, ldb, cfg, d.PruneRows > 0)
 	if d.PruneRows <= 0 {
 		return
 	}
@@ -291,6 +302,65 @@ func (s *Shipper) applyBudgetFlags(cfg budgetConfig, st db.LogStorageStats, d bu
 	}
 	s.budget.paused = d.Pause
 	s.budget.diskWarn = d.DiskWarn
+}
+
+// ConfiguredRetention is the day-based retention window
+// (KUSO_LOG_RETENTION_DAYS), for surfaces that show it next to the
+// effective one.
+func ConfiguredRetention() time.Duration { return resolveRetention() }
+
+func resolveRetentionWarn() time.Duration {
+	return time.Duration(positiveEnvInt("KUSO_LOG_RETENTION_WARN_HOURS", int(defaultRetentionWarn/time.Hour))) * time.Hour
+}
+
+// decideRetentionWarn: the alarm only raises while the byte budget is
+// what prunes (a fresh install's short history is not a problem) and
+// clears once the window is comfortably back above the threshold.
+func decideRetentionWarn(prev, budgetPruning bool, window, threshold time.Duration) bool {
+	if threshold > ConfiguredRetention() {
+		threshold = ConfiguredRetention()
+	}
+	if prev {
+		return window < time.Duration(float64(threshold)*retentionClearFactor) && window < ConfiguredRetention()
+	}
+	return budgetPruning && window < threshold
+}
+
+func (s *Shipper) checkRetention(ctx context.Context, ldb *db.LogDB, cfg budgetConfig, budgetPruning bool) {
+	if !budgetPruning && !s.budget.retentionWarn {
+		return
+	}
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	oldest, err := ldb.OldestLogTs(qctx)
+	cancel()
+	if err != nil || oldest.IsZero() {
+		return
+	}
+	now := time.Now()
+	window := now.Sub(oldest)
+	threshold := resolveRetentionWarn()
+	warn := decideRetentionWarn(s.budget.retentionWarn, budgetPruning, window, threshold)
+	if warn == s.budget.retentionWarn {
+		return
+	}
+	s.budget.retentionWarn = warn
+	if warn {
+		s.budget.retentionWarnSince = now
+		reason := fmt.Sprintf("Logs are kept for only %s (configured %d days): the %s LogLine byte budget is full. "+
+			"Error history, log-match alerts and log search lose anything older. Grow the kuso-postgres volume, raise KUSO_LOG_MAX_BYTES, "+
+			"lower log volume, or set KUSO_LOG_SEARCH_INDEX=none for ~1.7x the window.",
+			window.Round(time.Minute), int(ConfiguredRetention().Hours()/24), humanBytes(cfg.MaxBytes))
+		s.Logger.Warn("logship: effective log retention below threshold", "window", window.Round(time.Minute),
+			"threshold", threshold, "budgetBytes", cfg.MaxBytes)
+		if s.Notify != nil {
+			s.Notify.Emit(notify.PlatformUnhealthy(logRetentionAlarm, s.Namespace, reason, now))
+		}
+		return
+	}
+	s.Logger.Info("logship: effective log retention back above threshold", "window", window.Round(time.Minute))
+	if s.Notify != nil {
+		s.Notify.Emit(notify.PlatformRecovered(logRetentionAlarm, now.Sub(s.budget.retentionWarnSince)))
+	}
 }
 
 func humanBytes(b int64) string {

@@ -7,15 +7,19 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/logship"
 )
 
 type LogSearchHandler struct {
@@ -29,6 +33,33 @@ type LogSearchHandler struct {
 	// disabled the shipper and the search index is empty anyway.
 	LogDB  *db.LogDB
 	Logger *slog.Logger
+
+	retentionMu sync.Mutex
+	retention   logRetention
+	retentionAt time.Time
+}
+
+// logRetention tells the reader how far back the archive actually goes:
+// under the byte budget that can be hours, not the configured days.
+type logRetention struct {
+	OldestTs       *time.Time `json:"oldestTs,omitempty"`
+	ConfiguredDays int        `json:"configuredDays"`
+}
+
+const logRetentionTTL = time.Minute
+
+func (h *LogSearchHandler) cachedRetention(ctx context.Context) logRetention {
+	h.retentionMu.Lock()
+	defer h.retentionMu.Unlock()
+	if !h.retentionAt.IsZero() && time.Since(h.retentionAt) < logRetentionTTL {
+		return h.retention
+	}
+	r := logRetention{ConfiguredDays: int(logship.ConfiguredRetention().Hours() / 24)}
+	if oldest, err := h.LogDB.OldestLogTs(ctx); err == nil && !oldest.IsZero() {
+		r.OldestTs = &oldest
+	}
+	h.retention, h.retentionAt = r, time.Now()
+	return r
 }
 
 func (h *LogSearchHandler) Mount(r chi.Router) {
@@ -88,6 +119,14 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		BeforeID: beforeID,
 		AfterID:  afterID,
 	})
+	switch {
+	case errors.Is(err, db.ErrLogQueryTooShort):
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("search text needs at least %d characters", db.MinLogQueryRunes))
+		return
+	case errors.Is(err, db.ErrLogSearchTooBroad), errors.Is(err, context.DeadlineExceeded):
+		writeErr(w, http.StatusUnprocessableEntity, "search too broad: narrow the time range, pick a service, or use a longer search text")
+		return
+	}
 	if err != nil {
 		// Don't leak FTS5 grammar errors back to the caller — those are
 		// implementation details of the search engine and a probe vector
@@ -105,6 +144,9 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		"service": service,
 		"q":       q.Get("q"),
 		"lines":   rows,
+	}
+	if beforeID <= 0 && afterID <= 0 {
+		resp["retention"] = h.cachedRetention(ctx)
 	}
 	if afterID > 0 && beforeID <= 0 {
 		// Echoed so a client can tell this server honoured the forward

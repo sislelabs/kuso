@@ -17,6 +17,7 @@ import (
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/logship"
 )
 
 // AdminHandler hosts the read-mostly /api routes that drive the admin
@@ -76,7 +77,31 @@ func (h *AdminHandler) DBStats(w http.ResponseWriter, r *http.Request) {
 	if st, err := h.DB.MigrationState(ctx); err == nil {
 		resp["migrations"] = st
 	}
+	resp["logs"] = logStorageSummary(ctx, h.DB.AsLogDB())
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// logStorageSummary is the effective log retention next to the configured
+// one: once the byte budget prunes, the archive can hold hours, not days.
+// Best-effort; a failed read leaves its fields out.
+func logStorageSummary(ctx context.Context, ldb *db.LogDB) map[string]any {
+	out := map[string]any{
+		"configuredRetentionDays": int(logship.ConfiguredRetention().Hours() / 24),
+	}
+	if oldest, err := ldb.OldestLogTs(ctx); err == nil && !oldest.IsZero() {
+		out["oldestTs"] = oldest.UTC().Format(time.RFC3339)
+		out["effectiveRetentionHours"] = int(time.Since(oldest).Hours())
+	}
+	if st, err := ldb.LogStorageStats(ctx); err == nil {
+		out["liveRows"] = st.LiveRows
+		out["liveBytes"] = st.LiveBytes()
+		out["tableBytes"] = st.TotalBytes
+		out["bytesPerRow"] = int(st.BytesPerRow())
+	}
+	if ok, err := ldb.HasLogTrigramIndex(ctx); err == nil {
+		out["trigramIndex"] = ok
+	}
+	return out
 }
 
 func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {

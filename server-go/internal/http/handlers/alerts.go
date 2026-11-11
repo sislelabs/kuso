@@ -291,7 +291,11 @@ func normalizeAlertBody(b *createAlertBody) error {
 	}
 	episodic := db.IsEpisodicAlertKind(b.Kind)
 	switch b.Kind {
-	case db.AlertKindLogMatch, db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
+	case db.AlertKindLogMatch:
+		if q := strings.TrimSpace(b.Query); q != "" && len([]rune(q)) < db.MinLogQueryRunes {
+			return fmt.Errorf("log_match query needs at least %d characters (or none, to count every line)", db.MinLogQueryRunes)
+		}
+	case db.AlertKindNodeCPU, db.AlertKindNodeMem, db.AlertKindNodeDisk:
 	case db.AlertKindHTTP5xxRate:
 		b.ThresholdFloat = defaultFloat(b.ThresholdFloat, 5)
 		if *b.ThresholdFloat <= 0 || *b.ThresholdFloat > 100 {
