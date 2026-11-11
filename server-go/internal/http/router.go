@@ -666,6 +666,7 @@ func mountAuthenticatedRoutes(
 				Kube:         d.Kube,
 				Images:       builds.NewInClusterImageDeleter(builds.RegistryHost),
 				RegistryHost: builds.RegistryHost,
+				Platform:     true,
 			}
 			rhRemediator := &remediate.Remediator{Kube: d.Kube, Audit: d.Audit}
 			rhH := &httphandlers.ReconcileHealthHandler{
@@ -678,6 +679,9 @@ func mountAuthenticatedRoutes(
 			}
 			rhH.Mount(r)
 			(&httphandlers.OrphansHandler{Kube: d.Kube, Audit: d.Audit, Logger: d.Logger}).Mount(r)
+		}
+		if d.Builds != nil && d.Builds.BuildkitTLS != nil {
+			(&httphandlers.BuildkitTLSHandler{Store: d.Builds.BuildkitTLS, Audit: d.Audit, Logger: d.Logger}).Mount(r)
 		}
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}

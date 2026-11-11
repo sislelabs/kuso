@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -121,5 +123,43 @@ func TestEnsureClientSecret_MirrorsClientPairOnly(t *testing.T) {
 		if string(v) == string(home.Data[KeyServerKey]) {
 			t.Fatalf("server key leaked into the build namespace under %q", k)
 		}
+	}
+}
+
+// OPS-4: the one-step enable refuses a daemon that can't do TLS, and on a
+// current one flips the switch and restarts the daemon.
+func TestSetEnabled(t *testing.T) {
+	ctx := context.Background()
+	s, cs := newStore()
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: daemonDeployment, Namespace: "kuso"}}
+	if _, err := cs.AppsV1().Deployments("kuso").Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetEnabled(ctx, true); !errors.Is(err, ErrDaemonPredatesTLS) {
+		t.Fatalf("old daemon: err = %v", err)
+	}
+	if on, _ := s.Enabled(ctx); on {
+		t.Fatal("enabled on a daemon that can't serve TLS")
+	}
+
+	dep.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{
+		Secret: &corev1.SecretVolumeSource{SecretName: SecretName},
+	}}}
+	if _, err := cs.AppsV1().Deployments("kuso").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetEnabled(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if on, _ := s.Enabled(ctx); !on {
+		t.Fatal("not enabled")
+	}
+	sec, _ := cs.CoreV1().Secrets("kuso").Get(ctx, SecretName, metav1.GetOptions{})
+	if !complete(sec.Data) {
+		t.Fatal("enabled without a full certificate set")
+	}
+	live, _ := cs.AppsV1().Deployments("kuso").Get(ctx, daemonDeployment, metav1.GetOptions{})
+	if live.Spec.Template.Annotations["kuso.sislelabs.com/restartedAt"] == "" {
+		t.Fatal("daemon not restarted")
 	}
 }
