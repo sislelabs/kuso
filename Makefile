@@ -254,14 +254,14 @@ sync-install-scripts:
 	@cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
 	@echo "synced install scripts → server-go/internal/installscripts/scripts/"
 
-# Backup image — alpine + aws-cli + postgresql-client. Referenced by
-# the per-addon backup CronJob template. Cross-build amd64 by default
-# since most kuso clusters run on amd64; tag includes the version
-# suffix so old CronJobs don't get re-pulled into a different image.
+# Backup image — alpine + aws-cli + database clients. Referenced by the
+# per-addon backup CronJobs and every restore/seed Job. Multi-arch: those
+# pods follow the addon's placement, so an arm64 node needs its own
+# variant. `make ship` builds and pushes it too (hack/release.sh 4a2a).
 .PHONY: backup-image
 BACKUP_VERSION ?= v0.9.0
 backup-image:
-	@docker buildx build --platform linux/amd64 --push \
+	@docker buildx build --platform linux/amd64,linux/arm64 --push \
 		-t ghcr.io/sislelabs/kuso-backup:$(BACKUP_VERSION) \
 		-t ghcr.io/sislelabs/kuso-backup:latest \
 		-f build/backup/Dockerfile build/backup

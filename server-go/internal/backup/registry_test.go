@@ -46,7 +46,10 @@ func TestRestoreScripts_Contain(t *testing.T) {
 		// or duplicate rows. The apply must still gunzip the artifact and
 		// target the addon's DB.
 		{"PostgresIsAtomicAndFailLoud", "postgres", []string{"ON_ERROR_STOP=1", "--single-transaction", `"${POSTGRES_DB}"`}},
-		{"Mongo", "mongodb", []string{"mongorestore", "--archive", "--gzip", "MONGO_URL", "manifest.json", "MISMATCH"}},
+		// The dump's own `SET lock_timeout = 0;` would cancel the handler's
+		// PGOPTIONS lock_timeout and let a blocked restore wait for hours.
+		{"PostgresStripsDumpLockTimeout", "postgres", []string{"idle_session_timeout|lock_timeout)"}},
+		{"Mongo", "mongodb",[]string{"mongorestore", "--archive", "--gzip", "MONGO_URL", "manifest.json", "MISMATCH"}},
 		{"Mysql", "mysql", []string{"mysql", "MYSQL_HOST", "manifest.json", "MISMATCH", "gunzip"}},
 	}
 	for _, tc := range cases {
