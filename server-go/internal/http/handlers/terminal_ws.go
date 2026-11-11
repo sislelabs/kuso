@@ -64,25 +64,10 @@ func (h *TerminalWSHandler) Mount(r chi.Router) {
 // Terminal upgrades to a WebSocket and proxies an interactive exec
 // into one pod of the service.
 func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
-	jwtTok := extractWSBearer(r)
-	if jwtTok == "" {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	claims, respHeader, ok := authenticateWS(w, r, h.Issuer)
+	if !ok {
 		return
 	}
-	claims, err := h.Issuer.Verify(jwtTok)
-	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	// Revocation: Verify only checks signature + expiry. This handler is
-	// on the public router (no auth middleware), so we must consult the
-	// revocation hook ourselves — otherwise a logged-out / deactivated
-	// admin's unexpired token still opens a shell. Fails closed.
-	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// The auth middleware (which we bypass) is the only production code
 	// that stuffs claims into the request context. callerHasProjectPerm
 	// reads them back via ClaimsFromContext, so inject them here — without
@@ -137,10 +122,6 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 
 	// Upgrade. Echo the bearer subprotocol so intermediaries (Traefik)
 	// settle the handshake — same dance as the logs WS.
-	respHeader := http.Header{}
-	if sp := r.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
-		respHeader.Set("Sec-WebSocket-Protocol", "kuso.bearer")
-	}
 	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		return // upgrader wrote its own error

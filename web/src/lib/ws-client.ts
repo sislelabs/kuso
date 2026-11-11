@@ -1,7 +1,20 @@
-// Reconnecting WebSocket wrapper with JWT auth via subprotocol.
+// Reconnecting WebSocket wrapper. Each connection attempt authenticates
+// with a one-time ticket in the subprotocol (see wsTicketProtocols).
 // Use case: log tail streaming. Caller drives via onFrame/onStatus
 // callbacks; the wrapper handles auto-reconnect with capped exponential
 // backoff and surfaces transient errors as "disconnected" status.
+
+import { api } from "./api-client";
+
+// wsTicketProtocols mints a one-time ticket for a /ws/ path and returns
+// the Sec-WebSocket-Protocol list that presents it. The server refuses a
+// browser upgrade that only carries the session cookie: an addon console
+// is served from this origin, and its scripts would carry the cookie too.
+export async function wsTicketProtocols(path: string): Promise<string[]> {
+  const bare = path.split("?")[0];
+  const r = await api<{ ticket: string }>("/api/ws/ticket", { method: "POST", body: { path: bare } });
+  return ["kuso.ticket", r.ticket];
+}
 
 
 export type WSStatus = "connecting" | "open" | "closed" | "error";
@@ -23,6 +36,8 @@ export interface WSOptions<F = unknown> {
   onHandshakeFailure?: () => Promise<"retry" | "stop"> | "retry" | "stop";
   /** Consecutive never-opened sockets before giving up. Default 10 (~3.5 min of backoff). */
   maxHandshakeFailures?: number;
+  /** Subprotocols for one attempt. Default: a fresh ticket from wsTicketProtocols. */
+  protocols?: (path: string) => Promise<string[]> | string[];
 }
 
 export class ReconnectingWS<F = unknown> {
@@ -40,12 +55,23 @@ export class ReconnectingWS<F = unknown> {
   open() {
     if (this.closed) return;
     this.opts.onStatus?.("connecting");
-    const url = wsUrl(this.opts.path);
-    // Cookie-mode auth: the browser carries kuso.JWT_TOKEN on the
-    // upgrade request automatically. The server's logs_ws handler
-    // falls through from Sec-WebSocket-Protocol to the cookie when
-    // the protocol slot is empty.
-    const ws = new WebSocket(url);
+    const protocols = (this.opts.protocols ?? wsTicketProtocols)(this.opts.path);
+    if (Array.isArray(protocols)) {
+      this.connect(protocols);
+      return;
+    }
+    protocols.then(
+      (p) => this.connect(p),
+      // No ticket (session gone, server down) is a refused handshake.
+      () => {
+        if (!this.closed) void this.handleHandshakeFailure(0, "ticket");
+      },
+    );
+  }
+
+  private connect(protocols: string[]) {
+    if (this.closed) return;
+    const ws = new WebSocket(wsUrl(this.opts.path), protocols);
     this.ws = ws;
     let opened = false;
     ws.onopen = () => {

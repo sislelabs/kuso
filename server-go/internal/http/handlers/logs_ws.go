@@ -2,12 +2,8 @@
 //
 //	GET /ws/projects/{project}/services/{service}/logs?env=X&tail=N
 //
-// Auth: bearer JWT in the Sec-WebSocket-Protocol subprotocol header
-// (browsers can't set Authorization on WS handshakes; the subprotocol
-// trick is standard). The handler accepts a comma-separated list:
-// `kuso.bearer.<jwt>` is the auth slot. We surface the same value back
-// in Sec-WebSocket-Protocol on Accept so the client's WebSocket
-// receives a successful handshake.
+// Auth: authenticateWS (ws_auth.go): a one-time ticket or bearer JWT in
+// Sec-WebSocket-Protocol; the session cookie only for non-browser clients.
 package handlers
 
 import (
@@ -100,7 +96,7 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
 	CheckOrigin:     wsOriginAllowed,
-	Subprotocols:    []string{"kuso.bearer"},
+	Subprotocols:    []string{wsProtoBearer, wsProtoTicket},
 }
 
 // wsOriginAllowed implements the CheckOrigin policy described above.
@@ -181,24 +177,10 @@ func (s *wsSink) Write(f logs.Frame) error {
 
 // Tail is GET /ws/projects/{project}/services/{service}/logs.
 func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
-	jwtTok := extractWSBearer(r)
-	if jwtTok == "" {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
+	claims, respHeader, ok := authenticateWS(w, r, h.Issuer)
+	if !ok {
 		return
 	}
-	claims, err := h.Issuer.Verify(jwtTok)
-	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	// Revocation: Verify only checks signature + expiry. On the public
-	// router (no auth middleware) we must consult the revocation hook
-	// ourselves, else a revoked token still streams logs until expiry.
-	if h.Issuer.CheckRevoked(r.Context(), claims) {
-		writeErr(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	h.Issuer.ResolvePermissions(r.Context(), claims)
 	// Project-ownership check. Auth middleware would normally do this
 	// for us, but the WS handler is mounted on the public router and
 	// has to roll its own gates. Admins (settings:admin) bypass.
@@ -236,10 +218,6 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	// actually offered, some intermediaries (Traefik) reject. When
 	// no subprotocol is offered (cookie auth path) we omit the
 	// header entirely.
-	respHeader := http.Header{}
-	if sp := r.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
-		respHeader.Set("Sec-WebSocket-Protocol", "kuso.bearer")
-	}
 	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		// upgrader writes its own error response.
@@ -362,31 +340,3 @@ func (h *LogsWSHandler) releaseWSSlot(userID string) {
 	}
 }
 
-// extractWSBearer reads the JWT from the Sec-WebSocket-Protocol header.
-// Browsers send it as a comma-separated list; the format we expect is
-// `kuso.bearer, <jwt>` (gorilla doesn't accept dots in subprotocol
-// values, so the JWT is the *next* slot).
-//
-// Falls back to the kuso.JWT_TOKEN cookie when the header is missing —
-// useful for non-browser clients that can set Authorization but not the
-// subprotocol header.
-func extractWSBearer(r *http.Request) string {
-	v := r.Header.Get("Sec-WebSocket-Protocol")
-	if v != "" {
-		parts := strings.Split(v, ",")
-		// Find "kuso.bearer" then read the next part as the token.
-		for i := 0; i < len(parts)-1; i++ {
-			if strings.TrimSpace(parts[i]) == "kuso.bearer" {
-				return strings.TrimSpace(parts[i+1])
-			}
-		}
-	}
-	if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil {
-		return c.Value
-	}
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
-	}
-	return ""
-}

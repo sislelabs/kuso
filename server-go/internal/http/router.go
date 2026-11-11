@@ -488,6 +488,7 @@ func mountAuthenticatedRoutes(
 		r.Use(httphandlers.RefuseConsoleOriginatedAPI)
 		r.Use(d.Issuer.Middleware())
 		r.Get("/api/auth/session", authH.Session)
+		r.Post("/api/ws/ticket", httphandlers.WSTicket(d.Issuer))
 
 		if d.Status != nil {
 			statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
