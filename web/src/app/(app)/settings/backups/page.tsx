@@ -54,6 +54,7 @@ interface BackupHealthResp {
   addonBackups?: AddonBackupRow[];
   addonBackupsComplete?: boolean;
   serviceVolumes?: ServiceVolumeRow[];
+  backupKeysUnexported?: string[];
 }
 
 type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "via-instance" | "not-covered";
@@ -244,6 +245,13 @@ function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
   return (
     <>
       <CoverageHeadline rows={health.data.addonBackups ?? []} complete={health.data.addonBackupsComplete !== false} s3={s3} />
+      {(health.data.backupKeysUnexported?.length ?? 0) > 0 && (
+        <SettingsNotice tone="warning" title="Backup encryption keys exist only in this cluster">
+          {health.data.backupKeysUnexported?.length} addon key(s) have never been exported. If the cluster is lost, those
+          addons&apos; encrypted backups can&apos;t be read. Run <code>kuso backup keys export</code> and store the file
+          off-cluster.
+        </SettingsNotice>
+      )}
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />

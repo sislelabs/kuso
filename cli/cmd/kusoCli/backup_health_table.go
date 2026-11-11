@@ -49,7 +49,8 @@ type backupHealthView struct {
 		Covered bool     `json:"covered"`
 		Detail  string   `json:"detail"`
 	} `json:"serviceVolumes"`
-	ServiceVolumesComplete bool `json:"serviceVolumesComplete"`
+	ServiceVolumesComplete bool     `json:"serviceVolumesComplete"`
+	BackupKeysUnexported   []string `json:"backupKeysUnexported"`
 }
 
 func healthWord(ok bool) string {
@@ -117,6 +118,13 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 	}
 	if !h.ServiceVolumesComplete {
 		fmt.Fprintln(w, "  (service volume list incomplete: a lookup failed)")
+	}
+	if n := len(h.BackupKeysUnexported); n > 0 {
+		fmt.Fprintf(w, "\nWARNING: %d backup encryption key(s) exist only in this cluster; if it is lost, those addons' encrypted dumps are unreadable.\n", n)
+		fmt.Fprintln(w, "  Export them and store the file off-cluster: kuso backup keys export --file <path>")
+		for _, k := range h.BackupKeysUnexported {
+			fmt.Fprintln(w, "  - "+k)
+		}
 	}
 }
 

@@ -104,6 +104,8 @@ func (h *BackupHandler) Mount(r chi.Router) {
 	r.Post("/api/admin/restore", h.Upload)
 	r.Get("/api/admin/restore/{jobName}", h.RestoreStatus)
 	r.Get("/api/admin/backup-health", h.BackupHealth)
+	r.Get("/api/admin/backup/keys", h.ExportBackupKeys)
+	r.Post("/api/admin/backup/keys", h.ImportBackupKeys)
 }
 
 // Download streams `pg_dump --format=plain --no-owner --no-acl --clean
@@ -407,7 +409,7 @@ func (h *BackupHandler) createRestoreJob(ctx context.Context, jobName, secretNam
 					Containers: []corev1.Container{{
 						Name:            "psql",
 						Image:           "postgres:16-alpine",
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"/bin/sh", "-ec"},
 						Args:            []string{secretRestoreScript},
 						Env: []corev1.EnvVar{{
