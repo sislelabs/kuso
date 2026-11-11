@@ -843,8 +843,11 @@ spec:
                   # LOCK TABLES blocking app writes for the length of the dump.
                   # --routines/--events: otherwise silently left out.
                   # --no-tablespaces: the app user lacks PROCESS.
-                  # --skip-ssl-verify-server-cert: still TLS, but MySQL's cert
-                  # is self-signed and the MariaDB client verifies by default.
+                  # --skip-ssl-verify-server-cert: the traffic is still
+                  # TLS-encrypted, but the server's identity is NOT verified.
+                  # MySQL self-signs its cert and kuso issues no CA to check it
+                  # against; the connection stays in-cluster to the addon's
+                  # Service. A per-addon CA would let this verify.
                   MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump --skip-ssl-verify-server-cert \
                     --single-transaction --routines --events --triggers --no-tablespaces \
                     -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz

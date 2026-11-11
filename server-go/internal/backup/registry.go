@@ -294,6 +294,10 @@ echo "==> piping into mysql"
 # have been taken with DROP-TABLE statements (mysqldump's default --add-drop-
 # table) OR the target must be empty. Correctness focus for the atomic path is
 # postgres above; mysql is fail-loud but not all-or-nothing.
+# --skip-ssl-verify-server-cert: still TLS-encrypted, but the server's
+# identity is NOT verified. MySQL self-signs its cert and kuso issues no CA
+# to check it against; the connection stays in-cluster to the addon's
+# Service. A per-addon CA would let this verify.
 gunzip -c /tmp/dump.sql.gz | MYSQL_PWD="${MYSQL_PASSWORD}" mysql --skip-ssl-verify-server-cert -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}"
 echo "==> done"
 `
