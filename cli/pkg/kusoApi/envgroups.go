@@ -13,6 +13,7 @@ import "github.com/go-resty/resty/v2"
 type CreateEnvGroupRequest struct {
 	Name        string            `json:"name"`
 	AddonPolicy map[string]string `json:"addonPolicy,omitempty"`
+	S3ReadWrite bool              `json:"s3ReadWrite,omitempty"`
 }
 
 func (k *KusoClient) ListEnvGroups(project string) (*resty.Response, error) {

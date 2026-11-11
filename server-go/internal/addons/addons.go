@@ -1903,6 +1903,9 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 				slog.Default().Warn("addon refresh: production addon conns withheld from an isolated env (no clone for it)",
 					"project", project, "env", live.Name, "withheld", withheld)
 			}
+			if !preview && SharedS3ReadOnly(live.Annotations) {
+				perEnv = SwapToReadOnlyS3(perEnv, ReadOnlyS3Swaps(addonList), SubscriptionAllows(subs, project))
+			}
 			// Respect the shared-secret subscription (mirrors projects.
 			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env
 			// gets its subscribed keys as per-key valueFrom entries, so

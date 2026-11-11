@@ -25,6 +25,7 @@ import (
 
 var (
 	envGroupAddonShare []string
+	envGroupS3RW       bool
 	envGroupDeleteYes  bool
 )
 
@@ -128,7 +129,7 @@ var envGroupCreateCmd = &cobra.Command{
 				policy[a] = "shared"
 			}
 		}
-		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy}
+		req := kusoApi.CreateEnvGroupRequest{Name: args[1], AddonPolicy: policy, S3ReadWrite: envGroupS3RW}
 		resp, err := api.CreateEnvGroup(args[0], req)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("create env-group: %w", err)
@@ -231,5 +232,6 @@ func init() {
 	envGroupListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 	envGroupGetCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 	envGroupCreateCmd.Flags().StringSliceVar(&envGroupAddonShare, "share-addon", nil, "addon short-name(s) to share with production instead of cloning fresh (repeatable)")
+	envGroupCreateCmd.Flags().BoolVar(&envGroupS3RW, "s3-read-write", false, "let the group write the production buckets of s3 addons it shares (default: read-only)")
 	envGroupDeleteCmd.Flags().BoolVarP(&envGroupDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 }

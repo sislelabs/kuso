@@ -77,6 +77,9 @@ type CreateEnvGroupRequest struct {
 	// to "fresh" so a typo or an addon added later doesn't silently
 	// share production data.
 	AddonPolicy map[string]AddonPolicy `json:"addonPolicy,omitempty"`
+	// S3ReadWrite lets the group's envs write the production buckets of
+	// s3 addons it shares (policy shared). Default: read-only (BLOB-R9).
+	S3ReadWrite bool `json:"s3ReadWrite,omitempty"`
 }
 
 // EnvGroupSummary is what the API returns for list / detail endpoints.
@@ -629,6 +632,18 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	}
 	sort.Strings(freshConns)
 	var releaseEnvs []*kube.KusoEnvironment
+	// Shared production buckets are mounted read-only unless the caller
+	// opted into read-write; fresh ones are the group's own copies.
+	var s3ReadOnly map[string]string
+	if !req.S3ReadWrite {
+		var shared []kube.KusoAddon
+		for _, a := range prodAddons {
+			if policy[strings.TrimPrefix(a.Name, project+"-")] == AddonShared {
+				shared = append(shared, a)
+			}
+		}
+		s3ReadOnly = addonspkg.ReadOnlyS3Swaps(shared)
+	}
 
 	// Anchor: the first env CR we create carries the group-level
 	// annotations. Picks the alphabetically-first service so the same
@@ -718,6 +733,10 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				return nil, failCreate(fmt.Errorf("resolve shared env keys for %s: %w", item.short, err))
 			}
 			envEnvVars, svcEnvFrom = merged, pruned
+		}
+		if len(s3ReadOnly) > 0 {
+			svcEnvFrom = addonspkg.SwapToReadOnlyS3(svcEnvFrom, s3ReadOnly, nil)
+			envEnvVars = rescopeAddonConnRefsByOrigin(envEnvVars, s3ReadOnly)
 		}
 
 		// Clone the KusoService with the rewritten envVars. Branch
@@ -834,6 +853,9 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		anchor := idx == 0
 		annot := map[string]string{
 			"kuso.sislelabs.com/env-group-source-service": item.fqn,
+		}
+		if len(s3ReadOnly) > 0 {
+			annot[addonspkg.AnnotationSharedS3ReadOnly] = "true"
 		}
 		if anchor {
 			annot[envGroupAnchorAnnotation] = "true"

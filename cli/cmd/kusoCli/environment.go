@@ -33,6 +33,7 @@ var (
 	environmentAddShareAddons bool
 	environmentAddSeedFrom    string
 	environmentAddAddons      []string
+	environmentAddS3RW        bool
 )
 
 // runEnvironmentAdd is shared by both the top-level `kuso environment
@@ -51,6 +52,7 @@ var runEnvironmentAdd = func(cmd *cobra.Command, args []string) error {
 		ShareAddons:  environmentAddShareAddons,
 		SeedFrom:     environmentAddSeedFrom,
 		Addons:       environmentAddAddons,
+		S3ReadWrite:  environmentAddS3RW,
 	}
 	resp, err := api.AddEnvironment(args[0], args[1], req)
 	if err := checkRespErr(resp, err); err != nil {
@@ -90,6 +92,8 @@ By default a new env gets its OWN addons (its own postgres DB, redis, s3) so
 staging/qa never touch production data — the same isolation PR previews get.
 The postgres DB starts empty; pass --seed-from <env> to copy a snapshot, or
 --share-addons to fall back to sharing the project's production addons.
+A shared env reads production s3 buckets through their read-only user;
+add --s3-read-write to let it write them.
 
 This is distinct from "kuso env" which manages environment VARIABLES on
 a service.`,
@@ -207,6 +211,7 @@ func init() {
 	environmentAddCmd.Flags().BoolVar(&environmentAddShareAddons, "share-addons", false, "share the project's addons with production instead of giving this env its own DB/redis/s3 (legacy behavior)")
 	environmentAddCmd.Flags().StringVar(&environmentAddSeedFrom, "seed-from", "", "seed this env's postgres DB from the named source env (default: empty DB)")
 	environmentAddCmd.Flags().StringSliceVar(&environmentAddAddons, "addons", nil, "stateful addon kinds to provision per-env (default: all the project has — postgres,redis,s3)")
+	environmentAddCmd.Flags().BoolVar(&environmentAddS3RW, "s3-read-write", false, "with --share-addons: let this env write production s3 buckets (default: read-only)")
 	_ = environmentAddCmd.MarkFlagRequired("branch")
 
 	// Project-scoped alias. projectEnvCmd is already registered in
@@ -218,5 +223,6 @@ func init() {
 	projectEnvAddCmd.Flags().BoolVar(&environmentAddShareAddons, "share-addons", false, "share the project's addons instead of giving this env its own DB/redis/s3")
 	projectEnvAddCmd.Flags().StringVar(&environmentAddSeedFrom, "seed-from", "", "seed this env's postgres DB from the named source env (default: empty DB)")
 	projectEnvAddCmd.Flags().StringSliceVar(&environmentAddAddons, "addons", nil, "stateful addon kinds to provision per-env (default: all the project has)")
+	projectEnvAddCmd.Flags().BoolVar(&environmentAddS3RW, "s3-read-write", false, "with --share-addons: let this env write production s3 buckets (default: read-only)")
 	_ = projectEnvAddCmd.MarkFlagRequired("branch")
 }

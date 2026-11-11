@@ -418,6 +418,7 @@ type CreateEnvRequest struct {
 	ShareAddons  bool     `json:"shareAddons,omitempty"`
 	SeedFrom     string   `json:"seedFrom,omitempty"`
 	Addons       []string `json:"addons,omitempty"`
+	S3ReadWrite  bool     `json:"s3ReadWrite,omitempty"`
 }
 
 func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {
