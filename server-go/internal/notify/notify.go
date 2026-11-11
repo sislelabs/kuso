@@ -351,6 +351,16 @@ type Dispatcher struct {
 	mutedMu      sync.RWMutex
 	mutedCache   map[string]bool
 	mutedExpires time.Time
+
+	// lastGood is the most recent successful channel read. Unlike
+	// notifsCache it never expires or gets invalidated: it is what the
+	// direct fallback (fallback.go) pages through while Postgres is down.
+	lastGoodMu sync.Mutex
+	lastGood   []db.Notification
+
+	// directSendFn is a test seam for deliverDirect; nil means
+	// d.deliverViaChannel.
+	directSendFn func(ctx context.Context, n db.Notification, e Event) error
 }
 
 // notifsCacheTTL bounds how stale the dispatcher's view of the
@@ -453,6 +463,13 @@ func (d *Dispatcher) EmitDurable(e Event) error {
 			d.persistFeed(parent, e)
 		}
 		err = d.enqueueOutbox(parent, e)
+		if err != nil && directFallbackEligible(e) {
+			if derr := d.deliverDirect(parent, e); derr == nil {
+				err = nil
+			} else {
+				err = fmt.Errorf("%w; %w", err, derr)
+			}
+		}
 	}
 	// Event hook (incidents.Manager), after persist. Called outside d.mu;
 	// the hook spawns async work and must not block. NOT gated on the
@@ -676,6 +693,7 @@ func (d *Dispatcher) cachedNotifications(ctx context.Context) ([]db.Notification
 	}
 	d.notifsCache = notifs
 	d.notifsExpires = time.Now().Add(notifsCacheTTL)
+	d.rememberChannels(notifs)
 	return notifs, nil
 }
 

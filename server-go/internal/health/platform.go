@@ -25,25 +25,36 @@ type PlatformTarget struct {
 	Namespace  string
 	Deployment string
 	Selector   string
+	// Core: the cluster can't serve or recover without it, so a
+	// Deployment scaled to zero counts as down unless it carries
+	// IntentionallyOffAnnotation. Non-core targets at zero are skipped
+	// (buildkitd is scaled to 0 on purpose when shards replace it).
+	Core bool
 }
+
+// IntentionallyOffAnnotation on a core platform Deployment marks a
+// scale-to-zero as deliberate, so the watcher doesn't page on it.
+const IntentionallyOffAnnotation = "kuso.sislelabs.com/intentionally-off"
 
 // platformTargets mirrors the workloads platformharden hardens plus the
 // kuso-owned ones in the home namespace. Missing workloads are skipped,
 // so optional components (activator, pgbouncer, a Traefik that lives in
 // kube-system instead of traefik) cost nothing.
 var platformTargets = []PlatformTarget{
-	{Component: "Traefik", Namespace: "traefik", Deployment: "traefik"},
-	{Component: "Traefik", Namespace: "kube-system", Deployment: "traefik"},
-	{Component: "kuso-server", Deployment: "kuso-server"},
+	{Component: "Traefik", Namespace: "traefik", Deployment: "traefik", Core: true},
+	{Component: "Traefik", Namespace: "kube-system", Deployment: "traefik", Core: true},
+	{Component: "kuso-server", Deployment: "kuso-server", Core: true},
 	{Component: "buildkitd", Deployment: "kuso-buildkitd"},
-	{Component: "registry", Deployment: "kuso-registry"},
+	{Component: "registry", Deployment: "kuso-registry", Core: true},
 	{Component: "activator", Deployment: "kuso-activator"},
 	{Component: "Prometheus", Deployment: "kuso-prometheus"},
-	{Component: "pgbouncer", Deployment: "kuso-pgbouncer"},
+	{Component: "pgbouncer", Deployment: "kuso-pgbouncer", Core: true},
 	{Component: "control-plane Postgres", Selector: "cnpg.io/cluster=kuso-postgres"},
-	{Component: "kuso-operator", Namespace: "kuso-operator-system", Deployment: "kuso-operator-controller-manager"},
-	{Component: "cert-manager", Namespace: "cert-manager", Deployment: "cert-manager"},
-	{Component: "cert-manager-webhook", Namespace: "cert-manager", Deployment: "cert-manager-webhook"},
+	{Component: "CNPG operator", Namespace: "cnpg-system", Deployment: "cnpg-controller-manager", Core: true},
+	{Component: "CoreDNS", Namespace: "kube-system", Deployment: "coredns", Core: true},
+	{Component: "kuso-operator", Namespace: "kuso-operator-system", Deployment: "kuso-operator-controller-manager", Core: true},
+	{Component: "cert-manager", Namespace: "cert-manager", Deployment: "cert-manager", Core: true},
+	{Component: "cert-manager-webhook", Namespace: "cert-manager", Deployment: "cert-manager-webhook", Core: true},
 }
 
 const (
@@ -79,10 +90,20 @@ func (t PlatformTarget) key(home string) string {
 
 // platformObservation is one tick's verdict for a target.
 type platformObservation struct {
-	absent  bool // no such workload, or scaled to zero on purpose
-	crash   string
-	unready bool
-	ready   bool
+	absent       bool // no such workload, or scaled to zero on purpose
+	crash        string
+	unready      bool
+	ready        bool
+	scaledToZero bool
+}
+
+// platformPending is an event checkPlatform owes plus how to undo the
+// state change it implies if delivery fails, so the next tick retries.
+type platformPending struct {
+	key       string
+	ep        *platformEpisode
+	recovered bool
+	event     notify.Event
 }
 
 func (w *Watcher) checkPlatform(ctx context.Context) {
@@ -99,7 +120,7 @@ func (w *Watcher) checkPlatform(ctx context.Context) {
 		w.platformOOMs = map[string][]time.Time{}
 	}
 	w.mu.Unlock()
-	var events []notify.Event
+	var pending []platformPending
 	for _, t := range platformTargets {
 		ns := t.Namespace
 		if ns == "" {
@@ -124,12 +145,16 @@ func (w *Watcher) checkPlatform(ctx context.Context) {
 			ep.healthySince = time.Time{}
 			grace := PlatformUnreadyGrace
 			reason := "no ready pod"
+			if obs.scaledToZero {
+				reason = "Deployment scaled to 0 replicas (annotate it " + IntentionallyOffAnnotation + "=true if that is deliberate)"
+			}
 			if obs.crash != "" {
 				grace, reason = PlatformCrashGrace, obs.crash
 			}
 			if !ep.alerted && now.Sub(ep.badSince) >= grace {
 				ep.alerted = true
-				events = append(events, notify.PlatformUnhealthy(t.Component, ns, reason, ep.badSince))
+				pending = append(pending, platformPending{key: key, ep: ep,
+					event: notify.PlatformUnhealthy(t.Component, ns, reason, ep.badSince)})
 			}
 		case ep != nil && ep.alerted:
 			if !obs.ready {
@@ -140,7 +165,8 @@ func (w *Watcher) checkPlatform(ctx context.Context) {
 				ep.healthySince = now
 			}
 			if now.Sub(ep.healthySince) >= RecoveryStableWindow {
-				events = append(events, notify.PlatformRecovered(t.Component, ep.healthySince.Sub(ep.badSince)))
+				pending = append(pending, platformPending{key: key, ep: ep, recovered: true,
+					event: notify.PlatformRecovered(t.Component, ep.healthySince.Sub(ep.badSince))})
 				delete(w.platformSeen, key)
 			}
 		default:
@@ -148,8 +174,22 @@ func (w *Watcher) checkPlatform(ctx context.Context) {
 		}
 		w.mu.Unlock()
 	}
-	for _, e := range events {
-		w.send(e)
+	// State only sticks once the event is delivered (outbox row or the
+	// direct fallback). When the control-plane DB is what's down, a
+	// dropped page used to be final because alerted was already set.
+	for _, p := range pending {
+		if err := w.sendDurable(p.event); err == nil {
+			continue
+		}
+		w.mu.Lock()
+		if p.recovered {
+			if _, reopened := w.platformSeen[p.key]; !reopened {
+				w.platformSeen[p.key] = p.ep
+			}
+		} else if cur := w.platformSeen[p.key]; cur == p.ep {
+			cur.alerted = false
+		}
+		w.mu.Unlock()
 	}
 }
 
@@ -173,7 +213,10 @@ func (w *Watcher) observePlatform(ctx context.Context, t PlatformTarget, ns, key
 			desired = *dep.Spec.Replicas
 		}
 		if desired == 0 {
-			return platformObservation{absent: true}, true
+			if !t.Core || dep.Annotations[IntentionallyOffAnnotation] == "true" {
+				return platformObservation{absent: true}, true
+			}
+			return platformObservation{unready: true, scaledToZero: true}, true
 		}
 		if dep.Spec.Selector == nil {
 			return platformObservation{}, false

@@ -1068,6 +1068,11 @@ func main() {
 					hw.Run(workCtx)
 				})
 			}
+			// Not registered in the liveness registry: a failing ping is
+			// the external monitor's signal, not a reason to restart us.
+			if hb := health.HeartbeatFromEnv(logger, database.DB.PingContext); hb != nil {
+				goSafe(logger, "heartbeat", func() { hb.Run(workCtx) })
+			}
 			// Build controller moved out of startSingletons. It
 			// installs informer handlers at boot (one-shot, gated
 			// on leaderActive) — the previous shape registered a

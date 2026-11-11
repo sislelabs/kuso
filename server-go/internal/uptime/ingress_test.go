@@ -75,6 +75,34 @@ func TestIngressPartialFailureIsNotDown(t *testing.T) {
 	}
 }
 
+// The opt-in public-path probe catches what the ClusterIP probe can't
+// (broken LB/firewall/DNS while Traefik answers in-cluster).
+func TestExternalPathDownWhileTraefikHealthy(t *testing.T) {
+	ok := true
+	h := newIngressHarness(&ok)
+	extOK := false
+	h.w.ExternalTarget = func() string { return "https://shop.example.com/" }
+	h.w.ExternalProbe = func(context.Context, string) Result {
+		if extOK {
+			return Result{OK: true}
+		}
+		return Result{Error: "i/o timeout"}
+	}
+	h.ticks(ingressFailTicks - 1)
+	if n := countEvents(h.notify, notify.EventIngressDown); n != 0 {
+		t.Fatalf("paged before the debounce: %d", n)
+	}
+	h.ticks(4)
+	if n := countEvents(h.notify, notify.EventIngressDown); n != 1 {
+		t.Fatalf("ingress.down = %d, want 1", n)
+	}
+	extOK = true
+	h.ticks(ingressOKTicks)
+	if n := countEvents(h.notify, notify.EventPlatformRecovered); n != 1 {
+		t.Fatalf("platform.recovered = %d, want 1", n)
+	}
+}
+
 func TestIngressURLKeepsPathAndQuery(t *testing.T) {
 	got := ingressURL("http://traefik.traefik.svc.cluster.local", "http://web.kuso.svc.cluster.local/healthz?x=1")
 	if got != "http://traefik.traefik.svc.cluster.local/healthz?x=1" {

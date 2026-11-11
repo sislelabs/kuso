@@ -115,6 +115,9 @@ type Watcher struct {
 	// Test seams; nil means time.Now / w.Notify.Emit.
 	now  func() time.Time
 	emit func(notify.Event)
+	// emitDurable replaces w.Notify.EmitDurable in sendDurable; nil
+	// falls back to emit (reporting success) when that seam is set.
+	emitDurable func(notify.Event) error
 }
 
 // StateStore is the Setting key/value surface the watcher persists its
@@ -176,6 +179,19 @@ func (w *Watcher) send(e notify.Event) {
 		return
 	}
 	w.Notify.Emit(e)
+}
+
+// sendDurable is send for callers that keep "already paged" state: it
+// reports whether the event reached the outbox or a channel.
+func (w *Watcher) sendDurable(e notify.Event) error {
+	switch {
+	case w.emitDurable != nil:
+		return w.emitDurable(e)
+	case w.emit != nil:
+		w.emit(e)
+		return nil
+	}
+	return w.Notify.EmitDurable(e)
 }
 
 // Run loops until ctx is cancelled. First tick fires immediately so
