@@ -41,6 +41,7 @@ type Issuer struct {
 	revoked      RevocationChecker  // optional; set via SetRevocationChecker
 	resolvePerms PermissionResolver // optional; set via SetPermissionResolver
 	seen         SeenRecorder       // optional; set via SetSeenRecorder
+	tickets      TicketConsumer     // optional; set via SetTicketConsumer
 }
 
 // DevJWTSecret is the secret hack/install.sh writes under

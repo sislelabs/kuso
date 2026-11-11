@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"kuso/server/internal/auth"
@@ -62,7 +61,7 @@ func authenticateWS(w http.ResponseWriter, r *http.Request, issuer *auth.Issuer)
 		if claims.ExpiresAt != nil {
 			exp = claims.ExpiresAt.Time
 		}
-		if !isTicket || path != r.URL.Path || !wsTickets.consume(claims.ID, exp) {
+		if !isTicket || path != r.URL.Path || !issuer.ConsumeWSTicket(r.Context(), claims.ID, exp) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return nil, nil, false
 		}
@@ -99,38 +98,6 @@ func wsSubprotocolToken(r *http.Request) (tok, proto string) {
 		}
 	}
 	return "", ""
-}
-
-// wsTicketStore makes a ticket single-use on this replica. A replay on
-// another replica is bounded by the ticket's one-minute life and needs
-// the ticket itself, which only the client that minted it holds.
-type wsTicketStore struct {
-	mu   sync.Mutex
-	used map[string]time.Time
-}
-
-var wsTickets = &wsTicketStore{used: map[string]time.Time{}}
-
-func (s *wsTicketStore) consume(id string, exp time.Time) bool {
-	if id == "" {
-		return false
-	}
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, e := range s.used {
-		if now.After(e) {
-			delete(s.used, k)
-		}
-	}
-	if _, seen := s.used[id]; seen {
-		return false
-	}
-	if exp.IsZero() {
-		exp = now.Add(auth.WSTicketTTL)
-	}
-	s.used[id] = exp
-	return true
 }
 
 // WSTicket is POST /api/ws/ticket: body {"path":"/ws/..."}, answer
