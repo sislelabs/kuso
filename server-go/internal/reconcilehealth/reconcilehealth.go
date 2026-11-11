@@ -176,6 +176,11 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		}
 	}
 
+	if iss, ok := s.registryAuthOff(ctx, namespace); ok {
+		rep.Scanned++
+		rep.Issues = append(rep.Issues, iss)
+	}
+
 	backupCheck := s.newBackupSecretCheck(ctx, namespace)
 	for _, ns := range namespaces {
 		addons, err := s.Kube.ListKusoAddons(ctx, ns)

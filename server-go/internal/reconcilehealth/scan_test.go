@@ -19,6 +19,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/registryauth"
 )
 
 const testRegistry = "reg.local:5000"
@@ -102,6 +103,8 @@ func scanFixture(t *testing.T) (*dynamicfake.FakeDynamicClient, *fake.Clientset)
 		helmRelease,
 		sec("beta-db-conn", "kuso-beta", "beta"),
 		sec("beta-gone-conn", "kuso-beta", "beta"),
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: registryauth.SecretName, Namespace: "kuso"},
+			Data: map[string][]byte{"enabled": []byte("true")}},
 	)
 	return dyn, cs
 }
