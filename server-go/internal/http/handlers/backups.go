@@ -97,6 +97,8 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
+	r.Post("/api/projects/{project}/addons/{addon}/backups/drill", h.Drill)
+	r.Get("/api/projects/{project}/addons/{addon}/backups/drill/{job}", h.DrillStatus)
 	r.Get("/api/projects/{project}/addons/{addon}/backups/object", h.DownloadObject)
 	// Direct on-demand dump, streamed to the caller. Independent of the
 	// kuso-backup-s3 config, so it works when List/Restore return 503.
@@ -499,6 +501,9 @@ type RestoreRequest struct {
 	// AllowUnverified restores a backup that has no checksum manifest
 	// (taken before manifests existed). Without it the Job refuses one.
 	AllowUnverified bool `json:"allowUnverified,omitempty"`
+	// SkipSnapshot skips the automatic backup of the destination taken
+	// before the restore overwrites it.
+	SkipSnapshot bool `json:"skipSnapshot,omitempty"`
 }
 
 // Restore creates a one-shot Job that downloads the backup and pipes
@@ -639,7 +644,21 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// Job can actually start. The scheduled-backup CronJob path is
 	// chart-rendered into the project ns with its own secret, so it's
 	// unaffected by this gap.
-	if ns != h.Namespace {
+	if running, err := h.activeRestore(ctx, ns, destCR.Name, destAddon); err != nil {
+		h.Logger.Error("backup: check running restores", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	} else if running != "" {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("restore job %s is still running against %q; wait for it to finish (or delete it) before starting another", running, destAddon))
+		return
+	}
+	s3Secret, err := h.restoreBackupSecret(ctx, ns, project, tenantLoc != nil)
+	if err != nil {
+		h.Logger.Error("backup: resolve backup secret", "err", err)
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if ns != h.Namespace && s3Secret == backupSecretName {
 		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
 			if errors.Is(err, addons.ErrNotFound) {
 				writeErr(w, http.StatusPreconditionFailed, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)")
@@ -659,7 +678,10 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if tenantLoc != nil {
 		srcBucket = tenantLoc.bucket
 	}
-	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3Env(srcBucket)...)
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3EnvFrom(s3Secret, srcBucket)...)
+	if destCR.Spec.Kind == "postgres" {
+		restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "PGOPTIONS", Value: "-c lock_timeout=" + restoreLockTimeout})
+	}
 	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
 	// `--clean` dump of THAT logical database. Fed to the conn Secret's
 	// POSTGRES_DB it would drop and replace the primary DB's tables.
@@ -700,17 +722,41 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 
 	job := buildRestoreJob(ns, jobName, project, destAddon, addon, restoreShell,
 		append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...))
+	job.Labels[labelRestoreDest] = destCR.Name
+
+	resp := map[string]string{}
+	if !req.SkipSnapshot {
+		snap, since, warning, err := h.startPreRestoreSnapshot(ctx, ns, destCR)
+		if err != nil {
+			h.Logger.Error("backup: pre-restore snapshot", "err", err)
+			writeErr(w, http.StatusBadGateway, err.Error()+" (retry with skipSnapshot to restore without one)")
+			return
+		}
+		if warning != "" {
+			resp["warning"] = warning
+		}
+		if snap != nil {
+			resp["snapshotJob"] = snap.Name
+			job.Spec.Template.Spec.InitContainers = append(job.Spec.Template.Spec.InitContainers,
+				snapshotWaitContainer(s3Secret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since))
+			deadline := *job.Spec.ActiveDeadlineSeconds + int64(snapshotWait.Seconds())
+			job.Spec.ActiveDeadlineSeconds = &deadline
+		}
+	}
 	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
-		if keyCopy {
-			_ = h.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, jobName+"-key", metav1.DeleteOptions{})
-		}
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	if keyCopy {
-		h.adoptRestoreKeyCopy(ctx, ns, created)
+	if keyCopy != "" {
+		if err := h.createRestoreKeyCopy(ctx, created, project, keyCopy); err != nil {
+			h.Logger.Error("backup: copy backup key for restore", "err", err)
+			bg := metav1.DeletePropagationBackground
+			_ = h.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, created.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+			writeErr(w, http.StatusInternalServerError, "internal")
+			return
+		}
 	}
 	// Audit: destructive cross-DB write. Logged regardless of
 	// outcome so a half-completed restore (Job created but pod
@@ -730,7 +776,8 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			Message:  fmt.Sprintf("restore from key=%s into project=%s addon=%s job=%s", req.Key, project, destAddon, created.Name),
 		})
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+	resp["job"] = created.Name
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // siblingDumpRe matches the per-logical-DB dump the postgres backup CronJob
@@ -849,16 +896,22 @@ func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
 // makes a restore read from a bucket the dump was never written to,
 // which surfaces as "key not found" mid-incident.
 func restoreS3Env(bucketOverride string) []corev1.EnvVar {
-	bucketEnv := envFromSecret("BUCKET", backupSecretName, "bucket")
+	return restoreS3EnvFrom(backupSecretName, bucketOverride)
+}
+
+// restoreS3EnvFrom is restoreS3Env reading secretName instead of the shared
+// kuso-backup-s3.
+func restoreS3EnvFrom(secretName, bucketOverride string) []corev1.EnvVar {
+	bucketEnv := envFromSecret("BUCKET", secretName, "bucket")
 	if bucketOverride != "" {
 		bucketEnv = corev1.EnvVar{Name: "BUCKET", Value: bucketOverride}
 	}
 	return []corev1.EnvVar{
 		bucketEnv,
-		envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
-		envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
-		envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
-		envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
+		envFromSecret("S3_ENDPOINT", secretName, "endpoint"),
+		envFromSecret("AWS_ACCESS_KEY_ID", secretName, "accessKeyId"),
+		envFromSecret("AWS_SECRET_ACCESS_KEY", secretName, "secretAccessKey"),
+		envFromSecretOptional("AWS_DEFAULT_REGION", secretName, "region"),
 	}
 }
 
@@ -1624,6 +1677,8 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 	// Generous, so a large restore isn't cut off; --single-transaction
 	// rolls a killed restore back rather than leaving it half-applied.
 	deadline := int64(6 * 60 * 60)
+	// Reaps the Job, and with it the backup-key copy it owns.
+	ttl := int32(7 * 24 * 3600)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// The project's execution namespace: the <release>-conn
@@ -1642,10 +1697,11 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:          &zero,
-			ActiveDeadlineSeconds: &deadline,
-			Completions:           &one,
-			Parallelism:           &one,
+			BackoffLimit:            &zero,
+			ActiveDeadlineSeconds:   &deadline,
+			TTLSecondsAfterFinished: &ttl,
+			Completions:             &one,
+			Parallelism:             &one,
 			Template: corev1.PodTemplateSpec{
 				// Same pair the chart's backup CronJob pod carries: the
 				// project label puts the pod inside the project netpols so
@@ -1661,7 +1717,7 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:            "restore",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
+						Image:           backupJobImage,
 						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"sh", "-c"},
 						Args:            []string{restoreShell},

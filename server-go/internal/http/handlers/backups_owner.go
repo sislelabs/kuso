@@ -15,12 +15,10 @@ import (
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/backup"
@@ -235,42 +233,26 @@ func (h *BackupsHandler) readBackupKey(ctx context.Context, ns, name string) (st
 // restoreKeyEnv returns the BACKUP_ENCRYPTION_KEY env for a restore Job
 // of key. The key Secret normally sits beside the Job; an instance
 // tenant's dumps were encrypted with the instance addon's key, which
-// lives in the home namespace, so that key is copied into a Secret the
-// Job owns (keyCopy=true; the caller adopts or deletes it). Optional
-// either way: a dump taken before encryption shipped needs no key.
-func (h *BackupsHandler) restoreKeyEnv(ctx context.Context, ns, jobName, project, key string, tenantLoc *instanceTenantBackupLoc) (corev1.EnvVar, bool, error) {
+// lives in the home namespace, so its value is returned as copyVal for
+// the caller to write into a Secret the Job owns (createRestoreKeyCopy).
+// Optional otherwise: a dump taken before encryption shipped needs no key.
+func (h *BackupsHandler) restoreKeyEnv(ctx context.Context, ns, jobName, project, key string, tenantLoc *instanceTenantBackupLoc) (env corev1.EnvVar, copyVal string, err error) {
 	if tenantLoc == nil {
 		seg, _, _ := strings.Cut(strings.TrimPrefix(key, project+"/"), "/")
-		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", backup.KeySecretName(seg), backup.KeySecretKey), false, nil
+		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", backup.KeySecretName(seg), backup.KeySecretKey), "", nil
 	}
 	if tenantLoc.keyNS == ns {
-		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", tenantLoc.keyName, backup.KeySecretKey), false, nil
+		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", tenantLoc.keyName, backup.KeySecretKey), "", nil
 	}
 	val, err := h.readBackupKey(ctx, tenantLoc.keyNS, tenantLoc.keyName)
 	if err != nil {
-		return corev1.EnvVar{}, false, err
+		return corev1.EnvVar{}, "", err
 	}
 	copyName := jobName + "-key"
 	if val == "" {
-		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", copyName, backup.KeySecretKey), false, nil
+		return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", copyName, backup.KeySecretKey), "", nil
 	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: copyName, Namespace: ns, Labels: map[string]string{kube.LabelProject: project}},
-		Data:       map[string][]byte{backup.KeySecretKey: []byte(val)},
-	}
-	if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		return corev1.EnvVar{}, false, fmt.Errorf("copy backup key: %w", err)
-	}
-	return envFromSecretOptional("BACKUP_ENCRYPTION_KEY", copyName, backup.KeySecretKey), true, nil
-}
-
-// adoptRestoreKeyCopy makes the copied key Secret cascade-delete with
-// the restore Job (whose TTL reaps it).
-func (h *BackupsHandler) adoptRestoreKeyCopy(ctx context.Context, ns string, job *batchv1.Job) {
-	patch := fmt.Sprintf(`{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":%q,"uid":%q}]}}`, job.Name, job.UID)
-	if _, err := h.Kube.Clientset.CoreV1().Secrets(ns).Patch(ctx, job.Name+"-key", types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-		h.Logger.Warn("backup: adopt restore key copy", "job", job.Name, "err", err)
-	}
+	return envFromSecret("BACKUP_ENCRYPTION_KEY", copyName, backup.KeySecretKey), val, nil
 }
 
 type s3ObjectHeader interface {
