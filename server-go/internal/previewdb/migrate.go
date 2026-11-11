@@ -109,6 +109,24 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 	// Without this the post-seed migrate against the preview-DB clone reads an
 	// empty DATABASE_URI and falls back to localhost.
 	envVars := kube.CoreEnvVars(env.Spec.EnvVars)
+	podLabels := map[string]string{
+		"kuso.sislelabs.com/role":                  "preview-migrate",
+		"kuso.sislelabs.com/project":               project,
+		"kuso.sislelabs.com/network-egress-public": "true",
+	}
+	// The pod runs the PR's code: label it as the preview (its env scope,
+	// preview-pr-N, plus its addon subscriptions) so the env-isolation
+	// policies admit it to its own clone and to nothing of production's.
+	scope := env.Spec.EnvScope
+	if scope == "" {
+		scope = env.Labels[kube.LabelEnv]
+	}
+	if scope == "" {
+		scope = env.Name
+	}
+	for k, v := range kube.EnvIsolationLabels(scope, kube.PodSecretNames(envVars, env.Spec.EnvFromSecrets)) {
+		podLabels[k] = v
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -134,12 +152,7 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"kuso.sislelabs.com/role":                  "preview-migrate",
-						"kuso.sislelabs.com/project":               project,
-						"kuso.sislelabs.com/env":                   env.Name,
-						"kuso.sislelabs.com/network-egress-public": "true",
-					},
+					Labels: podLabels,
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,

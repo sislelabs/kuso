@@ -25,8 +25,10 @@ func seedPreviewAddon(short, kind string, external bool) seed {
 }
 
 // DATA-03: an addon the preview has no clone of (external postgres, mongodb,
-// …) must not reach the preview with its PRODUCTION conn — neither as an
-// envFrom mount nor as an explicit secretKeyRef. s3 stays shared by design.
+// external s3, …) must not reach the preview with its PRODUCTION conn —
+// neither as an envFrom mount nor as an explicit secretKeyRef. A native
+// bucket is shared through its read-only Secret only (BLOB-2), including
+// for secretKeyRefs; an external one only via an explicit previewEnvVars ref.
 func TestDispatch_PROpened_DropsUnclonedProductionConns(t *testing.T) {
 	t.Parallel()
 	prod := typedSeed(kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
@@ -36,10 +38,19 @@ func TestDispatch_PROpened_DropsUnclonedProductionConns(t *testing.T) {
 		},
 		Spec: kube.KusoEnvironmentSpec{
 			Project: "alpha", Service: "alpha-api", Kind: "custom",
-			EnvFromSecrets: []string{"alpha-db-conn", "alpha-psdb-conn", "alpha-mongo-conn", "alpha-storage-conn"},
+			EnvFromSecrets: []string{"alpha-db-conn", "alpha-psdb-conn", "alpha-mongo-conn", "alpha-storage-conn", "alpha-r2-conn"},
 			EnvVars: []kube.KusoEnvVar{{
 				Name:      "DIRECT_URL",
 				ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-psdb-conn", "key": "DIRECT_URL"}},
+			}, {
+				Name:      "BUCKET_KEY",
+				ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-storage-conn", "key": "S3_SECRET_ACCESS_KEY"}},
+			}, {
+				Name:      "R2_BUCKET",
+				ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-r2-conn", "key": "S3_BUCKET"}},
+			}, {
+				Name:      "R2_KEY",
+				ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-r2-conn", "key": "S3_SECRET_ACCESS_KEY"}},
 			}},
 		},
 	})
@@ -48,7 +59,12 @@ func TestDispatch_PROpened_DropsUnclonedProductionConns(t *testing.T) {
 			Name: "alpha-api", Namespace: "kuso",
 			Labels: map[string]string{kube.LabelProject: "alpha", kube.LabelService: "api"},
 		},
-		Spec: kube.KusoServiceSpec{Project: "alpha", Port: 3000},
+		Spec: kube.KusoServiceSpec{Project: "alpha", Port: 3000, Previews: &kube.KusoServicePreviews{
+			PreviewEnvVars: []kube.KusoEnvVar{{
+				Name:      "R2_BUCKET",
+				ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-r2-conn", "key": "S3_BUCKET"}},
+			}},
+		}},
 	})
 	d := newDispatcher(t,
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
@@ -57,27 +73,38 @@ func TestDispatch_PROpened_DropsUnclonedProductionConns(t *testing.T) {
 		seedPreviewAddon("psdb", "postgres", true),
 		seedPreviewAddon("mongo", "mongodb", false),
 		seedPreviewAddon("storage", "s3", false),
+		seedPreviewAddon("r2", "s3", true),
 	)
 	d.AddonConnSecrets = func(context.Context, string) ([]string, error) {
-		return []string{"alpha-db-conn", "alpha-mongo-conn", "alpha-psdb-conn", "alpha-storage-conn"}, nil
+		return []string{"alpha-db-conn", "alpha-mongo-conn", "alpha-psdb-conn", "alpha-storage-conn", "alpha-r2-conn"}, nil
 	}
 	d.PreviewDB = stubPreviewDB{pairs: map[string]string{"alpha-db-conn": "alpha-db-pr-7-conn"}}
 
 	env := dispatchPR7(t, d)
 	got := env.Spec.EnvFromSecrets
-	for _, leak := range []string{"alpha-db-conn", "alpha-psdb-conn", "alpha-mongo-conn"} {
+	for _, leak := range []string{"alpha-db-conn", "alpha-psdb-conn", "alpha-mongo-conn", "alpha-storage-conn", "alpha-r2-conn"} {
 		if slices.Contains(got, leak) {
 			t.Errorf("preview mounts production %s: %v", leak, got)
 		}
 	}
-	for _, want := range []string{"alpha-db-pr-7-conn", "alpha-storage-conn"} {
+	for _, want := range []string{"alpha-db-pr-7-conn", "alpha-storage-readonly"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("preview missing %s: %v", want, got)
 		}
 	}
+	refs := map[string]string{}
 	for _, v := range env.Spec.EnvVars {
-		if v.Name == "DIRECT_URL" {
-			t.Errorf("preview keeps a secretKeyRef into the production external DB: %+v", v)
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := ref["name"].(string)
+		refs[v.Name] = name
+	}
+	want := map[string]string{"BUCKET_KEY": "alpha-storage-readonly", "R2_BUCKET": "alpha-r2-conn"}
+	if len(refs) != len(want) {
+		t.Errorf("preview env var refs = %v, want %v", refs, want)
+	}
+	for k, v := range want {
+		if refs[k] != v {
+			t.Errorf("preview env var refs = %v, want %v", refs, want)
 		}
 	}
 }

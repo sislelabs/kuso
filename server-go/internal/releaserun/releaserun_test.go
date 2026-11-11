@@ -107,3 +107,35 @@ func TestJobName_DistinctForSyntheticRefs(t *testing.T) {
 		t.Errorf("long name not truncated: %q (%d)", long, len(long))
 	}
 }
+
+// ISO-3: a stamped env's release Job pod carries the env's scope and addon
+// subscriptions, so env isolation treats it as that env (a preview's hook
+// can't reach production); an unstamped env's Job stays legacy-unlabelled.
+func TestBuildJob_EnvIsolationLabels(t *testing.T) {
+	t.Parallel()
+	r := New(nil)
+	env := &kube.KusoEnvironment{Spec: kube.KusoEnvironmentSpec{
+		Project: "alpha", Service: "alpha-api", EnvScope: "preview-pr-7",
+		EnvFromSecrets: []string{"alpha-db-pr-7-conn"},
+		EnvVars: []kube.KusoEnvVar{{Name: "CACHE", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "alpha-cache-pr-7-conn", "key": "REDIS_URL"},
+		}}},
+		Release: &kube.KusoReleaseSpec{Command: []string{"migrate"}},
+	}}
+	img := &kube.KusoImage{Repository: "registry/alpha/api", Tag: "abc"}
+	labels := r.buildJob(env, img, "j", 60).Spec.Template.Labels
+	for k, v := range map[string]string{
+		kube.LabelEnv: "preview-pr-7",
+		kube.SubscriberLabelKey("alpha-db-pr-7-conn"):    "true",
+		kube.SubscriberLabelKey("alpha-cache-pr-7-conn"): "true",
+		"kuso.sislelabs.com/role":                        "release",
+	} {
+		if labels[k] != v {
+			t.Errorf("pod label %s = %q, want %q (all: %v)", k, labels[k], v, labels)
+		}
+	}
+	env.Spec.EnvScope = ""
+	if got := r.buildJob(env, img, "j", 60).Spec.Template.Labels[kube.LabelEnv]; got != "" {
+		t.Errorf("unstamped env's Job got env label %q", got)
+	}
+}

@@ -211,16 +211,22 @@ write; this covers CRs written around it. Returns JSON (fromJsonArray).
        Rendered only once kuso-server has stamped spec.envScope, so an
        upgrade alone changes no pod template (no fleet-wide restart);
        the labels land with the env's next write. */ -}}
+{{- /* An s3 addon's <name>-readonly Secret (what previews mount, BLOB-2)
+       subscribes to the addon exactly like <name>-conn. Mirrored by
+       kube.EnvIsolationLabels for Jobs the server creates. */ -}}
 {{- define "kusoenvironment.isolationLabels" -}}
 {{- if .Values.envScope -}}
 kuso.sislelabs.com/env: {{ .Values.envScope | quote }}
 {{- $conns := dict }}
 {{- range (.Values.envFromSecrets | default list) }}
-{{- if hasSuffix "-conn" (toString .) }}{{ $_ := set $conns (toString .) true }}{{ end }}
+{{- $n := toString . }}
+{{- if hasSuffix "-readonly" $n }}{{ $n = printf "%s-conn" (trimSuffix "-readonly" $n) }}{{ end }}
+{{- if hasSuffix "-conn" $n }}{{ $_ := set $conns $n true }}{{ end }}
 {{- end }}
 {{- range (include "kusoenvironment.envVars" . | fromJsonArray) }}
 {{- if and (kindIs "map" .) (kindIs "map" .valueFrom) (kindIs "map" .valueFrom.secretKeyRef) }}
 {{- $n := toString .valueFrom.secretKeyRef.name }}
+{{- if hasSuffix "-readonly" $n }}{{ $n = printf "%s-conn" (trimSuffix "-readonly" $n) }}{{ end }}
 {{- if hasSuffix "-conn" $n }}{{ $_ := set $conns $n true }}{{ end }}
 {{- end }}
 {{- end }}
