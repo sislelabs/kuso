@@ -144,6 +144,14 @@ func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*res
 	return k.client.Post(path)
 }
 
+// RawPostWithHeaders is RawPost plus extra headers for this call only.
+func (k *KusoClient) RawPostWithHeaders(path string, body []byte, contentType string, headers map[string]string) (*resty.Response, error) {
+	for h, v := range headers {
+		k.client.SetHeader(h, v)
+	}
+	return k.RawPost(path, body, contentType)
+}
+
 // RawPut mirrors RawPost for the handful of admin settings endpoints
 // that take a JSON body on PUT (backup-settings, settings/build,
 // settings/session).

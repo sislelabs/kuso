@@ -1135,6 +1135,15 @@ func main() {
 					goSafe(logger, "helm-history", func() { pruner.Run(workCtx) })
 				}
 			}
+			goSafe(logger, "controlplane-backup-key", func() {
+				kctx, kcancel := context.WithTimeout(workCtx, 30*time.Second)
+				defer kcancel()
+				if created, err := kube.EnsureControlPlaneBackupKey(kctx, kc.Clientset, *namespace); err != nil {
+					logger.Warn("control-plane backup key: ensure failed; CP dumps stay unencrypted", "err", err)
+				} else if created {
+					logger.Info("control-plane backup key created; export it with `kuso backup keys export`")
+				}
+			})
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 				// Maintenance(): the janitor's bulk deletes run without the
 				// request-path statement timeout.

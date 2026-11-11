@@ -38,7 +38,7 @@ const (
 // restoreViaS3 stages a large dump (head is what Upload already read) in the
 // backup bucket and starts a Job that downloads it, checks its sha256 and
 // applies it. Responds exactly like the Secret path.
-func (h *BackupHandler) restoreViaS3(w http.ResponseWriter, r *http.Request, head []byte) {
+func (h *BackupHandler) restoreViaS3(w http.ResponseWriter, r *http.Request, head []byte, src io.Reader) {
 	ctx, cancel := context.WithTimeout(r.Context(), restoreUploadWindow)
 	defer cancel()
 	bh := &BackupsHandler{Kube: h.Kube, Namespace: h.Namespace}
@@ -63,7 +63,7 @@ func (h *BackupHandler) restoreViaS3(w http.ResponseWriter, r *http.Request, hea
 		writeErr(w, http.StatusInternalServerError, "stage dump: "+err.Error())
 		return
 	}
-	rest, err := io.Copy(mw, io.LimitReader(r.Body, MaxControlPlaneRestoreBytes-int64(len(head))+1))
+	rest, err := io.Copy(mw, io.LimitReader(src, MaxControlPlaneRestoreBytes-int64(len(head))+1))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
@@ -151,8 +151,18 @@ apply_dump() { # gz file
     exit 1
   fi
   _dsn=$(direct_dsn "${DSN}")
+  # A dump without DROP statements (the scheduled CronJob's before it took
+  # --clean) cannot load over the live schema, which boot always creates:
+  # the first CREATE TABLE fails. Empty the public schema first, inside
+  # the same transaction, so it rolls back with everything else.
+  _wipe=""
+  # grep -c, not -q: -q exits early and pipefail would count the SIGPIPE.
+  if [ "$(gunzip -c "$1" | grep -cE '^DROP (TABLE|SCHEMA|EXTENSION) ' || true)" = "0" ]; then
+    echo "[restore] dump has no DROP statements; replacing the public schema in the same transaction"
+    _wipe="DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+  fi
   _n=1
-  until gunzip -c "$1" \
+  until { echo "${_wipe}"; gunzip -c "$1"; } \
     | grep -vxE "SET (transaction_timeout|idle_session_timeout) = '?[^']*'?;" \
     | psql "${_dsn}" -q -v ON_ERROR_STOP=1 --single-transaction; do
     if [ "${_n}" -ge 3 ]; then
