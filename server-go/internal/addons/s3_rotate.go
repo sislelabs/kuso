@@ -34,6 +34,8 @@ import (
 const (
 	annS3PreviousKey = "kuso.sislelabs.com/s3-previous-access-key"
 	s3RootSuffix     = "-root"
+	s3ReadOnlySuffix = "-readonly"
+	s3RoleLabel      = "kuso.sislelabs.com/role"
 	// Same image the chart's init Job uses.
 	s3AdminImage = "pgsty/mc:RELEASE.2026-10-26T00-00-00Z"
 	// rwPolicyJSON must match the chart's (kusoaddon/templates/s3.yaml).

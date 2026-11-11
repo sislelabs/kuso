@@ -194,11 +194,19 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		for i := range addons {
 			liveAddons[addons[i].Name] = true
 			rep.Scanned++
+			issued := true
 			if iss, ok := ClassifyAddon(&addons[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
 			} else if iss, ok := backupCheck(ctx, &addons[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
 			} else {
+				issued = false
+			}
+			if iss, ok := s.s3ConnHoldsRoot(ctx, &addons[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+				issued = true
+			}
+			if !issued {
 				rep.Healthy++
 			}
 		}
@@ -211,6 +219,7 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 		// an operator decision, never unattended.
 		if secs, ok := s.connSecrets(ctx, ns); ok {
 			rep.Issues = append(rep.Issues, detectOrphanConnSecrets(secs, liveAddons)...)
+			rep.Issues = append(rep.Issues, detectOrphanS3Secrets(secs, liveAddons)...)
 		}
 		if pvcs, ok := s.addonPVCs(ctx, ns); ok {
 			rep.Issues = append(rep.Issues, detectOrphanAddonPVCs(pvcs, liveAddons)...)
@@ -268,7 +277,7 @@ func (s *Scanner) connSecrets(ctx context.Context, ns string) ([]corev1.Secret, 
 	var out []corev1.Secret
 	if cached, ok := s.Kube.Cache.ListSecrets(ns); ok {
 		for _, sec := range cached {
-			if strings.HasSuffix(sec.Name, connSecretSuffix) {
+			if strings.HasSuffix(sec.Name, connSecretSuffix) || isS3CredentialSecret(sec) {
 				out = append(out, *sec)
 			}
 		}

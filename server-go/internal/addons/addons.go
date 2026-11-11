@@ -2422,6 +2422,31 @@ func (s *Service) deleteCloneDataPVCs(ctx context.Context, ns, addonFQN string) 
 			slog.Default().Warn("clone addon delete: leftover data PVC", "pvc", pvcs.Items[i].Name, "namespace", ns, "err", err)
 		}
 	}
+	s.deleteS3CredentialSecrets(ctx, ns, addonFQN)
+}
+
+// deleteS3CredentialSecrets removes an s3 addon's kept -root and
+// -readonly Secrets once its data is gone. Left behind, a re-created
+// addon of the same name reads the old root password back through the
+// chart's lookup, reviving a credential of deleted data (BLOB-8). Only
+// Secrets carrying the chart's role label are touched.
+func (s *Service) deleteS3CredentialSecrets(ctx context.Context, ns, addonFQN string) {
+	for suffix, role := range map[string]string{s3RootSuffix: "s3-root", s3ReadOnlySuffix: "s3-readonly"} {
+		name := addonFQN + suffix
+		sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				slog.Default().Warn("clone addon delete: read s3 secret", "secret", name, "namespace", ns, "err", err)
+			}
+			continue
+		}
+		if sec.Labels[s3RoleLabel] != role {
+			continue
+		}
+		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			slog.Default().Warn("clone addon delete: leftover s3 secret", "secret", name, "namespace", ns, "err", err)
+		}
+	}
 }
 
 func (s *Service) deleteCloneConnSecret(ctx context.Context, ns, addonFQN string) {
