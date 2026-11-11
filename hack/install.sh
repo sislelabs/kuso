@@ -719,6 +719,8 @@ kuso_manifest "operator/config/crd/bases/application.kuso.dev_kusoes.yaml" 2>/de
 log "deploying in-cluster registry"
 kubectl create namespace kuso 2>/dev/null || true
 kuso_manifest "deploy/registry.yaml" | kubectl apply -f - >/dev/null
+kuso_manifest "deploy/vulnscan-egress.yaml" | kubectl apply -f - >/dev/null \
+  || warn "deploy/vulnscan-egress.yaml apply failed — vulnerability scans run without an egress policy"
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')

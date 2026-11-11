@@ -1,0 +1,52 @@
+# Egress policy for vulnerability-scan Jobs (kuso-vulnscan-<id>, created
+# by kuso-server in the kuso namespace). The image a scan pulls is chosen
+# by project editors, so without this a scan could make registry requests
+# to any in-cluster service from the platform namespace.
+#
+# Egress-only and selecting only scan pods, so it isolates nothing else.
+# Bundled into upgrade-manifests.yaml, so `kuso upgrade` applies it. A
+# scan that this policy breaks fails, and the deploy gate fails open on a
+# failed scan, so the worst case is lost scan coverage, never a blocked
+# deploy. Allowed:
+#   - DNS to kube-system (CoreDNS);
+#   - kuso-registry:5000 (images built by kuso). Matched by pod, which
+#     works because kube-router evaluates after kube-proxy's DNAT;
+#   - the public internet (public registries, the Trivy DB on ghcr.io /
+#     mirror.gcr.io).
+# Denied: RFC1918 / CGNAT / link-local / loopback, so kuso-server, the
+# control-plane Postgres, Prometheus, tenant pods and the cloud metadata
+# endpoint are unreachable from a scan. IPv4 only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kuso-vulnscan-egress
+  namespace: kuso
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-vulnscan
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-registry
+      ports:
+        - { port: 5000, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+              - 127.0.0.0/8
