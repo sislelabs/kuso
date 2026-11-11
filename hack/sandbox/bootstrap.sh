@@ -80,6 +80,7 @@ kubectl apply -f "${REPO}/operator/config/crd/bases/" >/dev/null
 
 log "registry"
 manifest registry | kubectl apply -f - >/dev/null
+manifest vulnscan-egress | kubectl apply -f - >/dev/null
 
 log "buildkitd"
 manifest buildkitd | kubectl apply -f - >/dev/null

@@ -9,6 +9,7 @@ SANDBOX_APPLIED=(
   operator
   server-go
   kuso-activator
+  vulnscan-egress
 )
 
 SANDBOX_SKIPPED=(
