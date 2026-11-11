@@ -1,0 +1,85 @@
+# Backup S3 for the sandbox: a single MinIO that up.sh points kuso's
+# backup settings at (bucket kuso-backups).
+#
+# It is reached as http://s3.sandbox.test through traefik, not through
+# its own Service: backup Jobs carry the network-egress-public label, and
+# the project NetworkPolicy lets those pods reach traefik (the ingress
+# hairpin rule) but nothing else in-cluster. A CoreDNS stub zone
+# (coredns-custom below; bootstrap.sh fills in traefik's ClusterIP)
+# resolves the name, and kuso's endpoint validation accepts it because it
+# is neither an IP literal nor a cluster-internal suffix.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuso-sandbox
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sandbox-s3
+  namespace: kuso-sandbox
+stringData:
+  # Well-known dev credentials; the sandbox is loopback-only.
+  MINIO_ROOT_USER: kuso-sandbox
+  MINIO_ROOT_PASSWORD: kuso-sandbox-s3-secret
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-s3
+  namespace: kuso-sandbox
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-s3
+  namespace: kuso-sandbox
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: sandbox-s3 } }
+  template:
+    metadata:
+      labels: { app: sandbox-s3 }
+    spec:
+      containers:
+        - name: minio
+          image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+          args: [server, /data, --console-address, ":9001"]
+          envFrom: [{ secretRef: { name: sandbox-s3 } }]
+          ports: [{ containerPort: 9000, name: s3 }]
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: 9000 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 20m, memory: 96Mi }
+            limits: { memory: 384Mi }
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: sandbox-s3 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-s3
+  namespace: kuso-sandbox
+spec:
+  selector: { app: sandbox-s3 }
+  ports: [{ name: s3, port: 9000, targetPort: 9000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sandbox-s3
+  namespace: kuso-sandbox
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: s3.sandbox.test
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: sandbox-s3, port: { number: 9000 } } } }

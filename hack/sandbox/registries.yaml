@@ -8,6 +8,11 @@ mirrors:
   docker.io:
     endpoint:
       - "https://mirror.gcr.io"
+  # Host-arch builds of kuso's own Job images; see the mirror service in
+  # compose.yaml. containerd falls back to ghcr.io for everything else.
+  ghcr.io:
+    endpoint:
+      - "http://mirror:5000"
   "kuso-registry.kuso.svc.cluster.local:5000":
     endpoint:
       - "http://kuso-registry.kuso.svc.cluster.local:5000"

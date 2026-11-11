@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# curl a sandbox service through the instance's traefik, on whatever host
+# port the instance listens on. kuso prints links without a port; paste
+# them here as they are.
+#
+#   hack/sandbox/curl http://api.demo.kuso.localhost/healthz
+#   hack/sandbox/curl api.demo.kuso.localhost/api/todos -X POST -d '{}'
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+[[ $# -ge 1 ]] || die "usage: hack/sandbox/curl <host>[/path] [curl args...]"
+sandbox_curl "$@"

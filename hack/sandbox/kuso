@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# The kuso CLI, pointed at the sandbox. Runs with its own HOME so it never
-# reads or writes ~/.kuso (your real instances and tokens).
+# The kuso CLI, pointed at the current sandbox instance (KUSO_SANDBOX_NAME,
+# else the last one `up` started). Runs with the instance's own HOME so it
+# never reads or writes ~/.kuso (your real instances and tokens).
 set -euo pipefail
-dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-bin="${dir}/.state/bin/kuso"
-[[ -x "$bin" ]] || { echo "error: sandbox CLI not built; run 'make sandbox-up'" >&2; exit 1; }
-mkdir -p "${dir}/.state/home"
-HOME="${dir}/.state/home" exec "$bin" "$@"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+bin="${STATE_DIR}/bin/kuso"
+[[ -x "$bin" ]] || die "sandbox ${KUSO_SANDBOX_NAME} has no CLI; run 'make sandbox-up'"
+mkdir -p "${STATE_DIR}/home"
+HOME="${STATE_DIR}/home" exec "$bin" "$@"

@@ -10,12 +10,13 @@ SANDBOX_APPLIED=(
   server-go
   kuso-activator
   vulnscan-egress
+  prometheus
+  kuso-admission-policy
 )
 
 SANDBOX_SKIPPED=(
   postgres                  # CNPG cluster; the sandbox runs a plain postgres (postgres.yaml here)
-  postgres-backup           # needs S3
-  prometheus                # optional; only feeds the request/error metric cards
+  postgres-backup           # control-plane DB backup; targets the CNPG cluster the sandbox doesn't run
   cluster-issuer            # no cert-manager, everything is plain HTTP
   pkg-probe                 # privileged hostPID DaemonSet that runs apt on the host
   incident-agent-rbac       # incident agent is not part of the sandbox

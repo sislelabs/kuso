@@ -4,6 +4,7 @@
 #   reload.sh            server + operator
 #   reload.sh server     server (and the activator, which runs the same image)
 #   reload.sh operator
+#   reload.sh backup|env-detect|nixpacks   a Job image (pushed to the mirror)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -24,6 +25,9 @@ for t in "${targets[@]}"; do
       node_kubectl -n kuso-operator-system rollout restart deployment/kuso-operator-controller-manager >/dev/null
       node_kubectl -n kuso-operator-system rollout status deployment/kuso-operator-controller-manager --timeout=300s
       ;;
-    *) die "unknown target: ${t} (want server or operator)" ;;
+    backup|env-detect|nixpacks)
+      build_image "$t"; import_image "$t"; mirror_image "$t"
+      ;;
+    *) die "unknown target: ${t} (want server, operator, backup, env-detect or nixpacks)" ;;
   esac
 done
