@@ -200,6 +200,13 @@ spec:
             # that rule (internal/platformharden).
             - name: KUSO_INGRESS_LIMITS
               value: "true"
+            # 80% of the memory limit. helm-operator's cache holds every
+            # Secret in the cluster (helm release Secrets included) and has
+            # no filter option; this makes the GC work harder before the
+            # kernel OOM-kills it. kuso-server's platformharden sets the
+            # same on existing installs.
+            - name: GOMEMLIMIT
+              value: "614MiB"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -226,9 +233,10 @@ spec:
               # kusoaddon/s3.yaml's existing-secret lookup) push the
               # operator past 256Mi under reconcile bursts after a
               # fresh install. 256Mi → OOMKill loop → CRs sit in
-              # `pending` forever with no Job. 512Mi gives ~2x headroom
-              # without taxing single-node 4GB hosts.
-              memory: 512Mi
+              # `pending` forever with no Job. 768Mi matches the floor
+              # platformharden enforces: the Secret cache grows with
+              # releases × kept revisions (SCL-2).
+              memory: 768Mi
             requests:
               cpu: 200m
               memory: 128Mi

@@ -1090,7 +1090,7 @@ func main() {
 			// helm-operator v1.42 keeps unlimited release history (no
 			// max-history flag exists), so prune old revision Secrets
 			// here (SCL-16). Keeps the newest KUSO_HELM_HISTORY_MAX
-			// (default 10) per release plus any deployed/pending one.
+			// (default 3) per release plus any deployed/pending one.
 			// KUSO_HELM_HISTORY_PRUNE=off|dryrun|on, default dryrun:
 			// it only logs what it would delete until an operator has
 			// reviewed a cycle and set it to on.
@@ -1705,6 +1705,8 @@ func main() {
 				serverstate.RegisterLoop(serverstate.LoopLogship, logship.HeartbeatInterval)
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
 				ls.PodKinds = podKinds
+				ls.MaintDB = database.Maintenance().AsLogDB()
+				ls.Notify = notifyDisp
 				// Log drains ride the same lease so each line ships once
 				// cluster-wide. Not heartbeat-registered: its loop only
 				// reloads config and has no per-tick beat.

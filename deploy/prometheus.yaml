@@ -36,6 +36,16 @@ data:
             regex: ([^:]+)(?::\d+)?
             replacement: $1:9100
             target_label: __address__
+        # Keep only the two series families kuso queries (alerts,
+        # scaledown, env metrics, export). Traefik also emits entrypoint
+        # and router histograms, byte counters, _sum/_count and Go runtime
+        # metrics per backend; at ~1,000 envs those pushed head series
+        # past what this 512Mi-1Gi pod holds (SCL-8). Add a name here
+        # before querying a new traefik metric.
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            action: keep
+            regex: traefik_service_requests_total|traefik_service_request_duration_seconds_bucket
       # Pods that opt in via prometheus.io/scrape="true" + path/port
       # annotations. Lets users expose /metrics from their own apps
       # and have it picked up automatically.
@@ -50,7 +60,7 @@ data:
       # rotate without a config rebuild.
       - job_name: kubernetes-pods
         # Per-target caps: these are tenant /metrics endpoints, and this
-        # Prometheus has a 512Mi limit. A target over either cap fails its
+        # Prometheus has a 1Gi limit. A target over either cap fails its
         # own scrape (up=0 for that pod) instead of filling the TSDB.
         sample_limit: 20000
         body_size_limit: 20MB
@@ -148,6 +158,8 @@ spec:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time=7d
+            # The TSDB sits on an emptyDir, i.e. the node's disk: cap it.
+            - --storage.tsdb.retention.size=2GB
             - --web.listen-address=:9090
             # No --web.enable-lifecycle: nothing calls /-/reload (install.sh
             # restarts the pod), and it also exposes an unauthenticated
@@ -157,7 +169,7 @@ spec:
             - { containerPort: 9090, name: http }
           resources:
             requests: { cpu: 50m, memory: 256Mi }
-            limits:   { cpu: 500m, memory: 512Mi }
+            limits:   { cpu: 500m, memory: 1Gi }
           volumeMounts:
             - { name: config, mountPath: /etc/prometheus }
             - { name: data,   mountPath: /prometheus }

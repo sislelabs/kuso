@@ -29,6 +29,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/errorscan"
@@ -66,6 +68,17 @@ const (
 	// escape hatch. Override the cap with KUSO_LOG_MAX_LINES_PER_MIN.
 	rateWindow             = 1 * time.Minute
 	rateMaxLinesPerService = 6000
+	// rateMaxLinesTotal is the cluster-wide lines/window ceiling
+	// (KUSO_LOG_MAX_LINES_PER_MIN_TOTAL). Past it only services above
+	// their fair share are cut, so a quiet service's crash output still
+	// lands while several chatty ones saturate the shipper. 30k/min stays
+	// inside what the byte-budget pruner reclaims per hour.
+	rateMaxLinesTotal = 30000
+
+	// maxConcurrentOpens bounds stream (re)opens in flight. After a leader
+	// failover every container is new to the shipper; opening them all at
+	// once cost ~2 apiserver calls and 2 DB reads each in one burst.
+	maxConcurrentOpens = 16
 
 	// firstTailLines bounds the first stream of a container with no
 	// resume point (new pod, or a restart with nothing stored for it).
@@ -84,13 +97,23 @@ const (
 // A value of 0 or negative, or an unparseable value, falls back to the
 // default rather than disabling the cap (fail safe, not open).
 func resolveRateCap() int {
-	v := strings.TrimSpace(os.Getenv("KUSO_LOG_MAX_LINES_PER_MIN"))
+	return positiveEnvInt("KUSO_LOG_MAX_LINES_PER_MIN", rateMaxLinesPerService)
+}
+
+// resolveTotalRateCap is the cluster-wide cap, with the same fail-safe
+// parsing.
+func resolveTotalRateCap() int {
+	return positiveEnvInt("KUSO_LOG_MAX_LINES_PER_MIN_TOTAL", rateMaxLinesTotal)
+}
+
+func positiveEnvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		return rateMaxLinesPerService
+		return def
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n <= 0 {
-		return rateMaxLinesPerService
+		return def
 	}
 	return n
 }
@@ -167,6 +190,7 @@ type Shipper struct {
 	rateMu      sync.Mutex
 	rateCounts  map[string]int
 	rateDropped map[string]int // lines dropped this window (for the warn log)
+	rateTotal   int            // every accepted line this window, labelled or not
 	// rateWindowEnd is when the counters next reset; a capped service's
 	// streams stay closed until then.
 	rateWindowEnd time.Time
@@ -188,6 +212,20 @@ type Shipper struct {
 	// (build, release hook, …) for the error scanner. Optional.
 	PodKinds *errorscan.PodKinds
 
+	// MaintDB runs the byte-budget prune (direct pool, no request-path
+	// statement timeout). Falls back to DB when nil.
+	MaintDB *db.LogDB
+	// Notify receives the control-plane disk warnings. Optional.
+	Notify Emitter
+	// ingestPaused is set by the budget enforcer when the control-plane
+	// volume is nearly full and LogLine has no free space left to reuse:
+	// log lines are dropped rather than letting a full disk take auth and
+	// the API down.
+	ingestPaused atomic.Bool
+	budget       budgetState
+	// openSem bounds concurrent stream opens (maxConcurrentOpens).
+	openSem chan struct{}
+
 	// runCtx is the lifecycle context set by Run. Detached out-of-band
 	// flushes (kicked from append() when the buffer exceeds the batch
 	// threshold) use this so they get cancelled on shutdown — the
@@ -207,6 +245,7 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 	s := &Shipper{
 		DB: d, Kube: k, Namespace: namespace, Logger: logger,
 		containers: map[string]*containerState{},
+		openSem:    make(chan struct{}, maxConcurrentOpens),
 		// Pre-seed runCtx so append() called before Run() doesn't fall
 		// back to context.Background() (which would spawn an
 		// uncancellable flush goroutine). Run() overrides this with
@@ -224,7 +263,16 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 		return s.DB.PodLinesSince(ctx, project, service, pod, since, resumeDedupeMax)
 	}
 	s.envGroup = func(ctx context.Context, ns, envCR string) string {
-		if s.Kube == nil || s.Kube.Dynamic == nil || envCR == "" {
+		if s.Kube == nil || envCR == "" {
+			return ""
+		}
+		if u, found, ok := s.Kube.Cache.GetCR(kube.GVREnvironments, ns, envCR); ok {
+			if !found {
+				return ""
+			}
+			return u.GetLabels()[kube.LabelEnv]
+		}
+		if s.Kube.Dynamic == nil {
 			return ""
 		}
 		e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCR)
@@ -295,6 +343,10 @@ func (s *Shipper) Run(ctx context.Context) {
 	// Periodic pruner — drop rows past retention. 30 min ticker
 	// keeps the table bounded without hammering DELETE.
 	safego.Go(s.Logger, "logship-pruner", func() { s.runPruner(ctx) })
+	// Byte budget: oldest-first prune when LogLine outgrows its share of
+	// the control-plane volume, and the ingest pause when the disk is
+	// nearly full (budget.go).
+	safego.Go(s.Logger, "logship-budget", func() { s.runBudget(ctx) })
 	// Per-service rate-cap counter reset — every rateWindow, zero the
 	// counters and warn about any service that got throttled.
 	safego.Go(s.Logger, "logship-rate-reset", func() { s.resetRateCounters(ctx) })
@@ -325,9 +377,43 @@ func (s *Shipper) Run(ctx context.Context) {
 }
 
 func (s *Shipper) reconcilePods(ctx context.Context) {
-	for _, ns := range s.scanNamespaces(ctx) {
+	nss := s.scanNamespaces(ctx)
+	cached, ok := s.cachedPods(nss)
+	for _, ns := range nss {
+		if ok {
+			s.reconcilePodList(ctx, ns, cached[ns])
+			continue
+		}
 		s.reconcileNamespacePods(ctx, ns)
 	}
+}
+
+// cachedPods serves the reconcile from the cluster-wide pod informer,
+// grouped by namespace. A live LIST per project namespace every 30s was
+// 200 LISTs/min at 100 projects for data already in memory. ok is false
+// while the informer is cold; the caller then lists live.
+func (s *Shipper) cachedPods(nss []string) (map[string][]*corev1.Pod, bool) {
+	if s.Kube == nil || s.Kube.Cache == nil {
+		return nil, false
+	}
+	req, err := labels.NewRequirement(kube.LabelProject, selection.Exists, nil)
+	if err != nil {
+		return nil, false
+	}
+	pods, ok := s.Kube.Cache.ListPodsByLabel(labels.NewSelector().Add(*req))
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string][]*corev1.Pod, len(nss))
+	for _, ns := range nss {
+		out[ns] = nil
+	}
+	for _, p := range pods {
+		if _, want := out[p.Namespace]; want {
+			out[p.Namespace] = append(out[p.Namespace], p)
+		}
+	}
+	return out, true
 }
 
 func (s *Shipper) scanNamespaces(ctx context.Context) []string {
@@ -378,9 +464,19 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 		s.Logger.Warn("logship list pods", "namespace", ns, "err", err)
 		return
 	}
-	seen := map[string]struct{}{}
+	list := make([]*corev1.Pod, len(pods.Items))
 	for i := range pods.Items {
-		p := &pods.Items[i]
+		list[i] = &pods.Items[i]
+	}
+	s.reconcilePodList(ctx, ns, list)
+}
+
+// reconcilePodList starts streams for ns's pods and drops state for pods
+// that are gone. pods may be shared informer objects: read only.
+func (s *Shipper) reconcilePodList(ctx context.Context, ns string, pods []*corev1.Pod) {
+	paused := s.ingestPaused.Load()
+	seen := map[string]struct{}{}
+	for _, p := range pods {
 		podKey := ns + "/" + string(p.UID)
 		seen[podKey] = struct{}{}
 		s.PodKinds.Observe(p.Name, p.Labels)
@@ -401,7 +497,7 @@ func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 			st = &containerState{doneRestart: -1}
 			s.containers[key] = st
 		}
-		if st.streaming || (terminated && st.doneRestart == restarts) || time.Now().Before(st.pausedUntil) {
+		if paused || st.streaming || (terminated && st.doneRestart == restarts) || time.Now().Before(st.pausedUntil) {
 			s.mu.Unlock()
 			continue
 		}
@@ -484,6 +580,20 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 	}
 	envKind := pod.Labels["kuso.sislelabs.com/env-kind"]
 
+	// Held through the resume-point reads and the open, then released:
+	// it bounds the open burst, not the number of live streams.
+	release := func() {}
+	if s.openSem != nil {
+		select {
+		case s.openSem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		var once sync.Once
+		release = func() { once.Do(func() { <-s.openSem }) }
+	}
+	defer release()
+
 	s.mu.Lock()
 	seeded, lastTs, nAtLast := st.seeded, st.lastTs, st.nAtLast
 	s.mu.Unlock()
@@ -527,6 +637,7 @@ func (s *Shipper) streamContainer(ctx context.Context, ns string, pod corev1.Pod
 		opts.SinceTime = &since
 	}
 	stream, err := s.openLogs(ctx, ns, pod.Name, opts)
+	release()
 	if err != nil {
 		s.Logger.Debug("logship stream open", "pod", pod.Name, "err", err)
 		return
@@ -717,18 +828,31 @@ func (s *Shipper) flushEnvHints(ctx context.Context) {
 // the caller drops the line. Lines with no service label are never
 // capped (system/unlabelled pods are low-volume and we don't want to
 // silently lose their crash output).
+//
+// Past the cluster-wide cap a service is also cut once it has used its
+// fair share (total cap / services seen this window); unlabelled lines
+// count toward the total and are cut only when the total is spent.
 func (s *Shipper) allowLine(project, service string) bool {
+	total := resolveTotalRateCap()
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
 	if service == "" {
+		if s.rateTotal >= total {
+			return false
+		}
+		s.rateTotal++
 		return true
 	}
 	key := project + "/" + service
-	cap := resolveRateCap()
-	s.rateMu.Lock()
-	defer s.rateMu.Unlock()
 	if s.rateCounts == nil {
 		s.rateCounts = map[string]int{}
 	}
-	if s.rateCounts[key] >= cap {
+	n := s.rateCounts[key]
+	over := n >= resolveRateCap()
+	if !over && s.rateTotal >= total {
+		over = n >= total/max(1, len(s.rateCounts))
+	}
+	if over {
 		if s.rateDropped == nil {
 			s.rateDropped = map[string]int{}
 		}
@@ -736,6 +860,7 @@ func (s *Shipper) allowLine(project, service string) bool {
 		return false
 	}
 	s.rateCounts[key]++
+	s.rateTotal++
 	return true
 }
 
@@ -753,12 +878,13 @@ func (s *Shipper) resetRateCounters(ctx context.Context) {
 			s.rateMu.Lock()
 			for key, n := range s.rateDropped {
 				if n > 0 {
-					s.Logger.Warn("logship: per-service log rate cap hit; its log streams were paused until the window reset",
-						"service", key, "cap", resolveRateCap(), "window", rateWindow)
+					s.Logger.Warn("logship: log rate cap hit; its log streams were paused until the window reset",
+						"service", key, "cap", resolveRateCap(), "totalCap", resolveTotalRateCap(), "window", rateWindow)
 				}
 			}
 			s.rateCounts = map[string]int{}
 			s.rateDropped = map[string]int{}
+			s.rateTotal = 0
 			s.rateWindowEnd = time.Now().Add(rateWindow)
 			s.rateMu.Unlock()
 		}
@@ -778,7 +904,7 @@ func (s *Shipper) rateWindowEndsAt() time.Time {
 // append queues a line for storage. It returns false when the line was
 // refused because its service is over the rate cap.
 func (s *Shipper) append(l db.LogLine, emitted time.Time, envName, envKind string) bool {
-	if !s.allowLine(l.Project, l.Service) {
+	if s.ingestPaused.Load() || !s.allowLine(l.Project, l.Service) {
 		return false
 	}
 	if s.Tap != nil {

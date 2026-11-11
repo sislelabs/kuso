@@ -61,10 +61,31 @@ type DescribeResponse struct {
 // invalidateDescribe() contract at ~10 call sites that has to be
 // kept in sync as new mutators land.
 func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse, error) {
-	p, err := s.Get(ctx, name)
+	p, err := s.getForRead(ctx, name)
 	if err != nil {
 		return nil, err
 	}
+	return s.DescribeProject(ctx, p)
+}
+
+// getForRead is Get served from the informer when it holds the project.
+// Describe is polled per open canvas and per dashboard card, and the
+// live GET it paid was the only apiserver call left on that path. A
+// cache miss (cold informer, or a project created a moment ago) still
+// goes live. Not for read-modify-write paths: those keep Get.
+func (s *Service) getForRead(ctx context.Context, name string) (*kube.KusoProject, error) {
+	if s.Kube != nil {
+		if p, ok := s.Kube.Cache.GetKusoProject(s.Namespace, name); ok {
+			return p, nil
+		}
+	}
+	return s.Get(ctx, name)
+}
+
+// DescribeProject is Describe for a project the caller already holds
+// (the dashboard summary lists them first), skipping the project read.
+func (s *Service) DescribeProject(ctx context.Context, p *kube.KusoProject) (*DescribeResponse, error) {
+	name := p.Name
 	services, err := s.listServicesForProject(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)

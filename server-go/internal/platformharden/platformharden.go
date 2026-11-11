@@ -87,6 +87,11 @@ var defaults = []Target{
 		MemRequest:    "192Mi",
 		CPULimit:      "1000m",
 		MemLimit:      "768Mi",
+		// helm-operator caches every Secret in the cluster, helm release
+		// Secrets included, and has no option to filter that cache. Past
+		// this the Go collector works harder instead of the kernel
+		// OOM-killing the operator into a full-fleet replay loop.
+		GoMemLimitPercent: 80,
 	},
 	{
 		Namespace:     "cert-manager",

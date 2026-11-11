@@ -177,3 +177,41 @@ func TestPodMetricsCache_DoesNotCacheErrors(t *testing.T) {
 		t.Error("a failed fetch was cached; a transient outage would be extended to the full TTL")
 	}
 }
+
+// SCL-5: projects default to their own namespace, so the dashboard
+// summary did one metrics-server LIST per project. With several
+// namespaces it now makes one cluster-wide LIST and buckets it.
+func TestSummaryPodMetrics_OneClusterWideListForManyNamespaces(t *testing.T) {
+	ResetPodMetricsCacheForTesting()
+	a := podMetric("a1", "a-web-production", "100m", "64Mi")
+	a.SetNamespace("kuso-a")
+	b := podMetric("b1", "b-web-production", "200m", "64Mi")
+	b.SetNamespace("kuso-b")
+	kc, calls := newMetricsKube(t, a, b)
+	var (
+		mu  sync.Mutex
+		nss []string
+	)
+	prev := listPodMetrics
+	t.Cleanup(func() { listPodMetrics = prev })
+	listPodMetrics = func(ctx context.Context, kc *kube.Client, ns string) (*unstructured.UnstructuredList, error) {
+		mu.Lock()
+		nss = append(nss, ns)
+		mu.Unlock()
+		return prev(ctx, kc, ns)
+	}
+	h := &ProjectsHandler{Kube: kc, Namespace: "kuso"}
+	projs := []kube.KusoProject{
+		{Spec: kube.KusoProjectSpec{Namespace: "kuso-a"}},
+		{Spec: kube.KusoProjectSpec{Namespace: "kuso-b"}},
+	}
+	lookup := h.summaryPodMetrics(context.Background(), projs)
+	gotA, okA := lookup("kuso-a")
+	gotB, okB := lookup("kuso-b")
+	if !okA || !okB || len(gotA) != 1 || len(gotB) != 1 || gotA[0].GetName() != "a1" || gotB[0].GetName() != "b1" {
+		t.Fatalf("bucketing wrong: a=%v(%v) b=%v(%v)", gotA, okA, gotB, okB)
+	}
+	if calls.Load() != 1 || len(nss) != 1 || nss[0] != "" {
+		t.Fatalf("upstream LISTs %d in namespaces %q, want one cluster-wide", calls.Load(), nss)
+	}
+}

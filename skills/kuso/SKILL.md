@@ -319,7 +319,7 @@ kuso project update <p> --max-concurrent 500                             # defau
 - 429s from the cap are in Traefik's metrics as normal responses for the service, not in the app's logs: the request never reaches the pod.
 - Needs the operator's `traefik.io` middlewares RBAC. On installs that predate this feature, apply `deploy/operator.yaml` from the release; kuso-server logs `per-service ingress limits are OFF` at boot until then.
 
-**Logs under load:** a service is stored at up to 6000 log lines a minute (`KUSO_LOG_MAX_LINES_PER_MIN`). Past that kuso stops reading its logs until the minute ends, so the lines in between are not in `kuso logs`. Use a log drain for a service that needs every line.
+**Logs under load:** a service is stored at up to 6000 log lines a minute (`KUSO_LOG_MAX_LINES_PER_MIN`), and the whole cluster at up to 30000 (`KUSO_LOG_MAX_LINES_PER_MIN_TOTAL`; past it, services above their fair share are cut first). Past a cap kuso stops reading the service's logs until the minute ends, so the lines in between are not in `kuso logs`. Use a log drain for a service that needs every line. Stored logs also have a size budget (`KUSO_LOG_MAX_BYTES`, default 40% of the control-plane Postgres volume): past it the oldest lines are deleted first, before the 7-day retention would remove them. If that volume is over 90% full with no reusable space in the log table, kuso stops storing logs (drains included) and sends a `platform.unhealthy` notification for `control-plane-db`.
 
 ### wakeOn excludePaths — keep callback paths warm
 

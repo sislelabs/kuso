@@ -37,8 +37,12 @@ import (
 	"k8s.io/client-go/metadata"
 )
 
-// DefaultKeep matches `helm upgrade --history-max`'s default of 10.
-const DefaultKeep = 10
+// DefaultKeep is 3, not helm's --history-max default of 10. Rollback goes
+// through kuso's own build/image records, never `helm rollback`, so old
+// revisions are only Secret weight: ~57 KB per env and ~168 KB per addon
+// revision, all held in etcd and in the helm-operator's Secret cache
+// (SCL-2). The deployed and pending revisions are kept regardless.
+const DefaultKeep = 3
 
 // Mode is KUSO_HELM_HISTORY_PRUNE.
 type Mode string

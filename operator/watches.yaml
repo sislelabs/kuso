@@ -31,7 +31,14 @@
 #
 # Helm release history: v1.42 has no max-history option and keeps every
 # revision; kuso-server prunes old revision Secrets instead
-# (server-go/internal/helmhistory).
+# (server-go/internal/helmhistory, keep 3 once KUSO_HELM_HISTORY_PRUNE=on).
+#
+# Secret cache: addon charts render Secrets, so helm-operator opens a
+# dependent watch on Secrets through an unfiltered, cluster-wide
+# controller-runtime cache. v1.42 exposes no label/field selector for
+# that cache (nor for the release-storage Secrets), so every Secret in the
+# cluster sits in operator heap. The levers are fewer revisions (above)
+# and the memory limit + GOMEMLIMIT in deploy/operator.yaml.
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoProject

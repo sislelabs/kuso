@@ -1797,10 +1797,12 @@ type Poller struct {
 const capTickInterval = 72
 
 // capBuildsPerServiceMax is the per-service KusoBuild retention cap.
-// 50 covers the common "last week's worth of builds visible in the
-// History panel" use case plus comfortable headroom. Overridable via
-// KUSO_BUILD_RETENTION_PER_SERVICE for clusters that want to see more.
-const capBuildsPerServiceMax = 50
+// History lives in BuildRecord (the Deployments tab) and rollback depth
+// is imageRetentionWindow, so CRs past that only cost: every retained
+// done build is decoded on each ~6 min sweep and held in the build
+// informer (25k CRs at 500 services x 50, SCL-9). Overridable via
+// KUSO_BUILD_RETENTION_PER_SERVICE.
+const capBuildsPerServiceMax = 15
 
 // imageRetentionWindow is how many of the most-recent SUCCEEDED builds
 // per service keep their registry image — the "rollback depth". Older

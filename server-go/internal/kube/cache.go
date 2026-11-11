@@ -165,6 +165,27 @@ func stripManagedFields(obj any) (any, error) {
 	return obj, nil
 }
 
+// slimCR is the CR informer Transform. It drops
+// status.deployedRelease.manifest: 11.5 KB of a 13.5 KB env, carrying
+// rendered conn Secrets, and nothing reads it. Every CR response used to
+// marshal it only for stripCRServerFields to decode the whole body again
+// and cut it out (SCL-6). Status is a subresource on every kuso CRD, so
+// an Update built from a cached object can't write the trimmed status
+// back. managedFields stay: drift reads them, and an Update carrying
+// altered entries would rewrite field ownership.
+func slimCR(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return obj, nil
+	}
+	if st, ok := u.Object["status"].(map[string]any); ok {
+		if rel, ok := st["deployedRelease"].(map[string]any); ok {
+			delete(rel, "manifest")
+		}
+	}
+	return u, nil
+}
+
 type informerEntry struct {
 	lister  cache.GenericLister
 	synced  cache.InformerSynced
@@ -195,6 +216,7 @@ func NewCache(c *Client) *Cache {
 	for _, gvr := range gvrs {
 		gi := factory.ForResource(gvr)
 		inf := gi.Informer()
+		_ = inf.SetTransform(slimCR)
 		_ = inf.AddIndexers(cache.Indexers{crByProjectIndexKey: projectIndexFunc})
 		informers[gvr] = informerEntry{
 			lister:  gi.Lister(),

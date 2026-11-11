@@ -79,12 +79,33 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	nodes = nodesHosting(nodes, pods)
 	usage, errs := s.Kube.NodesPodUsage(ctx, nodes)
 	if len(usage) == 0 && len(errs) > 0 {
 		return fmt.Errorf("kubelet stats: %w", errors.Join(errs...))
 	}
 	s.Store.Record(time.Now(), Aggregate(pods, usage))
 	return nil
+}
+
+// nodesHosting keeps the nodes that run at least one env pod. This
+// sampler runs on every replica, and each kubelet summary is 0.5-1 MB
+// through the apiserver proxy: nodes with only addons, builds or the
+// control plane have nothing to contribute (SCL-10).
+func nodesHosting(nodes []*corev1.Node, pods []*corev1.Pod) []*corev1.Node {
+	used := make(map[string]struct{}, len(nodes))
+	for _, p := range pods {
+		if p.Spec.NodeName != "" {
+			used[p.Spec.NodeName] = struct{}{}
+		}
+	}
+	out := make([]*corev1.Node, 0, len(used))
+	for _, n := range nodes {
+		if _, ok := used[n.Name]; ok {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func (s *Sampler) nodes(ctx context.Context) ([]*corev1.Node, error) {

@@ -31,6 +31,7 @@ type ProjectsAPI interface {
 	Create(ctx context.Context, req projects.CreateProjectRequest) (*kube.KusoProject, error)
 	RetainedData(ctx context.Context, req projects.CreateProjectRequest) ([]string, error)
 	Describe(ctx context.Context, name string) (*projects.DescribeResponse, error)
+	DescribeProject(ctx context.Context, p *kube.KusoProject) (*projects.DescribeResponse, error)
 	Update(ctx context.Context, name string, req projects.UpdateProjectRequest) (*kube.KusoProject, error)
 	Delete(ctx context.Context, name string) error
 	DeleteWithOptions(ctx context.Context, name string, opts projects.DeleteProjectOptions) error

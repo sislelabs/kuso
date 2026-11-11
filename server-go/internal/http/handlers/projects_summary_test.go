@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +31,8 @@ type summaryFakeSvc struct {
 	// failDescribe simulates one broken project (kube blip) — the
 	// handler must degrade that card, not the whole response.
 	failDescribe map[string]bool
+	// Summary fans projects out to workers, so the hooks run concurrently.
+	mu           sync.Mutex
 	enrichedSvcs int
 	enrichedEnvs int
 }
@@ -58,12 +61,20 @@ func (f *summaryFakeSvc) Describe(_ context.Context, name string) (*projects.Des
 	return cp, nil
 }
 
+func (f *summaryFakeSvc) DescribeProject(ctx context.Context, p *kube.KusoProject) (*projects.DescribeResponse, error) {
+	return f.Describe(ctx, p.Name)
+}
+
 func (f *summaryFakeSvc) EnrichServiceWithManagedSecretKeys(_ context.Context, _, _ string, _ *kube.KusoService) {
+	f.mu.Lock()
 	f.enrichedSvcs++
+	f.mu.Unlock()
 }
 
 func (f *summaryFakeSvc) EnrichEnvWithManagedSecretKeys(_ context.Context, _ string, _ *kube.KusoEnvironment) {
+	f.mu.Lock()
 	f.enrichedEnvs++
+	f.mu.Unlock()
 }
 
 func newSummaryFake() *summaryFakeSvc {

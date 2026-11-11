@@ -106,11 +106,17 @@ func (s *Service) projectBuildCap(ctx context.Context, project string) int {
 	if s.Kube == nil || project == "" {
 		return 0
 	}
-	gctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	p, err := s.Kube.GetKusoProject(gctx, s.Namespace, project)
-	if err != nil || p == nil {
-		return 0
+	// Called per queued project on every 5s dispatch tick: read the
+	// informer, and go live only while it is cold.
+	p, ok := s.Kube.Cache.GetKusoProject(s.Namespace, project)
+	if !ok {
+		gctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		var err error
+		p, err = s.Kube.GetKusoProject(gctx, s.Namespace, project)
+		if err != nil || p == nil {
+			return 0
+		}
 	}
 	v := p.Annotations["kuso.sislelabs.com/build-max-concurrent"]
 	if v == "" {
@@ -483,6 +489,19 @@ func (s *Service) ScanNamespaces(ctx context.Context) []string {
 	out := []string{s.Namespace}
 	seen := map[string]bool{s.Namespace: true}
 	if s.Kube == nil {
+		return out
+	}
+	// Runs every 5s poller tick. Off a warm informer, read spec.namespace
+	// straight off the shared objects instead of decoding every project.
+	if items, ok := s.Kube.Cache.ListFromCacheShared(kube.GVRProjects, s.Namespace, nil); ok {
+		for _, u := range items {
+			ns, _, _ := unstructured.NestedString(u.Object, "spec", "namespace")
+			if ns == "" || seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			out = append(out, ns)
+		}
 		return out
 	}
 	projects, err := s.Kube.ListKusoProjects(ctx, s.Namespace)

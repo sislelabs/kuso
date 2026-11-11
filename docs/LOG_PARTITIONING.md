@@ -12,6 +12,31 @@ services, a long-retention requirement, or both — declarative
 partitioning by day moves prune from "delete 50k rows / repeat" to
 "`DROP PARTITION`" — O(1), no lock contention.
 
+## Size budget
+
+Retention is by time, so it doesn't bound size. The control-plane
+Postgres volume is 10Gi by default, and at ~630 bytes per stored line
+(heap plus indexes) a week at ~28 lines/s cluster-wide fills it. The
+log shipper also keeps the table under a byte budget:
+
+- `KUSO_LOG_MAX_BYTES` (bytes or a quantity such as `4Gi`; `0` turns
+  it off). The default is 40% of the `kuso-postgres` volume, read from
+  the CNPG Cluster (`KUSO_DB_VOLUME_BYTES` overrides it), or 4Gi when
+  the size can't be read.
+- Every 5 minutes it estimates the bytes held by live rows. Over
+  budget, it deletes the oldest lines down to 90% of the budget, at
+  most 200k rows and 60s per run, in 5k-row transactions on the direct
+  connection. A cluster that upgrades already over budget catches up
+  over several runs.
+- A DELETE frees space for reuse but doesn't shrink the files. When the
+  database passes 80% of the volume it sends a `platform.unhealthy`
+  notification for `control-plane-db`. Above 90%, if the log table has
+  less than 10% reusable space, it stops storing logs until usage drops,
+  so auth and the API keep working. To get the space back, run
+  `VACUUM FULL "LogLine"` in a maintenance window (it locks the table)
+  or switch to partitioning below, which frees space when a day is
+  dropped.
+
 ## When to turn it on
 
 - You're writing > 10M log rows / day.

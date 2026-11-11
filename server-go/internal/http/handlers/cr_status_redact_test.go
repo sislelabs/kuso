@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -91,6 +93,35 @@ func TestWriteJSON_StripsReleaseManifestAndManagedFields(t *testing.T) {
 	}
 	if _, ok := service.Status["deployedRelease"].(map[string]any)["manifest"]; !ok {
 		t.Error("writeJSON deleted the manifest from the caller's object")
+	}
+}
+
+// The byte splice that replaced the decode/re-encode on the common path
+// must produce the same document the decode path did, including for
+// strings that merely mention the key.
+func TestRemoveJSONKey_MatchesDecodeStrip(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		`{"metadata":{"managedFields":[{"manager":"a","fieldsV1":{"f:spec":{}}}],"name":"x"}}`,
+		`{"metadata":{"name":"x","managedFields":[{"manager":"a"}]},"spec":{}}`,
+		`{"metadata":{"managedFields":[]}}`,
+		`[{"metadata":{"managedFields":[{"m":"}]\"{"}]}},{"metadata":{"name":"y","managedFields":null}}]`,
+		`{"env":[{"name":"X","value":"\"managedFields\":[1]"}],"metadata":{"managedFields":[{"t":"2026"}],"labels":{"a":"b"}}}`,
+		`{"status":{"deployedRelease":{"name":"x"}},"metadata":{"name":"z"}}`,
+	}
+	for _, in := range cases {
+		got := removeJSONKey([]byte(in), "managedFields")
+		var gotDoc, wantDoc any
+		if err := json.Unmarshal(got, &gotDoc); err != nil {
+			t.Fatalf("splice produced invalid JSON %q from %q: %v", got, in, err)
+		}
+		if err := json.Unmarshal([]byte(in), &wantDoc); err != nil {
+			t.Fatal(err)
+		}
+		stripCRServerFieldsIn(wantDoc)
+		if !reflect.DeepEqual(gotDoc, wantDoc) {
+			t.Errorf("splice %s\n  want %v\n  got  %v", in, wantDoc, gotDoc)
+		}
 	}
 }
 

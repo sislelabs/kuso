@@ -11,12 +11,15 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
@@ -734,46 +737,94 @@ func (h *ProjectsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := make([]projectSummaryItem, 0, len(visible))
+	podMetrics := h.summaryPodMetrics(ctx, visible)
+	items := make([]projectSummaryItem, len(visible))
+	// Bounded fan-out: each card is a cache-served describe plus a few
+	// per-project permission reads against the shared DB pool. Serial, a
+	// few hundred projects ran past the 15s budget.
+	sem := make(chan struct{}, summaryWorkers)
+	var wg sync.WaitGroup
 	for i := range visible {
-		name := visible[i].Name
-		d, derr := h.Svc.Describe(ctx, name)
-		if derr != nil || d == nil {
-			// Best-effort per card: one broken project must not blank the
-			// whole dashboard. The card renders name-only (same as a
-			// failed per-card describe today); the miss is logged so it
-			// doesn't hide.
-			h.Logger.Warn("projects summary: describe failed; card degraded",
-				"project", name, "err", derr)
-			p := visible[i]
-			redactProjectRepoIfNeeded(ctx, h.DB, &p)
-			items = append(items, projectSummaryItem{
-				Project: &p,
-				Metrics: projectMetricsResponse{Project: name},
-			})
-			continue
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() { <-sem; wg.Done() }()
+			items[i] = h.summaryItem(ctx, &visible[i], podMetrics)
+		}(i)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, items)
+}
+
+// summaryWorkers bounds the Summary fan-out.
+const summaryWorkers = 8
+
+func (h *ProjectsHandler) summaryItem(ctx context.Context, proj *kube.KusoProject, podMetrics func(ns string) ([]unstructured.Unstructured, bool)) projectSummaryItem {
+	name := proj.Name
+	// The project comes from this request's own List (decoded copies, one
+	// per worker), so describe skips the read and may redact it in place.
+	d, derr := h.Svc.DescribeProject(ctx, proj)
+	if derr != nil || d == nil {
+		// Best-effort per card: one broken project must not blank the
+		// whole dashboard. The card renders name-only (same as a
+		// failed per-card describe today); the miss is logged so it
+		// doesn't hide.
+		h.Logger.Warn("projects summary: describe failed; card degraded",
+			"project", name, "err", derr)
+		p := *proj
+		redactProjectRepoIfNeeded(ctx, h.DB, &p)
+		return projectSummaryItem{
+			Project: &p,
+			Metrics: projectMetricsResponse{Project: name},
 		}
-		// Same serialization treatment as the Describe handler: surface
-		// managed-secret keys BEFORE masking, then mask env values and
-		// strip repo credentials for callers without secrets:read.
-		enrichServicesWithManagedSecretKeys(ctx, h.Svc, name, d.Services)
-		enrichEnvsWithManagedSecretKeys(ctx, h.Svc, name, d.Environments)
-		maskServicesEnvIfNeeded(ctx, h.DB, name, d.Services)
-		maskEnvsIfNeeded(ctx, h.DB, name, d.Environments)
-		redactProjectRepoIfNeeded(ctx, h.DB, d.Project)
-		redactServicesRepoIfNeeded(ctx, h.DB, name, d.Services)
-		ns := visible[i].Spec.Namespace
+	}
+	// Same serialization treatment as the Describe handler: surface
+	// managed-secret keys BEFORE masking, then mask env values and
+	// strip repo credentials for callers without secrets:read.
+	enrichServicesWithManagedSecretKeys(ctx, h.Svc, name, d.Services)
+	enrichEnvsWithManagedSecretKeys(ctx, h.Svc, name, d.Environments)
+	maskServicesEnvIfNeeded(ctx, h.DB, name, d.Services)
+	maskEnvsIfNeeded(ctx, h.DB, name, d.Environments)
+	redactProjectRepoIfNeeded(ctx, h.DB, d.Project)
+	redactServicesRepoIfNeeded(ctx, h.DB, name, d.Services)
+	ns := proj.Spec.Namespace
+	if ns == "" {
+		ns = h.Namespace
+	}
+	return projectSummaryItem{
+		Project:      d.Project,
+		Services:     d.Services,
+		Environments: d.Environments,
+		Metrics:      h.summaryMetrics(ctx, name, ns, d.Environments, podMetrics),
+	}
+}
+
+// summaryPodMetrics returns a per-namespace pod-metrics lookup for one
+// summary call. Projects default to their own namespace, so with more
+// than one namespace a single cluster-wide LIST (cached like the
+// per-namespace one) replaces one aggregated-API LIST per project.
+func (h *ProjectsHandler) summaryPodMetrics(ctx context.Context, projects []kube.KusoProject) func(ns string) ([]unstructured.Unstructured, bool) {
+	nss := map[string]struct{}{}
+	for i := range projects {
+		ns := projects[i].Spec.Namespace
 		if ns == "" {
 			ns = h.Namespace
 		}
-		items = append(items, projectSummaryItem{
-			Project:      d.Project,
-			Services:     d.Services,
-			Environments: d.Environments,
-			Metrics:      h.summaryMetrics(ctx, name, ns, d.Environments),
-		})
+		nss[ns] = struct{}{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	if len(nss) <= 1 {
+		return func(ns string) ([]unstructured.Unstructured, bool) {
+			return listPodMetricsCached(ctx, h.Kube, ns)
+		}
+	}
+	all, ok := listPodMetricsCached(ctx, h.Kube, metav1.NamespaceAll)
+	byNS := map[string][]unstructured.Unstructured{}
+	for i := range all {
+		byNS[all[i].GetNamespace()] = append(byNS[all[i].GetNamespace()], all[i])
+	}
+	return func(ns string) ([]unstructured.Unstructured, bool) {
+		return byNS[ns], ok
+	}
 }
 
 // summaryMetrics computes the per-project CPU/mem rollup for the summary
@@ -782,7 +833,7 @@ func (h *ProjectsHandler) Summary(w http.ResponseWriter, r *http.Request) {
 // previews coming and going don't jitter the card numbers) and the same
 // cached namespace-wide pod-metrics fetch, so a dashboard poll costs one
 // upstream metrics-server query per namespace, not one per project.
-func (h *ProjectsHandler) summaryMetrics(ctx context.Context, project, ns string, envs []kube.KusoEnvironment) projectMetricsResponse {
+func (h *ProjectsHandler) summaryMetrics(ctx context.Context, project, ns string, envs []kube.KusoEnvironment, podMetrics func(ns string) ([]unstructured.Unstructured, bool)) projectMetricsResponse {
 	out := projectMetricsResponse{Project: project}
 	// Scope to the PRODUCTION env-GROUP via the env label. spec.kind=
 	// "production" is also set on staging clones, so keying on it would
@@ -797,7 +848,7 @@ func (h *ProjectsHandler) summaryMetrics(ctx context.Context, project, ns string
 	if len(prod) == 0 || h.Kube == nil {
 		return out
 	}
-	items, ok := listPodMetricsCached(ctx, h.Kube, ns)
+	items, ok := podMetrics(ns)
 	if !ok {
 		// metrics-server missing or transient outage — zeros, the card
 		// renders its "—" state. Same graceful fall-through as the
@@ -2183,8 +2234,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // operator renders conn Secrets and literal env values into that
 // manifest, and viewers can read every CR list. It works on the encoded
 // bytes so the caller's (often informer-cached) objects stay untouched.
+//
+// managedFields come out by a byte splice. The CR informer already drops
+// the manifest (kube.slimCR), so the full decode/re-encode below only
+// runs for a response that still has one, i.e. one built from a live GET.
+// That decode used to run on every CR response: 122 µs and 90 KB
+// allocated per env to send 1.9 KB (SCL-6).
 func stripCRServerFields(b []byte) []byte {
-	if !bytes.Contains(b, []byte(`"deployedRelease"`)) && !bytes.Contains(b, []byte(`"managedFields"`)) {
+	b = removeJSONKey(b, "managedFields")
+	if !bytes.Contains(b, []byte(`"deployedRelease"`)) || !bytes.Contains(b, []byte(`"manifest"`)) {
 		return b
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -2199,6 +2257,91 @@ func stripCRServerFields(b []byte) []byte {
 		return b
 	}
 	return out
+}
+
+// removeJSONKey drops every `"key":<value>` member from json.Marshal
+// output. In valid JSON an unescaped `"key":` can only be an object key
+// (a quote inside a string is escaped, and a string value is never
+// followed by a colon). Returns b unchanged when the key is absent and
+// the original b on anything it can't parse, so the caller's slow path
+// still sees the field.
+func removeJSONKey(b []byte, key string) []byte {
+	pat := []byte(`"` + key + `":`)
+	if !bytes.Contains(b, pat) {
+		return b
+	}
+	out := make([]byte, 0, len(b))
+	i := 0
+	for {
+		j := bytes.Index(b[i:], pat)
+		if j < 0 {
+			return append(out, b[i:]...)
+		}
+		start := i + j
+		end, ok := skipJSONValue(b, start+len(pat))
+		if !ok {
+			return b
+		}
+		if start-1 >= i && b[start-1] == ',' {
+			out = append(out, b[i:start-1]...)
+		} else {
+			out = append(out, b[i:start]...)
+			if end < len(b) && b[end] == ',' {
+				end++
+			}
+		}
+		i = end
+	}
+}
+
+// skipJSONValue returns the index just past the JSON value starting at p.
+func skipJSONValue(b []byte, p int) (int, bool) {
+	if p >= len(b) {
+		return 0, false
+	}
+	switch b[p] {
+	case '"':
+		return skipJSONString(b, p)
+	case '{', '[':
+		depth := 0
+		for p < len(b) {
+			switch b[p] {
+			case '"':
+				e, ok := skipJSONString(b, p)
+				if !ok {
+					return 0, false
+				}
+				p = e
+				continue
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				if depth == 0 {
+					return p + 1, true
+				}
+			}
+			p++
+		}
+		return 0, false
+	default:
+		for p < len(b) && b[p] != ',' && b[p] != '}' && b[p] != ']' {
+			p++
+		}
+		return p, p <= len(b)
+	}
+}
+
+func skipJSONString(b []byte, p int) (int, bool) {
+	for i := p + 1; i < len(b); i++ {
+		switch b[i] {
+		case '\\':
+			i++
+		case '"':
+			return i + 1, true
+		}
+	}
+	return 0, false
 }
 
 func stripCRServerFieldsIn(v any) {
