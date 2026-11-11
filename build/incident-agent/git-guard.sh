@@ -22,12 +22,20 @@ set -euo pipefail
 
 real="${KUSO_GIT_REAL:-/usr/bin/git}"
 
-case "${1:-}" in
-  -*)
-    echo "git: global option ${1%%=*} is not allowed in the incident agent" >&2
-    exit 2
-    ;;
-esac
+# Global options that only change output or locking pass (Claude Code
+# runs `git --no-optional-locks status` itself); -c, -C, --git-dir,
+# --exec-path, --config-env and the rest are refused.
+for arg in "$@"; do
+  case "$arg" in
+    --no-optional-locks|--no-pager|-P|--literal-pathspecs|--glob-pathspecs|\
+    --noglob-pathspecs|--icase-pathspecs|--version|--help) ;;
+    -*)
+      echo "git: global option ${arg%%=*} is not allowed in the incident agent" >&2
+      exit 2
+      ;;
+    *) break ;;
+  esac
+done
 
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
   GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CEILING_DIRECTORIES \

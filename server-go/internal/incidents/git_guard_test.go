@@ -179,7 +179,7 @@ func TestGitGuardAllowsCloneConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runIn(repo, "bash", guard, "status", "--short")
+	runIn(repo, "bash", guard, "--no-optional-locks", "status", "--short")
 	runIn(repo, "bash", guard, "diff")
 	runIn(repo, "bash", guard, "add", "a.txt")
 	runIn(repo, "bash", guard, "commit", "-qm", "fix")
