@@ -13,6 +13,7 @@ import (
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
+	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 )
 
@@ -92,6 +93,10 @@ func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
+	// The Secret is mounted with envFrom, so its keys are env vars.
+	if refuseExecUnlessAdmin(ctx, w, h.DB, project, projects.ExecEnvNameFields(req.Key)) {
+		return
+	}
 	if err := h.Svc.SetKeyOpts(ctx, project, service, req.Env, req.Key, req.Value, secrets.SetOptions{Force: req.Force}); err != nil {
 		h.fail(w, "set secret", err)
 		return

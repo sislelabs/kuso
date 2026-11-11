@@ -643,7 +643,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		plan.Changes = append(plan.Changes, ResourceChange{Resource: "service:" + short, Fields: fields})
 		plan.svcPatch[short] = req
 		plan.svcEnvChanged[short] = crEnvChanged
-		if ex := projects.ExecPatchFields(&ls.Spec, req); len(ex) > 0 {
+		if ex := append(projects.ExecPatchFields(&ls.Spec, req), execEnvChanges(envFields)...); len(ex) > 0 {
 			plan.ExecChanges = append(plan.ExecChanges, ExecChange{Resource: "service:" + short, Fields: ex})
 		}
 	}

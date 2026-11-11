@@ -403,6 +403,32 @@ func refuseExecFields(w http.ResponseWriter, fields []string) {
 		strings.Join(fields, ", ")))
 }
 
+// refuseExecUnlessAdmin writes the exec-field 403 and returns true when
+// fields is non-empty and the caller isn't a project admin.
+func refuseExecUnlessAdmin(ctx context.Context, w http.ResponseWriter, dbConn *db.DB, project string, fields []string) bool {
+	if len(fields) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return false
+	}
+	refuseExecFields(w, fields)
+	return true
+}
+
+// refuseExecEnvSets gates env writes on a service whose names load or
+// choose code (projects.IsExecEnvName). Values equal to the stored
+// spec.envVars entry don't count, so the service lookup only happens for
+// a non-admin writing such a name. Returns true when it answered.
+func (h *ProjectsHandler) refuseExecEnvSets(ctx context.Context, w http.ResponseWriter, project, service string, sets []projects.EnvVar) bool {
+	if len(projects.ExecEnvSetFields(nil, sets)) == 0 || callerCanReadSecrets(ctx, h.DB, project) {
+		return false
+	}
+	cur, err := h.Svc.GetService(ctx, project, service)
+	if err != nil {
+		h.fail(w, "set env", err)
+		return true
+	}
+	return refuseExecUnlessAdmin(ctx, w, h.DB, project, projects.ExecEnvSetFields(cur.Spec.EnvVars, sets))
+}
+
 // callerCanRunSQL — may the caller use the SQL browser (list tables /
 // run SELECT)? Admin-only (sql:read) — a SELECT can read any
 // secret-bearing app table.

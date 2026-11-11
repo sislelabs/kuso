@@ -64,6 +64,7 @@ import {
   type SubscribableShape,
 } from "@/components/service/EnvVarParts";
 import { isSensitiveVar } from "@/components/service/envvars/sensitivity";
+import { EXEC_ENV_HINT, isExecEnvName, useExecEnvNames } from "@/components/service/envvars/execNames";
 import {
   HIDDEN_MARKER,
   parseRawEnv,
@@ -232,6 +233,8 @@ export function EnvVarsEditor({
   const masked = env.data?.masked ?? false;
   const canWriteEnv = useCanOnProject(project, Perms.SecretsWrite);
   const canWrite = canWriteEnv && !masked;
+  const canExec = useCanOnProject(project, Perms.SecretsRead);
+  const execNames = useExecEnvNames(canWrite && !canExec).data;
   // Reading the example file is an editor action server-side (it may hold
   // real values); image services have no repo to read it from.
   const svcSpec = useService(project, service).data?.spec;
@@ -1019,6 +1022,8 @@ export function EnvVarsEditor({
           </p>
         ) : reserved ? (
           <p className="text-xs text-[var(--warning)]">{reserved}</p>
+        ) : !canExec && isExecEnvName(execNames, name) ? (
+          <p className="text-xs text-[var(--warning)]">{EXEC_ENV_HINT}</p>
         ) : buildTimePrefix(name) ? (
           <p className="text-xs text-[var(--text-tertiary)]">
             {buildTimePrefix(name)}* is inlined into the browser bundle: changing it needs a rebuild, and it&apos;s
