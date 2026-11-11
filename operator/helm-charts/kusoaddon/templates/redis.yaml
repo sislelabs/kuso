@@ -50,11 +50,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep PONG"]
+            periodSeconds: 2
+            failureThreshold: 1800
           readinessProbe:
             exec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep PONG"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 15
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
   volumeClaimTemplates:

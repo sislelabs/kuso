@@ -212,11 +212,15 @@ spec:
               mountPath: /conf
             - name: data
               mountPath: /data
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+            periodSeconds: 2
+            failureThreshold: 1800
           readinessProbe:
             exec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 15
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:
@@ -302,7 +306,28 @@ spec:
         - name: sentinel
           image: {{ include "kusoaddon.image" (list $ (printf "redis:%s-alpine" $version)) }}
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
-          command: ["redis-sentinel", "/conf/sentinel.conf"]
+          # Sentinels never forget a peer. Every replaced pod comes back
+          # with a new IP and id, so the survivors keep pinging dead peers
+          # (~100m CPU each on tickero-cache with 5 known for 3 live) and
+          # count them toward the majority a failover needs. The loop
+          # resets this sentinel's own peer list when it sees a down peer
+          # and no failover is under way; live peers re-announce within
+          # seconds over the master's hello channel.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              (
+                cli() { redis-cli -p 26379 -a "$REDIS_PASSWORD" --no-auth-warning "$@"; }
+                sleep $((120 + RANDOM % 60))
+                while true; do
+                  if cli SENTINEL SENTINELS {{ $name }} | grep -q '^s_down' \
+                    && ! cli SENTINEL MASTER {{ $name }} | grep -qE 'o_down|failover_in_progress'; then
+                    echo "forgetting down sentinel peers: $(cli SENTINEL RESET {{ $name }})"
+                  fi
+                  sleep $((240 + RANDOM % 120))
+                done
+              ) &
+              exec redis-sentinel /conf/sentinel.conf
           ports:
             - name: sentinel
               containerPort: 26379
@@ -336,7 +361,7 @@ spec:
               # kubelet logs a warning every period.
               command: ["sh", "-c", "redis-cli -p 26379 -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
             initialDelaySeconds: 5
-            periodSeconds: 5
+            periodSeconds: 15
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:

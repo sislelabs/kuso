@@ -24,6 +24,30 @@
 {{- end -}}
 {{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 {{- $database := .Values.database | default "kuso" -}}
+{{- $serverConfig := `<clickhouse>
+  <logger>
+    <level>warning</level>
+  </logger>
+  <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+  <mark_cache_size>134217728</mark_cache_size>
+  <index_mark_cache_size>67108864</index_mark_cache_size>
+  <uncompressed_cache_size>134217728</uncompressed_cache_size>
+  <asynchronous_metrics_update_period_s>60</asynchronous_metrics_update_period_s>
+  <text_log remove="1"/>
+  <metric_log remove="1"/>
+  <asynchronous_metric_log remove="1"/>
+  <trace_log remove="1"/>
+  <query_thread_log remove="1"/>
+  <query_views_log remove="1"/>
+  <processors_profile_log remove="1"/>
+  <part_log remove="1"/>
+  <session_log remove="1"/>
+  <opentelemetry_span_log remove="1"/>
+  <query_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+  </query_log>
+</clickhouse>
+` -}}
 {{/*
   Default user config baked into a secret so we can interpolate the
   password into it. Mounting the secret as a file into ClickHouse's
@@ -41,6 +65,22 @@ type: Opaque
 data:
   default-user.xml: {{ $defaultUserXml | b64enc | quote }}
 ---
+# Server overrides. The image defaults suit a dedicated host: trace-level
+# text_log plus metric/trace/async-metric logs wrote 11.5 GiB of system
+# tables (vs 20 MiB of app data) on a small addon, and that write+merge
+# load was most of its idle CPU. 5 GiB mark/index caches against a 1 GiB
+# pod limit are how it got OOMKilled. query_log stays, with a TTL, since
+# it's what you read when a query is slow.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  kuso.xml: |
+    {{- $serverConfig | nindent 4 }}
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -57,6 +97,8 @@ spec:
     metadata:
       labels:
         {{- include "kusoaddon.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ $serverConfig | sha256sum }}
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
@@ -112,6 +154,10 @@ spec:
               mountPath: /var/log/clickhouse-server
             - name: usersd
               mountPath: /etc/clickhouse-server/users.d
+            - name: config
+              mountPath: /etc/clickhouse-server/config.d/kuso.xml
+              subPath: kuso.xml
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /ping
@@ -139,6 +185,9 @@ spec:
         # Writable users.d the entrypoint can rewrite at boot.
         - name: usersd
           emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ $name }}-config
   volumeClaimTemplates:
     - metadata:
         name: data

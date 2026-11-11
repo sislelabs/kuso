@@ -95,6 +95,7 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// /api/kubernetes/... tree so the URL reads naturally and so it
 	// shares the project-access auth gate with sibling project routes.
 	rt.Get("/api/projects/{project}/metrics", h.ProjectMetrics)
+	rt.Get("/api/projects/{project}/top", h.ProjectTop)
 	// Per-env traffic timeseries (requests/sec, error rate, p95
 	// response time). Reads from the in-cluster prometheus deployed
 	// via deploy/prometheus.yaml. The host can reach kuso-prometheus

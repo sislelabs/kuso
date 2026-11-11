@@ -183,16 +183,25 @@ spec:
               exec:
                 command: ["sh", "-c", "pg_ctl -D \"$PGDATA\" -m fast -w -t 55 stop || true"]
           {{- end }}
+          {{- if $pinned }}
+          # Image rolls pause PgBouncer until this pod is Ready, so start-up
+          # is polled fast. The kubelet runs readiness immediately once the
+          # startup probe passes, so the slower steady-state period below
+          # adds nothing to that pause. Each exec forks pg_isready; at a 2s
+          # period that cost ~45m CPU per idle Postgres.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "kuso", "-d", {{ $database | quote }}]
+            periodSeconds: 2
+            failureThreshold: 1800
+          {{- end }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "kuso", "-d", {{ $database | quote }}]
-            {{- if $pinned }}
-            initialDelaySeconds: 1
-            periodSeconds: 2
-            {{- else }}
+            {{- if not $pinned }}
             initialDelaySeconds: 5
-            periodSeconds: 5
             {{- end }}
+            periodSeconds: 15
           resources:
             {{- include "kusoaddon.resources" . | nindent 12 }}
       {{- if $tlsOn }}

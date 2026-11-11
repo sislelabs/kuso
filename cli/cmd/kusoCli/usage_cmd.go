@@ -108,7 +108,7 @@ func runUsageProjects() error {
 		return nil
 	}
 	tw := tablewriter.NewWriter(os.Stdout)
-	tw.SetHeader([]string{"Project", "CPU (core-h)", "Mem (GB-h)", "Cost", "% cluster"})
+	tw.SetHeader([]string{"Project", "CPU (core-h, next 30d)", "Mem (GB-h, next 30d)", "Cost (next 30d)", "% cluster"})
 	for _, p := range out.Projects {
 		cost := "—"
 		if p.Cost > 0 {
@@ -123,7 +123,7 @@ func runUsageProjects() error {
 		})
 	}
 	tw.Render()
-	fmt.Printf("\nWindow: %d days (projected). Cluster total: %.1f core-h, %.1f GB-h",
+	fmt.Printf("\nProjected next 30 days from the last %d days' usage (core-h / 720 = avg cores). Cluster total: %.1f core-h, %.1f GB-h",
 		out.Days,
 		float64(out.ClusterTotal.CPUMilliHours)/1000,
 		out.ClusterTotal.MemGBHours)
