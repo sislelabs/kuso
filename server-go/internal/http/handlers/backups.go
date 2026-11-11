@@ -639,16 +639,18 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// Job can actually start. The scheduled-backup CronJob path is
 	// chart-rendered into the project ns with its own secret, so it's
 	// unaffected by this gap.
-	if ns != h.Namespace {
-		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
-			if errors.Is(err, addons.ErrNotFound) {
-				writeErr(w, http.StatusPreconditionFailed, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)")
-				return
-			}
-			h.Logger.Error("backup: mirror s3 secret into project ns", "err", err, "ns", ns)
-			writeErr(w, http.StatusInternalServerError, "internal")
+	//
+	// A project with its own (scoped) key restores through it and gets no
+	// copy of the bucket-wide key (BLOB-R1).
+	credSecret, err := h.restoreCredentialSecret(ctx, ns, project)
+	if err != nil {
+		if errors.Is(err, addons.ErrNotFound) {
+			writeErr(w, http.StatusPreconditionFailed, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)")
 			return
 		}
+		h.Logger.Error("backup: resolve restore s3 credential", "err", err, "ns", ns)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
 	}
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
@@ -659,7 +661,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if tenantLoc != nil {
 		srcBucket = tenantLoc.bucket
 	}
-	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3Env(srcBucket)...)
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName, isExternalAddon(destCR)), restoreS3EnvFrom(credSecret, srcBucket)...)
 	// A multi-DB addon's sibling dump (`<ts>.db-<name>.sql.gz`) is a
 	// `--clean` dump of THAT logical database. Fed to the conn Secret's
 	// POSTGRES_DB it would drop and replace the primary DB's tables.
@@ -849,17 +851,44 @@ func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
 // makes a restore read from a bucket the dump was never written to,
 // which surfaces as "key not found" mid-incident.
 func restoreS3Env(bucketOverride string) []corev1.EnvVar {
-	bucketEnv := envFromSecret("BUCKET", backupSecretName, "bucket")
+	return restoreS3EnvFrom(backupSecretName, bucketOverride)
+}
+
+// restoreS3EnvFrom is restoreS3Env reading the storage settings from
+// secret (a project's scoped kuso-backup-s3-<project>, same keys).
+func restoreS3EnvFrom(secret, bucketOverride string) []corev1.EnvVar {
+	bucketEnv := envFromSecret("BUCKET", secret, "bucket")
 	if bucketOverride != "" {
 		bucketEnv = corev1.EnvVar{Name: "BUCKET", Value: bucketOverride}
 	}
 	return []corev1.EnvVar{
 		bucketEnv,
-		envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
-		envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
-		envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
-		envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
+		envFromSecret("S3_ENDPOINT", secret, "endpoint"),
+		envFromSecret("AWS_ACCESS_KEY_ID", secret, "accessKeyId"),
+		envFromSecret("AWS_SECRET_ACCESS_KEY", secret, "secretAccessKey"),
+		envFromSecretOptional("AWS_DEFAULT_REGION", secret, "region"),
 	}
+}
+
+// restoreCredentialSecret names the Secret a restore Job in ns reads its
+// backup storage from: the project's rendered kuso-backup-s3-<project>
+// when present, else the shared Secret, mirrored into a project
+// namespace first. That mirror is the same persistent copy the heal sweep
+// keeps for unscoped projects' CronJobs, so it is not tied to the Job.
+func (h *BackupsHandler) restoreCredentialSecret(ctx context.Context, ns, project string) (string, error) {
+	scoped, err := h.Kube.ProjectBackupSecretIn(ctx, ns, project)
+	if err != nil {
+		return "", err
+	}
+	if scoped != "" {
+		return scoped, nil
+	}
+	if ns != h.Namespace {
+		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
+			return "", err
+		}
+	}
+	return backupSecretName, nil
 }
 
 // mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret

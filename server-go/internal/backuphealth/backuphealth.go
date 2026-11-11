@@ -351,7 +351,9 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			continue
 		}
 		st.Covered = true
-		if p, seen := secretPresent[ns]; seen {
+		// Keyed per project too: a scoped project reads its own Secret.
+		secretKey := ns + "/" + project
+		if p, seen := secretPresent[secretKey]; seen {
 			if p == nil {
 				complete = false
 				skipped[a.Name] = true
@@ -359,25 +361,18 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			}
 			st.SecretPresent = *p
 		} else {
-			_, gerr := kc.Clientset.CoreV1().Secrets(ns).Get(ctx, "kuso-backup-s3", metav1.GetOptions{})
-			switch {
-			case gerr == nil:
-				v := true
-				secretPresent[ns] = &v
-				st.SecretPresent = true
-			case apierrors.IsNotFound(gerr):
-				v := false
-				secretPresent[ns] = &v
-				st.SecretPresent = false
-			default:
+			present, gerr := kc.BackupSecretPresent(ctx, ns, project)
+			if gerr != nil {
 				// Transient apiserver failure ≠ "Secret missing". A
 				// false "backups broken" page teaches operators to
 				// ignore the real one.
-				secretPresent[ns] = nil
+				secretPresent[secretKey] = nil
 				complete = false
 				skipped[a.Name] = true
 				continue
 			}
+			secretPresent[secretKey] = &present
+			st.SecretPresent = present
 		}
 		cronProblem := ""
 		cj, cerr := kc.Clientset.BatchV1().CronJobs(ns).Get(ctx, a.Name+"-backup", metav1.GetOptions{})

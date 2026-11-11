@@ -26,7 +26,6 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
@@ -203,6 +202,10 @@ func (s *Scanner) Scan(ctx context.Context, namespace string) (*Report, error) {
 				issued = false
 			}
 			if iss, ok := s.s3ConnHoldsRoot(ctx, &addons[i]); ok {
+				rep.Issues = append(rep.Issues, iss)
+				issued = true
+			}
+			if iss, ok := ClassifyS3PublicTCP(&addons[i]); ok {
 				rep.Issues = append(rep.Issues, iss)
 				issued = true
 			}
@@ -450,18 +453,15 @@ func (s *Scanner) newBackupSecretCheck(ctx context.Context, namespace string) fu
 		if ns == "" {
 			ns = namespace
 		}
-		present, seen := secretPresent[ns]
+		present, seen := secretPresent[ns+"/"+project]
 		if !seen {
-			_, gerr := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, "kuso-backup-s3", metav1.GetOptions{})
-			switch {
-			case gerr == nil:
-				present = true
-			case apierrors.IsNotFound(gerr):
-				present = false
-			default:
+			// The shared copy, or a scoped project's own Secret.
+			var gerr error
+			present, gerr = s.Kube.BackupSecretPresent(ctx, ns, project)
+			if gerr != nil {
 				return Issue{}, false // transient lookup failure — skip, don't flag
 			}
-			secretPresent[ns] = present
+			secretPresent[ns+"/"+project] = present
 		}
 		if present {
 			return Issue{}, false

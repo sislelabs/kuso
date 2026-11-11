@@ -51,6 +51,12 @@ func (c *Client) ensureBackupSecret(ctx context.Context, ns string) error {
 		}
 		return fmt.Errorf("kube: read %s/%s: %w", ServerSANamespace, backupSecretName, err)
 	}
+	// A namespace whose every project has its own scoped key must not hold
+	// the bucket-wide one (BLOB-R1). A lookup error keeps the old copy
+	// behaviour: backups that run beat a key that is merely too broad.
+	if scopedOnly, serr := c.namespaceFullyScoped(ctx, ns); serr == nil && scopedOnly {
+		return c.dropSharedBackupCopy(ctx, ns)
+	}
 
 	want := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
