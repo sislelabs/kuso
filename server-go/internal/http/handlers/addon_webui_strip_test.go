@@ -23,7 +23,7 @@ func TestAddonWebUIProxy_StripsKusoCredentials(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig")
 	req.Header.Set("Cookie", "kuso.JWT_TOKEN=eyJ.a.b; m=rabbit-session; __Host-kuso_jwt=eyJ.c.d; other=1")
 	req.Header.Set("Sec-WebSocket-Protocol", "kuso.bearer, eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig, v12.stomp")
-	newAddonWebUIProxy(target, "/api/projects/p/addons/mail/webui").ServeHTTP(httptest.NewRecorder(), req)
+	newAddonWebUIProxy(target, "/api/projects/p/addons/mail/webui", "https://kuso.example.com").ServeHTTP(httptest.NewRecorder(), req)
 
 	if got == nil {
 		t.Fatal("upstream never called")
@@ -55,7 +55,7 @@ func TestAddonWebUIProxy_ConfinesConsoleResponses(t *testing.T) {
 
 	get := func(path string) *http.Response {
 		rec := httptest.NewRecorder()
-		newAddonWebUIProxy(target, prefix).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		newAddonWebUIProxy(target, prefix, "https://kuso.example.com").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		return rec.Result()
 	}
 
@@ -67,8 +67,16 @@ func TestAddonWebUIProxy_ConfinesConsoleResponses(t *testing.T) {
 	if cookies[0].Path != prefix+"/" || cookies[0].Domain != "" {
 		t.Errorf("cookie path/domain = %q/%q, want %q and no domain", cookies[0].Path, cookies[0].Domain, prefix+"/")
 	}
-	if csp := res.Header.Get("Content-Security-Policy"); csp != "" {
-		t.Errorf("console shell got CSP %q; sandboxing it would break the SPA", csp)
+	// SEC-6: the shell keeps scripts and same-origin storage (the SPA
+	// needs them) but can only reach its own mount and opens no popups.
+	csp := res.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"connect-src https://kuso.example.com" + prefix + "/;", "allow-scripts", "allow-same-origin", "form-action "} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("console shell CSP %q lacks %q", csp, want)
+		}
+	}
+	if strings.Contains(csp, "allow-popups") {
+		t.Errorf("console shell CSP %q allows popups, which can read same-origin /api pages", csp)
 	}
 
 	for _, p := range []string{"/view/abc.html", "/api/v1/message/abc/part/2"} {

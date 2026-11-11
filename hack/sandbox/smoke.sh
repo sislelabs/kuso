@@ -12,6 +12,8 @@
 #              config; PR close → reclaimed
 #   sleep      idle env scales to zero; a request wakes it (timed)
 #   registry   anonymous push/pull refused; a build pushes; digest on the env
+#   rbac       editors can't set code-loading env names or the command;
+#              another project's apex host can't be claimed
 #
 #   SMOKE=isolation,backup make sandbox-smoke     pick groups
 #   SMOKE=all make sandbox-smoke                  every group
@@ -25,7 +27,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "${SANDBOX_DIR}/smoke/common.sh"
 
-ALL_GROUPS=(core isolation backup preview sleep registry)
+ALL_GROUPS=(core isolation backup preview sleep registry rbac)
 groups="${SMOKE:-core}"
 [[ "$groups" == "all" ]] && groups="$(IFS=,; echo "${ALL_GROUPS[*]}")"
 

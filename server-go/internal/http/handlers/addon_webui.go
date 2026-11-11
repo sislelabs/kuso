@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -147,7 +148,7 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = "/"
 	}
 
-	proxy := newAddonWebUIProxy(target, prefix)
+	proxy := newAddonWebUIProxy(target, prefix, consoleOrigin(r))
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		h.Logger.Warn("addon webui proxy error",
 			"project", project, "addon", addon, "target", target.Host, "err", perr)
@@ -162,7 +163,7 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 // newAddonWebUIProxy builds the reverse proxy to an addon console with
 // the caller's kuso credentials stripped from every outbound request.
 // prefix is the kuso-side path the console is mounted under.
-func newAddonWebUIProxy(target *url.URL, prefix string) *httputil.ReverseProxy {
+func newAddonWebUIProxy(target *url.URL, prefix, origin string) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	director := proxy.Director
 	proxy.Director = func(out *http.Request) {
@@ -170,7 +171,7 @@ func newAddonWebUIProxy(target *url.URL, prefix string) *httputil.ReverseProxy {
 		stripKusoCredentials(out.Header)
 	}
 	proxy.ModifyResponse = func(res *http.Response) error {
-		confineConsoleResponse(res, prefix)
+		confineConsoleResponse(res, prefix, origin)
 		return nil
 	}
 	return proxy
@@ -185,9 +186,9 @@ const webUIContentSandbox = "sandbox allow-popups allow-popups-to-escape-sandbox
 // Domain, and kuso.* names are dropped so it can't overwrite the session.
 // Documents that carry data rather than the console's own app shell
 // (mailpit's /view/<id>.html mail bodies, message parts under /api/) are
-// sandboxed. The shell itself isn't: the consoles need scripts and
-// same-origin storage to work at all.
-func confineConsoleResponse(res *http.Response, prefix string) {
+// sandboxed. The shell keeps scripts and same-origin storage, which the
+// consoles need, under consoleShellPolicy.
+func confineConsoleResponse(res *http.Response, prefix, origin string) {
 	if raw := res.Header.Values("Set-Cookie"); len(raw) > 0 {
 		res.Header.Del("Set-Cookie")
 		for _, line := range raw {
@@ -210,7 +211,38 @@ func confineConsoleResponse(res *http.Response, prefix string) {
 	last := p[strings.LastIndex(p, "/")+1:]
 	if strings.HasPrefix(p, "/api/") || (strings.HasPrefix(p, "/view/") && strings.Contains(last, ".")) {
 		res.Header.Set("Content-Security-Policy", webUIContentSandbox)
+	} else if pol := consoleShellPolicy(origin, prefix); pol != "" {
+		res.Header.Add("Content-Security-Policy", pol)
 	}
+}
+
+// consoleShellPolicy confines a console's own pages (SEC-6). They share
+// the kuso origin, so the session cookie rides any request they make,
+// and the Referer that RefuseConsoleOriginatedAPI checks can be
+// suppressed or chosen by a script. The policy keeps a console's fetches,
+// WebSockets, frames, workers and form posts inside its own mount, and
+// the sandbox (scripts and same-origin storage kept, popups not) stops it
+// opening a same-origin window onto the dashboard or /api and reading it.
+// KUSO_CONSOLE_CONFINE=off turns it off if a console needs more.
+func consoleShellPolicy(origin, prefix string) string {
+	if origin == "" || strings.EqualFold(os.Getenv("KUSO_CONSOLE_CONFINE"), "off") {
+		return ""
+	}
+	mount := origin + prefix + "/"
+	return "connect-src " + mount + "; frame-src " + mount + "; worker-src " + mount +
+		"; form-action " + mount + "; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads"
+}
+
+// consoleOrigin is the scheme and host the browser used to reach kuso.
+func consoleOrigin(r *http.Request) string {
+	if r.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if auth.RequestIsHTTPS(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 // consolePrefixRE matches the kuso-side mount of an addon console.
