@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/registryauth"
 )
 
 type Service struct {
@@ -513,6 +514,9 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 		if err := validateImage(req.Image); err != nil {
 			return nil, err
 		}
+		if registryauth.ForeignRepo(project, req.Image.Repository) {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, registryauth.ForeignRepoReason("image.repository", project))
+		}
 	default:
 		return nil, fmt.Errorf("%w: kind must be http or command", ErrInvalid)
 	}
@@ -933,6 +937,10 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 			cr.Spec.URL = strings.TrimSpace(*req.URL)
 		}
 		if req.Image != nil {
+			if (cr.Spec.Image == nil || cr.Spec.Image.Repository != req.Image.Repository) &&
+				registryauth.ForeignRepo(project, req.Image.Repository) {
+				return fmt.Errorf("%w: %s", ErrInvalid, registryauth.ForeignRepoReason("image.repository", project))
+			}
 			cr.Spec.Image = req.Image
 		}
 		if req.Command != nil {

@@ -101,6 +101,15 @@ func (s *Service) readRepoToken(ctx context.Context, ns, secretName string) (str
 	return tok, nil
 }
 
+// BuildCachePVCName is the build-cache PVC a service's production
+// (preview=false) or preview builds mount.
+func BuildCachePVCName(fqn string, preview bool) string {
+	if preview {
+		return fqn + "-build-cache-preview"
+	}
+	return fqn + "-build-cache"
+}
+
 // ensureBuildCachePVC upserts a PVC named <fqn>-build-cache in the
 // project's namespace. Each build mounts it at /cache and uses
 // /cache/nix as the persistent nix store + /cache/deps as the
@@ -115,11 +124,17 @@ func (s *Service) readRepoToken(ctx context.Context, ns, secretName string) (str
 // Best-effort: on any kube error we return "" and log a warn —
 // the build still runs without the cache (just slower). The cache
 // is a perf optimisation, not a correctness requirement.
-func (s *Service) ensureBuildCachePVC(ctx context.Context, ns, fqn string, svcCR *kube.KusoService, sizeGi int) string {
+//
+// Preview builds run PR code (forks too, with allowForkPreviews) in
+// containers that mount this cache read-write (static-plan's npm cache,
+// the buildctl client's dep caches), so they get their own
+// <fqn>-build-cache-preview PVC: a PR can't plant objects the next
+// production build consumes (ISO-8). Previews of one service share it.
+func (s *Service) ensureBuildCachePVC(ctx context.Context, ns, fqn string, svcCR *kube.KusoService, sizeGi int, preview bool) string {
 	if s.Kube == nil {
 		return ""
 	}
-	pvcName := fqn + "-build-cache"
+	pvcName := BuildCachePVCName(fqn, preview)
 	if sizeGi <= 0 {
 		sizeGi = 5
 	}

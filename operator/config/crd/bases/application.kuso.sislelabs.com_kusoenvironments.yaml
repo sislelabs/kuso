@@ -102,6 +102,10 @@ spec:
                       type: string
                       default: IfNotPresent
                     pullSecret: { type: string } # dockerconfigjson Secret (project registry credential)
+                    # Manifest digest a build pushed; the chart appends it only
+                    # while digestRef == "<repository>:<tag>".
+                    digest: { type: string }
+                    digestRef: { type: string }
                 pendingImage:
                   type: object
                   description: >-

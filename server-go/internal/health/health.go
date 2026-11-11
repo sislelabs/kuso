@@ -111,6 +111,11 @@ type Watcher struct {
 
 	restored  bool
 	lastSaved string
+	// volumeTick paces checkPlatformVolumes (volumes.go).
+	volumeTick int
+	// BuildBacklog reports queued builds and the oldest one's creation
+	// time (builds.Service.QueueBacklog). nil skips the backlog alert.
+	BuildBacklog func(ctx context.Context) (int, time.Time)
 
 	// Test seams; nil means time.Now / w.Notify.Emit.
 	now  func() time.Time
@@ -202,6 +207,8 @@ func (w *Watcher) tick(ctx context.Context) {
 	w.checkPods(ctx)
 	w.checkPlatform(ctx)
 	w.checkNodes(ctx)
+	w.checkPlatformVolumes(ctx)
+	w.checkBuildBacklog(ctx)
 	w.persistState(ctx)
 }
 

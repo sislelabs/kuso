@@ -9,6 +9,7 @@ import (
 
 	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/registryauth"
 )
 
 const revOpEnvImage = "environment.image"
@@ -56,6 +57,9 @@ func (s *Service) SetEnvironmentImage(ctx context.Context, project, service, env
 	}
 	if svc.Spec.Runtime != "image" {
 		return fmt.Errorf("%w: %s builds from source; roll back to a build instead", ErrInvalid, service)
+	}
+	if registryauth.ForeignRepo(project, repository) && (svc.Spec.Image == nil || svc.Spec.Image.Repository != repository) {
+		return fmt.Errorf("%w: %s", ErrInvalid, registryauth.ForeignRepoReason("image repository", project))
 	}
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {

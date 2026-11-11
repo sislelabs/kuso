@@ -231,3 +231,65 @@ func (s *Store) EnsurePushSecret(ctx context.Context, ns string) (string, error)
 	}
 	return PushSecretName, nil
 }
+
+// Complete fills the derived keys (htpasswd, docker config, CNB auth) of
+// a credential that was written with only username/password/enabled.
+// Fresh installs do that: hack/install.sh and the sandbox mint the
+// password in shell (where bcrypt isn't available), write it into every
+// node's registries.yaml, and create the Secret with enabled=true before
+// the registry starts. The registry waits for htpasswd, which this fills
+// once kuso-server is up. Returns done=true once nothing is left to fill
+// (including when no Secret exists). Safe on every replica: a concurrent
+// writer makes Update conflict and the next call sees the filled Secret.
+func (s *Store) Complete(ctx context.Context) (done bool, err error) {
+	secrets := s.Kube.Clientset.CoreV1().Secrets(s.ns())
+	sec, err := secrets.Get(ctx, SecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("registry auth: read secret: %w", err)
+	}
+	c := decode(sec)
+	if c == nil {
+		return true, nil
+	}
+	if len(sec.Data[keyHtpasswd]) > 0 && len(sec.Data[keyDocker]) > 0 && len(sec.Data[keyCNB]) > 0 {
+		return true, nil
+	}
+	if len(sec.Data[keyHtpasswd]) == 0 {
+		hash, herr := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost)
+		if herr != nil {
+			return false, herr
+		}
+		sec.Data[keyHtpasswd] = []byte(c.Username + ":" + string(hash) + "\n")
+	}
+	sec.Data[keyDocker] = c.DockerConfigJSON(s.Host)
+	sec.Data[keyCNB] = []byte(c.CNBAuth(s.Host))
+	if _, err := secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+		return false, fmt.Errorf("registry auth: complete secret: %w", err)
+	}
+	s.mu.Lock()
+	s.expires = time.Time{}
+	s.mu.Unlock()
+	return true, nil
+}
+
+// CompleteLoop runs Complete until it reports done, retrying every
+// interval. Run once per process at boot.
+func (s *Store) CompleteLoop(ctx context.Context, interval time.Duration, logf func(msg string, args ...any)) {
+	for {
+		done, err := s.Complete(ctx)
+		if done {
+			return
+		}
+		if err != nil && logf != nil {
+			logf("registry auth: completing kuso-registry-auth failed; retrying", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}

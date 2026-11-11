@@ -438,7 +438,7 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	imageMismatch := false
 	wantImage := ""
 	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
-		wantImage = env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
+		wantImage = env.Spec.Image.Ref()
 	}
 	// We compare pod contents (env map + image) against the spec —
 	// no timestamp gate. The previous "pod older than lastSpecEdit
@@ -557,7 +557,7 @@ func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, 
 		out = append(out, "envVars")
 	}
 	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
-		want := env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
+		want := env.Spec.Image.Ref()
 		if len(dep.Spec.Template.Spec.Containers) > 0 && dep.Spec.Template.Spec.Containers[0].Image != want {
 			out = append(out, "image")
 		}

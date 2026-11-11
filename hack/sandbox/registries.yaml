@@ -15,3 +15,9 @@ configs:
   "kuso-registry.kuso.svc.cluster.local:5000":
     tls:
       insecure_skip_verify: true
+    # Registry auth is on by default, as on a fresh install. Well-known dev
+    # credential; bootstrap.sh writes the same pair into kuso-registry-auth.
+    auth:
+      username: kuso
+      password: "6b75736f2d73616e64626f782d6465762d6f6e6c79"
+# kuso-registry-auth: 13ded2293b18d785

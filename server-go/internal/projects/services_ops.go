@@ -25,6 +25,7 @@ import (
 	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/placement"
+	"kuso/server/internal/registryauth"
 )
 
 // decodeInto adapts the unstructured decode for the projects package.
@@ -384,6 +385,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	}
 	if err := validateServiceImageSpec(req.Image); err != nil {
 		return nil, err
+	}
+	if req.Image != nil && registryauth.ForeignRepo(project, req.Image.Repository) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, registryauth.ForeignRepoReason("image.repository", project))
 	}
 	if err := validateBuildArgs(req.BuildArgs); err != nil {
 		return nil, err
@@ -3315,6 +3319,12 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.Image != nil {
 			if err := validateServiceImageSpec(req.Image); err != nil {
 				return err
+			}
+			// A service saved before this check keeps its repository; only
+			// pointing it somewhere new is refused.
+			if (svc.Spec.Image == nil || svc.Spec.Image.Repository != strings.TrimSpace(req.Image.Repository)) &&
+				registryauth.ForeignRepo(project, req.Image.Repository) {
+				return fmt.Errorf("%w: %s", ErrInvalid, registryauth.ForeignRepoReason("image.repository", project))
 			}
 			imageChanged = true
 			if strings.TrimSpace(req.Image.Repository) == "" {

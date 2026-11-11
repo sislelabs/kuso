@@ -6,10 +6,15 @@
 # registry as an insecure (plain-HTTP) registry — handled in
 # hack/install.sh by writing /etc/rancher/k3s/registries.yaml.
 #
-# AUTH (staged, off by default). The registry stays anonymous until the
-# kuso-registry-auth Secret says enabled=true. Distribution has no
-# "optional auth" mode, so every consumer must hold the credential before
-# it is switched on, or every pull on a node without it fails:
+# AUTH. Fresh installs (hack/install.sh) start with auth ON: install.sh
+# mints the password, writes it into every node's registries.yaml (joining
+# nodes get it from the join bootstrap) and creates kuso-registry-auth with
+# enabled=true; kuso-server fills in the htpasswd hash and the registry
+# waits for it. Installs that predate this keep whatever mode they had:
+# the registry stays anonymous until the kuso-registry-auth Secret says
+# enabled=true. Distribution has no "optional auth" mode, so every
+# consumer must hold the credential before it is switched on, or every
+# pull on a node without it fails. To switch an older install over:
 #
 #   1. Mint the credential (enabled=false; nothing changes yet):
 #        kuso api POST admin/registry-auth/credentials
@@ -28,10 +33,13 @@
 #      Revert:  the same patch with "false", then the same restart.
 #
 # The credential is one htpasswd user. It stops tenant app pods, addon
-# pods and Dockerfile RUN steps (which never see it) from pushing,
-# overwriting or deleting images. Build pods hold it because they push,
-# so a buildpacks build running PR code can still use it; per-repository
-# scoping needs token auth (OPEN.md N6 option a).
+# pods, Dockerfile RUN steps, static buildCmd and buildpacks build scripts
+# from listing, pulling, pushing, overwriting or deleting images: only
+# containers that run kuso's own code hold it (the buildctl client, the
+# buildpacks analyze/restore/export phases, kuso-server, kubelets). It is
+# not scoped per repository, so a Dockerfile can still name another
+# project's image in FROM (the build client pulls it with the shared
+# credential). Per-repository scoping needs token auth (OPEN.md N6 a).
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -76,10 +84,16 @@ spec:
           args:
             - |
               if [ "$(cat /auth/enabled 2>/dev/null)" = "true" ]; then
-                if [ ! -s /auth/htpasswd ]; then
-                  echo "[registry] kuso-registry-auth enabled=true but htpasswd is empty; refusing to start" >&2
-                  exit 1
-                fi
+                # Fresh installs create the Secret before kuso-server has
+                # bcrypt-hashed the password into htpasswd. Wait for it
+                # rather than start anonymous: the kubelet resyncs the
+                # Secret volume within a minute or two of the fill.
+                n=0
+                while [ ! -s /auth/htpasswd ]; do
+                  [ $((n % 6)) -eq 0 ] && echo "[registry] auth enabled; waiting for kuso-server to write htpasswd into kuso-registry-auth" >&2
+                  n=$((n + 1))
+                  sleep 5
+                done
                 export REGISTRY_AUTH=htpasswd
                 export REGISTRY_AUTH_HTPASSWD_REALM=kuso-registry
                 export REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd
@@ -155,7 +169,7 @@ spec:
       port: 5000
       targetPort: registry
 ---
-# v0.9.38: weekly registry GC. The registry binary supports DELETE
+# v0.9.38: registry GC (daily since SCL-4). The registry binary supports DELETE
 # (REGISTRY_STORAGE_DELETE_ENABLED=true above), but every push leaves
 # orphan blobs that the registry's own `garbage-collect` subcommand
 # has to compact. Without this CronJob, a busy build cluster fills the
@@ -178,7 +192,7 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-registry-gc
 spec:
-  schedule: "17 3 * * 0"  # 03:17 every Sunday
+  schedule: "17 3 * * *"  # 03:17 daily (SCL-4: weekly let a busy week fill the PVC)
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3

@@ -255,6 +255,11 @@ func (p protectedImages) addKuso(img *kube.KusoImage) {
 	if repo := repoKey(img.Repository); repo != "" && img.Tag != "" {
 		p.tags[repo+":"+img.Tag] = true
 	}
+	// A digest-pinned env keeps running its manifest even after the tag
+	// moves, so that manifest stays live too.
+	if repo := repoKey(img.Repository); repo != "" && img.Digest != "" {
+		p.digests[repo+"@"+img.Digest] = true
+	}
 }
 
 func (p protectedImages) addRef(ref string) {

@@ -279,7 +279,11 @@ spec:
           {{- end }}
       containers:
         - name: app
-          image: "{{ $image.repository }}:{{ $image.tag | default "latest" }}"
+          {{- /* Digest pin from build promotion (KusoImage.Ref in server-go):
+               honoured only while digestRef still names this repository:tag,
+               so a merge-patched tag (rollback) drops a stale pin. */}}
+          {{- $tagRef := printf "%s:%s" $image.repository ($image.tag | default "latest") }}
+          image: "{{ $tagRef }}{{ if and $image.digest (eq ($image.digestRef | default "") $tagRef) }}@{{ $image.digest }}{{ end }}"
           imagePullPolicy: {{ $image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: {{ if and .Values.securityContext .Values.securityContext.allowPrivilegeEscalation }}true{{ else }}false{{ end }}

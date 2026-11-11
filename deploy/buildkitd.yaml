@@ -29,6 +29,18 @@
 #        need rootless or a per-tenant daemon — both possible to
 #        retrofit if/when needed.
 #
+# Client auth (mutual TLS). Fresh installs require it from the start.
+# On an install that predates it, kuso-server mints kuso-buildkitd-tls
+# with enabled=false and mirrors the client certificate into every
+# namespace a build runs in; build Jobs try TLS first and fall back to
+# plaintext, so switching needs no coordination. To switch on:
+#   kubectl apply -f deploy/buildkitd.yaml      # start.sh/probe.sh + tls volume
+#   kubectl -n kuso patch secret kuso-buildkitd-tls -p '{"stringData":{"enabled":"true"}}'
+#   kubectl -n kuso rollout restart deploy/kuso-buildkitd
+# Revert: the same patch with "false", then the same restart. Builds
+# created by a kuso-server older than this file can't use TLS, so only
+# switch once no such build is queued.
+#
 # State: persistent /var/lib/buildkit so a daemon restart doesn't
 # nuke every cache. 20Gi is generous for a 4-project install;
 # tune via KUSO_BUILDKITD_STATE_SIZE if needed.
@@ -118,26 +130,10 @@ spec:
       containers:
         - name: buildkitd
           image: moby/buildkit:v0.34.2
-          args:
-            # Listen on TCP so build Jobs can connect from
-            # whatever namespace they live in. No mutual TLS yet
-            # — we're single-tenant and the Service IP isn't
-            # routable from outside the cluster. Add mTLS via
-            # --tlscert/--tlskey/--tlscacert when multi-tenant
-            # comes back into scope.
-            - --addr
-            - tcp://0.0.0.0:1234
-            # Use the kernel overlay snapshotter (faster than
-            # fuse-overlayfs by ~15-20% on heavy I/O workloads
-            # like LibreOffice apt install). k3s ships a kernel
-            # new enough that overlayfs works inside a privileged
-            # container.
-            - --oci-worker-snapshotter=overlayfs
-            # Trust the in-cluster insecure registry. Without
-            # this, every image push fails with x509 cert errors
-            # against the plain-HTTP kuso-registry:5000.
-            - --config
-            - /etc/buildkit/buildkitd.toml
+          # start.sh (kuso-buildkitd-config) listens on tcp://0.0.0.0:1234
+          # with the overlayfs snapshotter and buildkitd.toml, and adds
+          # mutual TLS when kuso-buildkitd-tls says enabled=true.
+          command: [/bin/sh, /etc/buildkit/start.sh]
           ports:
             - name: grpc
               containerPort: 1234
@@ -147,11 +143,9 @@ spec:
             # the file header comment for the trade-off.
             privileged: true
           readinessProbe:
-            # buildctl defaults to a unix socket; we run with
-            # --addr tcp://. The probe must pass the same --addr
-            # or it'll look for a socket that doesn't exist.
+            # Same address and TLS mode the daemon was started with.
             exec:
-              command: [buildctl, --addr, tcp://127.0.0.1:1234, debug, workers]
+              command: [/bin/sh, /etc/buildkit/probe.sh]
             initialDelaySeconds: 5
             periodSeconds: 5
           volumeMounts:
@@ -159,6 +153,9 @@ spec:
               mountPath: /var/lib/buildkit
             - name: config
               mountPath: /etc/buildkit
+              readOnly: true
+            - name: tls
+              mountPath: /certs
               readOnly: true
           resources:
             requests:
@@ -174,6 +171,12 @@ spec:
         - name: config
           configMap:
             name: kuso-buildkitd-config
+        # optional: without the Secret (installs that predate it, until
+        # kuso-server mints it) the daemon starts without client auth.
+        - name: tls
+          secret:
+            secretName: kuso-buildkitd-tls
+            optional: true
 ---
 # buildkitd.toml — trust the in-cluster registry (plain HTTP).
 # Anything else needs TLS; the build Job's Dockerfile can still
@@ -200,9 +203,50 @@ data:
     # the cgroup permits and spend the difference in CFS throttling.
     [worker.oci]
       max-parallelism = 3
+      # Size GC to the 20Gi state PVC (SCL-3). Without these the
+      # defaults are computed from the HOST filesystem the local-path PV
+      # lives on, so the cache could grow past the PVC's nominal size and
+      # fill the node disk. Raise both with the PVC.
+      gc = true
+      reservedSpace = "2GB"
+      maxUsedSpace = "16GB"
+      minFreeSpace = "10%"
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
+  start.sh: |
+    # Daemon entrypoint. Mutual TLS (review OPS-3): when kuso-buildkitd-tls
+    # says enabled=true, only clients holding the kuso-server-minted client
+    # certificate can talk to the daemon. Build Jobs get that certificate in
+    # the buildctl container only; static buildCmd, buildpacks scripts and
+    # Dockerfile RUN steps (which share this pod's network namespace, so
+    # they can reach 127.0.0.1:1234) never see it.
+    set -e
+    set -- --addr tcp://0.0.0.0:1234 --oci-worker-snapshotter=overlayfs --config /etc/buildkit/buildkitd.toml
+    if [ "$(cat /certs/enabled 2>/dev/null)" = "true" ]; then
+      # Fresh installs enable TLS before kuso-server has minted the
+      # certificates; wait for the Secret volume to fill rather than
+      # start without client auth.
+      n=0
+      while [ ! -s /certs/ca.crt ] || [ ! -s /certs/tls.crt ] || [ ! -s /certs/tls.key ]; do
+        [ $((n % 6)) -eq 0 ] && echo "[buildkitd] mTLS enabled; waiting for kuso-server to write the certificates into kuso-buildkitd-tls" >&2
+        n=$((n + 1))
+        sleep 5
+      done
+      set -- "$@" --tlscacert /certs/ca.crt --tlscert /certs/tls.crt --tlskey /certs/tls.key
+      : > /tmp/kuso-buildkitd-tls
+      echo "[buildkitd] mutual TLS required"
+    else
+      rm -f /tmp/kuso-buildkitd-tls
+      echo "[buildkitd] no client authentication (kuso-buildkitd-tls not enabled)"
+    fi
+    exec buildkitd "$@"
+  probe.sh: |
+    if [ -f /tmp/kuso-buildkitd-tls ]; then
+      exec buildctl --addr tcp://127.0.0.1:1234 --tlsservername kuso-buildkitd \
+        --tlscacert /certs/ca.crt --tlscert /certs/client.crt --tlskey /certs/client.key debug workers
+    fi
+    exec buildctl --addr tcp://127.0.0.1:1234 debug workers
 ---
 # NetworkPolicy: only kuso build pods may reach the BuildKit daemon.
 #
@@ -217,15 +261,13 @@ data:
 # to "an attacker who already controls a build pod" — which is the
 # same trust boundary as the build pipeline itself.
 #
-# Egress (what Dockerfile RUN steps can reach) is bounded by the opt-in
-# deploy/netpol/buildkitd-egress.yaml, kept out of this file so the
-# updater's upgrade-manifests bundle doesn't apply it cluster-wide before
-# it has been verified on a given install.
+# Egress (what Dockerfile RUN steps can reach) is bounded by
+# kuso-buildkitd-egress below.
 #
-# Single-tenant: every build pod is ours, so labelling is the
-# correct boundary. A future multi-tenant deployment should also
-# add mTLS so a compromised build pod from tenant A can't pose as
-# tenant B's build pod.
+# A pod label is self-applicable inside a kuso namespace, and build pods
+# also run user code (static buildCmd, buildpacks scripts), so this
+# policy is only the outer fence: the daemon's mutual TLS (start.sh) is
+# what keeps anything but kuso's buildctl client off the gRPC port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -259,3 +301,67 @@ spec:
       ports:
         - protocol: TCP
           port: 1234
+---
+# Egress policy for the shared, privileged BuildKit daemon (review ISO-5 /
+# SEC-3 / OPEN.md N4). Default-on: release.sh bundles NetworkPolicies from
+# deploy/*.yaml into upgrade-manifests.yaml, so `kuso upgrade` applies it.
+#
+# Dockerfile RUN steps execute in the daemon's network namespace (the OCI
+# worker runs with network mode host = this pod's netns), so this policy is
+# what bounds them. Allowed:
+#   - DNS to kube-system (CoreDNS);
+#   - kuso-registry:5000 for push, cache export/import and FROM images
+#     from the in-cluster registry. Matched by pod, which works because
+#     kube-router evaluates after kube-proxy's DNAT (the project chart's
+#     allow-registry-egress relies on the same thing). With registry auth
+#     on, a RUN step holds no credential, so it can open a connection but
+#     not list, pull or push;
+#   - the public internet (base images, package registries, git).
+# Denied: every RFC1918 / CGNAT / link-local address, so the control-plane
+# Postgres, kuso-server, kuso-prometheus, kuso-instance, tenant pods and the
+# cloud metadata endpoint (169.254.169.254) are unreachable from a build.
+# A Dockerfile that fetches from a private-network host (ADD http://10.x,
+# a LAN package mirror, an external registry on a private IP) fails; add
+# an allow rule for that CIDR per install.
+# Not covered: node PUBLIC IPs (apiserver :6443, kubelet :10250). Add them
+# to `except` per install, same as the project chart's extraBlockCIDRs.
+# IPv4 only; a dual-stack cluster needs a matching ::/0 rule.
+#
+# No ingress rule here: ingress stays governed by kuso-buildkitd-ingress
+# above. This policy declares policyTypes [Egress] only.
+#
+# Roll back on one install:  kubectl -n kuso delete networkpolicy kuso-buildkitd-egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kuso-buildkitd-egress
+  namespace: kuso
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-buildkitd
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-registry
+      ports:
+        - { port: 5000, protocol: TCP }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+              - 127.0.0.0/8

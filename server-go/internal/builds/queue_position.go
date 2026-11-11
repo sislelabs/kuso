@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"sort"
+	"time"
 
 	"kuso/server/internal/kube"
 )
@@ -23,6 +24,20 @@ import (
 // within the remaining set stay consistent). Callers treat a missing
 // entry as "unknown" and omit the position.
 func (s *Service) QueuePositions(ctx context.Context) map[string]int {
+	positions, _ := s.queueState(ctx)
+	return positions
+}
+
+// QueueBacklog reports how many builds wait in the cluster-wide queue and
+// when the oldest was created (zero when none). Feeds the health
+// watcher's backlog alert (SCL-3): the cap is daemon capacity, so a
+// long queue means builds need more daemons, not more patience.
+func (s *Service) QueueBacklog(ctx context.Context) (int, time.Time) {
+	positions, oldest := s.queueState(ctx)
+	return len(positions), oldest
+}
+
+func (s *Service) queueState(ctx context.Context) (map[string]int, time.Time) {
 	var queued []kube.KusoBuild
 	for _, ns := range s.ScanNamespaces(ctx) {
 		raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
@@ -44,5 +59,9 @@ func (s *Service) QueuePositions(ctx context.Context) map[string]int {
 	for i := range queued {
 		out[queued[i].Name] = i + 1
 	}
-	return out
+	var oldest time.Time
+	if len(queued) > 0 {
+		oldest = queued[0].CreationTimestamp.Time
+	}
+	return out, oldest
 }

@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/buildkittls"
 	cronspkg "kuso/server/internal/crons"
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
@@ -238,6 +239,9 @@ type Service struct {
 	// RegistryAuth, when it holds a minted kuso-registry credential,
 	// gives in-cluster builds a push Secret. nil = anonymous pushes.
 	RegistryAuth *registryauth.Store
+	// BuildkitTLS mirrors the buildkitd client certificate into the
+	// build's namespace. nil = builds connect in plaintext.
+	BuildkitTLS *buildkittls.Store
 	// Tokens mints fresh github installation tokens for the build's
 	// clone init container. Optional — nil means we still create the
 	// expected secret (empty value) so pods start, but private repos
@@ -1168,7 +1172,8 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// at Job render time anyway. The dispatcher promote path
 		// re-runs ensure when it patches in spec.image (so a queued
 		// CR promoted later still gets the cache).
-		cachePVC = s.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+		preview := req.PreviewEnv != "" || (targetEnv != nil && targetEnv.Spec.Kind == "preview")
+		cachePVC = s.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5, preview)
 	}
 
 	labels := map[string]string{
@@ -1331,6 +1336,14 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 			slog.Default().Warn("build: registry push secret unavailable; pushing anonymously", "ns", ns, "err", aerr)
 		} else if name != "" {
 			spec.Auth = &kube.KusoBuildAuth{SecretName: name, Registry: RegistryHost}
+		}
+	}
+	if s.BuildkitTLS != nil {
+		// The Job mounts this Secret optionally and falls back to
+		// plaintext without it, so a failure only matters once the
+		// daemon requires TLS; the build then fails to connect.
+		if _, terr := s.BuildkitTLS.EnsureClientSecret(ctx, ns); terr != nil {
+			slog.Default().Warn("build: buildkit client certificate unavailable", "ns", ns, "err", terr)
 		}
 	}
 	if settings.MemoryLimit != "" || settings.MemoryRequest != "" ||
@@ -2401,7 +2414,7 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 	}
 	cachePVC := ""
 	if !buildCacheDisabled(projCR) {
-		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5, next.Annotations[AnnPreviewEnv] != "")
 	}
 	cachePatch := ""
 	if cachePVC != "" {
@@ -3532,11 +3545,16 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 			spec = map[string]any{}
 			raw.Object["spec"] = spec
 		}
-		spec["image"] = map[string]any{
+		newImage := map[string]any{
 			"repository": img.Repository,
 			"tag":        img.Tag,
 			"pullPolicy": "IfNotPresent",
 		}
+		if img.Digest != "" {
+			newImage["digest"] = img.Digest
+			newImage["digestRef"] = img.DigestRef
+		}
+		spec["image"] = newImage
 		// Release the pre-build holding state: a build-based env is created
 		// with replicaCount=0 (see projects.AddService) so it doesn't
 		// crash-loop a placeholder ":latest" pod before the first image
@@ -3672,6 +3690,7 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 		return 0, fmt.Errorf("list envs for promotion: %w", err)
 	}
 	bTrigger := buildTriggerTimestamp(b)
+	pinned := p.lazyPinnedImage(ctx, ns, b)
 	// Resolve the project's default branch once (MED-6). An env with an
 	// UNSTAMPED branch (spec.branch == "") used to match EVERY build, so a
 	// push to `staging` could promote to a branch-unset production env. We
@@ -3821,7 +3840,7 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 					"env", e.Name, "build", b.Name, "job", res.JobName)
 			}
 		}
-		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, pinned())
 		if err != nil {
 			// Don't abort — log and keep promoting the other envs so a
 			// transient error on one doesn't strand the rest on the old
@@ -3921,6 +3940,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 	}
 	// MED-6: same empty-env-branch = default-branch semantics as promoteImage.
 	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
+	pinned := p.lazyPinnedImage(ctx, ns, b)
 	for i := range rawSvcs.Items {
 		var s kube.KusoService
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
@@ -3957,7 +3977,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if prev := e.Annotations[annPromotedAt]; promotedAtIsNewer(prev, bTrigger) {
 				continue
 			}
-			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, pinned())
 			if err != nil {
 				p.logger().Warn("promote worker env failed", "env", e.Name, "err", err)
 				continue

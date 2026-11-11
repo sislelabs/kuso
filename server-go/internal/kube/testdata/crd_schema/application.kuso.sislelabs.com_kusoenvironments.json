@@ -178,6 +178,12 @@
           },
           "image": {
             "properties": {
+              "digest": {
+                "type": "string"
+              },
+              "digestRef": {
+                "type": "string"
+              },
               "pullPolicy": {
                 "default": "IfNotPresent",
                 "type": "string"
