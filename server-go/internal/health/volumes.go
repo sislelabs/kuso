@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
 )
 
@@ -62,11 +63,14 @@ func (w *Watcher) checkPlatformVolumes(ctx context.Context) {
 		return
 	}
 	for _, v := range platformVolumes {
-		used, request, ok := w.platformVolumeUsage(ctx, v)
+		usage, request, ok := w.platformVolumeUsage(ctx, v)
 		if !ok || request <= 0 {
 			continue
 		}
-		pct := int(used * 100 / request)
+		pct, what := volumeFill(usage, request)
+		if pct < 0 {
+			continue
+		}
 		key := "pvc:" + v.PVC + ":full"
 		w.mu.Lock()
 		fire, clear := volumeAlertState(pct, w.fired[key])
@@ -78,9 +82,16 @@ func (w *Watcher) checkPlatformVolumes(ctx context.Context) {
 		}
 		w.mu.Unlock()
 		if fire {
+			title := fmt.Sprintf("%s storage %d%% full", v.Label, pct)
+			body := fmt.Sprintf("%s/%s uses %s of its %s. %s", w.Namespace, v.PVC, gib(usage.UsedBytes), gib(request), v.Hint)
+			if what == fillNodeDisk {
+				title = fmt.Sprintf("%s node disk %d%% full", v.Label, pct)
+				body = fmt.Sprintf("%s/%s is not size-limited (local-path), so it grows into its node's disk, which is %s of %s used. %s",
+					w.Namespace, v.PVC, gib(usage.UsedBytes), gib(usage.CapacityBytes), v.Hint)
+			}
 			w.send(notify.AlertFired(
-				fmt.Sprintf("%s storage %d%% full", v.Label, pct),
-				fmt.Sprintf("%s/%s uses %s of its %s. %s", w.Namespace, v.PVC, gib(used), gib(request), v.Hint),
+				title,
+				body,
 				"warn",
 				map[string]string{"pvc": v.PVC},
 			))
@@ -88,21 +99,43 @@ func (w *Watcher) checkPlatformVolumes(ctx context.Context) {
 	}
 }
 
-// platformVolumeUsage returns the PVC's used bytes (from the kubelet of
+type fillKind int
+
+const (
+	fillVolume fillKind = iota
+	fillNodeDisk
+)
+
+// volumeFill turns a kubelet reading into a fill percentage. When the
+// reported capacity is far above the request the volume isn't
+// size-enforced (local-path): UsedBytes is the node disk's usage, so
+// compare it to the disk, not the request; dividing by the request
+// reported a registry on a 62%-full disk as "882% full". -1 = no reading.
+func volumeFill(u kube.PVCUsage, request int64) (int, fillKind) {
+	if u.CapacityBytes > 0 && u.CapacityBytes > request*2 {
+		return int(u.UsedBytes * 100 / u.CapacityBytes), fillNodeDisk
+	}
+	if request <= 0 {
+		return -1, fillVolume
+	}
+	return int(u.UsedBytes * 100 / request), fillVolume
+}
+
+// platformVolumeUsage returns the PVC's usage (from the kubelet of
 // the node running its pod) and its requested size. ok=false on any
 // read error: a missing grant (nodes/stats) or a pod mid-reschedule.
-func (w *Watcher) platformVolumeUsage(ctx context.Context, v platformVolume) (used, request int64, ok bool) {
+func (w *Watcher) platformVolumeUsage(ctx context.Context, v platformVolume) (usage kube.PVCUsage, request int64, ok bool) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	pvc, err := w.Kube.Clientset.CoreV1().PersistentVolumeClaims(w.Namespace).Get(cctx, v.PVC, metav1.GetOptions{})
 	if err != nil {
-		return 0, 0, false
+		return kube.PVCUsage{}, 0, false
 	}
 	q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	request = q.Value()
 	pods, err := w.Kube.Clientset.CoreV1().Pods(w.Namespace).List(cctx, metav1.ListOptions{LabelSelector: v.Selector})
 	if err != nil {
-		return 0, 0, false
+		return kube.PVCUsage{}, 0, false
 	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
@@ -111,16 +144,16 @@ func (w *Watcher) platformVolumeUsage(ctx context.Context, v platformVolume) (us
 		}
 		node, err := w.Kube.Clientset.CoreV1().Nodes().Get(cctx, p.Spec.NodeName, metav1.GetOptions{})
 		if err != nil {
-			return 0, 0, false
+			return kube.PVCUsage{}, 0, false
 		}
-		usage, err := w.Kube.NodePVCUsage(cctx, node)
+		byPVC, err := w.Kube.NodePVCUsage(cctx, node)
 		if err != nil {
-			return 0, 0, false
+			return kube.PVCUsage{}, 0, false
 		}
-		u, found := usage[w.Namespace+"/"+v.PVC]
+		u, found := byPVC[w.Namespace+"/"+v.PVC]
 		return u, request, found
 	}
-	return 0, 0, false
+	return kube.PVCUsage{}, 0, false
 }
 
 const (

@@ -67,12 +67,30 @@ func TestParseSummaryPVCUsage(t *testing.T) {
 	body := []byte(`{"pods":[
 	  {"volume":[{"name":"data","usedBytes":100,"pvcRef":{"name":"kuso-registry-data","namespace":"kuso"}},
 	             {"name":"tmp","usedBytes":5}]},
-	  {"volume":[{"name":"data","usedBytes":300,"pvcRef":{"name":"kuso-registry-data","namespace":"kuso"}}]}]}`)
+	  {"volume":[{"name":"data","usedBytes":300,"capacityBytes":900,"pvcRef":{"name":"kuso-registry-data","namespace":"kuso"}}]}]}`)
 	got, err := kube.ParseSummaryPVCUsage(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got["kuso/kuso-registry-data"] != 300 {
+	if len(got) != 1 || got["kuso/kuso-registry-data"].UsedBytes != 300 || got["kuso/kuso-registry-data"].CapacityBytes != 900 {
 		t.Fatalf("usage = %v", got)
+	}
+}
+
+// Live v0.43.0: local-path reports the node disk as the volume, so a
+// registry on a 62%-full 301 GiB disk alerted as "882% full".
+func TestVolumeFill_LocalPathComparesToNodeDisk(t *testing.T) {
+	const gi = int64(1) << 30
+	pct, kind := volumeFill(kube.PVCUsage{UsedBytes: 177 * gi, CapacityBytes: 301 * gi}, 20*gi)
+	if kind != fillNodeDisk || pct != 58 {
+		t.Fatalf("local-path: pct=%d kind=%v, want 58 node-disk", pct, kind)
+	}
+	pct, kind = volumeFill(kube.PVCUsage{UsedBytes: 18 * gi, CapacityBytes: 20 * gi}, 20*gi)
+	if kind != fillVolume || pct != 90 {
+		t.Fatalf("enforced volume: pct=%d kind=%v, want 90 volume", pct, kind)
+	}
+	pct, kind = volumeFill(kube.PVCUsage{UsedBytes: 18 * gi}, 20*gi)
+	if kind != fillVolume || pct != 90 {
+		t.Fatalf("no capacity reported: pct=%d kind=%v, want 90 volume", pct, kind)
 	}
 }
