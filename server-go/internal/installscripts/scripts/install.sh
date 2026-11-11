@@ -226,8 +226,8 @@ prepare_manifests() {
   ref="$(sed -nE 's|.*"server": *\{ *"image": *"[^"]*/kuso-server-go:([^"]+)".*|\1|p' "${dir}/release.json" | head -n1)"
   [[ "$ref" == "${KUSO_SERVER_VERSION}@sha256:"* ]] && KUSO_SERVER_IMAGE_REF="$ref"
   ref="$(sed -nE 's|.*"operator": *\{ *"image": *"[^"]*/kuso-operator:([^"]+)".*|\1|p' "${dir}/release.json" | head -n1)"
-  [[ "$ref" == "${KUSO_VERSION}@sha256:"* ]] && KUSO_OPERATOR_IMAGE_REF="$ref"
-  log "release ${KUSO_SERVER_VERSION} verified; manifests from its signed bundle (server ${KUSO_SERVER_IMAGE_REF}, operator ${KUSO_OPERATOR_IMAGE_REF})"
+  [[ -n "${KUSO_VERSION:-}" && "$ref" == "${KUSO_VERSION}@sha256:"* ]] && KUSO_OPERATOR_IMAGE_REF="$ref"
+  log "release ${KUSO_SERVER_VERSION} verified; manifests from its signed bundle (server ${KUSO_SERVER_IMAGE_REF:-?}, operator ${KUSO_OPERATOR_IMAGE_REF:-?})"
 }
 
 # kuso_manifest <repo path>: a manifest from the verified bundle, or from
