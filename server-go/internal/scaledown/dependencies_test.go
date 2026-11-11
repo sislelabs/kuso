@@ -31,7 +31,28 @@ func TestReferencedEnvs(t *testing.T) {
 		{Name: "PUBLIC", Value: "https://api.example.com"},
 		{Name: "DB", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "x-conn", "key": "URL"}}},
 	}
-	got := referencedEnvs(e)
+	got := referencedEnvs(e, nil)
+	want := []string{"kuso/alpha-api-staging", "kuso/alpha-auth-staging"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("referencedEnvs = %v, want %v", got, want)
+	}
+}
+
+// RUN-9: same-namespace short Service names are the idiomatic in-namespace
+// form and must count as references, but only when they name a real env.
+func TestReferencedEnvs_ShortNames(t *testing.T) {
+	t.Parallel()
+	e := &kube.KusoEnvironment{}
+	e.Name, e.Namespace = "alpha-web-staging", "kuso"
+	e.Spec.EnvVars = []kube.KusoEnvVar{
+		{Name: "API_URL", Value: "http://alpha-api-staging/v1"},
+		{Name: "AUTH_ADDR", Value: "alpha-auth-staging:8080"},
+		{Name: "CACHE", Value: "redis://not-an-env:6379"},
+		{Name: "MODE", Value: "alpha-jobs-staging"}, // bare word: not a URL
+		{Name: "PUBLIC", Value: "https://alpha-api-staging.example.com"},
+	}
+	envs := map[string]bool{"alpha-api-staging": true, "alpha-auth-staging": true, "alpha-jobs-staging": true}
+	got := referencedEnvs(e, func(n string) bool { return envs[n] })
 	want := []string{"kuso/alpha-api-staging", "kuso/alpha-auth-staging"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("referencedEnvs = %v, want %v", got, want)

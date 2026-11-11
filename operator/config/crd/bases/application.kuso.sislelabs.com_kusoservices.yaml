@@ -257,6 +257,13 @@ spec:
                       description: >-
                         Seconds the HPA waits before scaling down.
                         Unset = chart default (300).
+                tcpLiveness:
+                  type: boolean
+                  description: >-
+                    Adds a TCP liveness probe and a 5s readiness failure
+                    window to the default TCP probes. Set on services
+                    created from v0.42.5; existing services opt in (it
+                    rolls their pods). Ignored when healthcheck.path is set.
                 healthcheck:
                   type: object
                   description: >-

@@ -699,6 +699,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Volumes:              createVolumes,
 			Uptime:               createUptime,
 			RequestLimits:        createRequestLimits,
+			// New services only: existing ones keep their probes (and
+			// pods) until they opt in through PatchService.
+			TCPLiveness: req.Runtime != "worker",
 		},
 	}
 	if req.GitHub != nil && req.GitHub.InstallationID > 0 {
@@ -922,6 +925,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// Optional HTTP health check — propagated so the chart can
 			// render HTTP liveness+readiness instead of TCP.
 			Healthcheck:     created.Spec.Healthcheck,
+			TCPLiveness:     created.Spec.TCPLiveness,
 			SecurityContext: created.Spec.SecurityContext,
 			Resources:       created.Spec.Resources,
 			RequestLimits:   kube.ResolveRequestLimits(proj.Spec.RequestLimits, created.Spec.RequestLimits),
@@ -1423,6 +1427,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			SecurityContext:      svc.Spec.SecurityContext,
 			RequestLimits:        kube.ResolveRequestLimits(proj.Spec.RequestLimits, svc.Spec.RequestLimits),
 			Healthcheck:          svc.Spec.Healthcheck,
+			TCPLiveness:          svc.Spec.TCPLiveness,
 			PublicEnv:            svc.Spec.PublicEnv,
 			Release:              svc.Spec.Release,
 			SnapshotBeforeDeploy: svc.Spec.SnapshotBeforeDeploy,
@@ -2736,6 +2741,10 @@ type PatchServiceRequest struct {
 	// alone; an empty Path removes it (back to the default TCP probes).
 	// Zero timing fields fall back to the CRD defaults.
 	Healthcheck *kube.KusoHealthcheck `json:"healthcheck,omitempty"`
+	// TCPLiveness turns the default TCP liveness probe on or off. nil
+	// leaves it. Services created before it existed have it off; this is
+	// their opt-in (it rolls the service's pods once).
+	TCPLiveness *bool `json:"tcpLiveness,omitempty"`
 }
 
 // PatchReleaseRequest is the wire shape for editing the release hook.
@@ -3250,6 +3259,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			svc.Spec.Healthcheck = hc
 			healthcheckChanged = true
+		}
+		if req.TCPLiveness != nil && *req.TCPLiveness != svc.Spec.TCPLiveness {
+			svc.Spec.TCPLiveness = *req.TCPLiveness
+			healthcheckChanged = true // same probe block, same propagation
 		}
 		imageChanged := false
 		placementChanged := false

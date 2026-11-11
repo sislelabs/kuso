@@ -181,7 +181,15 @@ revert_server() {
     write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverting to ${PRIOR_SERVER_IMAGE}"
     kubectl set image -n "$NS" deploy/kuso-server "server=${PRIOR_SERVER_IMAGE}" >/dev/null || true
     if kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
-      write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverted to working ${PRIOR_SERVER_IMAGE}"
+      # The failed image may have migrated the database before it died;
+      # the reverted server reports that on /readyz (checks.schema).
+      schema=$(curl -s --connect-timeout 5 --max-time 10 "http://kuso-server.${NS}.svc:80/readyz" 2>/dev/null \
+        | jq -r '.checks.schema // empty' 2>/dev/null || true)
+      if [ -n "$schema" ]; then
+        write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverted to ${PRIOR_SERVER_IMAGE}, but the database keeps the newer migrations (${schema}) — check the server logs for SQL errors"
+      else
+        write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverted to working ${PRIOR_SERVER_IMAGE}"
+      fi
     else
       write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why} AND revert to ${PRIOR_SERVER_IMAGE} did not stabilise — manual intervention required"
     fi

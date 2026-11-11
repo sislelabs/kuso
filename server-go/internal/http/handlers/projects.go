@@ -1257,6 +1257,9 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	if req.Repo != nil && !h.requireRepoBound(ctx, w, project, []string{req.Repo.URL}, []int64{req.Repo.InstallationID}) {
 		return
 	}
+	if h.refuseMissingImage(ctx, w, r, project, service, req.Image) {
+		return
+	}
 	out, err := h.Svc.PatchService(ctx, project, service, req)
 	if err != nil {
 		h.fail(w, "patch service", err)

@@ -1778,19 +1778,10 @@ type Poller struct {
 	// risk.
 	archiveOnce  sync.Once
 	archiveQueue chan archiveTask
-
-	// capTickCounter is a small counter the tick uses to throttle the
-	// per-service retention sweep. The leader-gated daily SweepFinished
-	// covers the age-based path; this counter drives a non-leader cap
-	// so KusoBuild CRs can't pile up unbounded if the leader is down
-	// for a day. Increments every tick; fires CapBuildsPerService once
-	// it crosses capTickInterval.
-	capTickMu      sync.Mutex
-	capTickCounter int
 }
 
-// capTickInterval is how many poller ticks pass between per-service
-// retention sweeps. With the default 5s tick this works out to once
+// capTickInterval is how many poller intervals pass between per-service
+// retention sweeps (runRetention). With the default 5s tick this works out to once
 // every ~6min — short enough that a runaway redeploy loop can't
 // outgrow retention in a typical leader-down window, long enough that
 // the kube LIST cost is negligible.
@@ -1967,6 +1958,7 @@ func (p *Poller) Run(ctx context.Context) error {
 		p.Logger = slog.Default()
 	}
 	p.startArchiveWorkers(ctx)
+	go p.runRetention(ctx)
 	tick := time.NewTicker(p.Interval)
 	defer tick.Stop()
 	for {
@@ -2001,53 +1993,72 @@ func (p *Poller) tick(ctx context.Context) error {
 	for _, ns := range p.Svc.ScanNamespaces(ctx) {
 		p.observeNamespace(ctx, ns)
 	}
-	// Per-service retention sweep. Throttled to once every
-	// `capTickInterval` poller ticks (~6min at the default 5s cadence)
-	// so a busy cluster's KusoBuild CR count can't grow unbounded
-	// while the leader-gated daily sweep is paused (leader pod gone,
-	// lease re-electing, etc.). Runs on every replica regardless of
-	// leadership — it's idempotent (delete-by-name) so duplicate work
-	// is harmless.
-	p.capTickMu.Lock()
-	p.capTickCounter++
-	doCap := p.capTickCounter >= capTickInterval
-	if doCap {
-		p.capTickCounter = 0
-	}
-	p.capTickMu.Unlock()
-	if doCap {
-		max := capBuildsPerServiceMax
-		if v := os.Getenv("KUSO_BUILD_RETENTION_PER_SERVICE"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				max = n
-			}
-		}
-		imgKeep := imageRetentionWindow
-		if v := os.Getenv("KUSO_BUILD_IMAGE_RETENTION"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				imgKeep = n
-			}
-		}
-		for _, ns := range p.Svc.ScanNamespaces(ctx) {
-			if n, err := CapBuildsPerService(ctx, p.Svc.Kube, ns, max, LogAdapter(p.Logger)); err != nil {
-				p.Logger.Warn("build retention sweep", "ns", ns, "err", err)
-			} else if n > 0 {
-				p.Logger.Info("build retention swept", "ns", ns, "deleted", n, "cap", max)
-			}
-			// Image-retention sweep: untag images past the rollback
-			// window so the registry doesn't grow unbounded. Skipped when
-			// the deleter isn't wired (e.g. external-registry clusters or
-			// stripped test setups).
-			if p.ImageDeleter != nil {
-				if n, err := SweepImagesPastWindow(ctx, p.Svc.Kube, ns, p.ImageRecords, p.ImageDeleter, imgKeep, LogAdapter(p.Logger)); err != nil {
-					p.Logger.Warn("image retention sweep", "ns", ns, "err", err)
-				} else if n > 0 {
-					p.Logger.Info("image retention swept", "ns", ns, "untagged", n, "keep", imgKeep)
-				}
-			}
-		}
-	}
 	return nil
+}
+
+// retentionPassTimeout bounds one retention pass. Each untag can cost
+// several 15s registry calls, so a stalled registry must end the pass
+// rather than run into the next one.
+const retentionPassTimeout = 4 * time.Minute
+
+// runRetention runs the per-service build cap and the image-retention
+// sweep every capTickInterval poller intervals (~6 min), on its own
+// goroutine. They used to run inline in tick, before the poller
+// heartbeat: a registry that accepted connections but stalled held the
+// tick past readyz's 30s poller window and took the API out of the
+// Service. The sweeps need no liveness signal of their own; a missed
+// pass only delays cleanup. Runs on every replica regardless of
+// leadership: it's idempotent (delete-by-name), and the leader-gated
+// daily SweepFinished covers the age-based path.
+func (p *Poller) runRetention(ctx context.Context) {
+	t := time.NewTicker(time.Duration(capTickInterval) * p.Interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		pctx, cancel := context.WithTimeout(ctx, retentionPassTimeout)
+		p.retentionPass(pctx)
+		cancel()
+	}
+}
+
+func (p *Poller) retentionPass(ctx context.Context) {
+	max := capBuildsPerServiceMax
+	if v := os.Getenv("KUSO_BUILD_RETENTION_PER_SERVICE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			max = n
+		}
+	}
+	imgKeep := imageRetentionWindow
+	if v := os.Getenv("KUSO_BUILD_IMAGE_RETENTION"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			imgKeep = n
+		}
+	}
+	for _, ns := range p.Svc.ScanNamespaces(ctx) {
+		if ctx.Err() != nil {
+			p.Logger.Warn("build retention pass cut short", "err", ctx.Err())
+			return
+		}
+		if n, err := CapBuildsPerService(ctx, p.Svc.Kube, ns, max, LogAdapter(p.Logger)); err != nil {
+			p.Logger.Warn("build retention sweep", "ns", ns, "err", err)
+		} else if n > 0 {
+			p.Logger.Info("build retention swept", "ns", ns, "deleted", n, "cap", max)
+		}
+		// Image-retention sweep: untag images past the rollback window so
+		// the registry doesn't grow unbounded. Skipped when the deleter
+		// isn't wired (external-registry clusters, stripped test setups).
+		if p.ImageDeleter != nil {
+			if n, err := SweepImagesPastWindow(ctx, p.Svc.Kube, ns, p.ImageRecords, p.ImageDeleter, imgKeep, LogAdapter(p.Logger)); err != nil {
+				p.Logger.Warn("image retention sweep", "ns", ns, "err", err)
+			} else if n > 0 {
+				p.Logger.Info("image retention swept", "ns", ns, "untagged", n, "keep", imgKeep)
+			}
+		}
+	}
 }
 
 // observeNamespace is one poller observe pass over a single namespace:
@@ -3631,6 +3642,9 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoBuild) (int, error) {
 	if b.Spec.Image == nil {
 		return 0, nil
+	}
+	if err := p.promotionImageMissing(ctx, b); err != nil {
+		return 0, err
 	}
 	// List only envs that belong to this build's project + service.
 	// Without the selector, every promotion walks every env in the

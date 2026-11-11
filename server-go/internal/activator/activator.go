@@ -78,13 +78,12 @@ type Activator struct {
 	wakeMu sync.Mutex
 	waking map[string]*wakeState // key: ns/name
 
-	// hostCache memoizes host → (env, ns) so we don't filter the full
-	// env list on every request. Short TTL so a host move/rename heals
-	// quickly; the activator is off the hot path once an app is awake,
-	// so staleness only ever affects the first-hit-after-idle.
-	hostMu    sync.RWMutex
-	hostCache map[string]hostEntry
-	hostTTL   time.Duration
+	// hosts resolves Host → env from a periodically refreshed env
+	// snapshot that keeps serving through apiserver errors (hostindex.go).
+	hosts *hostResolver
+	// missLog / lookupErrLog rate-limit the per-request WARN lines for
+	// unclaimed hosts and failed lookups.
+	missLog, lookupErrLog *logLimiter
 
 	// proxyTransport is the cold-start-tolerant transport used for the
 	// reverse proxy (short dial timeout + retry on dial races).
@@ -113,6 +112,19 @@ type Activator struct {
 	// held counts requests waiting on a wake; maxHeld caps it.
 	held    atomic.Int64
 	maxHeld int64
+	// heldByEnv caps held requests per env (maxHeldPerEnv) so one broken
+	// host that never becomes ready can't take the whole held budget from
+	// every other sleeping app.
+	heldMu        sync.Mutex
+	heldByEnv     map[string]int64
+	maxHeldPerEnv int64
+
+	// podFail caches the newest pod's terminal start failure per env
+	// (podfail.go). podCheckOff latches when the activator's RBAC lacks
+	// pods list, so an older ClusterRole just loses the fail-fast.
+	podFailMu   sync.Mutex
+	podFail     map[string]podFailEntry
+	podCheckOff atomic.Bool
 
 	// nowFn is time.Now, overridable in tests. Read via now().
 	nowFn func() time.Time
@@ -126,20 +138,6 @@ func (a *Activator) now() time.Time {
 	return time.Now()
 }
 
-type hostEntry struct {
-	env, ns string
-	// stopped mirrors the env's spec.stopped. A stopped env must NOT be
-	// woken by traffic (that's the whole point of a hard stop vs sleep),
-	// so the handler serves a "service stopped" 503 instead of waking.
-	// Cached alongside env/ns; the short hostTTL bounds staleness after
-	// a start/stop toggle.
-	stopped bool
-	// miss: no env claims this host. Stored with at shifted so the entry
-	// expires after negativeHostTTL rather than hostTTL.
-	miss bool
-	at   time.Time
-}
-
 type wakeState struct {
 	done chan struct{} // closed when the target is Ready (or wake failed)
 	err  error
@@ -151,21 +149,42 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		logger = slog.Default()
 	}
 	hold := resolveHoldTimeout()
-	return &Activator{
+	a := &Activator{
 		kc:             kc,
 		logger:         logger,
 		holdTimeout:    hold,
 		pollInterval:   250 * time.Millisecond,
 		waking:         map[string]*wakeState{},
-		hostCache:      map[string]hostEntry{},
-		hostTTL:        30 * time.Second,
+		missLog:        &logLimiter{every: 10 * time.Second},
+		lookupErrLog:   &logLimiter{every: 10 * time.Second},
 		proxyTransport: newProxyTransport(hold),
 		lastStamp:      map[string]time.Time{},
 		readyAt:        map[string]time.Time{},
 		inflight:       map[string]int{},
 		maxHeld:        resolveMaxHeld(),
+		heldByEnv:      map[string]int64{},
+		maxHeldPerEnv:  resolveMaxHeldPerEnv(),
+		podFail:        map[string]podFailEntry{},
 		nowFn:          time.Now,
 	}
+	a.hosts = &hostResolver{
+		// Every env kind: non-production envs (named, env-group clones,
+		// previews) sleep by default, and a stopped env of any kind routes
+		// here for the branded stopped page.
+		list: func(ctx context.Context) ([]kube.KusoEnvironment, error) { return kc.ListKusoEnvironments(ctx, "") },
+		now:  a.now,
+	}
+	return a
+}
+
+// resolveMaxHeldPerEnv returns KUSO_ACTIVATOR_MAX_HELD_PER_ENV (min 1),
+// default 100: plenty for a burst of first hits on one app, a tenth of
+// the process-wide budget.
+func resolveMaxHeldPerEnv() int64 {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("KUSO_ACTIVATOR_MAX_HELD_PER_ENV"))); err == nil && v >= 1 {
+		return int64(v)
+	}
+	return 100
 }
 
 // resolveMaxHeld returns KUSO_ACTIVATOR_MAX_HELD (min 1), default 1000.
@@ -237,14 +256,28 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	env, ns, stopped, err := a.resolveByHost(ctx, host)
-	if err != nil {
-		a.logger.Warn("activator: resolve host", "host", host, "err", err)
+	if errors.Is(err, errHostNotFound) {
+		if ok, muted := a.missLog.allow(a.now()); ok {
+			a.logger.Warn("activator: no env claims host", "host", host, "suppressed", muted)
+		}
 		// Unknown host — no kuso service claims it. This is what an
 		// unmatched domain lands on when traefik's catch-all routes it
 		// here (or a stray request to the activator IP). Serve a branded
 		// 404 for browsers (content-negotiated) instead of a bare
 		// "404 page not found" — nothing we can wake.
 		writeActivatorPage(w, r, http.StatusNotFound, notFoundPageHTML, "No kuso service is configured for this domain.\n")
+		return
+	}
+	if err != nil {
+		if ok, muted := a.lookupErrLog.allow(a.now()); ok {
+			a.logger.Warn("activator: resolve host failed", "host", host, "err", err, "suppressed", muted)
+		}
+		// The lookup failed (apiserver down, no snapshot yet): we don't
+		// know the host is unclaimed, so a cacheable "no service here" 404
+		// would be a lie that crawlers and uptime checks act on.
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Cache-Control", "no-store")
+		http.Error(w, "service temporarily unavailable, please retry", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -264,6 +297,16 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := a.wakeAndWait(wctx, ns, env); err != nil {
 		a.logger.Warn("activator: wake failed", "ns", ns, "env", env, "err", err)
+		var sf *startFailure
+		if errors.As(err, &sf) {
+			// The new pod is in a state it won't leave on its own (bad
+			// image, crash loop, missing secret). Holding the full budget
+			// only to 503 hid the real problem; name it instead. The reason
+			// is a kube waiting-reason constant, never the image name.
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "service failed to start ("+sf.reason+"); its latest deploy needs attention", http.StatusBadGateway)
+			return
+		}
 		// Cold start exceeded the budget (slow image pull, crash loop).
 		// 503 + Retry-After so browsers/CDNs back off and retry rather
 		// than hammering a starting pod.
@@ -585,10 +628,10 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	// Each held request pins a goroutine and a client connection for up
 	// to the hold budget. Past the cap, the wake still runs but the
 	// request gets the 503 + Retry-After instead of being held.
-	if !a.tryHold() {
+	if !a.tryHold(ns + "/" + name) {
 		return errHoldCapacity
 	}
-	defer a.held.Add(-1)
+	defer a.release(ns + "/" + name)
 
 	// Whether we own the wake or not, wait for readiness (the owner's
 	// doWake only triggers the scale; readiness is observed here so
@@ -613,12 +656,37 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 // errHoldCapacity: too many requests are already held waiting for wakes.
 var errHoldCapacity = errors.New("activator: held-request capacity reached")
 
-func (a *Activator) tryHold() bool {
+// tryHold takes one held slot for env key, checking the per-env cap
+// before the process-wide one.
+func (a *Activator) tryHold(key string) bool {
+	a.heldMu.Lock()
+	if a.heldByEnv[key] >= a.maxHeldPerEnv {
+		a.heldMu.Unlock()
+		return false
+	}
+	a.heldByEnv[key]++
+	a.heldMu.Unlock()
 	if a.held.Add(1) > a.maxHeld {
 		a.held.Add(-1)
+		a.releaseEnv(key)
 		return false
 	}
 	return true
+}
+
+func (a *Activator) release(key string) {
+	a.held.Add(-1)
+	a.releaseEnv(key)
+}
+
+func (a *Activator) releaseEnv(key string) {
+	a.heldMu.Lock()
+	if a.heldByEnv[key] <= 1 {
+		delete(a.heldByEnv, key)
+	} else {
+		a.heldByEnv[key]--
+	}
+	a.heldMu.Unlock()
 }
 
 // startWake starts the scale-up for ns/name unless one is already in
@@ -690,6 +758,9 @@ func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 			a.markReady(ns, name)
 			return nil
 		}
+		if sf := a.startFailed(ctx, ns, name); sf != nil {
+			return sf
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -704,9 +775,11 @@ const (
 	// and a proxy dial failure drops the entry (forgetReady).
 	readyTTL = 2 * time.Second
 	// readyStaleOnError is how long a ready observation still counts when
-	// the LIST itself fails. An apiserver blip must not read as "asleep"
-	// for an env that was serving moments ago.
-	readyStaleOnError = 30 * time.Second
+	// the LIST itself fails. An apiserver outage must not read as "asleep"
+	// for an env that was serving: proxy optimistically, and if it really
+	// is down the refused-dial path re-wakes it. Long, because nothing can
+	// sleep an env while the apiserver is unreachable either.
+	readyStaleOnError = 15 * time.Minute
 )
 
 // fastReady is the per-request readiness check. It serves recent ready
@@ -791,127 +864,20 @@ func (a *Activator) endpointReadyLegacy(ctx context.Context, ns, name string) (b
 	return false, nil
 }
 
-// resolveByHost finds the env CR (and its namespace) whose Host or
-// AdditionalHosts matches the request host. Returns (envName, namespace).
-// Memoized with a short TTL — resolution only runs on the first hit
-// after idle, but a hot CDN can send a burst, so we avoid re-filtering
-// the full env list per request.
+// resolveByHost finds the env CR (and its namespace) whose host,
+// additional hosts or wildcard covers the request host. errHostNotFound
+// means no env claims it; any other error means the lookup failed.
 func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns string, stopped bool, err error) {
-	a.hostMu.RLock()
-	if e, ok := a.hostCache[host]; ok && time.Since(e.at) < a.hostTTL {
-		a.hostMu.RUnlock()
-		if e.miss {
-			return "", "", false, fmt.Errorf("no env matches host %q (cached)", host)
-		}
-		return e.env, e.ns, e.stopped, nil
+	t, stale, err := a.hosts.resolve(ctx, host)
+	if err != nil {
+		return "", "", false, err
 	}
-	a.hostMu.RUnlock()
-
-	// Every env kind: non-production envs (named, env-group clones,
-	// previews) sleep by default, and a stopped env of any kind routes
-	// here for the branded stopped page. An env that isn't activator-
-	// routed never sends its traffic here, so matching it is harmless.
-	// Empty namespace lists cluster-wide via the cached typed-list.
-	envs, lerr := a.kc.ListKusoEnvironments(ctx, "")
-	if lerr != nil {
-		return "", "", false, lerr
-	}
-	// Exact host wins over any wildcard, so scan every env before
-	// falling back to the wildcard match.
-	var wild *kube.KusoEnvironment
-	for i := range envs {
-		e := &envs[i]
-		// Internal services and workers have no Ingress, but the
-		// catch-all route still lands their host here; proxying would
-		// expose them publicly.
-		if e.Spec.Internal || e.Spec.Runtime == "worker" {
-			continue
-		}
-		if hostMatches(host, e) {
-			return a.cacheHost(host, e)
-		}
-		if wild == nil && wildcardMatches(host, e) {
-			wild = e
+	if stale {
+		if ok, muted := a.lookupErrLog.allow(a.now()); ok {
+			a.logger.Warn("activator: env list failing, serving last good host map", "suppressed", muted)
 		}
 	}
-	if wild != nil {
-		return a.cacheHost(host, wild)
-	}
-	// Remember the miss briefly: every unclaimed host on the internet lands
-	// here via the catch-all route, and each miss decodes every env CR.
-	a.storeHost(host, hostEntry{miss: true, at: time.Now().Add(negativeHostTTL - a.hostTTL)})
-	return "", "", false, fmt.Errorf("no env matches host %q", host)
-}
-
-const (
-	// negativeHostTTL is kept short so a just-created env's host stops
-	// 404ing within seconds.
-	negativeHostTTL = 5 * time.Second
-	// maxHostCache bounds hostCache: wildcard domains and unclaimed hosts
-	// make its key space attacker-controlled.
-	maxHostCache = 4096
-)
-
-func (a *Activator) cacheHost(host string, e *kube.KusoEnvironment) (string, string, bool, error) {
-	a.storeHost(host, hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()})
-	return e.Name, e.Namespace, e.Spec.Stopped, nil
-}
-
-func (a *Activator) storeHost(host string, entry hostEntry) {
-	a.hostMu.Lock()
-	defer a.hostMu.Unlock()
-	if _, ok := a.hostCache[host]; !ok && len(a.hostCache) >= maxHostCache {
-		for h, e := range a.hostCache {
-			if time.Since(e.at) >= a.hostTTL {
-				delete(a.hostCache, h)
-			}
-		}
-		if len(a.hostCache) >= maxHostCache {
-			a.hostCache = make(map[string]hostEntry, maxHostCache)
-		}
-	}
-	a.hostCache[host] = entry
-}
-
-func hostMatches(host string, e *kube.KusoEnvironment) bool {
-	if strings.EqualFold(e.Spec.Host, host) {
-		return true
-	}
-	for _, h := range e.Spec.AdditionalHosts {
-		if strings.EqualFold(h, host) {
-			return true
-		}
-	}
-	return false
-}
-
-// wildcardMatches reports whether one of the env's wildcard hosts
-// covers host. Wildcards live in spec.wildcardDomains (the chart renders
-// them as a separate Ingress that also routes through the activator
-// while asleep); a "*." entry in host/additionalHosts is honoured too.
-// Standard one-label semantics: "*.example.com" covers "a.example.com",
-// not "example.com" or "a.b.example.com" — so at most one wildcard
-// pattern can cover a given host and "most specific" needs no ranking.
-func wildcardMatches(host string, e *kube.KusoEnvironment) bool {
-	dot := strings.IndexByte(host, '.')
-	if dot <= 0 {
-		return false
-	}
-	want := "*" + host[dot:]
-	for _, w := range e.Spec.WildcardDomains {
-		if strings.EqualFold(w.Host, want) {
-			return true
-		}
-	}
-	if strings.EqualFold(e.Spec.Host, want) {
-		return true
-	}
-	for _, h := range e.Spec.AdditionalHosts {
-		if strings.EqualFold(h, want) {
-			return true
-		}
-	}
-	return false
+	return t.env, t.ns, t.stopped, nil
 }
 
 // hostOnly strips any :port suffix from an HTTP Host header.

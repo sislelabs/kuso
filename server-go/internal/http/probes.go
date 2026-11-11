@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -144,6 +145,12 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// poolSaturated reports whether every connection the pool may open is
+// checked out.
+func poolSaturated(st sql.DBStats) bool {
+	return st.MaxOpenConnections > 0 && st.InUse >= st.MaxOpenConnections
+}
+
 // readyz returns 200 only when the dependencies kuso-server actually
 // needs to serve traffic are healthy: DB reachable + kube informer
 // cache synced (when the cache is enabled). Each check has a 1s
@@ -161,7 +168,13 @@ func readyz(d Deps) http.HandlerFunc {
 		if d.DB != nil {
 			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 			defer cancel()
-			if err := d.DB.PingContext(ctx); err != nil {
+			if err := d.DB.PingContext(ctx); err != nil && poolSaturated(d.DB.DB.Stats()) {
+				// Every pool connection is checked out, so the ping only
+				// timed out waiting for one: Postgres is up and in use.
+				// Draining the (often only) replica under load would take
+				// the API down exactly when it is busiest.
+				checks["db"] = "busy"
+			} else if err != nil {
 				// Generic body — readyz is on the public router and
 				// raw Postgres errors leak the DSN host/user. Real
 				// detail goes to slog where it stays inside the pod.
@@ -203,6 +216,12 @@ func readyz(d Deps) http.HandlerFunc {
 		// secret would take the dashboard down.
 		if p := serverstate.InsecureJWT(); p != "" {
 			checks["jwtSecret"] = "insecure: " + p
+		}
+		// Also reported, never gating: an old binary over additive
+		// migrations works, and failing readiness would turn the
+		// updater's revert into an outage.
+		if p := serverstate.SchemaAhead(); p != "" {
+			checks["schema"] = "ahead: " + p
 		}
 
 		// Build-poller readiness — only meaningful on the leader (only the

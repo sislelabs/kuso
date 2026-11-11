@@ -449,8 +449,23 @@ spec:
             initialDelaySeconds: 0
             periodSeconds: 1
             timeoutSeconds: 2
-            failureThreshold: 60
+            {{- /*
+              tcpLiveness (services created from v0.42.5, or opted in):
+              a listener that went away leaves the endpoints in 5s, not
+              60s, and liveness restarts the process after ~1 min of a
+              dead socket. Gated so existing envs render byte-identical
+              and an upgrade rolls no pods.
+            */}}
+            failureThreshold: {{ if .Values.tcpLiveness }}5{{ else }}60{{ end }}
             successThreshold: 1
+          {{- if .Values.tcpLiveness }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.port }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- end }}
           startupProbe:
             tcpSocket:
               port: {{ .Values.port }}

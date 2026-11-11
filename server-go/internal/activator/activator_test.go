@@ -34,19 +34,21 @@ func TestHostOnly(t *testing.T) {
 
 func TestHostMatches(t *testing.T) {
 	t.Parallel()
-	env := &kube.KusoEnvironment{}
+	env := kube.KusoEnvironment{}
 	env.Spec.Host = "Primary.Example.com"
 	env.Spec.AdditionalHosts = []string{"www.example.com", "alt.example.org"}
+	idx := buildHostIndex([]kube.KusoEnvironment{env}, time.Now())
+	hostMatches := func(h string) bool { _, ok := idx.lookup(h); return ok }
 
 	yes := []string{"primary.example.com", "PRIMARY.example.com", "www.example.com", "alt.example.org"}
 	for _, h := range yes {
-		if !hostMatches(h, env) {
+		if !hostMatches(h) {
 			t.Errorf("hostMatches(%q) = false, want true", h)
 		}
 	}
 	no := []string{"other.example.com", "example.com", ""}
 	for _, h := range no {
-		if hostMatches(h, env) {
+		if hostMatches(h) {
 			t.Errorf("hostMatches(%q) = true, want false", h)
 		}
 	}
