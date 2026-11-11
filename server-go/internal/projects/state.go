@@ -364,10 +364,7 @@ func (s *Service) populateRollupState(ctx context.Context, ns string, e *kube.Ku
 		// rendered it into the Deployment: every pod is still the old
 		// version, so this is a rollout in flight, not "running" the new tag.
 		if !in.Rollout.InFlight && e.Spec.Image != nil && e.Spec.Image.Repository != "" {
-			want := e.Spec.Image.Repository + ":" + e.Spec.Image.Tag
-			if e.Spec.Image.Tag == "" {
-				want += "latest"
-			}
+			want := e.Spec.Image.Ref()
 			if cur, pending := rollout.PendingApply(dep, want); pending {
 				in.Rollout = rollout.Facts{InFlight: true, PreviousServing: in.Ready > 0, NewImage: want, PreviousImage: cur}
 			}

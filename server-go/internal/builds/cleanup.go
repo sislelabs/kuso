@@ -303,6 +303,7 @@ func SweepImagesPastWindow(
 	// reached the cache yet, and untagging it then turns the rollback
 	// into ImagePullBackOff (BLOB-9).
 	protected := map[string]bool{}
+	live := protectedImages{tags: map[string]bool{}, digests: map[string]bool{}, repos: map[string]bool{}}
 	if envs, eerr := liveList[kube.KusoEnvironment](ctx, kc, kube.GVREnvironments, namespace); eerr != nil {
 		// Fail CLOSED: without the live-env view we can't know which
 		// tags are load-bearing, and a skipped sweep is recoverable
@@ -310,6 +311,7 @@ func SweepImagesPastWindow(
 		return 0, fmt.Errorf("image-sweep list envs: %w", eerr)
 	} else {
 		for i := range envs {
+			live.addKuso(envs[i].Spec.Image)
 			img := envs[i].Spec.Image
 			if img == nil || img.Tag == "" {
 				continue
@@ -355,7 +357,6 @@ func SweepImagesPastWindow(
 	// push already re-pointed spec.image); untagging it means the next
 	// eviction of those pods has no good image to pull. Same pod-aware
 	// view the orphan sweep uses. Fail closed like the lists above.
-	live := protectedImages{tags: map[string]bool{}, digests: map[string]bool{}, repos: map[string]bool{}}
 	runs, rerr := liveList[kube.KusoRun](ctx, kc, kube.GVRRuns, namespace)
 	if rerr != nil {
 		return 0, fmt.Errorf("image-sweep list runs: %w", rerr)

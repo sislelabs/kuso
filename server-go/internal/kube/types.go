@@ -953,6 +953,34 @@ type KusoImage struct {
 	// as imagePullSecrets. Rides along wherever KusoImage is copied
 	// (service → env → cron/run). Empty = anonymous pull.
 	PullSecret string `json:"pullSecret,omitempty"`
+	// Digest pins the image to the manifest a build pushed, so a later
+	// re-push of the tag can't swap what the env runs (BLOB-1). It only
+	// applies while DigestRef still equals "<repository>:<tag>": writers
+	// that merge-patch repository/tag (rollback, preview sync) leave a
+	// stale digest behind, and the mismatch makes it inert. Set by build
+	// promotion only; empty = run by tag.
+	Digest    string `json:"digest,omitempty"`
+	DigestRef string `json:"digestRef,omitempty"`
+}
+
+// TagRef is "<repository>:<tag>" with the chart's "latest" default.
+func (i *KusoImage) TagRef() string {
+	tag := i.Tag
+	if tag == "" {
+		tag = "latest"
+	}
+	return i.Repository + ":" + tag
+}
+
+// Ref is the image reference the kusoenvironment chart renders:
+// TagRef, plus "@<digest>" when Digest is pinned to the current
+// repository and tag. Keep in sync with templates/deployment.yaml.
+func (i *KusoImage) Ref() string {
+	ref := i.TagRef()
+	if i.Digest != "" && i.DigestRef == ref {
+		return ref + "@" + i.Digest
+	}
+	return ref
 }
 
 type KusoAutoscaling struct {

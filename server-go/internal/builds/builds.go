@@ -3532,11 +3532,16 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 			spec = map[string]any{}
 			raw.Object["spec"] = spec
 		}
-		spec["image"] = map[string]any{
+		newImage := map[string]any{
 			"repository": img.Repository,
 			"tag":        img.Tag,
 			"pullPolicy": "IfNotPresent",
 		}
+		if img.Digest != "" {
+			newImage["digest"] = img.Digest
+			newImage["digestRef"] = img.DigestRef
+		}
+		spec["image"] = newImage
 		// Release the pre-build holding state: a build-based env is created
 		// with replicaCount=0 (see projects.AddService) so it doesn't
 		// crash-loop a placeholder ":latest" pod before the first image
@@ -3669,6 +3674,7 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 		return 0, fmt.Errorf("list envs for promotion: %w", err)
 	}
 	bTrigger := buildTriggerTimestamp(b)
+	pinned := p.lazyPinnedImage(ctx, ns, b)
 	// Resolve the project's default branch once (MED-6). An env with an
 	// UNSTAMPED branch (spec.branch == "") used to match EVERY build, so a
 	// push to `staging` could promote to a branch-unset production env. We
@@ -3818,7 +3824,7 @@ func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoB
 					"env", e.Name, "build", b.Name, "job", res.JobName)
 			}
 		}
-		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, pinned())
 		if err != nil {
 			// Don't abort — log and keep promoting the other envs so a
 			// transient error on one doesn't strand the rest on the old
@@ -3918,6 +3924,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 	}
 	// MED-6: same empty-env-branch = default-branch semantics as promoteImage.
 	defaultBranch := p.Svc.defaultBranchIn(ctx, ns, b.Spec.Project, b.Spec.Service)
+	pinned := p.lazyPinnedImage(ctx, ns, b)
 	for i := range rawSvcs.Items {
 		var s kube.KusoService
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
@@ -3954,7 +3961,7 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if prev := e.Annotations[annPromotedAt]; promotedAtIsNewer(prev, bTrigger) {
 				continue
 			}
-			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, pinned())
 			if err != nil {
 				p.logger().Warn("promote worker env failed", "env", e.Name, "err", err)
 				continue
