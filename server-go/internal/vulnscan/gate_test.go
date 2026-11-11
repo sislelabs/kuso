@@ -25,6 +25,18 @@ func gateReq(since time.Time) builds.VulnGateRequest {
 	return builds.VulnGateRequest{Project: "shop", Service: "web", Image: gateImage, Since: since}
 }
 
+// dbNow is the database's clock. Tests of the failed-scan branch compare
+// "since" with a createdAt stamped by Postgres, and a loaded Docker VM can
+// lag the host by more than the gate's skew allowance.
+func dbNow(t *testing.T, d *db.DB) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := d.QueryRowContext(context.Background(), `SELECT now()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
 // enforceDB is openDB with the instance in enforce mode; the shipped
 // default is report, which never holds or blocks a build.
 func enforceDB(t *testing.T) *db.DB {
@@ -116,7 +128,7 @@ func TestGate_FailedScan(t *testing.T) {
 	if _, err := d.ExecContext(ctx, `UPDATE "VulnScan" SET "createdAt" = now() - interval '1 hour' WHERE "id" = $1`, old); err != nil {
 		t.Fatal(err)
 	}
-	since := time.Now()
+	since := dbNow(t, d)
 	if v, _ := g.Check(ctx, gateReq(since)); v.Decision != builds.VulnPending {
 		t.Fatalf("a failure from before this gate asked is retried: %+v", v)
 	}

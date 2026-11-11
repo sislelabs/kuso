@@ -3,7 +3,6 @@ package vulnscan
 import (
 	"context"
 	"testing"
-	"time"
 
 	"kuso/server/internal/builds"
 )
@@ -13,7 +12,7 @@ import (
 func TestGate_FailClosedBlocksFailedScan(t *testing.T) {
 	d := enforceDB(t)
 	ctx := context.Background()
-	since := time.Now()
+	since := dbNow(t, d)
 	g := &Gate{DB: d, Digests: staticDigests{gateImage: dA}, FailClosed: true}
 	if v, _ := g.Check(ctx, gateReq(since)); v.Decision != builds.VulnPending {
 		t.Fatalf("first check should enqueue and hold: %+v", v)
