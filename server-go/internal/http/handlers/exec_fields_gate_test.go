@@ -66,6 +66,24 @@ func (f *execGateFakeSvc) AddService(context.Context, string, projects.CreateSer
 func (f *execGateFakeSvc) EnrichServiceWithManagedSecretKeys(context.Context, string, string, *kube.KusoService) {
 }
 
+func (f *execGateFakeSvc) Get(context.Context, string) (*kube.KusoProject, error) {
+	return &kube.KusoProject{}, nil
+}
+
+// RevisionExecFields stands in for the projects implementation: a
+// snapshot that mentions printenv brings back an admin-set command.
+func (f *execGateFakeSvc) RevisionExecFields(_ context.Context, _, _, _, _ string, raw []byte) ([]string, error) {
+	if strings.Contains(string(raw), "printenv") {
+		return []string{projects.ExecFieldCommand}, nil
+	}
+	return nil, nil
+}
+
+func (f *execGateFakeSvc) RevertServiceSnapshot(context.Context, string, string, []byte) error {
+	f.patched = true
+	return nil
+}
+
 // SEC-1 (2026-11-10): an editor could rewrite a service's command (or
 // image, release hook, build command) and read the secrets it printed
 // from the logs, the capability runs and the pod shell admin-gate.
@@ -85,6 +103,7 @@ func TestServiceExecFieldsNeedProjectAdmin(t *testing.T) {
 		r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
 		r.Post("/api/projects/{project}/services/{service}/changes", h.ApplyServiceChanges)
 		r.Put("/api/projects/{project}/services/{service}/envs/{env}/env-vars/{name}", h.SetEnvScopedVar)
+		r.Post("/api/projects/{project}/revisions/{id}/revert", h.RevertRevision)
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req = req.WithContext(auth.WithClaimsForTest(req.Context(), claims))
 		rr := httptest.NewRecorder()
@@ -92,6 +111,14 @@ func TestServiceExecFieldsNeedProjectAdmin(t *testing.T) {
 		return fake, rr
 	}
 	const svc = "/api/projects/p1/services/web"
+	for id, snap := range map[string]string{
+		"sec4-exec": `{"patch":{"command":["printenv"]}}`,
+		"sec4-port": `{"patch":{"port":3000}}`,
+	} {
+		if err := d.InsertRevision(context.Background(), db.Revision{ID: id, Project: "p1", Kind: "service", Name: "web", Snapshot: []byte(snap)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	cases := []struct {
 		name   string
@@ -120,6 +147,10 @@ func TestServiceExecFieldsNeedProjectAdmin(t *testing.T) {
 		{"editor staged patch changes command", editor, `{"patch":{"command":["printenv"]}}`, http.StatusForbidden, http.MethodPost, svc + "/changes"},
 		{"editor staged plain var", editor, `{"envSet":[{"name":"A","value":"1"}]}`, http.StatusOK, http.MethodPost, svc + "/changes"},
 		{"editor per-env JAVA_TOOL_OPTIONS", editor, `{"value":"-x"}`, http.StatusForbidden, http.MethodPut, svc + "/envs/staging/env-vars/JAVA_TOOL_OPTIONS"},
+		// SEC-4: a revert is a write and takes the same gate.
+		{"editor reverts to an admin-set command", editor, ``, http.StatusForbidden, http.MethodPost, "/api/projects/p1/revisions/sec4-exec/revert"},
+		{"editor reverts a port change", editor, ``, http.StatusOK, http.MethodPost, "/api/projects/p1/revisions/sec4-port/revert"},
+		{"admin reverts to an admin-set command", admin, ``, http.StatusOK, http.MethodPost, "/api/projects/p1/revisions/sec4-exec/revert"},
 	}
 	for _, c := range cases {
 		method, path := c.method, c.path

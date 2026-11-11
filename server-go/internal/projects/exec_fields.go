@@ -1,6 +1,9 @@
 package projects
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"sort"
@@ -283,6 +286,98 @@ func ExecEnvSetFields(cur []kube.KusoEnvVar, sets []EnvVar) []string {
 		changed = append(changed, name)
 	}
 	return execEnvFieldsOf(changed)
+}
+
+// RevisionExecFields returns the exec fields replaying a stored revision
+// would change on the live object (SEC-4). A revert is a write like any
+// other, so a non-admin may not use it to bring back a command, image,
+// release hook or code-loading env var an admin once set. env scopes a
+// service image revision to one environment (the History "roll back this
+// env" action); it is empty for a whole-service replay.
+//
+// An image replayed onto an environment counts only when the repository
+// differs from what the env runs now: an older tag of the same image is a
+// rollback, which editors can already do from build history.
+func (s *Service) RevisionExecFields(ctx context.Context, project, kind, name, env string, raw []byte) ([]string, error) {
+	var snap struct {
+		revisionSnapshot
+		Patch json.RawMessage `json:"patch"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil || snap.Informational {
+		return nil, nil // the replay refuses these itself
+	}
+	switch {
+	case kind == "service" && env != "":
+		var p struct {
+			Image *ServiceImageSpec `json:"image"`
+		}
+		if json.Unmarshal(snap.Patch, &p) != nil || p.Image == nil {
+			return nil, nil
+		}
+		return s.envImageExecFields(ctx, project, name, env, p.Image.Repository)
+	case kind == "service" && snap.Op == "":
+		var req PatchServiceRequest
+		if len(snap.Patch) == 0 || json.Unmarshal(snap.Patch, &req) != nil {
+			return nil, nil
+		}
+		cur, err := s.GetService(ctx, project, name)
+		if err != nil {
+			return nil, err
+		}
+		return ExecPatchFields(&cur.Spec, req), nil
+	case kind == "service" && snap.Op == revOpEnvVars && snap.EnvVars != nil:
+		cur, err := s.GetService(ctx, project, name)
+		if err != nil {
+			return nil, err
+		}
+		return execEnvReplayFields(*snap.EnvVars, cur.Spec.EnvVars), nil
+	case kind == "environment" && snap.Op == revOpEnvOverrides && snap.EnvVars != nil:
+		ns, err := s.namespaceFor(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, snap.Service, snap.Env))
+		if err != nil {
+			return nil, fmt.Errorf("get env: %w", err)
+		}
+		return execEnvReplayFields(*snap.EnvVars, envOverridesOf(e)), nil
+	case kind == "environment" && snap.Op == revOpEnvImage && snap.Image != nil:
+		return s.envImageExecFields(ctx, project, snap.Service, snap.Env, snap.Image.Repository)
+	}
+	return nil, nil
+}
+
+// execEnvReplayFields compares a snapshot's env list against the current
+// one. Masked snapshot values resolve to the current value, so they never
+// count as a change.
+func execEnvReplayFields(snap, current []kube.KusoEnvVar) []string {
+	sets := make([]EnvVar, 0, len(snap))
+	for _, e := range snap {
+		if e.Value == EnvMaskSentinel {
+			continue
+		}
+		sets = append(sets, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
+	}
+	return ExecEnvSetFields(current, sets)
+}
+
+func (s *Service) envImageExecFields(ctx context.Context, project, service, env, repo string) ([]string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, nil
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, service, env))
+	if err != nil {
+		return nil, fmt.Errorf("get env: %w", err)
+	}
+	if e.Spec.Image != nil && e.Spec.Image.Repository == repo {
+		return nil, nil
+	}
+	return []string{ExecFieldImage}, nil
 }
 
 func envValueFromEqual(a, b map[string]any) bool {

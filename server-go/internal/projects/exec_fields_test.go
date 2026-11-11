@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -49,6 +50,38 @@ func TestIsExecEnvName(t *testing.T) {
 	} {
 		if got := IsExecEnvName(name); got != want {
 			t.Errorf("IsExecEnvName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// SEC-4: replaying a revision is a write; it reports the exec fields the
+// replay would change against the live object, not the stored ones.
+func TestRevisionExecFields(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Port: 8080, Command: []string{"./run"},
+			EnvVars: []kube.KusoEnvVar{{Name: "NODE_OPTIONS", Value: "--max-old-space-size=512"}}}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	cases := []struct {
+		name, kind, env, snap string
+		want                  []string
+	}{
+		{"old command", "service", "", `{"patch":{"command":["printenv"]}}`, []string{ExecFieldCommand}},
+		{"same command", "service", "", `{"patch":{"command":["./run"],"port":1}}`, nil},
+		{"old NODE_OPTIONS", "service", "", `{"op":"service.envVars","envVars":[{"name":"NODE_OPTIONS","value":"--import=x"}]}`, []string{"env.NODE_OPTIONS"}},
+		{"masked NODE_OPTIONS", "service", "", `{"op":"service.envVars","envVars":[{"name":"NODE_OPTIONS","value":"` + EnvMaskSentinel + `"}]}`, nil},
+		{"foreign image onto env", "service", "production", `{"patch":{"image":{"repository":"evil/img","tag":"1"}}}`, []string{ExecFieldImage}},
+		{"informational", "service", "", `{"op":"x","informational":true,"patch":{"command":["printenv"]}}`, nil},
+	}
+	for _, c := range cases {
+		got, err := s.RevisionExecFields(context.Background(), "alpha", c.kind, "web", c.env, []byte(c.snap))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: RevisionExecFields = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
