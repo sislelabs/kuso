@@ -37,7 +37,7 @@ ARG KUSO_CLI_LOCAL=
 
 # Claude Code CLI version. Pin so a CC release doesn't silently change
 # prompt/flag behaviour under us.
-ARG CLAUDE_CODE_VERSION=latest
+ARG CLAUDE_CODE_VERSION=2.1.322
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -76,6 +76,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     mv /usr/bin/kubectl /usr/local/libexec/kuso-agent/kubectl
 
 COPY kubectl-guard.sh /usr/local/bin/kubectl
+# Shadows /usr/bin/git on PATH for the agent; the entrypoint calls
+# /usr/bin/git directly for its own clone and push.
+COPY git-guard.sh /usr/local/bin/git
 
 # Claude Code CLI. Installed globally via npm; `claude` lands on $PATH.
 RUN --mount=type=cache,target=/root/.npm \
@@ -101,7 +104,7 @@ RUN --mount=type=bind,target=/staging,source=. \
       chmod 0755 /usr/local/bin/kuso; \
     fi; \
     /usr/local/bin/kuso --version || /usr/local/bin/kuso version || true; \
-    chmod 0755 /usr/local/bin/incident-agent-entrypoint /usr/local/bin/kubectl
+    chmod 0755 /usr/local/bin/incident-agent-entrypoint /usr/local/bin/kubectl /usr/local/bin/git
 
 # The agent runs read-only against the cluster and clones into a scratch
 # workdir. Run as a non-root, unprivileged user (node:20 ships `node`,

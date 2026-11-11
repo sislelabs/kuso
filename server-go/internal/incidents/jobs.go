@@ -11,6 +11,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -41,12 +42,21 @@ const ccMountPath = "/cc"
 const jobNamespace = "kuso"
 
 // Per-Job Secret keys. The incident bearer and the git token reach the
-// container through secretKeyRef, never as literals in the Job spec (which
-// anyone with jobs get could read for the Job's 24h TTL).
+// container through the Secret, never as literals in the Job spec (which
+// anyone with jobs get could read for the Job's 24h TTL). The key names
+// are the file names the entrypoint reads from agentSecretsDir.
 const (
 	secretKeyIncidentToken = "incident-token"
 	secretKeyGitToken      = "git-token"
+
+	jobSecretMount  = "/run/agent-secret"
+	agentSecretsDir = "/run/kuso-agent"
 )
+
+func ptrQuantity(s string) *resource.Quantity {
+	q := resource.MustParse(s)
+	return &q
+}
 
 // logAccessName names both the ClusterRole (pods/log get+list, shipped in
 // deploy/incident-agent-rbac.yaml) and the RoleBinding stamped into the
@@ -388,21 +398,17 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 		}
 	}
 
-	secretRef := func(key string) *corev1.EnvVarSource {
-		return &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: agentSecretName(name)},
-			Key:                  key,
-		}}
-	}
-
+	// The incident bearer (scoped to /findings and /pr of this one
+	// incident) and the git token reach the agent container as files, not
+	// env: a container's env sits in /proc/1/environ for its whole life,
+	// readable by every process the agent starts. The init container
+	// copies them into a memory emptyDir; the entrypoint reads and deletes
+	// them before the agent runs.
 	env := []corev1.EnvVar{
 		{Name: "INCIDENT_ID", Value: in.ID},
 		{Name: "PHASE", Value: phase},
 		{Name: "KUSO_API_URL", Value: s.APIBaseURL},
-		// INCIDENT_TOKEN scopes the agent's incident-facing callbacks
-		// (/findings, /pr) to this single incident. It is NOT a kuso API
-		// token — it only authenticates those two endpoints.
-		{Name: "INCIDENT_TOKEN", ValueFrom: secretRef(secretKeyIncidentToken)},
+		{Name: "SECRETS_DIR", Value: agentSecretsDir},
 		// KUSO_TOKEN is intentionally EMPTY in v1. It must NOT reuse the
 		// incident bearer (that would let a leaked kuso-CLI token also write
 		// the incident record). Until a project-scoped viewer+sql token is
@@ -436,7 +442,6 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 			corev1.EnvVar{Name: "REPO_OWNER", Value: repo.Owner},
 			corev1.EnvVar{Name: "REPO_NAME", Value: repo.Name},
 			corev1.EnvVar{Name: "REPO_DEFAULT_BRANCH", Value: orDefault(repo.DefaultBranch, "main")},
-			corev1.EnvVar{Name: "GIT_TOKEN", ValueFrom: secretRef(secretKeyGitToken)},
 		)
 		if RunRepoCode() {
 			// Opt-in: lets the agent run the repo's build/test commands,
@@ -463,6 +468,11 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 		jobLabels[labelLogNamespace] = logNS
 	}
 
+	containerSC := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &noEscalation,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	secretMode := int32(0o444)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -488,27 +498,37 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 						RunAsGroup:     &agentUID,
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
-					Volumes: []corev1.Volume{{
-						Name: "cc-creds",
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{
-								SecretName: ccSecretName,
-							},
+					Volumes: []corev1.Volume{
+						{Name: "cc-creds", VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{SecretName: ccSecretName},
+						}},
+						{Name: "job-secret", VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{SecretName: agentSecretName(name), DefaultMode: &secretMode},
+						}},
+						{Name: "agent-secrets", VolumeSource: corev1.VolumeSource{
+							EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: ptrQuantity("1Mi")},
+						}},
+					},
+					// Only this container mounts the per-Job Secret.
+					InitContainers: []corev1.Container{{
+						Name:            "secrets",
+						Image:           s.image(),
+						Command:         []string{"/bin/sh", "-c", "umask 077 && cp " + jobSecretMount + "/* " + agentSecretsDir + "/"},
+						SecurityContext: containerSC,
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "job-secret", MountPath: jobSecretMount, ReadOnly: true},
+							{Name: "agent-secrets", MountPath: agentSecretsDir},
 						},
 					}},
 					Containers: []corev1.Container{{
-						Name:  "agent",
-						Image: s.image(),
-						Env:   env,
-						SecurityContext: &corev1.SecurityContext{
-							AllowPrivilegeEscalation: &noEscalation,
-							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						Name:            "agent",
+						Image:           s.image(),
+						Env:             env,
+						SecurityContext: containerSC,
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "cc-creds", MountPath: ccMountPath, ReadOnly: true},
+							{Name: "agent-secrets", MountPath: agentSecretsDir},
 						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "cc-creds",
-							MountPath: ccMountPath,
-							ReadOnly:  true,
-						}},
 					}},
 				},
 			},
