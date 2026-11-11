@@ -34,6 +34,7 @@ import (
 	"kuso/server/internal/backuphealth"
 	"kuso/server/internal/buildcontroller"
 	"kuso/server/internal/buildkit"
+	"kuso/server/internal/buildkittls"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
@@ -664,6 +665,9 @@ func main() {
 			}
 		}
 		registryAuth = &registryauth.Store{Kube: kc, Namespace: *namespace, Host: builds.RegistryHost}
+		// Fresh installs create kuso-registry-auth without htpasswd; the
+		// registry waits until this fills it.
+		go registryAuth.CompleteLoop(ctx, 30*time.Second, logger.Warn)
 		builds.SetRegistryAuth(func(ctx context.Context) (string, bool) {
 			c, err := registryAuth.Get(ctx)
 			if err != nil || c == nil {
@@ -677,6 +681,9 @@ func main() {
 		buildSvc.Remote = &gitremote.Inspector{}
 		buildSvc.Images = builds.NewInClusterImageDeleter(builds.RegistryHost)
 		buildSvc.RegistryAuth = registryAuth
+		buildkitTLS := &buildkittls.Store{Kube: kc, Namespace: *namespace}
+		go buildkitTLS.EnsureLoop(ctx, 30*time.Second, logger.Warn)
+		buildSvc.BuildkitTLS = buildkitTLS
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
 		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)
 		// already saturate the node. Operators with bigger machines

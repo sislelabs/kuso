@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/buildkittls"
 	cronspkg "kuso/server/internal/crons"
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
@@ -238,6 +239,9 @@ type Service struct {
 	// RegistryAuth, when it holds a minted kuso-registry credential,
 	// gives in-cluster builds a push Secret. nil = anonymous pushes.
 	RegistryAuth *registryauth.Store
+	// BuildkitTLS mirrors the buildkitd client certificate into the
+	// build's namespace. nil = builds connect in plaintext.
+	BuildkitTLS *buildkittls.Store
 	// Tokens mints fresh github installation tokens for the build's
 	// clone init container. Optional — nil means we still create the
 	// expected secret (empty value) so pods start, but private repos
@@ -1331,6 +1335,14 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 			slog.Default().Warn("build: registry push secret unavailable; pushing anonymously", "ns", ns, "err", aerr)
 		} else if name != "" {
 			spec.Auth = &kube.KusoBuildAuth{SecretName: name, Registry: RegistryHost}
+		}
+	}
+	if s.BuildkitTLS != nil {
+		// The Job mounts this Secret optionally and falls back to
+		// plaintext without it, so a failure only matters once the
+		// daemon requires TLS; the build then fails to connect.
+		if _, terr := s.BuildkitTLS.EnsureClientSecret(ctx, ns); terr != nil {
+			slog.Default().Warn("build: buildkit client certificate unavailable", "ns", ns, "err", terr)
 		}
 	}
 	if settings.MemoryLimit != "" || settings.MemoryRequest != "" ||

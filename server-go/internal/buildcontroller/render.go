@@ -3,6 +3,7 @@ package buildcontroller
 import (
 	"fmt"
 	"kuso/server/internal/buildkit"
+	"kuso/server/internal/buildkittls"
 	"regexp"
 	"slices"
 	"sort"
@@ -215,6 +216,20 @@ func renderVolumes(b *kube.KusoBuild, strategy string) []corev1.Volume {
 					Items: []corev1.KeyToPath{
 						{Key: ".dockerconfigjson", Path: "config.json"},
 					},
+				},
+			},
+		})
+	}
+	if strategy != "buildpacks" {
+		// buildkitd client certificate (buildkittls). Optional: absent
+		// until kuso-server mints it, and the script falls back to
+		// plaintext without it.
+		vols = append(vols, corev1.Volume{
+			Name: "buildkit-tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: buildkittls.ClientSecretName,
+					Optional:   ptrTrue(),
 				},
 			},
 		})
@@ -1239,6 +1254,19 @@ func cacheExport(b *kube.KusoBuild) string {
 	return "1"
 }
 
+// cacheMountNamespace scopes the Dockerfile frontend's RUN cache mounts
+// (BUILDKIT_CACHE_MOUNT_NS) to the service, and to the preview env for
+// preview builds, so PR code can't seed a cache production later reads
+// (ISO-7, OPS-4). A custom `# syntax=` frontend can ignore it; only a
+// per-project daemon closes that.
+func cacheMountNamespace(b *kube.KusoBuild) string {
+	ns := b.Spec.Project + "/" + b.Spec.Service
+	if env := b.Annotations[builds.AnnPreviewEnv]; env != "" {
+		ns += "/" + env
+	}
+	return ns
+}
+
 // renderBuildkitContainer is the buildkit thin-client. Talks to the
 // long-lived kuso-buildkitd Deployment over TCP. The actual build
 // happens in the daemon; this container just uploads the workspace
@@ -1354,6 +1382,14 @@ for k in $KUSO_BUILDENV_SECRET_KEYS; do
   set -- "$@" --secret "id=${k},env=KUSO_BE_${k}"
 done
 
+# RUN --mount=type=cache ids are global to the shared daemon; namespace
+# them per project/service (and per preview) so one project's build can't
+# read or poison another's cache mounts. Appended after the user build-args
+# so a BuildArgs key of the same name can't override it (last one wins).
+if [ -n "${CACHE_MOUNT_NS:-}" ]; then
+  set -- "$@" --opt "build-arg:BUILDKIT_CACHE_MOUNT_NS=${CACHE_MOUNT_NS}"
+fi
+
 echo "==> buildkit: daemon=$BUILDKIT_HOST"
 echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX dryRun=${DRY_RUN:-0}"
 echo "==> buildkit: build-arg keys=${KUSO_BUILDENV_KEYS:-<none>}"
@@ -1368,7 +1404,18 @@ elif [ "${CACHE_EXPORT:-1}" != "1" ]; then
   echo "==> buildkit: preview build, cache is read-only"
 fi
 
+# Mutual TLS when the daemon requires it (kuso-buildkitd-tls enabled=true).
+# The client certificate is mounted into this container only. Try TLS
+# first, then plaintext, so the Job works against either daemon mode.
+BKTLS=""
+TLSD=/tmp/buildkit-tls
+TLSFLAGS="--tlsservername kuso-buildkitd --tlscacert $TLSD/ca.crt --tlscert $TLSD/tls.crt --tlskey $TLSD/tls.key"
 for i in $(seq 1 30); do
+  if [ -s "$TLSD/tls.crt" ] && buildctl --addr "$BUILDKIT_HOST" $TLSFLAGS debug workers >/dev/null 2>&1; then
+    BKTLS=$TLSFLAGS
+    echo "==> buildkit: connected with mutual TLS"
+    break
+  fi
   if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
     break
   fi
@@ -1380,7 +1427,7 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
   # Dry-run: parse + compile, no push, no cache mutation. The image
   # is discarded after the buildkit run completes.
   exec buildctl \
-    --addr "$BUILDKIT_HOST" \
+    --addr "$BUILDKIT_HOST" $BKTLS \
     build \
     --frontend dockerfile.v0 \
     --local context="$CTX" \
@@ -1396,7 +1443,7 @@ fi
 # registry 2.8 answers the docker-v2-only HEAD in builds/registry_client.go
 # (image-retention sweep) with 404 for those, silently disabling the sweep.
 { buildctl \
-  --addr "$BUILDKIT_HOST" \
+  --addr "$BUILDKIT_HOST" $BKTLS \
   build \
   --frontend dockerfile.v0 \
   --local context="$CTX" \
@@ -1407,14 +1454,22 @@ fi
   --import-cache type=registry,ref="$CACHE",registry.insecure=$INSECURE \
   --progress plain; echo $? > /tmp/buildctl.rc; } 2>&1 | tee /tmp/buildctl.log
 RC=$(cat /tmp/buildctl.rc 2>/dev/null || echo 1)
-[ "$RC" = "0" ] && exit 0
+PUSHED=$(sed -n "s|.*pushing manifest for ${IMAGE}@\(sha256:[0-9a-f]\{64\}\).* done.*|\1|p" /tmp/buildctl.log | tail -n 1)
+# The pushed digest goes to the termination message; kuso-server pins the
+# promoted env to it so a later re-push of the tag can't swap the image.
+record_digest() {
+  if [ -n "$PUSHED" ]; then printf 'digest=%s\n' "$PUSHED" > "${KUSO_TERMINATION_LOG:-/dev/termination-message}" 2>/dev/null || true; fi
+}
+if [ "$RC" = "0" ]; then
+  record_digest
+  exit 0
+fi
 
 # buildkitd can drop the session (an overloaded daemon misses its session
 # healthcheck) after the image is already pushed, while it is still
 # exporting the optional build cache. The build then fails although the
 # image is complete. Accept it only when buildkit logged the manifest push
 # as done AND the registry serves that exact digest for the tag.
-PUSHED=$(sed -n "s|.*pushing manifest for ${IMAGE}@\(sha256:[0-9a-f]\{64\}\).* done.*|\1|p" /tmp/buildctl.log | tail -n 1)
 if [ -n "$PUSHED" ]; then
   REG=${IMAGE%%/*}
   REST=${IMAGE#*/}
@@ -1422,13 +1477,17 @@ if [ -n "$PUSHED" ]; then
   TAG=${REST##*:}
   SCHEME=https
   [ "$INSECURE" = "true" ] && SCHEME=http
-  SERVED=$(wget -q -S -O /dev/null \
-    --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-    --header "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+  set -- --header "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+    --header "Accept: application/vnd.docker.distribution.manifest.list.v2+json"
+  # With registry auth on, send the push credential (docker config "auth").
+  AUTH=$(sed -n 's/.*"auth":"\([A-Za-z0-9+\/=]*\)".*/\1/p' "${DOCKER_CONFIG:-/nonexistent}/config.json" 2>/dev/null | head -n 1)
+  if [ -n "$AUTH" ]; then set -- "$@" --header "Authorization: Basic $AUTH"; fi
+  SERVED=$(wget -q -S -O /dev/null "$@" \
     "${SCHEME}://${REG}/v2/${REPO}/manifests/${TAG}" 2>&1 \
     | sed -n 's/.*[Dd]ocker-[Cc]ontent-[Dd]igest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -n 1)
   if [ "$SERVED" = "$PUSHED" ]; then
     echo "==> buildkit: WARNING build cache export failed after the image was pushed (${PUSHED}); the image is complete, continuing"
+    record_digest
     exit 0
   fi
 fi
@@ -1449,6 +1508,7 @@ exit "$RC"
 		{Name: "BUILDKIT_ADDR", Value: buildkit.HostFor(b.Spec.Project)},
 		{Name: "DRY_RUN", Value: dryRun},
 		{Name: "CACHE_EXPORT", Value: cacheExport(b)},
+		{Name: "CACHE_MOUNT_NS", Value: cacheMountNamespace(b)},
 	}
 	if hasAuthSecret(b) {
 		envs = append(envs, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/tmp/.docker"})
@@ -1515,6 +1575,7 @@ exit "$RC"
 
 	mounts := []corev1.VolumeMount{
 		{Name: "workspace", MountPath: "/workspace"},
+		{Name: "buildkit-tls", MountPath: "/tmp/buildkit-tls", ReadOnly: true},
 	}
 	if hasAuthSecret(b) {
 		mounts = append(mounts, corev1.VolumeMount{

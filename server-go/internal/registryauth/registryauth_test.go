@@ -10,6 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"kuso/server/internal/kube"
 )
 
@@ -126,5 +128,40 @@ func TestStatus_ReadyOnlyWhenEveryNodeProbedOK(t *testing.T) {
 	setJob("b", func(j *batchv1.Job) { j.Annotations[annProbeMarker] = "old" + c.Marker()[3:] })
 	if st, _ = s.Status(ctx); st.ReadyToEnable {
 		t.Fatalf("stale probe counted as ready: %+v", st)
+	}
+}
+
+// install.sh creates the Secret with username/password/enabled only (no
+// bcrypt in shell); Complete must add a matching htpasswd and keep the
+// password and the enabled flag as written.
+func TestComplete_FillsShellMintedSecret(t *testing.T) {
+	ctx := context.Background()
+	s, cs := newStore()
+	if done, err := s.Complete(ctx); err != nil || !done {
+		t.Fatalf("no secret: done=%v err=%v", done, err)
+	}
+	_, _ = cs.CoreV1().Secrets("kuso").Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: SecretName, Namespace: "kuso"},
+		Data:       map[string][]byte{"username": []byte("kuso"), "password": []byte("abc123"), "enabled": []byte("true")},
+	}, metav1.CreateOptions{})
+	if done, err := s.Complete(ctx); err != nil || !done {
+		t.Fatalf("complete: done=%v err=%v", done, err)
+	}
+	sec, _ := cs.CoreV1().Secrets("kuso").Get(ctx, SecretName, metav1.GetOptions{})
+	user, hash, _ := strings.Cut(strings.TrimSpace(string(sec.Data["htpasswd"])), ":")
+	if user != "kuso" || bcrypt.CompareHashAndPassword([]byte(hash), []byte("abc123")) != nil {
+		t.Fatalf("htpasswd does not match the password: %q", sec.Data["htpasswd"])
+	}
+	if string(sec.Data["enabled"]) != "true" || string(sec.Data["password"]) != "abc123" {
+		t.Fatalf("complete changed enabled/password: %q %q", sec.Data["enabled"], sec.Data["password"])
+	}
+	if len(sec.Data[".dockerconfigjson"]) == 0 || len(sec.Data["cnb_registry_auth"]) == 0 {
+		t.Fatal("derived keys missing")
+	}
+	before := string(sec.Data["htpasswd"])
+	_, _ = s.Complete(ctx)
+	sec, _ = cs.CoreV1().Secrets("kuso").Get(ctx, SecretName, metav1.GetOptions{})
+	if string(sec.Data["htpasswd"]) != before {
+		t.Fatal("second Complete rewrote htpasswd")
 	}
 }

@@ -79,6 +79,20 @@ log "CRDs"
 kubectl apply -f "${REPO}/operator/config/crd/bases/" >/dev/null
 
 log "registry"
+# Same defaults as a fresh install: registry auth and buildkitd mTLS on.
+# kuso-server fills in the htpasswd hash and the certificates; the
+# registry and buildkitd wait for them. Only on a sandbox that has no
+# registry yet: an older one started its node without the credential in
+# registries.yaml (run `make sandbox-down` first to switch it over).
+if ! kubectl -n kuso get deployment kuso-registry >/dev/null 2>&1; then
+  kubectl -n kuso get secret kuso-registry-auth >/dev/null 2>&1 \
+    || kubectl -n kuso create secret generic kuso-registry-auth \
+      --from-literal=username=kuso \
+      --from-literal=password=6b75736f2d73616e64626f782d6465762d6f6e6c79 \
+      --from-literal=enabled=true >/dev/null
+  kubectl -n kuso get secret kuso-buildkitd-tls >/dev/null 2>&1 \
+    || kubectl -n kuso create secret generic kuso-buildkitd-tls --from-literal=enabled=true >/dev/null
+fi
 manifest registry | kubectl apply -f - >/dev/null
 
 log "buildkitd"
