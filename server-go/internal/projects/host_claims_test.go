@@ -139,18 +139,22 @@ func TestUpdate_BaseDomainMovesEveryGeneratedHost(t *testing.T) {
 		seedHostedEnv("alpha", "alpha", "production", "alpha-alpha-production", old),
 	)
 	ctx := context.Background()
-	// Moving onto the control-plane host must not hand the project-named
-	// service's apex to the dashboard's host.
-	newBase := "kuso.example.com"
+	// The control-plane host (and anything outside the project's own
+	// subtree of it) is refused as a baseDomain outright (SEC-4).
+	control := "kuso.example.com"
+	if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{BaseDomain: &control}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Update(baseDomain = control host) err = %v, want ErrConflict", err)
+	}
+	newBase := "alpha.kuso.example.com"
 	if _, err := s.Update(ctx, "alpha", UpdateProjectRequest{BaseDomain: &newBase}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	for name, want := range map[string]string{
-		"alpha-web-production":    "web.kuso.example.com",
-		"alpha-web-staging":       "web-staging.kuso.example.com",
+		"alpha-web-production":    "web.alpha.kuso.example.com",
+		"alpha-web-staging":       "web-staging.alpha.kuso.example.com",
 		"alpha-web-demo":          "demo.customer.org",
 		"alpha-web-qa-production": "web-qa.alpha.kuso.example.com",
-		"alpha-alpha-production":  old,
+		"alpha-alpha-production":  "alpha.kuso.example.com",
 	} {
 		env, err := s.Kube.GetKusoEnvironment(ctx, "kuso", name)
 		if err != nil {
@@ -214,5 +218,40 @@ func TestHostClaims_WildcardCoverage(t *testing.T) {
 	}
 	if _, err := s.AddEnvDomain(ctx, "gamma", "web", "production", "shop.tenants.io", ""); err != nil {
 		t.Errorf("exact host under own wildcard refused: %v", err)
+	}
+}
+
+// SEC-4 (2026-11-10): an exact host under the instance domain must sit in
+// the claiming project's own subtree, or it squats another project's
+// default names (and blocks that project's later AddService).
+func TestHostClaims_InstanceDomainSubtree(t *testing.T) {
+	t.Setenv("KUSO_DOMAIN", "kuso.example.com")
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedHostedEnv("alpha", "web", "production", "alpha-web-production", "web.alpha.kuso.example.com"),
+	)
+	ctx := context.Background()
+	for _, h := range []string{"api.beta.kuso.example.com", "beta.kuso.example.com", "other.kuso.example.com", "staging-beta.kuso.example.com"} {
+		if _, err := s.AddEnvDomain(ctx, "alpha", "web", "production", h, ""); !errors.Is(err, ErrConflict) {
+			t.Errorf("AddEnvDomain(%q) err = %v, want ErrConflict", h, err)
+		}
+	}
+	for _, h := range []string{"api.alpha.kuso.example.com", "alpha.kuso.example.com", "staging-alpha.kuso.example.com", "app.customer.com"} {
+		if _, err := s.AddEnvDomain(ctx, "alpha", "web", "production", h, ""); err != nil {
+			t.Errorf("AddEnvDomain(%q) refused: %v", h, err)
+		}
+	}
+	if _, err := s.Create(ctx, CreateProjectRequest{Name: "gamma", BaseDomain: "alpha.kuso.example.com"}); !errors.Is(err, ErrConflict) {
+		t.Errorf("Create(baseDomain in another project's subtree) err = %v, want ErrConflict", err)
+	}
+	if _, err := s.Create(ctx, CreateProjectRequest{Name: "delta", BaseDomain: "eu.delta.kuso.example.com"}); err != nil {
+		t.Errorf("Create(baseDomain in own subtree) refused: %v", err)
+	}
+
+	squat := kube.KusoEnvironment{ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-production"},
+		Spec: kube.KusoEnvironmentSpec{Project: "alpha", Kind: "production", Host: "web.alpha.kuso.example.com", AdditionalHosts: []string{"api.beta.kuso.example.com"}}}
+	if got := HostClaimProblems([]kube.KusoEnvironment{squat}); len(got) != 1 {
+		t.Errorf("HostClaimProblems = %v, want the one squatted host flagged", got)
 	}
 }

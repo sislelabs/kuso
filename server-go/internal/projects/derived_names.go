@@ -519,6 +519,9 @@ func reservedHost(host, project string) error {
 	}
 	suffix, ok := strings.CutPrefix(host, "*.")
 	if !ok {
+		if strings.HasSuffix(host, "."+control) && !ownsInstanceHost(host, project, control) {
+			return fmt.Errorf("%w: %q is under the kuso instance domain; a project may only use %s.%s and names under it", ErrConflict, host, orPlaceholder(project), control)
+		}
 		return nil
 	}
 	if wildcardCovers(host, control) {
@@ -533,6 +536,45 @@ func reservedHost(host, project string) error {
 		}
 	}
 	return nil
+}
+
+// ownsInstanceHost reports whether an exact host under the instance
+// domain belongs to project: its "<project>.<control>" apex, anything
+// below it, or the "<env>-<project>.<control>" shape customEnvHost and
+// buildEnvHost generate for a service named after its project.
+func ownsInstanceHost(host, project, control string) bool {
+	if project == "" {
+		return false
+	}
+	apex := project + "." + control
+	if host == apex || strings.HasSuffix(host, "."+apex) {
+		return true
+	}
+	label := strings.TrimSuffix(host, "."+control)
+	return !strings.Contains(label, ".") && len(label) > len(project)+1 && strings.HasSuffix(label, "-"+project)
+}
+
+func orPlaceholder(project string) string {
+	if project == "" {
+		return "<project>"
+	}
+	return project
+}
+
+// validateBaseDomain refuses a project baseDomain inside the instance
+// domain but outside the project's own subtree: every generated host
+// would land on another project's names (SEC-4).
+func validateBaseDomain(project, baseDomain string) error {
+	control := strings.ToLower(config.DefaultBaseDomain())
+	bd := strings.ToLower(baseDomain)
+	if bd == "" || control == "" || (bd != control && !strings.HasSuffix(bd, "."+control)) {
+		return nil
+	}
+	apex := project + "." + control
+	if bd == apex || strings.HasSuffix(bd, "."+apex) {
+		return nil
+	}
+	return fmt.Errorf("%w: baseDomain %q is under the kuso instance domain; use %s or a name under it", ErrConflict, baseDomain, apex)
 }
 
 // wildcardCovers reports whether pattern ("*.example.com") matches host.
@@ -581,14 +623,27 @@ func servedHosts(e *kube.KusoEnvironment) []string {
 	return out
 }
 
-// WildcardHostProblems lists wildcard domains already on envs that the
-// create/update checks would now refuse (control-plane coverage, too
-// broad, or covering another project's host). They predate the check
-// and keep serving; this only surfaces them so an operator can act.
-func WildcardHostProblems(envs []kube.KusoEnvironment) []string {
+// HostClaimProblems lists hosts already on envs that the create/update
+// checks would now refuse: wildcards that cover the control plane, are
+// too broad or cover another project's host, and exact hosts in another
+// project's slice of the instance domain. They predate the checks and
+// keep serving; this only surfaces them so an operator can act.
+func HostClaimProblems(envs []kube.KusoEnvironment) []string {
 	var out []string
 	for i := range envs {
 		e := &envs[i]
+		if e.Spec.Kind != "preview" {
+			exact := append([]string{e.Spec.Host}, e.Spec.AdditionalHosts...)
+			for _, h := range exact {
+				h = strings.ToLower(strings.TrimSpace(h))
+				if h == "" {
+					continue
+				}
+				if err := reservedHost(h, e.Spec.Project); err != nil {
+					out = append(out, fmt.Sprintf("env %s: %v", e.Name, err))
+				}
+			}
+		}
 		for _, w := range e.Spec.WildcardDomains {
 			h := strings.ToLower(w.Host)
 			if err := reservedHost(h, e.Spec.Project); err != nil {

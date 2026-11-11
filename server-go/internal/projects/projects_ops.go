@@ -171,6 +171,9 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	if req.BaseDomain != "" && !isPublicFQDN(req.BaseDomain) {
 		return nil, fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, req.BaseDomain)
 	}
+	if err := validateBaseDomain(req.Name, req.BaseDomain); err != nil {
+		return nil, err
+	}
 
 	if existing, err := s.Kube.GetKusoProject(ctx, s.Namespace, req.Name); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: project %q already exists", ErrConflict, req.Name)
@@ -335,6 +338,13 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			v := strings.TrimSpace(*req.BaseDomain)
 			if v != "" && !isPublicFQDN(v) {
 				return fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, v)
+			}
+			// Unchanged values re-save fine, so a project that already
+			// carries a now-refused baseDomain keeps saving its settings.
+			if v != cur.Spec.BaseDomain {
+				if err := validateBaseDomain(name, v); err != nil {
+					return err
+				}
 			}
 			cur.Spec.BaseDomain = v
 		}
