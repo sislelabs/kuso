@@ -126,12 +126,16 @@ func (s *Service) listSecretKeys(ctx context.Context, ns, name string) ([]string
 	// Transform strips them before indexing), which is exactly the
 	// shape this caller needs.
 	//
-	// A cache miss falls through to the live Get below rather than
-	// reporting "no keys": absent-from-cache is not the same as
-	// absent-from-cluster for a Secret written moments ago.
+	// A miss on a synced cache is "no such Secret": most services never
+	// get a <svc>-secrets, and falling through to a live 404 GET per
+	// service throttled the dashboard summary on the client-go limiter.
+	// Only an unsynced cache (boot) goes live.
 	if s.Kube != nil && s.Kube.Cache != nil {
 		if keys, ok := s.Kube.Cache.SecretKeysOnly(ns, name); ok {
 			return keys, nil
+		}
+		if s.Kube.Cache.SecretsSynced() {
+			return []string{}, nil
 		}
 	}
 	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})

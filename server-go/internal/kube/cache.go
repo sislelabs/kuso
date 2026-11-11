@@ -737,6 +737,12 @@ func (c *Cache) SecretKeysOnly(namespace, name string) ([]string, bool) {
 	return keys, true
 }
 
+// SecretsSynced reports whether the Secret informer has completed its
+// initial list, i.e. a SecretKeysOnly miss means the Secret does not exist.
+func (c *Cache) SecretsSynced() bool {
+	return c != nil && c.secretLister != nil && c.secretSynced != nil && c.secretSynced()
+}
+
 // ListSecrets returns the data-stripped Secrets in namespace from the
 // informer cache (metadata + key names only, see stripSecretData).
 // (nil, false) when the cache isn't ready — callers fall back to a live

@@ -138,7 +138,9 @@ func (s *Service) EnrichEnvWithManagedSecretKeys(ctx context.Context, project st
 	if err != nil {
 		return
 	}
-	svcShort := env.Spec.Service
+	// spec.service is the CR name (<project>-<svc>); the secret helpers
+	// take the short name.
+	svcShort := shortServiceName(project, env.Spec.Service)
 	for _, secretName := range managedSecretNamesFor(env.Spec.EnvFromSecrets, project, svcShort, env.Spec.Kind, env.Name) {
 		keys, err := s.listSecretKeys(ctx, ns, secretName)
 		if err != nil {
