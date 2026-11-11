@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -58,7 +61,7 @@ func TestReferencedEnvs(t *testing.T) {
 			e := &kube.KusoEnvironment{}
 			e.Name, e.Namespace = "alpha-web-staging", "kuso"
 			e.Spec.EnvVars = tc.vars
-			if got := referencedEnvs(e, tc.isEnv); !slices.Equal(got, want) {
+			if got := referencedEnvs(e, nil, tc.isEnv); !slices.Equal(got, want) {
 				t.Fatalf("referencedEnvs = %v, want %v", got, want)
 			}
 		})
@@ -113,6 +116,35 @@ func TestEvaluate_InClusterCallerKeepsTargetAwake(t *testing.T) {
 		if got := replicas(t, kc, env); got != want {
 			t.Errorf("%s: replicas = %d, want %d", env, got, want)
 		}
+	}
+}
+
+// RUN-3: `kuso env set` stores a plain literal in the managed Secret, not
+// on the CR. A service URL wired that way is still an in-cluster call.
+func TestEvaluate_SecretStoredServiceURLKeepsTargetAwake(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	idle := map[string]string{LastActivityAnnotation: now.Add(-2 * time.Hour).Format(time.RFC3339)}
+	busy := map[string]string{LastActivityAnnotation: now.Add(-time.Minute).Format(time.RFC3339)}
+	staging := map[string]string{kube.LabelEnv: "staging"}
+
+	f := &fixture{}
+	f.service("alpha-web", nil, map[string]any{})
+	f.service("alpha-api", nil, map[string]any{})
+	f.env("alpha-web-staging", "alpha-web", staging, busy, map[string]any{
+		"kind": "custom", "autoSleep": true,
+		"envFromSecrets": []any{"alpha-web-staging-secrets", "alpha-pg-conn"},
+	}, 1, "kuso-activator")
+	f.env("alpha-api-staging", "alpha-api", staging, idle, map[string]any{
+		"kind": "custom", "autoSleep": true,
+	}, 1, "kuso-activator")
+	f.deps = append(f.deps, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-staging-secrets", Namespace: testNS},
+		Data:       map[string][]byte{"API_URL": []byte("http://alpha-api-staging:8080/v1")},
+	})
+
+	kc := f.run(t, now)
+	if got := replicas(t, kc, "alpha-api-staging"); got != 1 {
+		t.Errorf("alpha-api-staging: replicas = %d, want 1 (called via a Secret-stored URL)", got)
 	}
 }
 

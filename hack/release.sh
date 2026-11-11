@@ -73,6 +73,7 @@ set -euo pipefail
 VERSION=""
 DRY_RUN=0
 ALLOW_BREAKING_CRDS="${KUSO_RELEASE_ALLOW_BREAKING_CRDS:-0}"
+ALLOW_POD_RESTARTS="${KUSO_RELEASE_ALLOW_POD_RESTARTS:-0}"
 # Parse args. Flags can come before or after VERSION; flag-style is
 # the modern convention but bare positional VERSION still works for
 # muscle memory + the Makefile shim.
@@ -80,6 +81,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--dry-run) DRY_RUN=1; shift ;;
     --allow-breaking-crds) ALLOW_BREAKING_CRDS=1; shift ;;
+    --allow-pod-restarts) ALLOW_POD_RESTARTS=1; shift ;;
     -h|--help)
       cat <<EOF
 usage: $0 [--dry-run] vX.Y.Z
@@ -94,6 +96,11 @@ Cuts a kuso release.
               skip the CRD breaking-change guard. Only pass this after
               applying the manual CRD migration to live clusters — the
               updater blindly re-applies crds.yaml and assumes additive.
+
+  --allow-pod-restarts
+              ship even though an addon chart's pod template changed, which
+              restarts every addon of that kind on every cluster when the
+              operator rolls (KUSO_RELEASE_ALLOW_POD_RESTARTS=1 via make ship).
 
 Env knobs (see release.sh header for the full list):
   KUSO_RELEASE_ROLL=1       roll the live cluster after build
@@ -348,8 +355,9 @@ fi
 # Two things a release can do to live clusters that the image roll hides:
 # RBAC the updater can't apply (escalation prevention; it reports "done"
 # regardless), and a changed pod template that restarts every env/addon
-# at once when the operator rolls. Neither blocks the ship; both are
-# printed here and appended to the GitHub release notes.
+# at once when the operator rolls. Both are printed here and appended to
+# the GitHub release notes; an addon pod-template change also blocks the
+# ship unless acknowledged (below).
 RELEASE_IMPACT_FILE="$(mktemp)"
 if [[ -n "$CRD_GUARD_PREV_TAG" ]] && python3 -c 'import yaml' >/dev/null 2>&1; then
   if python3 hack/release-impact.py "$CRD_GUARD_PREV_TAG" > "$RELEASE_IMPACT_FILE"; then
@@ -365,6 +373,17 @@ if [[ -n "$CRD_GUARD_PREV_TAG" ]] && python3 -c 'import yaml' >/dev/null 2>&1; t
   fi
 else
   warn "release-impact report skipped (no previous tag or no PyYAML)"
+fi
+# Single-replica databases restart together when the operator rolls, so an
+# addon pod-template change is a cluster-wide DB outage: make it deliberate.
+if grep -q '^- kusoaddon `' "$RELEASE_IMPACT_FILE"; then
+  if [[ "$ALLOW_POD_RESTARTS" == "1" ]]; then
+    warn "--allow-pod-restarts: shipping an addon pod-template change (every matching addon restarts on upgrade)"
+  else
+    fail "addon pod template(s) changed since ${CRD_GUARD_PREV_TAG} (see the impact report above).
+       Every addon of that kind restarts at once when the operator rolls.
+       Re-run with --allow-pod-restarts (make ship: KUSO_RELEASE_ALLOW_POD_RESTARTS=1) to acknowledge."
+  fi
 fi
 
 # ---- 2. rewrite version files --------------------------------------

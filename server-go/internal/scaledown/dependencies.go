@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -36,19 +38,23 @@ var shortHostRE = regexp.MustCompile(`(?:://([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:
 const maxDependencyDepth = 4
 
 // referencedEnvs returns the ns/name keys of every in-cluster Service the
-// env's literal envVars point at, excluding itself. The env kuso Service
-// is named after its env CR, so the key doubles as an env key. sameNS
-// reports whether a bare name is an env in the env's own namespace; nil
-// ignores short names.
-func referencedEnvs(env *kube.KusoEnvironment, sameNS func(name string) bool) []string {
+// env's literal envVars (plus extra, the values of its managed Secrets)
+// point at, excluding itself. The env kuso Service is named after its env
+// CR, so the key doubles as an env key. sameNS reports whether a bare name
+// is an env in the env's own namespace; nil ignores short names.
+func referencedEnvs(env *kube.KusoEnvironment, extra []string, sameNS func(name string) bool) []string {
 	self := env.Namespace + "/" + env.Name
 	var out []string
 	seen := map[string]bool{}
+	values := make([]string, 0, len(env.Spec.EnvVars)+len(extra))
 	for _, v := range env.Spec.EnvVars {
-		if v.ValueFrom != nil || v.Value == "" {
-			continue
+		if v.ValueFrom == nil && v.Value != "" {
+			values = append(values, v.Value)
 		}
-		for _, m := range serviceHostRE.FindAllStringSubmatch(v.Value, -1) {
+	}
+	values = append(values, extra...)
+	for _, val := range values {
+		for _, m := range serviceHostRE.FindAllStringSubmatch(val, -1) {
 			key := m[2] + "/" + m[1]
 			if key == self || seen[key] {
 				continue
@@ -59,7 +65,7 @@ func referencedEnvs(env *kube.KusoEnvironment, sameNS func(name string) bool) []
 		if sameNS == nil {
 			continue
 		}
-		for _, m := range shortHostRE.FindAllStringSubmatch(v.Value, -1) {
+		for _, m := range shortHostRE.FindAllStringSubmatch(val, -1) {
 			name := m[1] + m[2]
 			key := env.Namespace + "/" + name
 			if name == "" || key == self || seen[key] || !sameNS(name) {
@@ -73,8 +79,9 @@ func referencedEnvs(env *kube.KusoEnvironment, sameNS func(name string) bool) []
 }
 
 // referrersByTarget inverts referencedEnvs over every env: target key →
-// keys of the envs that call it.
-func referrersByTarget(envs []kube.KusoEnvironment) map[string][]string {
+// keys of the envs that call it. extra maps an env key to the values of
+// its managed Secrets (may be nil).
+func referrersByTarget(envs []kube.KusoEnvironment, extra map[string][]string) map[string][]string {
 	names := map[string]bool{}
 	for i := range envs {
 		names[envs[i].Namespace+"/"+envs[i].Name] = true
@@ -84,7 +91,7 @@ func referrersByTarget(envs []kube.KusoEnvironment) map[string][]string {
 		e := &envs[i]
 		from := e.Namespace + "/" + e.Name
 		inNS := func(name string) bool { return names[e.Namespace+"/"+name] }
-		for _, to := range referencedEnvs(e, inNS) {
+		for _, to := range referencedEnvs(e, extra[from], inNS) {
 			out[to] = append(out[to], from)
 		}
 	}
@@ -117,7 +124,10 @@ func WakeDependencies(ctx context.Context, kc *kube.Client, logger *slog.Logger,
 			}
 			// A short name that isn't an env just fails the Get below.
 			anyName := func(string) bool { return true }
-			for _, dep := range referencedEnvs(env, anyName) {
+			// CR values only: the activator can't read Secrets. A target
+			// referenced from the managed Secret is woken by the scaledown
+			// tick instead (wakeReferencedSleepers).
+			for _, dep := range referencedEnvs(env, nil, anyName) {
 				if visited[dep] {
 					continue
 				}
@@ -145,4 +155,77 @@ func WakeDependencies(ctx context.Context, kc *kube.Client, logger *slog.Logger,
 func splitKey(key string) (ns, name string) {
 	ns, name, _ = strings.Cut(key, "/")
 	return ns, name
+}
+
+type cachedSecretVals struct {
+	rv   string
+	vals []string
+}
+
+// secretRefValues returns, per env key, the values of the kuso-managed
+// "-secrets" Secrets the env mounts. `kuso env set` stores plain literals
+// there rather than on the CR, so an in-cluster URL set that way is only
+// visible here. Values are cached by resourceVersion (the informer cache
+// strips Secret data, so a changed Secret costs one live GET). A Secret
+// that can't be read is skipped: the env just loses that edge, as before.
+func (w *Watcher) secretRefValues(ctx context.Context, envs []kube.KusoEnvironment) map[string][]string {
+	if w.Kube == nil || w.Kube.Clientset == nil {
+		return nil
+	}
+	if w.secretVals == nil {
+		w.secretVals = map[string]cachedSecretVals{}
+	}
+	rvByNS := map[string]map[string]string{}
+	rvOf := func(ns, name string) (string, bool) {
+		m, ok := rvByNS[ns]
+		if !ok {
+			if secs, cached := w.Kube.Cache.ListSecrets(ns); cached {
+				m = make(map[string]string, len(secs))
+				for _, sec := range secs {
+					m[sec.Name] = sec.ResourceVersion
+				}
+			}
+			rvByNS[ns] = m
+		}
+		if m == nil {
+			return "", false
+		}
+		rv, ok := m[name]
+		return rv, ok
+	}
+	seen := map[string]bool{}
+	out := map[string][]string{}
+	for i := range envs {
+		e := &envs[i]
+		for _, name := range e.Spec.EnvFromSecrets {
+			if !strings.HasSuffix(name, "-secrets") {
+				continue // addon -conn and shared secrets point at addons, not envs
+			}
+			key := e.Namespace + "/" + name
+			seen[key] = true
+			c, have := w.secretVals[key]
+			rv, known := rvOf(e.Namespace, name)
+			if !have || !known || rv != c.rv {
+				sec, err := w.Kube.Clientset.CoreV1().Secrets(e.Namespace).Get(ctx, name, metav1.GetOptions{})
+				if err != nil {
+					delete(w.secretVals, key)
+					continue
+				}
+				c = cachedSecretVals{rv: sec.ResourceVersion}
+				for _, v := range sec.Data {
+					if len(v) > 0 && len(v) < 4096 {
+						c.vals = append(c.vals, string(v))
+					}
+				}
+				w.secretVals[key] = c
+			}
+			out[e.Namespace+"/"+e.Name] = append(out[e.Namespace+"/"+e.Name], c.vals...)
+		}
+	}
+	for k := range w.secretVals {
+		if !seen[k] {
+			delete(w.secretVals, k)
+		}
+	}
+	return out
 }

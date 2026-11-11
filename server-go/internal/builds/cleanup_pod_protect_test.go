@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -42,11 +43,23 @@ func TestSweepImagesPastWindow_ProtectsPodAndRunImages(t *testing.T) {
 		seedB("alpha-web-t0", "podtag00000", 100),
 		seedB("alpha-web-run", "runtag00000", 200),
 		seedB("alpha-web-gone", "gonetag0000", 300),
+		seedB("alpha-web-rs", "rstag000000", 400),
 		seedB("alpha-web-t5", "newtag11111", 900),
 	)
 	if _, err := s.Kube.Clientset.CoreV1().Pods("kuso").Create(context.Background(), &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old-rs-abc", Namespace: "kuso"},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "reg.local:5000/alpha/web:podtag00000"}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// RUN-2: a slept env has no pods; its last-good image lives only on
+	// the old ReplicaSet behind a wedged rollout.
+	if _, err := s.Kube.Clientset.AppsV1().ReplicaSets("kuso").Create(context.Background(), &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-production-good", Namespace: "kuso"},
+		Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app", Image: "reg.local:5000/alpha/web:rstag000000"}},
+		}}},
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +77,9 @@ func TestSweepImagesPastWindow_ProtectsPodAndRunImages(t *testing.T) {
 	}
 	if got["alpha/web:runtag00000"] {
 		t.Error("sweep untagged the image a KusoRun references")
+	}
+	if got["alpha/web:rstag000000"] {
+		t.Error("sweep untagged the image a retained ReplicaSet (last-good revision) references")
 	}
 	if !got["alpha/web:gonetag0000"] {
 		t.Errorf("unreferenced old tag should still be swept; deleted=%v", del.deleted)

@@ -72,6 +72,7 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
 					ServiceAccountName: "kuso-server",
+					PriorityClassName:  s.platformPriorityClass(ctx),
 					Containers: []corev1.Container{{
 						Name:            "updater",
 						Image:           j.Image,
@@ -101,6 +102,19 @@ func (s *Service) applyJob(ctx context.Context, j *batchv1Job) error {
 	}
 	_, err := s.Kube.Clientset.BatchV1().Jobs(j.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	return err
+}
+
+// platformPriorityClass is the PriorityClass for the updater pod: with
+// BackoffLimit 0, a kubelet eviction under node pressure mid-roll fails
+// the Job with no retry and no revert. Empty when the class is missing
+// or unreadable: the admission plugin rejects a pod naming an unknown
+// class, which would brick self-update on installs that predate it.
+func (s *Service) platformPriorityClass(ctx context.Context) string {
+	const name = "kuso-platform"
+	if _, err := s.Kube.Clientset.SchedulingV1().PriorityClasses().Get(ctx, name, metav1.GetOptions{}); err != nil {
+		return ""
+	}
+	return name
 }
 
 // getenv is the package-local fallback for envOrDefault. We don't

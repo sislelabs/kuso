@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -373,6 +374,16 @@ func SweepImagesPastWindow(
 	}
 	for i := range pods.Items {
 		live.addPod(&pods.Items[i])
+	}
+	// ReplicaSets kept for rollback (revisionHistoryLimit) too: a slept or
+	// stopped env has no pods, and the last image that actually served
+	// sits on an old ReplicaSet behind a wedged newer one.
+	rss, rserr := kc.Clientset.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+	if rserr != nil {
+		return 0, fmt.Errorf("image-sweep list replicasets: %w", rserr)
+	}
+	for i := range rss.Items {
+		live.addPod(&corev1.Pod{Spec: rss.Items[i].Spec.Template.Spec})
 	}
 	for k := range live.tags {
 		protected[k] = true

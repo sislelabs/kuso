@@ -68,9 +68,19 @@ type Activator struct {
 	// slow-but-delivered requests instead of 503s. Override with
 	// KUSO_ACTIVATOR_HOLD_SECONDS for clusters with unusually slow pulls.
 	holdTimeout time.Duration
-	// pollInterval is how often we re-check the Deployment's readiness
-	// while holding a request.
+	// pollInterval is how often an env's readiness poller re-checks while
+	// requests are held on it.
 	pollInterval time.Duration
+
+	// pollMu / polls hold one readiness poller per env (ns/name) that every
+	// held request for it waits on, so N held requests cost one LIST per
+	// interval instead of N.
+	pollMu sync.Mutex
+	polls  map[string]*readyPoll
+	// checkMu / checks single-flight the endpoint LIST per env across the
+	// fast path and the pollers.
+	checkMu sync.Mutex
+	checks  map[string]*readyCheck
 
 	// wakeMu serializes the "is a wake already in flight for this
 	// service" bookkeeping so N simultaneous first-hits trigger exactly
@@ -81,9 +91,9 @@ type Activator struct {
 	// hosts resolves Host → env from a periodically refreshed env
 	// snapshot that keeps serving through apiserver errors (hostindex.go).
 	hosts *hostResolver
-	// missLog / lookupErrLog rate-limit the per-request WARN lines for
-	// unclaimed hosts and failed lookups.
-	missLog, lookupErrLog *logLimiter
+	// missLog / lookupErrLog / readyErrLog rate-limit the per-request
+	// WARN lines for unclaimed hosts, failed lookups and readiness errors.
+	missLog, lookupErrLog, readyErrLog *logLimiter
 
 	// proxyTransport is the cold-start-tolerant transport used for the
 	// reverse proxy (short dial timeout + retry on dial races).
@@ -108,6 +118,12 @@ type Activator struct {
 	// scaledown doesn't sleep it mid-connection. Drain reads the total.
 	inflightMu sync.Mutex
 	inflight   map[string]int
+	// inflightTotal is the sum of inflight; maxProxy / maxProxyPerEnv cap
+	// it so an awake app that accepts connections and never answers can't
+	// pile goroutines and buffers into the shared proxy until it OOMs.
+	inflightTotal  int
+	maxProxy       int
+	maxProxyPerEnv int
 
 	// held counts requests waiting on a wake; maxHeld caps it.
 	held    atomic.Int64
@@ -155,9 +171,14 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		holdTimeout:    hold,
 		pollInterval:   250 * time.Millisecond,
 		waking:         map[string]*wakeState{},
+		polls:          map[string]*readyPoll{},
+		checks:         map[string]*readyCheck{},
 		missLog:        &logLimiter{every: 10 * time.Second},
 		lookupErrLog:   &logLimiter{every: 10 * time.Second},
-		proxyTransport: newProxyTransport(hold),
+		readyErrLog:    &logLimiter{every: 10 * time.Second},
+		proxyTransport: newProxyTransport(hold, resolveResponseHeaderTimeout()),
+		maxProxy:       envInt("KUSO_ACTIVATOR_MAX_PROXY", 2500),
+		maxProxyPerEnv: envInt("KUSO_ACTIVATOR_MAX_PROXY_PER_ENV", 500),
 		lastStamp:      map[string]time.Time{},
 		readyAt:        map[string]time.Time{},
 		inflight:       map[string]int{},
@@ -175,6 +196,22 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		now:  a.now,
 	}
 	return a
+}
+
+// envInt returns the positive integer in env var name, else def.
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v >= 1 {
+		return v
+	}
+	return def
+}
+
+// resolveResponseHeaderTimeout returns how long the proxy waits for an
+// awake app's response headers: KUSO_ACTIVATOR_RESPONSE_HEADER_SECONDS,
+// default 300. Long enough for slow reports and long-poll endpoints; it
+// only exists so a hung app's requests can't be held open forever.
+func resolveResponseHeaderTimeout() time.Duration {
+	return time.Duration(envInt("KUSO_ACTIVATOR_RESPONSE_HEADER_SECONDS", 300)) * time.Second
 }
 
 // resolveMaxHeldPerEnv returns KUSO_ACTIVATOR_MAX_HELD_PER_ENV (min 1),
@@ -325,6 +362,12 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	proxy.Transport = a.proxyTransport
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		a.logger.Warn("activator: proxy error", "ns", ns, "env", env, "err", perr)
+		if isHeaderTimeout(perr) {
+			// The app is up and accepted the request; it is just not
+			// answering. Not a wake problem, so keep the ready cache.
+			http.Error(rw, "service did not respond in time", http.StatusGatewayTimeout)
+			return
+		}
 		a.forgetReady(ns, env)
 		rw.Header().Set("Retry-After", "2")
 		http.Error(rw, "service is starting, please retry", http.StatusServiceUnavailable)
@@ -337,7 +380,13 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	// place to stamp a last-activity marker. Throttled to at most once per
 	// activityStampInterval per env to avoid an API write per request.
 	a.recordActivity(ctx, ns, env)
-	done := a.beginProxy(ns, env)
+	done, ok := a.beginProxy(ns, env)
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Cache-Control", "no-store")
+		http.Error(w, "service is overloaded, please retry", http.StatusServiceUnavailable)
+		return
+	}
 	defer done()
 	// The ready cache can say "up" while scaledown is zeroing the env.
 	// The first refused dial re-triggers the wake instead of retrying
@@ -351,11 +400,17 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // beginProxy registers an open proxied request for ns/env and returns
-// the func that unregisters it.
-func (a *Activator) beginProxy(ns, env string) func() {
+// the func that unregisters it. ok=false (nothing registered) when the
+// env or the whole process is at its open-request cap.
+func (a *Activator) beginProxy(ns, env string) (done func(), ok bool) {
 	key := ns + "/" + env
 	a.inflightMu.Lock()
+	if (a.maxProxyPerEnv > 0 && a.inflight[key] >= a.maxProxyPerEnv) || (a.maxProxy > 0 && a.inflightTotal >= a.maxProxy) {
+		a.inflightMu.Unlock()
+		return nil, false
+	}
 	a.inflight[key]++
+	a.inflightTotal++
 	a.inflightMu.Unlock()
 	return func() {
 		a.inflightMu.Lock()
@@ -364,8 +419,15 @@ func (a *Activator) beginProxy(ns, env string) func() {
 		} else {
 			a.inflight[key]--
 		}
+		a.inflightTotal--
 		a.inflightMu.Unlock()
-	}
+	}, true
+}
+
+// isHeaderTimeout reports whether a proxy error is the transport's
+// ResponseHeaderTimeout firing.
+func isHeaderTimeout(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "timeout awaiting response headers")
 }
 
 // InFlight returns the number of proxied requests still open, including
@@ -374,11 +436,7 @@ func (a *Activator) beginProxy(ns, env string) func() {
 func (a *Activator) InFlight() int {
 	a.inflightMu.Lock()
 	defer a.inflightMu.Unlock()
-	n := 0
-	for _, c := range a.inflight {
-		n += c
-	}
-	return n
+	return a.inflightTotal
 }
 
 // openEnvs returns the ns/name keys with at least one open proxied request.
@@ -395,10 +453,11 @@ func (a *Activator) openEnvs() []string {
 // KeepActive re-stamps last-activity for every env with an open proxied
 // connection until ctx ends. Without it a WebSocket/SSE stream counts as
 // one request at its start and the env is slept under it once the idle
-// window passes. The tick is half the stamp interval so recordActivity's
-// throttle, not tick alignment, sets the write rate.
+// window passes. The tick is a quarter of the stamp interval so a stream's
+// stamp is never much older than one interval (scaledown.stampWindow
+// relies on that).
 func (a *Activator) KeepActive(ctx context.Context) {
-	t := time.NewTicker(activityStampInterval / 2)
+	t := time.NewTicker(activityStampInterval / 4)
 	defer t.Stop()
 	for {
 		select {
@@ -419,12 +478,15 @@ func (a *Activator) stampOpen(ctx context.Context) {
 }
 
 // kickWake starts a coalesced wake for ns/name without waiting on it.
+// It skips the readiness fast path on purpose: the caller just saw a
+// refused dial, and fastReady answers "ready" optimistically when it
+// can't LIST, which would make the re-wake a no-op.
 func (a *Activator) kickWake(ns, name string) {
+	st, _ := a.startWake(ns, name)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.holdTimeout)
-		defer cancel()
-		if err := a.wakeAndWait(ctx, ns, name); err != nil {
-			a.logger.Warn("activator: re-wake after refused dial", "ns", ns, "env", name, "err", err)
+		<-st.done
+		if st.err != nil {
+			a.logger.Warn("activator: re-wake after refused dial", "ns", ns, "env", name, "err", st.err)
 		}
 	}()
 }
@@ -441,8 +503,10 @@ func dialRetryHook(ctx context.Context) func() {
 }
 
 // activityStampInterval throttles how often the activator writes the
-// last-activity annotation for a given env.
-const activityStampInterval = 30 * time.Second
+// last-activity annotation for a given env. Every write to the env CR
+// makes the helm-operator reconcile the release, so it is minutes, not
+// seconds; scaledown widens its idle window by the same amount.
+const activityStampInterval = scaledown.ActivityStampInterval
 
 // activityWriteTimeout bounds one detached last-activity write. It is
 // shorter than activityStampInterval so at most one write per env is in
@@ -454,6 +518,12 @@ const activityWriteTimeout = 10 * time.Second
 // (detached from the request ctx, bounded by activityWriteTimeout).
 // Best-effort: a missed stamp just means scaledown falls back to its
 // Prometheus check.
+//
+// The replicas don't talk to each other, so before writing each checks
+// the stamp already on the CR (from the host snapshot, then again on the
+// fresh read inside the update) and skips when another replica stamped
+// within the interval. One write per env per interval, not one per
+// replica.
 func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	key := ns + "/" + env
 	now := a.now()
@@ -462,6 +532,14 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	if ok && now.Sub(last) < activityStampInterval {
 		a.activityMu.Unlock()
 		return
+	}
+	if a.hosts != nil {
+		if ts, ok := a.hosts.lastActivity(key); ok && now.Sub(ts) < activityStampInterval {
+			// Re-check once that stamp ages out, not a full interval from now.
+			a.lastStamp[key] = ts
+			a.activityMu.Unlock()
+			return
+		}
 	}
 	a.lastStamp[key] = now
 	a.activityMu.Unlock()
@@ -472,17 +550,24 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), activityWriteTimeout)
 	go func() {
 		defer cancel()
-		if _, err := a.kc.UpdateKusoEnvironmentWithRetry(wctx, ns, env, func(e *kube.KusoEnvironment) error {
+		_, err := a.kc.UpdateKusoEnvironmentWithRetry(wctx, ns, env, func(e *kube.KusoEnvironment) error {
+			if ts, err := time.Parse(time.RFC3339, e.Annotations[scaledown.LastActivityAnnotation]); err == nil && now.Sub(ts) < activityStampInterval {
+				return errStampFresh
+			}
 			if e.Annotations == nil {
 				e.Annotations = map[string]string{}
 			}
 			e.Annotations[scaledown.LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
 			return nil
-		}); err != nil {
+		})
+		if err != nil && !errors.Is(err, errStampFresh) {
 			a.logger.Warn("activator: record activity", "ns", ns, "env", env, "err", err)
 		}
 	}()
 }
+
+// errStampFresh aborts an activity write another replica already made.
+var errStampFresh = errors.New("activator: activity stamp already fresh")
 
 // newProxyTransport builds the transport the activator proxies through.
 // Two cold-start hazards motivate the design:
@@ -496,7 +581,7 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 // instead of hanging the whole hold budget, and retryTransport retries
 // both error classes for up to retryBudget (the hold budget) or until the
 // client goes away.
-func newProxyTransport(retryBudget time.Duration) http.RoundTripper {
+func newProxyTransport(retryBudget, headerTimeout time.Duration) http.RoundTripper {
 	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
 	base := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -505,6 +590,7 @@ func newProxyTransport(retryBudget time.Duration) http.RoundTripper {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: headerTimeout,
 		// Don't reuse a connection for a service that may have just been
 		// scaled — fresh dial each time during the cold-start window.
 		DisableKeepAlives: false,
@@ -744,47 +830,152 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	return nil
 }
 
-// waitReady polls until the target Service has at least one READY
+// readyPoll is the one readiness poller for an env. done closes with
+// err=nil once the Service has a ready endpoint, or with a startFailure.
+type readyPoll struct {
+	done    chan struct{}
+	err     error
+	waiters int
+	cancel  context.CancelFunc
+}
+
+// readyCheck is one in-flight endpoint LIST shared by every caller asking
+// about the same env.
+type readyCheck struct {
+	done  chan struct{}
+	ready bool
+	err   error
+}
+
+const (
+	// readyCheckTimeout bounds one endpoint LIST. On the fast path a
+	// timeout proxies optimistically; in a poller it is just a missed tick.
+	readyCheckTimeout = 3 * time.Second
+	// slowPollAfter / slowPollInterval: past the usual 1-5s cold start a
+	// wake is a slow pull or an unschedulable pod, and polling at 4/s for
+	// the rest of the hold only loads the apiserver.
+	slowPollAfter    = 5 * time.Second
+	slowPollInterval = time.Second
+)
+
+// waitReady blocks until the target Service has at least one READY
 // endpoint address. We check Endpoints, NOT Deployment.ReadyReplicas:
 // a fresh scale-up can report a ready replica a beat before kube-proxy
 // programs the Service endpoint, and proxying in that window yields
 // "connection refused". The Service endpoint being ready is the true
 // "the proxied request will land on a live pod" signal.
+//
+// Every held request for the env waits on the same poller; the poller
+// stops when the last waiter leaves.
 func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
-	ticker := time.NewTicker(a.pollInterval)
-	defer ticker.Stop()
+	key := ns + "/" + name
+	a.pollMu.Lock()
+	p := a.polls[key]
+	if p == nil {
+		pctx, cancel := context.WithCancel(context.Background())
+		p = &readyPoll{done: make(chan struct{}), cancel: cancel}
+		a.polls[key] = p
+		go a.runPoll(pctx, key, ns, name, p)
+	}
+	p.waiters++
+	a.pollMu.Unlock()
+	defer a.leavePoll(key, p)
+
+	select {
+	case <-p.done:
+		return p.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (a *Activator) leavePoll(key string, p *readyPoll) {
+	a.pollMu.Lock()
+	defer a.pollMu.Unlock()
+	p.waiters--
+	if p.waiters > 0 {
+		return
+	}
+	if a.polls[key] == p {
+		delete(a.polls, key)
+	}
+	p.cancel()
+}
+
+func (a *Activator) runPoll(ctx context.Context, key, ns, name string, p *readyPoll) {
+	finish := func(err error) {
+		p.err = err
+		a.pollMu.Lock()
+		if a.polls[key] == p {
+			delete(a.polls, key)
+		}
+		a.pollMu.Unlock()
+		close(p.done)
+		p.cancel()
+	}
+	started := a.now()
 	for {
-		if ready, _ := a.endpointReady(ctx, ns, name); ready {
+		if ready, _ := a.checkReady(ctx, ns, name); ready {
 			a.markReady(ns, name)
-			return nil
+			finish(nil)
+			return
 		}
 		if sf := a.startFailed(ctx, ns, name); sf != nil {
-			return sf
+			finish(sf)
+			return
+		}
+		wait := a.pollInterval
+		if a.now().Sub(started) >= slowPollAfter && wait < slowPollInterval {
+			wait = slowPollInterval
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+			return // every waiter left
+		case <-time.After(wait):
 		}
 	}
 }
 
-const (
-	// readyTTL is how long a ready observation answers the fast path
-	// without a LIST. Short: sleep only ever follows a long idle period,
-	// and a proxy dial failure drops the entry (forgetReady).
-	readyTTL = 2 * time.Second
-	// readyStaleOnError is how long a ready observation still counts when
-	// the LIST itself fails. An apiserver outage must not read as "asleep"
-	// for an env that was serving: proxy optimistically, and if it really
-	// is down the refused-dial path re-wakes it. Long, because nothing can
-	// sleep an env while the apiserver is unreachable either.
-	readyStaleOnError = 15 * time.Minute
-)
+// checkReady is endpointReady single-flighted per env and bounded by
+// readyCheckTimeout, detached from any one caller so a client hanging up
+// doesn't fail the LIST for the others sharing it.
+func (a *Activator) checkReady(ctx context.Context, ns, name string) (bool, error) {
+	key := ns + "/" + name
+	a.checkMu.Lock()
+	c := a.checks[key]
+	if c == nil {
+		c = &readyCheck{done: make(chan struct{})}
+		a.checks[key] = c
+		go func() {
+			lctx, cancel := context.WithTimeout(context.Background(), readyCheckTimeout)
+			c.ready, c.err = a.endpointReady(lctx, ns, name)
+			cancel()
+			a.checkMu.Lock()
+			delete(a.checks, key)
+			a.checkMu.Unlock()
+			close(c.done)
+		}()
+	}
+	a.checkMu.Unlock()
+	select {
+	case <-c.done:
+		return c.ready, c.err
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+// readyTTL is how long a ready observation answers the fast path without
+// a LIST. Short: sleep only ever follows a long idle period, and a proxy
+// dial failure drops the entry (forgetReady).
+const readyTTL = 2 * time.Second
 
 // fastReady is the per-request readiness check. It serves recent ready
 // observations from memory and only LISTs past readyTTL. A LIST error is
-// "unknown", not "asleep": a recently-ready env is still proxied.
+// "unknown", not "asleep", and proxies optimistically however old (or
+// absent) the last observation is: during an apiserver outage pods and
+// traefik keep serving, and a target that really is down answers the
+// proxy with a refused dial, which re-wakes it (kickWake).
 func (a *Activator) fastReady(ctx context.Context, ns, name string) bool {
 	key := ns + "/" + name
 	now := a.now()
@@ -794,10 +985,15 @@ func (a *Activator) fastReady(ctx context.Context, ns, name string) bool {
 	if seen && now.Sub(last) < readyTTL {
 		return true
 	}
-	ready, err := a.endpointReady(ctx, ns, name)
+	ready, err := a.checkReady(ctx, ns, name)
 	if err != nil {
-		a.logger.Warn("activator: endpoint readiness unknown", "ns", ns, "env", name, "err", err)
-		return seen && now.Sub(last) < readyStaleOnError
+		if ctx.Err() != nil {
+			return false
+		}
+		if ok, muted := a.readyErrLog.allow(now); ok {
+			a.logger.Warn("activator: endpoint readiness unknown, proxying optimistically", "ns", ns, "env", name, "err", err, "suppressed", muted)
+		}
+		return true
 	}
 	if ready {
 		a.markReady(ns, name)

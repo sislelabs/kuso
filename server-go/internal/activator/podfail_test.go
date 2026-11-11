@@ -48,8 +48,29 @@ func TestNewestPodStartFailure(t *testing.T) {
 		{"crash looping", []corev1.Pod{*waitingPod("p", t0, "CrashLoopBackOff", 3)}, "CrashLoopBackOff"},
 		{"missing secret", []corev1.Pod{*waitingPod("p", t0, "CreateContainerConfigError", 0)}, "CreateContainerConfigError"},
 	}
+	unsched := func(since time.Time) corev1.Pod {
+		p := *waitingPod("p", t0, "", 0)
+		p.Status.Conditions = []corev1.PodCondition{{
+			Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+			Reason: corev1.PodReasonUnschedulable, LastTransitionTime: metav1.NewTime(since),
+		}}
+		return p
+	}
+	now := t0.Add(time.Hour)
+	cases = append(cases,
+		struct {
+			name string
+			pods []corev1.Pod
+			want string
+		}{"unschedulable past the grace", []corev1.Pod{unsched(now.Add(-time.Minute))}, "Unschedulable"},
+		struct {
+			name string
+			pods []corev1.Pod
+			want string
+		}{"just went unschedulable", []corev1.Pod{unsched(now.Add(-2 * time.Second))}, ""},
+	)
 	for _, c := range cases {
-		if got := newestPodStartFailure(c.pods); got != c.want {
+		if got := newestPodStartFailure(c.pods, now); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}

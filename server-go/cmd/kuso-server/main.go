@@ -2563,6 +2563,9 @@ func runActivator(addr string, logger *slog.Logger) {
 		Addr:              addr,
 		Handler:           act.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: it would cut WebSocket/SSE streams. Idle
+		// keep-alive connections from traefik are what this bounds.
+		IdleTimeout: 120 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
