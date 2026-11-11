@@ -493,6 +493,9 @@ var (
 	// drainGoneWait bounds the wait for evicted pods to terminate before
 	// the Node object is deleted.
 	drainGoneWait = 60 * time.Second
+	// drainPollEvery / evictRetryEvery pace the two loops above.
+	drainPollEvery  = time.Second
+	evictRetryEvery = 2 * time.Second
 )
 
 // drainablePods lists the pods on node that a drain must move: not
@@ -567,7 +570,7 @@ func drainNode(ctx context.Context, k *kube.Client, name string, force bool) err
 			return fmt.Errorf("drain: %d pod(s) still terminating on %s after %s (e.g. %s/%s); retry once they're gone",
 				len(left), name, drainGoneWait, left[0].Namespace, left[0].Name)
 		}
-		time.Sleep(time.Second)
+		time.Sleep(drainPollEvery)
 	}
 }
 
@@ -598,7 +601,7 @@ func evictPod(ctx context.Context, k *kube.Client, p *corev1.Pod) error {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, ctx.Err())
-		case <-time.After(2 * time.Second):
+		case <-time.After(evictRetryEvery):
 		}
 	}
 }

@@ -4,16 +4,23 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
+
+func fastNSBindingRetry(t *testing.T) {
+	prev := managedNSBindingRetryStep
+	managedNSBindingRetryStep = time.Millisecond
+	t.Cleanup(func() { managedNSBindingRetryStep = prev })
+}
 
 // TestEnsureManagedNSBinding_RetriesTransient is the HIGH-7 robustness
 // guard the live smoke test motivated: right after a namespace is
@@ -22,6 +29,7 @@ import (
 // so a single blip left the namespace permanently without kuso-server
 // access. It must now retry and ultimately succeed.
 func TestEnsureManagedNSBinding_RetriesTransient(t *testing.T) {
+	fastNSBindingRetry(t)
 	cs := k8sfake.NewSimpleClientset()
 	var calls int
 	cs.PrependReactor("create", "rolebindings", func(a ktesting.Action) (bool, runtime.Object, error) {
@@ -118,6 +126,7 @@ func TestEnsureNamespace_HealsRestrictedNamespace(t *testing.T) {
 // TestEnsureManagedNSBinding_GivesUp: a persistent error surfaces after
 // the retry budget rather than looping forever.
 func TestEnsureManagedNSBinding_GivesUp(t *testing.T) {
+	fastNSBindingRetry(t)
 	cs := k8sfake.NewSimpleClientset()
 	cs.PrependReactor("create", "rolebindings", func(a ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("permanent boom")

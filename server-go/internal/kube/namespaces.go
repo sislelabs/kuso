@@ -147,6 +147,10 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	return nil
 }
 
+// managedNSBindingRetryStep is the linear backoff step between binding
+// create attempts; a var so tests can shrink it.
+var managedNSBindingRetryStep = 300 * time.Millisecond
+
 // ensureManagedNSBinding creates the RoleBinding that grants the
 // kuso-server ServiceAccount the verbs in the kuso-server-managed-ns
 // ClusterRole inside the named namespace. Idempotent; safe to call
@@ -182,7 +186,7 @@ func (c *Client) ensureManagedNSBinding(ctx context.Context, ns string) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			case <-time.After(time.Duration(attempt) * managedNSBindingRetryStep):
 			}
 		}
 		_, err := c.Clientset.RbacV1().RoleBindings(ns).Create(ctx, rb, metav1.CreateOptions{})
