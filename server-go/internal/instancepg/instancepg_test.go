@@ -292,6 +292,9 @@ func TestInstanceAddonSpec_EnablesAuthQueryPooler(t *testing.T) {
 	if pooler["instancePooler"] != true {
 		t.Errorf("pooler.instancePooler = %v, want true (lets the chart render the pooler for the cluster PG despite no useInstanceAddon on this CR)", pooler["instancePooler"])
 	}
+	if pooler["maxUserConnections"] != int64(instancePoolerMaxUserConns) {
+		t.Errorf("pooler.maxUserConnections = %v, want %d (one tenant must not take every backend)", pooler["maxUserConnections"], instancePoolerMaxUserConns)
+	}
 	// Existing fields preserved.
 	if spec["kind"] != "postgres" || spec["version"] != "16" {
 		t.Errorf("base spec fields changed: %#v", spec)

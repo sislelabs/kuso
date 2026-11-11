@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -17,10 +18,15 @@ import (
 // CONNECTION LIMIT on the shared server. Applied on the next resync.
 const AnnotationInstanceConnLimit = "kuso.sislelabs.com/pg-connection-limit"
 
-// instanceConnLimitFloor sits above what one tenant legitimately holds: a
-// pooled tenant gets default_pool_size 25 + reserve 5 backends per (user, db)
-// pair, plus a few for DIRECT_URL (migrations, workers).
-const instanceConnLimitFloor = 50
+// instanceConnLimitFloor sits above what one pooled tenant legitimately
+// holds: default_pool_size 25 + reserve 5 backends per (user, db) pair on a
+// pooler with no per-user cap, plus a few for DIRECT_URL (migrations,
+// workers). Lower, and PgBouncer's own backend logins fail under load.
+const instanceConnLimitFloor = 35
+
+// instanceConnHeadroom is kept out of the tenant split for kuso's own admin
+// sessions (provisioning, harden, backups) beyond the superuser-reserved slots.
+const instanceConnHeadroom = 5
 
 func instanceConnLimitOverride(a *kube.KusoAddon) int {
 	if a == nil {
@@ -33,12 +39,23 @@ func instanceConnLimitOverride(a *kube.KusoAddon) int {
 	return n
 }
 
-// defaultInstanceConnLimit is half the server's max_connections, never below
-// the floor, and never below twice what the role holds right now: a limit is
-// applied to live tenants, and it must not stop a running app from opening
-// the connections it already depends on.
-func defaultInstanceConnLimit(maxConns, inUse int) int {
-	n := maxConns / 2
+// defaultInstanceConnLimit splits the server's usable connections evenly
+// across the kuso tenants on it, clamped to [floor, max(floor, maxConns/2)],
+// and never below twice what the role holds right now: a limit applied to a
+// live tenant must not stop a running app from opening the connections it
+// already depends on.
+func defaultInstanceConnLimit(maxConns, reserved, tenants, inUse int) int {
+	if tenants < 1 {
+		tenants = 1
+	}
+	ceiling := maxConns / 2
+	if ceiling < instanceConnLimitFloor {
+		ceiling = instanceConnLimitFloor
+	}
+	n := (maxConns - reserved - instanceConnHeadroom) / tenants
+	if n > ceiling {
+		n = ceiling
+	}
 	if n < instanceConnLimitFloor {
 		n = instanceConnLimitFloor
 	}
@@ -50,15 +67,20 @@ func defaultInstanceConnLimit(maxConns, inUse int) int {
 
 // applyInstanceRoleConnLimit sets the tenant role's CONNECTION LIMIT. With no
 // override it only fills in a role that has none (-1), so a limit an admin
-// tuned by hand survives resyncs. ALTER ROLE never terminates open sessions;
-// it only refuses new ones beyond the limit. Superusers are exempt.
+// tuned by hand (or an earlier default) survives resyncs. ALTER ROLE never
+// terminates open sessions; it only refuses new ones beyond the limit.
+// Superusers are exempt.
 func applyInstanceRoleConnLimit(ctx context.Context, db *sql.DB, role string, override int) error {
-	var cur, inUse, maxConns int
+	var cur, inUse, maxConns, reserved, tenants int
 	err := db.QueryRowContext(ctx, `
 		SELECT r.rolconnlimit,
 		       (SELECT count(*) FROM pg_stat_activity a WHERE a.usename = r.rolname),
-		       current_setting('max_connections')::int
-		  FROM pg_roles r WHERE r.rolname = $1`, role).Scan(&cur, &inUse, &maxConns)
+		       current_setting('max_connections')::int,
+		       current_setting('superuser_reserved_connections')::int
+		         + COALESCE(NULLIF(current_setting('reserved_connections', true), ''), '0')::int,
+		       (SELECT count(*) FROM pg_roles t
+		         WHERE t.rolcanlogin AND shobj_description(t.oid, 'pg_authid') LIKE $2)
+		  FROM pg_roles r WHERE r.rolname = $1`, role, instanceDBOwnerPrefix+"%").Scan(&cur, &inUse, &maxConns, &reserved, &tenants)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -70,7 +92,7 @@ func applyInstanceRoleConnLimit(ctx context.Context, db *sql.DB, role string, ov
 		if cur >= 0 {
 			return nil
 		}
-		want = defaultInstanceConnLimit(maxConns, inUse)
+		want = defaultInstanceConnLimit(maxConns, reserved, tenants, inUse)
 	}
 	if cur == want {
 		return nil
@@ -79,6 +101,26 @@ func applyInstanceRoleConnLimit(ctx context.Context, db *sql.DB, role string, ov
 		return fmt.Errorf("set connection limit of %s: %w", role, err)
 	}
 	return nil
+}
+
+// withConnectTimeout bounds the connect phase of a URL-form admin DSN so an
+// unreachable or half-open server can't pin a handler goroutine for the OS
+// TCP timeout. Applied at open time only: per-project DSNs in conn Secrets
+// are derived from the stored admin DSN, and changing their content restarts
+// every consumer. A DSN that already sets one, or is in keyword form, is
+// returned unchanged.
+func withConnectTimeout(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return dsn
+	}
+	q := u.Query()
+	if q.Get("connect_timeout") != "" {
+		return dsn
+	}
+	q.Set("connect_timeout", "5")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // publicCanConnect is true while PUBLIC still holds CONNECT on the database
@@ -176,7 +218,7 @@ type InstanceHardenResult struct {
 // cannot alter does not stop the rest.
 func HardenInstanceServer(ctx context.Context, adminDSN string, lockShared bool) (InstanceHardenResult, error) {
 	var res InstanceHardenResult
-	db, err := sql.Open("postgres", adminDSN)
+	db, err := sql.Open("postgres", withConnectTimeout(adminDSN))
 	if err != nil {
 		return res, fmt.Errorf("open admin: %w", err)
 	}
@@ -275,7 +317,7 @@ func HardenInstanceServer(ctx context.Context, adminDSN string, lockShared bool)
 // sessions are left alone. A re-add re-asserts LOGIN and the password.
 func (s *Service) disableInstanceRoleLogin(ctx context.Context, adminDSN, project, addonShort string) error {
 	role := pgIdentifier(project, addonShort)
-	db, err := sql.Open("postgres", adminDSN)
+	db, err := sql.Open("postgres", withConnectTimeout(adminDSN))
 	if err != nil {
 		return fmt.Errorf("open admin: %w", err)
 	}

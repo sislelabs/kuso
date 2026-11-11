@@ -780,9 +780,19 @@ func instanceAddonSpec(req ProvisionManagedRequest) map[string]any {
 			"enabled":        true,
 			"authMode":       "query",
 			"instancePooler": true,
+			// Without it one tenant's pools may take every backend. Set on
+			// create only: changing pgbouncer.ini rolls the pooler, so
+			// existing instance PGs keep theirs until an admin opts in.
+			"maxUserConnections": int64(instancePoolerMaxUserConns),
 		},
 	}
 }
+
+// instancePoolerMaxUserConns caps one tenant role's pooled backends across
+// all its pools. Below the tenant role's CONNECTION LIMIT floor (35), so the
+// pooler queues instead of hitting "too many connections for role", and
+// DIRECT_URL sessions keep room.
+const instancePoolerMaxUserConns = 25
 
 func addonCRName() string { return instanceProject + "-" + instancePGAddonName }
 
