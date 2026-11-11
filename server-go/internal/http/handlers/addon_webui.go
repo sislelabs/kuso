@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -191,7 +192,7 @@ func confineConsoleResponse(res *http.Response, prefix string) {
 		res.Header.Del("Set-Cookie")
 		for _, line := range raw {
 			c, err := http.ParseSetCookie(line)
-			if err != nil || strings.HasPrefix(c.Name, "kuso.") {
+			if err != nil || isKusoCookie(c.Name) {
 				continue
 			}
 			c.Domain = ""
@@ -251,6 +252,12 @@ func addonWebUIMinRole(method string) db.ProjectRole {
 	return db.ProjectRoleEditor
 }
 
+// isKusoCookie reports whether a cookie name is kuso's own: the session
+// under either name, or any other kuso.* cookie.
+func isKusoCookie(name string) bool {
+	return strings.HasPrefix(name, "kuso.") || strings.EqualFold(name, auth.SessionCookieName)
+}
+
 // stripKusoCredentials removes the caller's kuso session from a request
 // headed to an addon pod, so a compromised addon image can't replay it
 // against /api. Drops Bearer Authorization (the kuso JWT; non-Bearer
@@ -271,7 +278,7 @@ func stripKusoCredentials(h http.Header) {
 					continue
 				}
 				name, _, _ := strings.Cut(part, "=")
-				if strings.HasPrefix(strings.TrimSpace(name), "kuso.") {
+				if isKusoCookie(strings.TrimSpace(name)) {
 					continue
 				}
 				kept = append(kept, part)

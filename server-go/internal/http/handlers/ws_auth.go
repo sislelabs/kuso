@@ -39,12 +39,12 @@ func authenticateWS(w http.ResponseWriter, r *http.Request, issuer *auth.Issuer)
 		}
 	}
 	if tok == "" {
-		if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil && c.Value != "" {
+		if c, _ := auth.SessionCookieToken(r); c != "" {
 			if r.Header.Get("Origin") != "" {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: browsers open WebSockets with a ticket from POST /api/ws/ticket")
 				return nil, nil, false
 			}
-			tok = c.Value
+			tok = c
 		}
 	}
 	if tok == "" {

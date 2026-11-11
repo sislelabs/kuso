@@ -133,7 +133,7 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
         : opts.body instanceof FormData
           ? opts.body
           : JSON.stringify(opts.body),
-    // Cookie-only session: every API call rides the kuso.JWT_TOKEN
+    // Cookie-only session: every API call rides the session cookie
     // cookie via credentials:include. No Authorization header.
     credentials: "include",
   });

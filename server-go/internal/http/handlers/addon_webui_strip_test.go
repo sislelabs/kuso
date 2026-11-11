@@ -21,7 +21,7 @@ func TestAddonWebUIProxy_StripsKusoCredentials(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig")
-	req.Header.Set("Cookie", "kuso.JWT_TOKEN=eyJ.a.b; m=rabbit-session; other=1")
+	req.Header.Set("Cookie", "kuso.JWT_TOKEN=eyJ.a.b; m=rabbit-session; __Host-kuso_jwt=eyJ.c.d; other=1")
 	req.Header.Set("Sec-WebSocket-Protocol", "kuso.bearer, eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig, v12.stomp")
 	newAddonWebUIProxy(target, "/api/projects/p/addons/mail/webui").ServeHTTP(httptest.NewRecorder(), req)
 

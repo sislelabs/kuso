@@ -88,7 +88,7 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			tok, ok := bearerToken(r)
+			tok, legacyCookie, ok := bearerToken(r)
 			if !ok {
 				httperr.Write(w, http.StatusUnauthorized, "unauthorized: missing bearer token")
 				return
@@ -101,6 +101,15 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				}
 				httperr.Write(w, http.StatusUnauthorized, msg)
 				return
+			}
+			if legacyCookie {
+				if !LegacySessionAllowed(r, claims) {
+					httperr.Write(w, http.StatusUnauthorized, "unauthorized: session cookie from an old name; log in again")
+					return
+				}
+				if RequestIsHTTPS(r) {
+					SetSessionCookie(w, r, tok, sessionMaxAge(claims))
+				}
 			}
 			// A WebSocket ticket opens one socket; it is not a session.
 			if _, isTicket := claims.WSTicketPath(); isTicket {
@@ -209,20 +218,21 @@ func WithClaimsForTest(ctx context.Context, c *Claims) context.Context {
 }
 
 // bearerToken pulls a token out of "Authorization: Bearer <token>"
-// or, failing that, the kuso.JWT_TOKEN HttpOnly cookie. Both forms
+// or, failing that, the session cookie (SessionCookieToken). Both forms
 // must hit the same verify path so the SPA (cookie) and the CLI
-// (Bearer header) share state.
-func bearerToken(r *http.Request) (string, bool) {
+// (Bearer header) share state. legacy reports a token read from the old
+// cookie name.
+func bearerToken(r *http.Request) (tok string, legacy, ok bool) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		const prefix = "Bearer "
 		if strings.HasPrefix(h, prefix) {
 			if t := strings.TrimSpace(h[len(prefix):]); t != "" {
-				return t, true
+				return t, false, true
 			}
 		}
 	}
-	if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil && c.Value != "" {
-		return c.Value, true
+	if t, legacy := SessionCookieToken(r); t != "" {
+		return t, legacy, true
 	}
-	return "", false
+	return "", false, false
 }
