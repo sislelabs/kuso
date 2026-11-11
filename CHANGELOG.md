@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.43.1] — 2026-11-11
+
+### Other
+- Sync the embedded install-cli.sh with hack/install-cli.sh ([3deef2f](https://github.com/sislelabs/kuso/commit/3deef2fb5bebb219cb075dc3c31b6c5824fe0460))
+- Measure local-path platform volumes against the node disk ([411912a](https://github.com/sislelabs/kuso/commit/411912af7439b0e447a27e545594d551009f544d))
+
 ## [0.43.0] — 2026-11-11
 
 ### Other
@@ -1140,18 +1146,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Reclaim PVCs, conn and TLS secrets on env-group delete ([f45889e](https://github.com/sislelabs/kuso/commit/f45889e59d2cd5af746ef3b9001ceb34150f327b))
-
-## [0.26.8] — 2026-09-28
-
-### Other
-- Redesign notification cards and fix delivery bugs ([7f511d5](https://github.com/sislelabs/kuso/commit/7f511d512b1606b82530fe7f1376ec767c3661c2))
-
-### 🐛 Bug Fixes
-- Fix(builds): backfill the hold stamp on upgrade, correct the third OOM surface ([3789c9a](https://github.com/sislelabs/kuso/commit/3789c9aa0199fb95977297315530474892ece26a))
-- Fix(builds): bound the promotion hold, cap BuildKit parallelism, correct the OOM advice ([f9337f6](https://github.com/sislelabs/kuso/commit/f9337f6574959d963bc7334a56e60477b7d97192))
-
-### 👷 CI
-- Ci: remove the tag-triggered release workflow ([1273f56](https://github.com/sislelabs/kuso/commit/1273f56317d717853914bb4ba28be11ceb9a929d))
 
 
 ---

@@ -2,6 +2,18 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.8] — 2026-09-28
+
+### Other
+- Redesign notification cards and fix delivery bugs ([7f511d5](https://github.com/sislelabs/kuso/commit/7f511d512b1606b82530fe7f1376ec767c3661c2))
+
+### 🐛 Bug Fixes
+- Fix(builds): backfill the hold stamp on upgrade, correct the third OOM surface ([3789c9a](https://github.com/sislelabs/kuso/commit/3789c9aa0199fb95977297315530474892ece26a))
+- Fix(builds): bound the promotion hold, cap BuildKit parallelism, correct the OOM advice ([f9337f6](https://github.com/sislelabs/kuso/commit/f9337f6574959d963bc7334a56e60477b7d97192))
+
+### 👷 CI
+- Ci: remove the tag-triggered release workflow ([1273f56](https://github.com/sislelabs/kuso/commit/1273f56317d717853914bb4ba28be11ceb9a929d))
+
 ## [0.26.7] — 2026-09-23
 
 ### Other
