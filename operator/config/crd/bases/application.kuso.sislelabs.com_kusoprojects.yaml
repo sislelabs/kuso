@@ -235,8 +235,8 @@ spec:
                       items: { type: string }
                       description: >-
                         Public node IPs excepted from public egress. Written
-                        by kuso-server from the Node objects; set
-                        KUSO_BLOCK_NODE_IPS=off on kuso-server to clear it.
+                        by kuso-server from the Node objects when
+                        KUSO_BLOCK_NODE_IPS=on is set on kuso-server.
                     extraIngressNamespaces:
                       type: array
                       items: { type: string }

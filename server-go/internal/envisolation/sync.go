@@ -44,14 +44,16 @@ type Syncer struct {
 	Interval time.Duration
 }
 
-// NodeIPBlockEnabled reads KUSO_BLOCK_NODE_IPS; anything but an explicit
-// off value keeps the block on.
+// NodeIPBlockEnabled reads KUSO_BLOCK_NODE_IPS; off unless explicitly on.
+// Blocking node public IPs is only safe where a pod calling its own public
+// URL is DNAT'd to traefik before policy evaluation, which isn't verified
+// on every install, so it stays opt-in.
 func NodeIPBlockEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("KUSO_BLOCK_NODE_IPS"))) {
-	case "0", "false", "off", "no":
-		return false
+	case "1", "true", "on", "yes":
+		return true
 	}
-	return true
+	return false
 }
 
 func (s *Syncer) Run(ctx context.Context) {
