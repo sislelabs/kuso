@@ -3,6 +3,7 @@ package addons
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -209,5 +210,53 @@ func TestRotateS3Credentials_Preconditions(t *testing.T) {
 	pg.Kube.Clientset = kubefake.NewSimpleClientset()
 	if _, err := pg.RotateS3Credentials(context.Background(), "alpha", "db", S3RotateOptions{}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("postgres addon: want ErrInvalid, got %v", err)
+	}
+}
+
+// BLOB-R10: the creds Secret is created already owned by its Job, so a
+// failed follow-up write can't leave an unowned credential behind.
+func TestRunS3AdminJob_SecretBornOwnedByJob(t *testing.T) {
+	s3AdminPoll = time.Millisecond
+	s, cs := rotateFixture(t, s3Secrets("ROOTAK", "ROOTSK", "ROOTAK", "ROOTSK"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go completeJobs(ctx, cs, false)
+	if _, err := s.RotateS3Credentials(ctx, "alpha", "files", S3RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var created int
+	for _, a := range cs.Actions() {
+		ca, ok := a.(interface{ GetObject() runtime.Object })
+		if a.GetVerb() != "create" || a.GetResource().Resource != "secrets" || !ok {
+			continue
+		}
+		sec := ca.GetObject().(*corev1.Secret)
+		if sec.Labels["kuso.sislelabs.com/role"] != "s3-admin" {
+			continue
+		}
+		created++
+		if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].Kind != "Job" || sec.OwnerReferences[0].Name != sec.Name {
+			t.Errorf("admin secret %s created without its Job owner: %+v", sec.Name, sec.OwnerReferences)
+		}
+	}
+	if created == 0 {
+		t.Fatal("no admin creds Secret was created")
+	}
+}
+
+func TestS3AdminJobName_LongAddonStaysValid(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	long := strings.Repeat("a", 30) + "-" + strings.Repeat("b", 22) // 53 chars, the release-name cap
+	for _, addon := range []string{"alpha-files", long, long[:52] + "-"} {
+		n := s3AdminJobName(addon, "revoke", now)
+		if len(n) > 63 || n[0] == '-' || strings.Contains(n, "--") {
+			t.Errorf("%q -> invalid job name %q", addon, n)
+		}
+		if !strings.HasSuffix(n, "-s3-revoke-"+strconv.FormatInt(now.Unix(), 36)) {
+			t.Errorf("%q -> %q lost its verb/timestamp suffix", addon, n)
+		}
+	}
+	if s3AdminJobName(long, "revoke", now) == s3AdminJobName(long[:40]+strings.Repeat("c", 13), "revoke", now) {
+		t.Error("two long addons sharing a prefix got the same job name")
 	}
 }
