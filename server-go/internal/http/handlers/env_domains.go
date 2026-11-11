@@ -114,6 +114,12 @@ func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request
 
 		return
 	}
+	// A per-env override replaces what the env runs with, and the caller
+	// can't see the stored value, so an execution-bearing name is gated
+	// on every write.
+	if refuseExecUnlessAdmin(ctx, w, h.DB, project, projects.ExecEnvNameFields(chi.URLParam(r, "name"))) {
+		return
+	}
 	req := projects.SetEnvVarRequest{Value: wire.Value}
 	if wire.SecretRef != nil {
 		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}

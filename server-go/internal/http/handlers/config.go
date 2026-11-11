@@ -19,6 +19,7 @@ import (
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
 	"kuso/server/internal/podsizes"
+	"kuso/server/internal/projects"
 )
 
 // ConfigHandler exposes /api/config/* routes.
@@ -47,6 +48,7 @@ func (h *ConfigHandler) Mount(r chi.Router) {
 	r.Get("/api/config/podsizes", h.ListPodSizes)
 	r.Get("/api/config/default-podsize", h.GetDefaultPodSize)
 	r.Get("/api/config/templates", h.Templates)
+	r.Get("/api/config/exec-env-names", h.ExecEnvNames)
 	r.Group(func(r chi.Router) {
 		r.Use(AdminOnly)
 		r.Post("/api/config", h.UpdateSettings)
@@ -128,6 +130,14 @@ func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 // base domain. The UI uses it to show the URL a new service will get.
 func (h *ConfigHandler) Domain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"domain": config.DefaultBaseDomain()})
+}
+
+// ExecEnvNames lists the env var names (exact, and by prefix) whose
+// change needs the project admin role (projects.IsExecEnvName). Matching
+// ignores case.
+func (h *ConfigHandler) ExecEnvNames(w http.ResponseWriter, r *http.Request) {
+	names, prefixes := projects.ExecEnvNameList()
+	writeJSON(w, http.StatusOK, map[string][]string{"names": names, "prefixes": prefixes})
 }
 
 func (h *ConfigHandler) Banner(w http.ResponseWriter, r *http.Request) {

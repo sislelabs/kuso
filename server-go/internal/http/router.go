@@ -853,8 +853,8 @@ func isSafeMethod(method string) bool {
 }
 
 func hasSessionCookie(r *http.Request) bool {
-	c, err := r.Cookie("kuso.JWT_TOKEN")
-	return err == nil && c.Value != ""
+	tok, _ := auth.SessionCookieToken(r)
+	return tok != ""
 }
 
 // hasBearerAuth reports whether the request carries a bearer token that

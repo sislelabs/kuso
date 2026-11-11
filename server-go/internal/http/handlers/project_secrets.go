@@ -24,6 +24,7 @@ import (
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
+	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
 )
@@ -81,6 +82,10 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+		return
+	}
+	// Shared keys reach subscribed services as env vars.
+	if refuseExecUnlessAdmin(ctx, w, h.DB, chi.URLParam(r, "project"), projects.ExecEnvNameFields(body.Key)) {
 		return
 	}
 	res, err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value, projectsecrets.SetOptions{Force: body.Force})

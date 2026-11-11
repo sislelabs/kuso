@@ -1,7 +1,12 @@
 package projects
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"slices"
+	"sort"
 	"strings"
 
 	"kuso/server/internal/kube"
@@ -129,7 +134,14 @@ func ExecCreateFields(req CreateServiceRequest) []string {
 	if len(req.BuildArgs) > 0 {
 		out = append(out, ExecFieldBuildArgs)
 	}
-	return out
+	var names []string
+	for _, e := range req.EnvVars {
+		names = append(names, e.Name)
+	}
+	for _, e := range req.EnvValues {
+		names = append(names, e.Name)
+	}
+	return append(out, execEnvFieldsOf(names)...)
 }
 
 func appendIfSet(out []string, field, want, have string) []string {
@@ -144,4 +156,233 @@ func normRuntime(rt string) string {
 		return "dockerfile"
 	}
 	return rt
+}
+
+// Env var names that load or choose code (SEC-1/SEC-2). A runtime reads
+// them before the app's own code runs (NODE_OPTIONS=--import=…,
+// JAVA_TOOL_OPTIONS=-XX:OnOutOfMemoryError=…, LD_PRELOAD, BASH_ENV), or
+// the build reads them to pick its commands, packages or toolchain
+// (NIXPACKS_START_CMD, BP_*, PIP_INDEX_URL, GOFLAGS=-toolexec=…). Setting
+// one is the same capability as setting `command`, so it carries the same
+// project admin gate. Values already stored keep working; only a write
+// that changes one is gated.
+//
+// This is a denylist and can't be complete: an editor who knows a
+// runtime's rarer hooks may still find one. This file is the one list;
+// the web UI and CLI relay the server's refusal.
+var execEnvNames = map[string]bool{
+	// Node and Bun.
+	"NODE_OPTIONS": true, "NODE_PATH": true, "NODE_REPL_EXTERNAL_MODULE": true,
+	"BUN_OPTIONS": true,
+	// JVM.
+	"JAVA_TOOL_OPTIONS": true, "JDK_JAVA_OPTIONS": true, "_JAVA_OPTIONS": true,
+	"JAVA_OPTS": true, "JVM_OPTS": true, "CATALINA_OPTS": true,
+	"MAVEN_OPTS": true, "GRADLE_OPTS": true, "SBT_OPTS": true,
+	// Shells.
+	"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "BASHOPTS": true,
+	"PS4": true, "PROMPT_COMMAND": true, "ZDOTDIR": true, "PATH": true,
+	// Python.
+	"PYTHONPATH": true, "PYTHONHOME": true, "PYTHONSTARTUP": true,
+	"PYTHONINSPECT": true, "PYTHONWARNINGS": true, "PYTHONBREAKPOINT": true,
+	"PYTHONUSERBASE": true, "PYTHONPLATLIBDIR": true, "GUNICORN_CMD_ARGS": true,
+	"UV_INDEX_URL": true, "UV_EXTRA_INDEX_URL": true, "UV_INDEX": true,
+	"UV_DEFAULT_INDEX": true, "UV_FIND_LINKS": true,
+	// Perl, Ruby, PHP.
+	"PERL5OPT": true, "PERL5LIB": true, "PERLLIB": true, "PERL5DB": true,
+	"RUBYOPT": true, "RUBYLIB": true,
+	"PHPRC": true, "PHP_INI_SCAN_DIR": true,
+	// .NET.
+	"DOTNET_STARTUP_HOOKS": true, "DOTNET_ADDITIONAL_DEPS": true,
+	// Toolchains the build runs.
+	"CC": true, "CXX": true, "CPP": true,
+	"GOFLAGS": true, "GOPROXY": true, "GOSUMDB": true, "GONOSUMDB": true,
+	"GONOSUMCHECK": true, "GOINSECURE": true, "GOPRIVATE": true, "GOTOOLCHAIN": true,
+	"RUSTC": true, "RUSTC_WRAPPER": true, "RUSTFLAGS": true,
+	"GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_ASKPASS": true, "GIT_EXEC_PATH": true,
+	"GIT_EXTERNAL_DIFF": true, "GIT_PROXY_COMMAND": true, "GIT_TEMPLATE_DIR": true,
+}
+
+// execEnvPrefixes are matched as name prefixes.
+var execEnvPrefixes = []string{
+	"LD_",                         // dynamic loader: LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH
+	"NPM_CONFIG_",                 // npm/pnpm config: script-shell, node-options, registry
+	"YARN_",                       // yarn config: yarn-path, plugins, registry
+	"NIXPACKS_",                   // nixpacks start/build/install commands and packages
+	"BP_", "BPE_", "BPL_", "CNB_", // buildpacks build and launch config
+	"PIP_",             // pip index and options
+	"CORECLR_", "COR_", // .NET profilers
+	"CARGO_",      // cargo wrappers and linkers
+	"GIT_CONFIG_", // git config injection (core.sshCommand, …)
+}
+
+// IsExecEnvName reports whether an env var named name loads or chooses
+// code. Matching ignores case: some tools read lowercase forms too
+// (npm_config_*), and a false positive only costs an admin approval.
+func IsExecEnvName(name string) bool {
+	n := strings.ToUpper(strings.TrimSpace(name))
+	if execEnvNames[n] {
+		return true
+	}
+	for _, p := range execEnvPrefixes {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExecEnvNameList returns the exact names (sorted) and prefixes that
+// IsExecEnvName matches, so clients can warn before the server refuses.
+func ExecEnvNameList() (names, prefixes []string) {
+	for n := range execEnvNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names, slices.Clone(execEnvPrefixes)
+}
+
+// ExecEnvField is the exec-field label for an env var name.
+func ExecEnvField(name string) string { return "env." + name }
+
+// ExecEnvNameFields returns the sorted, de-duplicated exec-field labels
+// for the execution-bearing names in names, without comparing values.
+// Blind writes (a managed or shared Secret key) use it directly: the
+// caller can't see the stored value, and the write replaces it.
+func ExecEnvNameFields(names ...string) []string { return execEnvFieldsOf(names) }
+
+func execEnvFieldsOf(names []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if IsExecEnvName(n) && !seen[n] {
+			seen[n] = true
+			out = append(out, ExecEnvField(n))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ExecEnvSetFields returns the exec-field labels for the
+// execution-bearing vars in sets whose value or ref differs from the
+// service's stored spec.envVars entry. Re-sending a value already on the
+// CR isn't a change. A value held in the managed Secret compares as
+// absent, so writing it again is gated; non-admins can't read it anyway.
+func ExecEnvSetFields(cur []kube.KusoEnvVar, sets []EnvVar) []string {
+	stored := make(map[string]kube.KusoEnvVar, len(cur))
+	for _, e := range cur {
+		stored[e.Name] = e
+	}
+	var changed []string
+	for _, e := range sets {
+		name := strings.TrimSpace(e.Name)
+		if !IsExecEnvName(name) {
+			continue
+		}
+		if old, ok := stored[name]; ok && old.Value == e.Value && envValueFromEqual(old.ValueFrom, e.ValueFrom) {
+			continue
+		}
+		changed = append(changed, name)
+	}
+	return execEnvFieldsOf(changed)
+}
+
+// RevisionExecFields returns the exec fields replaying a stored revision
+// would change on the live object (SEC-4). A revert is a write like any
+// other, so a non-admin may not use it to bring back a command, image,
+// release hook or code-loading env var an admin once set. env scopes a
+// service image revision to one environment (the History "roll back this
+// env" action); it is empty for a whole-service replay.
+//
+// An image replayed onto an environment counts only when the repository
+// differs from what the env runs now: an older tag of the same image is a
+// rollback, which editors can already do from build history.
+func (s *Service) RevisionExecFields(ctx context.Context, project, kind, name, env string, raw []byte) ([]string, error) {
+	var snap struct {
+		revisionSnapshot
+		Patch json.RawMessage `json:"patch"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil || snap.Informational {
+		return nil, nil // the replay refuses these itself
+	}
+	switch {
+	case kind == "service" && env != "":
+		var p struct {
+			Image *ServiceImageSpec `json:"image"`
+		}
+		if json.Unmarshal(snap.Patch, &p) != nil || p.Image == nil {
+			return nil, nil
+		}
+		return s.envImageExecFields(ctx, project, name, env, p.Image.Repository)
+	case kind == "service" && snap.Op == "":
+		var req PatchServiceRequest
+		if len(snap.Patch) == 0 || json.Unmarshal(snap.Patch, &req) != nil {
+			return nil, nil
+		}
+		cur, err := s.GetService(ctx, project, name)
+		if err != nil {
+			return nil, err
+		}
+		return ExecPatchFields(&cur.Spec, req), nil
+	case kind == "service" && snap.Op == revOpEnvVars && snap.EnvVars != nil:
+		cur, err := s.GetService(ctx, project, name)
+		if err != nil {
+			return nil, err
+		}
+		return execEnvReplayFields(*snap.EnvVars, cur.Spec.EnvVars), nil
+	case kind == "environment" && snap.Op == revOpEnvOverrides && snap.EnvVars != nil:
+		ns, err := s.namespaceFor(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, snap.Service, snap.Env))
+		if err != nil {
+			return nil, fmt.Errorf("get env: %w", err)
+		}
+		return execEnvReplayFields(*snap.EnvVars, envOverridesOf(e)), nil
+	case kind == "environment" && snap.Op == revOpEnvImage && snap.Image != nil:
+		return s.envImageExecFields(ctx, project, snap.Service, snap.Env, snap.Image.Repository)
+	}
+	return nil, nil
+}
+
+// execEnvReplayFields compares a snapshot's env list against the current
+// one. Masked snapshot values resolve to the current value, so they never
+// count as a change.
+func execEnvReplayFields(snap, current []kube.KusoEnvVar) []string {
+	sets := make([]EnvVar, 0, len(snap))
+	for _, e := range snap {
+		if e.Value == EnvMaskSentinel {
+			continue
+		}
+		sets = append(sets, EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
+	}
+	return ExecEnvSetFields(current, sets)
+}
+
+func (s *Service) envImageExecFields(ctx context.Context, project, service, env, repo string) ([]string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil, nil
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	e, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, service, env))
+	if err != nil {
+		return nil, fmt.Errorf("get env: %w", err)
+	}
+	if e.Spec.Image != nil && e.Spec.Image.Repository == repo {
+		return nil, nil
+	}
+	return []string{ExecFieldImage}, nil
+}
+
+func envValueFromEqual(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
 }

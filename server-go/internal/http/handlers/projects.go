@@ -1427,6 +1427,17 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+	set := projects.EnvVar{Name: name, Value: wire.Value}
+	switch {
+	case wire.SecretRef != nil:
+		set.Value = ""
+		set.ValueFrom = map[string]any{"secretKeyRef": map[string]any{"name": wire.SecretRef.Name, "key": wire.SecretRef.Key}}
+	case wire.SecretValue != nil:
+		set.Value = *wire.SecretValue
+	}
+	if h.refuseExecEnvSets(ctx, w, project, service, []projects.EnvVar{set}) {
+		return
+	}
 	// Unified "one secret primitive" write: the server decides storage.
 	var out *kube.KusoService
 	var err error
@@ -1484,6 +1495,25 @@ func (h *ProjectsHandler) ApplyServiceChanges(w http.ResponseWriter, r *http.Req
 	if req.Patch != nil && req.Patch.Repo != nil &&
 		!h.requireRepoBound(ctx, w, project, []string{req.Patch.Repo.URL}, []int64{req.Patch.Repo.InstallationID}) {
 		return
+	}
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		cur, err := h.Svc.GetService(ctx, project, service)
+		if err != nil {
+			h.fail(w, "apply service changes", err)
+			return
+		}
+		sets := make([]projects.EnvVar, 0, len(req.EnvSet))
+		for _, e := range req.EnvSet {
+			sets = append(sets, projects.EnvVar{Name: e.Name, Value: e.Value})
+		}
+		fields := projects.ExecEnvSetFields(cur.Spec.EnvVars, sets)
+		if req.Patch != nil {
+			fields = append(projects.ExecPatchFields(&cur.Spec, *req.Patch), fields...)
+		}
+		if len(fields) > 0 {
+			refuseExecFields(w, fields)
+			return
+		}
 	}
 	res, err := h.Svc.ApplyServiceChanges(ctx, project, service, req)
 	if err != nil {
@@ -1739,6 +1769,9 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
+	}
+	if h.refuseExecEnvSets(ctx, w, project, service, envVars) {
+		return
 	}
 	if err := h.Svc.SetEnvWithOpts(ctx,
 		project,

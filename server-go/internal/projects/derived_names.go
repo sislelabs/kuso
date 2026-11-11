@@ -463,7 +463,58 @@ func (s *Service) checkDomainsFree(ctx context.Context, project, service string,
 	if len(added) == 0 {
 		return nil
 	}
-	return s.checkHostsFree(ctx, project, envCRNameFor(project, service, "production"), added...)
+	return s.checkClaimedHostsFree(ctx, project, envCRNameFor(project, service, "production"), added...)
+}
+
+// checkClaimedHostsFree is checkHostsFree for a host a user typed (a
+// custom domain, an env domain, a host override) rather than one kuso
+// generated. ownsInstanceHost accepts "<env>-<project>.<KUSO_DOMAIN>"
+// because customEnvHost and buildEnvHost generate it for a service named
+// after its project, but that label is also the apex of a project named
+// "<env>-<project>". Typed by hand, it may only name an env group the
+// project actually has; otherwise a project could take a future
+// project's main host first (SEC-5).
+func (s *Service) checkClaimedHostsFree(ctx context.Context, project, skipEnv string, hosts ...string) error {
+	control := strings.ToLower(config.DefaultBaseDomain())
+	var groups map[string]bool
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		env, ok := envSuffixLabel(h, project, control)
+		if !ok {
+			continue
+		}
+		if groups == nil {
+			envs, err := s.Kube.ListKusoEnvironments(ctx, "")
+			if err != nil {
+				return fmt.Errorf("list envs for host check: %w", err)
+			}
+			groups = map[string]bool{}
+			for i := range envs {
+				if envs[i].Spec.Project == project {
+					groups[envs[i].Labels[kube.LabelEnv]] = true
+				}
+			}
+		}
+		if !groups[env] || env == "production" {
+			return fmt.Errorf("%w: %q could be the main host of a project named %q; under the kuso instance domain use %s.%s or a name under it", ErrConflict, h, strings.TrimSuffix(h, "."+control), project, control)
+		}
+	}
+	return s.checkHostsFree(ctx, project, skipEnv, hosts...)
+}
+
+// envSuffixLabel returns <env> when host is the single-label
+// "<env>-<project>.<control>" form ownsInstanceHost accepts outside the
+// project's own subtree.
+func envSuffixLabel(host, project, control string) (string, bool) {
+	if project == "" || control == "" {
+		return "", false
+	}
+	label, ok := strings.CutSuffix(host, "."+control)
+	if !ok || strings.Contains(label, ".") {
+		return "", false
+	}
+	env, ok := strings.CutSuffix(label, "-"+project)
+	return env, ok && env != ""
 }
 
 // checkHostsFree refuses hosts that project's env skipEnv is about to

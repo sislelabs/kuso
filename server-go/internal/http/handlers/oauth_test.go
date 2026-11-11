@@ -206,13 +206,13 @@ func TestOAuth_SetsJWTCookie(t *testing.T) {
 
 	var jwt *http.Cookie
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "kuso.JWT_TOKEN" {
+		if c.Name == auth.SessionCookieName {
 			jwt = c
 			break
 		}
 	}
 	if jwt == nil {
-		t.Fatalf("kuso.JWT_TOKEN not set in callback response: %+v", rr.Result().Cookies())
+		t.Fatalf("session cookie not set in callback response: %+v", rr.Result().Cookies())
 	}
 	// The cookie is now HttpOnly. The SPA receives the JWT via the
 	// URL fragment (#token=…) and the cookie is server-only — used
@@ -221,10 +221,10 @@ func TestOAuth_SetsJWTCookie(t *testing.T) {
 	// regression to the legacy JS-readable shape that made every
 	// XSS in the bundle equivalent to session theft.
 	if !jwt.HttpOnly {
-		t.Error("kuso.JWT_TOKEN must be HttpOnly to prevent XSS-driven token theft")
+		t.Error("session cookie must be HttpOnly to prevent XSS-driven token theft")
 	}
 	if !jwt.Secure {
-		t.Error("kuso.JWT_TOKEN must be Secure")
+		t.Error("session cookie must be Secure")
 	}
 	if jwt.SameSite != http.SameSiteLaxMode {
 		t.Errorf("SameSite: got %v (want Lax)", jwt.SameSite)
@@ -259,7 +259,7 @@ func TestOAuth_UpsertsUserAndIssuesValidJWT(t *testing.T) {
 	// JWT round-trips and carries strategy=oauth2.
 	var jwt string
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "kuso.JWT_TOKEN" {
+		if c.Name == auth.SessionCookieName {
 			jwt = c.Value
 			break
 		}
@@ -416,7 +416,7 @@ func TestOAuth_StartHonorsConfiguredEndpoint(t *testing.T) {
 // nil when the flow didn't establish a session.
 func jwtCookie(rr *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "kuso.JWT_TOKEN" && c.Value != "" {
+		if c.Name == auth.SessionCookieName && c.Value != "" {
 			return c
 		}
 	}

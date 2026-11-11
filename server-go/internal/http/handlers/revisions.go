@@ -358,8 +358,20 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	scopedEnv := strings.TrimSpace(r.URL.Query().Get("env"))
+	if !callerCanReadSecrets(ctx, h.DB, rev.Project) {
+		fields, ferr := h.Svc.RevisionExecFields(ctx, rev.Project, rev.Kind, rev.Name, scopedEnv, rev.Snapshot)
+		if ferr != nil {
+			h.fail(w, "revert revision", ferr)
+			return
+		}
+		if len(fields) > 0 {
+			refuseExecFields(w, fields)
+			return
+		}
+	}
 	var kind string
-	if env := strings.TrimSpace(r.URL.Query().Get("env")); env != "" {
+	if env := scopedEnv; env != "" {
 		// Scoped rollback: only that environment moves to the revision's
 		// image. The default (no env) replays the service-wide change.
 		kind, err = "environment", h.revertImageToEnv(projects.WithRevertOf(ctx, rev.ID), rev, env)

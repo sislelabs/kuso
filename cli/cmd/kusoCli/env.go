@@ -187,7 +187,13 @@ var envListCmd = &cobra.Command{
 var envSetCmd = &cobra.Command{
 	Use:   "set <project> <service> KEY=VALUE [KEY=VALUE ...]",
 	Short: "Set or replace plain env vars on a service",
-	Args:  cobra.MinimumNArgs(3),
+	Long: `Set or replace plain env vars on a service.
+
+Names that load or choose code (NODE_OPTIONS, JAVA_TOOL_OPTIONS, LD_PRELOAD,
+BASH_ENV, PYTHONPATH, NIXPACKS_*, BP_* and similar) run code with the
+service's secrets, so setting or changing one needs the project admin role.
+The server keeps the list: kuso api GET config/exec-env-names`,
+	Args: cobra.MinimumNArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")

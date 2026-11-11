@@ -618,6 +618,15 @@ CREATE TABLE IF NOT EXISTS "RevokedToken" (
 );
 CREATE INDEX IF NOT EXISTS "RevokedToken_expiresAt_idx" ON "RevokedToken"("expiresAt");
 
+-- WebSocket tickets are single-use across every kuso-server replica: the
+-- first upgrade inserts the ticket's jti, any replay hits the PK. Rows
+-- outlive the one-minute ticket only until the next consume prunes them.
+CREATE TABLE IF NOT EXISTS "WSTicketUse" (
+    "jti" TEXT PRIMARY KEY,
+    "expiresAt" TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "WSTicketUse_expiresAt_idx" ON "WSTicketUse"("expiresAt");
+
 -- v0.9.38: per-user token-invalidation watermark. The RevokedToken
 -- table works for "kill THIS specific jti" (logout, manual revoke);
 -- this table works for "kill EVERY token currently issued to user U"

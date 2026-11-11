@@ -193,6 +193,8 @@ func main() {
 	// token can't outlive Postgres being down by more than 30s, long
 	// enough that a flaky pool burst doesn't 401 every active session.
 	issuer.SetRevocationChecker(makeRevocationChecker(database))
+	// WebSocket tickets are single-use across replicas, not per process.
+	issuer.SetTicketConsumer(database.ConsumeWSTicket)
 
 	// Per-request permission resolution: the JWT is identity only —
 	// the effective permission set is recomputed on every request as

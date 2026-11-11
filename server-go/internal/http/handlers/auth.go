@@ -176,26 +176,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// HttpOnly session cookie: HttpOnly + Secure + SameSite=Lax +
-	// Path=/ so cross-site requests don't carry it; same-site GETs
-	// (the SPA's own fetch calls) do. Insecure-cookie fallback for
-	// plain-HTTP dev only — production runs behind traefik+TLS so
-	// r.TLS != nil.
-	secure := isHTTPS(r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "kuso.JWT_TOKEN",
-		Value:    tok,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-		// Cookie MaxAge tracks the JWT lifetime (admin-configurable
-		// session setting), not a hardcoded constant. The old fixed
-		// 12h MaxAge silently expired the cookie out from under a
-		// longer-lived JWT (and vice versa), forcing premature
-		// logouts — exactly the "logged out too often" symptom.
-		MaxAge: cookieMaxAge,
-	})
+	// HttpOnly, SameSite=Lax session cookie, __Host- prefixed over HTTPS
+	// (auth.SetSessionCookie). MaxAge tracks the JWT lifetime (the
+	// admin-configurable session setting): a fixed MaxAge expired the
+	// cookie out from under a longer-lived JWT.
+	auth.SetSessionCookie(w, r, tok, cookieMaxAge)
 	w.Header().Set("Content-Type", "application/json")
 	// Body still carries the access_token for the CLI / API token
 	// flow (kuso login --api ...). The SPA reads the cookie via
@@ -239,7 +224,7 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// Logout clears the kuso.JWT_TOKEN cookie AND, if the request carries
+// Logout clears the session cookie AND, if the request carries
 // a verified bearer, persists a RevokedToken row keyed on the JWT's
 // jti. The auth middleware's per-request check rejects revoked tokens
 // on the next call.
@@ -255,9 +240,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			bearer = strings.TrimSpace(hdr[len("Bearer "):])
 		}
 		if bearer == "" {
-			if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil {
-				bearer = c.Value
-			}
+			bearer, _ = auth.SessionCookieToken(r)
 		}
 		if bearer != "" {
 			if claims, err := h.Issuer.Verify(bearer); err == nil && claims != nil && claims.ID != "" {
@@ -275,16 +258,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	secure := isHTTPS(r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "kuso.JWT_TOKEN",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	auth.ClearSessionCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

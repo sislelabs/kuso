@@ -667,34 +667,13 @@ func verifyStateCookie(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(q), []byte(c.Value)) == 1
 }
 
-// setJWTCookie writes the kuso.JWT_TOKEN cookie used by the WebSocket
-// log tail (which needs the bearer in a header the SPA can't set).
-//
-// HttpOnly is true now — XSS in the SPA can no longer steal the
-// session token. The SPA receives the JWT via a URL fragment after
-// OAuth (see redirectWithJWT) and stores it in localStorage; api()
-// reads localStorage directly. The cookie exists only as a server-
-// readable bearer for the WS handshake, where the browser can't
-// send Authorization headers.
-//
-// Secure tracks the request scheme (isHTTPS) so the browser ships the
-// cookie over TLS in production but the session also lands on plain-HTTP
-// dev hosts — matching the password-login path in auth.go. Without this
-// the OAuth session cookie was silently dropped on non-localhost HTTP,
-// so login appeared to succeed then bounced straight back to /login.
-// SameSite=Lax keeps the OAuth-callback redirect path working while
-// blocking cross-site CSRF.
+// setJWTCookie writes the HttpOnly session cookie after OAuth, the same
+// way password login does (auth.SetSessionCookie: __Host- over HTTPS,
+// the plain name on HTTP dev hosts, where a Secure cookie would be
+// dropped and login would bounce back to /login). MaxAge tracks the
+// token's own exp claim; a token with no exp gets a 10y cookie.
 func setJWTCookie(w http.ResponseWriter, r *http.Request, jwt string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: "kuso.JWT_TOKEN", Value: jwt, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure: isHTTPS(r),
-		// MaxAge tracks the token's own exp claim (driven by the
-		// admin-configurable session setting) instead of a hardcoded
-		// 10h, so a longer/never-expiring session isn't truncated by a
-		// short cookie. A token with no exp (never-expire) → 10y cookie.
-		MaxAge: cookieMaxAgeFromJWT(jwt),
-	})
+	auth.SetSessionCookie(w, r, jwt, cookieMaxAgeFromJWT(jwt))
 }
 
 // cookieMaxAgeFromJWT reads the unverified exp claim off a freshly-

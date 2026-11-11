@@ -561,6 +561,20 @@ func (d *envDiffer) diff(live *kube.KusoService, service string, desired Service
 	return out, crEnvChanged, warnings
 }
 
+// execEnvChanges returns the exec-field labels of planned env changes
+// that set or change a name projects.IsExecEnvName covers. Removing one
+// isn't gated, like clearing any exec field.
+func execEnvChanges(envFields []FieldChange) []string {
+	var names []string
+	for _, c := range envFields {
+		name, ok := strings.CutPrefix(c.Field, "env.")
+		if ok && !strings.HasPrefix(c.To, "(removed") {
+			names = append(names, name)
+		}
+	}
+	return projects.ExecEnvNameFields(names...)
+}
+
 func missingSecretWarning(project, service, key string) string {
 	return fmt.Sprintf("service %s: env %s is {secret: true} but the service's Secret doesn't hold it — apply won't set it; run `kuso env set %s %s %s=…`", service, key, project, service, key)
 }

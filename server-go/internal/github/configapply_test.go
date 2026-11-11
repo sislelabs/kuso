@@ -136,6 +136,43 @@ func TestCheckConfigExecChanges(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrConfigExecNotAllowed", name, err)
 		}
 	}
+
+	// SEC-3: env changes count on services the pushed repo doesn't build,
+	// and no push may wire an existing addon into a service that doesn't
+	// use it yet.
+	api := unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "p-api"},
+		"spec":     map[string]any{"subscribedAddons": []any{"cache"}},
+	}}
+	envSvcs := []unstructured.Unstructured{worker, tool, api}
+	envPlan := func(svc, to string, newAddons ...string) *spec.Plan {
+		return &spec.Plan{AddonsToCreate: newAddons, Changes: []spec.ResourceChange{{
+			Resource: "service:" + svc, Fields: []spec.FieldChange{{Field: "env.X", From: "(unset)", To: to}},
+		}}}
+	}
+	for _, c := range []struct {
+		name    string
+		plan    *spec.Plan
+		refused bool
+	}{
+		{"own-repo literal", envPlan("api", "(value)"), false},
+		{"other-repo literal", envPlan("worker", "(value)"), true},
+		{"image service removal", envPlan("tool", "(removed)"), true},
+		{"ref to subscribed addon", envPlan("api", "${{ cache.URL }}"), false},
+		{"ref to unsubscribed addon", envPlan("api", "${{ db.DATABASE_URL }}"), true},
+		{"ref to addon this push creates", envPlan("api", "${{ db.DATABASE_URL }}", "db"), false},
+		{"new service with env, other repo", &spec.Plan{ServicesToCreate: []string{"side"}}, true},
+	} {
+		ff := f
+		if c.name == "new service with env, other repo" {
+			ff = &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "side", Repo: "https://github.com/org/worker",
+				Env: map[string]spec.EnvValue{"A": {Value: "1"}}}}}
+		}
+		err := checkConfigExecChanges(c.plan, ff, proj, envSvcs, "org/app")
+		if got := errors.Is(err, ErrConfigExecNotAllowed); got != c.refused {
+			t.Errorf("%s: err = %v, want refused=%v", c.name, err, c.refused)
+		}
+	}
 }
 
 func TestConfigPruneAllowed(t *testing.T) {

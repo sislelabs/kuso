@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
 )
 
@@ -128,8 +130,15 @@ var ErrConfigExecNotAllowed = errors.New("config-as-code: execution change outsi
 // nothing there. For any other service, an image service above all, it
 // would hand a repo pusher a capability a kuso editor no longer has
 // (SEC-1); `kuso apply` by a project admin is the way to make that change.
+//
+// Env changes count too on a service the pushed repo doesn't build (SEC-3):
+// a redirected DATABASE_URL or HTTPS_PROXY there is as much a takeover as
+// a new command. And on any service, a push may not add a ${{ addon.KEY }}
+// ref to an existing addon the service doesn't already use, which would
+// hand the pusher that addon's credentials; an addon the same push
+// creates is fine, it holds no data yet.
 func checkConfigExecChanges(plan *spec.Plan, f *spec.File, proj *kube.KusoProject, svcs []unstructured.Unstructured, pushed string) error {
-	if plan == nil || len(plan.ExecChanges) == 0 {
+	if plan == nil {
 		return nil
 	}
 	if proj == nil {
@@ -143,13 +152,7 @@ func checkConfigExecChanges(plan *spec.Plan, f *spec.File, proj *kube.KusoProjec
 	for i := range svcs {
 		live[strings.TrimPrefix(svcs[i].GetName(), f.Project+"-")] = &svcs[i]
 	}
-	var refused []string
-	for _, c := range plan.ExecChanges {
-		name, ok := strings.CutPrefix(c.Resource, "service:")
-		if !ok {
-			refused = append(refused, c.Resource)
-			continue
-		}
+	builtByPushed := func(name string) bool {
 		d := desired[name]
 		runtime := d.Runtime
 		if runtime == "" && live[name] != nil {
@@ -159,15 +162,107 @@ func checkConfigExecChanges(plan *spec.Plan, f *spec.File, proj *kube.KusoProjec
 		if repo == "" {
 			repo, _ = serviceEffectiveRepo(live[name], proj)
 		}
-		if runtime == "image" || !repoMatches(repo, pushed) {
-			refused = append(refused, c.Resource+" ("+strings.Join(c.Fields, ", ")+")")
+		return runtime != "image" && repoMatches(repo, pushed)
+	}
+	newAddons := map[string]bool{}
+	for _, a := range plan.AddonsToCreate {
+		newAddons[a] = true
+	}
+	isService := func(n string) bool { _, d := desired[n]; return d || live[n] != nil }
+
+	exec := map[string][]string{}
+	var order []string
+	note := func(res string, fields ...string) {
+		if _, seen := exec[res]; !seen {
+			order = append(order, res)
+		}
+		exec[res] = append(exec[res], fields...)
+	}
+	for _, c := range plan.ExecChanges {
+		note(c.Resource, c.Fields...)
+	}
+	envFields := map[string][]string{}
+	var badRefs []string
+	refCheck := func(svc, key, value string) {
+		ref, ok, _ := projects.ParseVarRef(value)
+		if !ok || (projects.IsServiceKey(ref.Key) && isService(ref.Name)) || newAddons[ref.Name] ||
+			serviceUsesAddon(live[svc], f.Project, ref.Name) {
+			return
+		}
+		badRefs = append(badRefs, fmt.Sprintf("service:%s env.%s (%s)", svc, key, strings.TrimSpace(value)))
+	}
+	for _, c := range plan.Changes {
+		name, ok := strings.CutPrefix(c.Resource, "service:")
+		if !ok || c.NotApplied {
+			continue
+		}
+		for _, fc := range c.Fields {
+			if key, isEnv := strings.CutPrefix(fc.Field, "env."); isEnv {
+				envFields[name] = append(envFields[name], fc.Field)
+				refCheck(name, key, fc.To)
+			}
 		}
 	}
-	if len(refused) == 0 {
+	for _, name := range plan.ServicesToCreate {
+		for key, v := range desired[name].Env {
+			envFields[name] = append(envFields[name], "env."+key)
+			refCheck(name, key, v.Value)
+		}
+	}
+	for name, fields := range envFields {
+		if !builtByPushed(name) {
+			sort.Strings(fields)
+			note("service:"+name, fields...)
+		}
+	}
+
+	var refused []string
+	for _, res := range order {
+		name, ok := strings.CutPrefix(res, "service:")
+		if !ok || !builtByPushed(name) {
+			refused = append(refused, res+" ("+strings.Join(exec[res], ", ")+")")
+		}
+	}
+	sort.Strings(badRefs)
+	if len(refused) == 0 && len(badRefs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: kuso.yaml changes %s, which %s doesn't build; a project admin has to apply that with `kuso apply`",
-		ErrConfigExecNotAllowed, strings.Join(refused, "; "), pushed)
+	var msg []string
+	if len(refused) > 0 {
+		msg = append(msg, fmt.Sprintf("kuso.yaml changes %s, which %s doesn't build", strings.Join(refused, "; "), pushed))
+	}
+	if len(badRefs) > 0 {
+		msg = append(msg, "kuso.yaml wires existing addons the service doesn't use yet: "+strings.Join(badRefs, "; "))
+	}
+	return fmt.Errorf("%w: %s; a project admin has to apply that with `kuso apply`",
+		ErrConfigExecNotAllowed, strings.Join(msg, "; "))
+}
+
+// serviceUsesAddon reports whether a live service already has access to
+// the addon's connection Secret: a legacy (nil) subscription mounts every
+// addon, an explicit one lists it, or an env var already refs its conn.
+func serviceUsesAddon(svc *unstructured.Unstructured, project, addon string) bool {
+	if svc == nil {
+		return false
+	}
+	subs, found, _ := unstructured.NestedStringSlice(svc.Object, "spec", "subscribedAddons")
+	if !found || subs == nil {
+		return true
+	}
+	for _, s := range subs {
+		if s == addon {
+			return true
+		}
+	}
+	envs, _, _ := unstructured.NestedSlice(svc.Object, "spec", "envVars")
+	for _, e := range envs {
+		em, _ := e.(map[string]any)
+		name, _, _ := unstructured.NestedString(em, "valueFrom", "secretKeyRef", "name")
+		if name == addon+"-conn" || name == project+"-"+addon+"-conn" {
+			return true
+		}
+	}
+	return false
 }
 
 // auditConfigApply writes one audit row per push-driven kuso.yaml apply.

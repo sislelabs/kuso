@@ -15,8 +15,9 @@ against a live cluster.
 Conventions:
 
 - Every authenticated route requires `Authorization: Bearer <jwt>` from
-  `POST /api/auth/login` (or the OAuth flows below). `kuso.JWT_TOKEN`
-  cookie is also accepted on browser-driven endpoints.
+  `POST /api/auth/login` (or the OAuth flows below). The session cookie
+  (`__Host-kuso_jwt` over HTTPS, `kuso.JWT_TOKEN` on plain-HTTP dev hosts)
+  is also accepted on browser-driven endpoints.
 - Path params in `{curlies}` mirror chi syntax.
 - `body` blocks describe the JSON request body.
 - "Trigger" calls out the web-UI page or CLI command that fires the route
@@ -64,7 +65,7 @@ Conventions:
 
 ### `GET /api/auth/github/callback` ✅
 - Auth: none. Validates state cookie, exchanges code, upserts the
-  kuso User row, sets `kuso.JWT_TOKEN` cookie, persists
+  kuso User row, sets the session cookie, persists
   `GithubUserLink`, redirects to `/`.
 
 ### `GET /api/auth/oauth2` ✅ (only when `OAUTH2_CLIENT_*` are set)
