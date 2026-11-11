@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/scaledown"
 )
 
 // errHostNotFound means the env list was read and no env claims the host:
@@ -41,11 +42,15 @@ type hostTarget struct {
 type hostIndex struct {
 	exact map[string]hostTarget
 	wild  map[string]hostTarget // "*.<suffix>" → target
-	at    time.Time
+	// activity is each env's last-activity stamp (ns/name → time) as of
+	// this snapshot, so the activator can skip a stamp another replica
+	// already wrote.
+	activity map[string]time.Time
+	at       time.Time
 }
 
 func buildHostIndex(envs []kube.KusoEnvironment, at time.Time) *hostIndex {
-	idx := &hostIndex{exact: map[string]hostTarget{}, wild: map[string]hostTarget{}, at: at}
+	idx := &hostIndex{exact: map[string]hostTarget{}, wild: map[string]hostTarget{}, activity: map[string]time.Time{}, at: at}
 	add := func(m map[string]hostTarget, h string, t hostTarget) {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {
@@ -57,6 +62,9 @@ func buildHostIndex(envs []kube.KusoEnvironment, at time.Time) *hostIndex {
 	}
 	for i := range envs {
 		e := &envs[i]
+		if ts, err := time.Parse(time.RFC3339, e.Annotations[scaledown.LastActivityAnnotation]); err == nil {
+			idx.activity[e.Namespace+"/"+e.Name] = ts
+		}
 		// Internal services and workers have no Ingress, but the catch-all
 		// route still lands their host here; proxying would expose them.
 		if e.Spec.Internal || e.Spec.Runtime == "worker" {
@@ -163,6 +171,17 @@ func (r *hostResolver) snapshot(ctx context.Context) (idx *hostIndex, stale bool
 	r.lastErr = nil
 	r.nextTry = time.Time{}
 	return fresh, false, nil
+}
+
+// lastActivity returns the env's last-activity stamp from the current
+// snapshot without refreshing it.
+func (r *hostResolver) lastActivity(key string) (time.Time, bool) {
+	idx := r.current()
+	if idx == nil {
+		return time.Time{}, false
+	}
+	ts, ok := idx.activity[key]
+	return ts, ok
 }
 
 // resolve returns the target for host, errHostNotFound when a snapshot

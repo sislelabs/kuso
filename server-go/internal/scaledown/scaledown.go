@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -62,6 +63,11 @@ type Watcher struct {
 	Now func() time.Time
 
 	httpc *http.Client
+
+	// secretVals caches the values of the managed Secrets scanned for
+	// in-cluster references, keyed ns/name and revalidated by
+	// resourceVersion so a tick doesn't GET every Secret again.
+	secretVals map[string]cachedSecretVals
 }
 
 // now returns the Watcher's clock, defaulting to time.Now when unset so
@@ -197,7 +203,7 @@ func (w *Watcher) evaluate(ctx context.Context) {
 	// candidate that an awake, non-sleeping env calls, to a fixed point
 	// so a chain web → api → auth stays up as a unit. Envs that call each
 	// other and are all idle remain candidates and sleep together.
-	refs := referrersByTarget(envs)
+	refs := referrersByTarget(envs, w.secretRefValues(ctx, envs))
 	for changed := true; changed; {
 		changed = false
 		for key := range candidates {
@@ -379,6 +385,13 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 	if r, ok := w.deploymentReplicas(ctx, ns, envName); !ok || r == 0 {
 		return false // missing, or already asleep / pre-build hold
 	}
+	// Mid-rollout the old ReplicaSet is the one serving. Scaling to 0
+	// empties both and a wake only brings back the newest, so a wedged
+	// deploy that was harmless becomes an outage on the next request.
+	if w.rolloutInFlight(ctx, ns, envName) {
+		w.Logger.Debug("scaledown: idle env has a rollout in flight; leaving it up", "env", envName)
+		return false
+	}
 
 	idleMin := pol.AfterMinutes
 	active, err := w.requestsInWindow(ctx, ns, envName, idleMin)
@@ -415,6 +428,33 @@ func (w *Watcher) evaluateEnv(ctx context.Context, svc *kube.KusoService, env *k
 		return false
 	}
 	return true
+}
+
+// rolloutInFlight reports whether the env's Deployment is mid-rollout:
+// a spec change not yet observed, fewer updated replicas than desired, or
+// pods of an older ReplicaSet still running. A read failure counts as in
+// flight (stay up).
+func (w *Watcher) rolloutInFlight(ctx context.Context, ns, name string) bool {
+	dep, ok := w.Kube.Cache.GetDeployment(ns, name)
+	if !ok {
+		d, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return true
+		}
+		dep = d
+	}
+	return deploymentRollingOut(dep)
+}
+
+func deploymentRollingOut(dep *appsv1.Deployment) bool {
+	want := int32(1)
+	if dep.Spec.Replicas != nil {
+		want = *dep.Spec.Replicas
+	}
+	st := dep.Status
+	return dep.Generation > st.ObservedGeneration ||
+		st.UpdatedReplicas < want ||
+		st.Replicas > st.UpdatedReplicas
 }
 
 // setAutoSleep writes env.spec.autoSleep. Turning it on also stamps
@@ -488,6 +528,24 @@ const PreSleepReplicasAnnotation = "kuso.sislelabs.com/pre-sleep-replicas"
 // recentlyActive below.
 const LastActivityAnnotation = "kuso.sislelabs.com/last-activity"
 
+// ActivityStampInterval is how often the activator refreshes
+// LastActivityAnnotation for an env with ongoing traffic. Every write
+// triggers a helm-operator reconcile of the env, so it is minutes apart;
+// stampWindow widens short idle windows so a busy env's stamp is never
+// older than the window it is checked against.
+const ActivityStampInterval = 4 * time.Minute
+
+// stampWindow is the idle window used against LastActivityAnnotation: the
+// policy's window, but never shorter than one stamp interval plus a tick
+// of margin.
+func stampWindow(idleMin int) int {
+	floor := int((ActivityStampInterval+time.Minute)/time.Minute) + 1
+	if idleMin < floor {
+		return floor
+	}
+	return idleMin
+}
+
 // recentlyActive reports whether the activator stamped activity for this
 // env within the idle window. A parse failure / missing annotation → not
 // recently active (fall through to sleeping), which is safe: the env only
@@ -498,7 +556,7 @@ func (w *Watcher) recentlyActive(ctx context.Context, ns, envName string, idleMi
 	if err != nil || env == nil {
 		return false
 	}
-	return activeSince(env.Annotations[LastActivityAnnotation], w.now(), idleMin)
+	return activeSince(env.Annotations[LastActivityAnnotation], w.now(), stampWindow(idleMin))
 }
 
 // hasActiveJobs reports whether any cron/run Job for this service is
@@ -548,7 +606,7 @@ func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string, idleMin i
 
 	now := w.now()
 	if _, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(e *kube.KusoEnvironment) error {
-		if activeSince(e.Annotations[LastActivityAnnotation], now, idleMin) {
+		if activeSince(e.Annotations[LastActivityAnnotation], now, stampWindow(idleMin)) {
 			return errRecentlyActive
 		}
 		// Stash the pre-sleep count on the CR before zeroing, so the

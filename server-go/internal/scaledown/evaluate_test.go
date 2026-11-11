@@ -54,6 +54,7 @@ func (f *fixture) env(name, svc string, labels, ann map[string]string, spec map[
 	f.deps = append(f.deps, &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
 		Spec:       appsv1.DeploymentSpec{Replicas: &r},
+		Status:     appsv1.DeploymentStatus{Replicas: r, UpdatedReplicas: r, ReadyReplicas: r},
 	})
 	if backend != "" {
 		f.deps = append(f.deps, &networkingv1.Ingress{
@@ -178,6 +179,15 @@ func TestEvaluate_SleepsEveryEnvByPolicy(t *testing.T) {
 	f.service("alpha-web-verify", map[string]string{kube.LabelEnv: "verify"}, map[string]any{})
 	f.env("alpha-web-verify-production", "alpha-web-verify", map[string]string{kube.LabelEnv: "verify"}, idle,
 		map[string]any{"kind": "production", "autoSleep": true}, 1, "kuso-activator")
+	// Wedged rollout: the new revision can't start, so the old ReplicaSet's
+	// pod is the one serving (2 pods, 1 updated).
+	f.env("alpha-web-wedged", "alpha-web", map[string]string{kube.LabelEnv: "wedged"}, idle,
+		map[string]any{"kind": "custom", "autoSleep": true}, 1, "kuso-activator")
+	for _, d := range f.deps {
+		if dep, ok := d.(*appsv1.Deployment); ok && dep.Name == "alpha-web-wedged" {
+			dep.Status = appsv1.DeploymentStatus{Replicas: 2, UpdatedReplicas: 1, ReadyReplicas: 1}
+		}
+	}
 	// api: opted out of non-prod sleep while its staging env is asleep.
 	f.service("alpha-api", nil, map[string]any{"sleep": map[string]any{"nonProduction": "off"}})
 	f.env("alpha-api-staging", "alpha-api", stagingLabels,
@@ -197,6 +207,7 @@ func TestEvaluate_SleepsEveryEnvByPolicy(t *testing.T) {
 		{"alpha-web-qa", 1, "Ingress not on the activator yet → must not sleep"},
 		{"alpha-web-demo", 1, "first sighting only flips routing"},
 		{"alpha-web-verify-production", 0, "env-group clone counts as non-production"},
+		{"alpha-web-wedged", 1, "rollout in flight: sleeping would drop the serving old ReplicaSet"},
 		{"alpha-api-staging", 2, "opt-out wakes an already-slept env to its pre-sleep count"},
 	}
 	for _, c := range cases {

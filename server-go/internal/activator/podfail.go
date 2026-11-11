@@ -29,6 +29,11 @@ const podFailTTL = 2 * time.Second
 // a few times (≥70s of back-off, past any hold budget) is failed fast.
 const crashLoopMinRestarts = 3
 
+// unschedulableGrace: the scheduler reports Unschedulable the moment no
+// node fits, but a node can free up (a terminating pod, a cordon lifted)
+// within seconds; past this the pod is waiting on an operator.
+const unschedulableGrace = 10 * time.Second
+
 // startFailed returns a startFailure when the env's newest pod is in a
 // terminal waiting state, else nil. Unknown (LIST error, RBAC without
 // pods list) is nil: the request keeps holding as before.
@@ -57,7 +62,7 @@ func (a *Activator) startFailed(ctx context.Context, ns, name string) *startFail
 	if err != nil {
 		return nil
 	}
-	reason := newestPodStartFailure(pods.Items)
+	reason := newestPodStartFailure(pods.Items, now)
 	a.podFailMu.Lock()
 	a.podFail[key] = podFailEntry{reason: reason, at: now}
 	if len(a.podFail) > 4096 {
@@ -81,7 +86,7 @@ func asStartFailure(reason string) *startFailure {
 // newestPodStartFailure inspects only the newest live pod: an older
 // ReplicaSet's pod being fine (or broken) says nothing about the revision
 // a wake actually starts.
-func newestPodStartFailure(pods []corev1.Pod) string {
+func newestPodStartFailure(pods []corev1.Pod, now time.Time) string {
 	var newest *corev1.Pod
 	for i := range pods {
 		p := &pods[i]
@@ -94,6 +99,12 @@ func newestPodStartFailure(pods []corev1.Pod) string {
 	}
 	if newest == nil {
 		return ""
+	}
+	for _, c := range newest.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse &&
+			c.Reason == corev1.PodReasonUnschedulable && now.Sub(c.LastTransitionTime.Time) >= unschedulableGrace {
+			return corev1.PodReasonUnschedulable
+		}
 	}
 	statuses := append(append([]corev1.ContainerStatus{}, newest.Status.InitContainerStatuses...), newest.Status.ContainerStatuses...)
 	for _, cs := range statuses {

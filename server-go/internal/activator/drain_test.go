@@ -152,7 +152,7 @@ func TestStampOpen_RestampsEnvsWithOpenConnections(t *testing.T) {
 		}
 	}
 
-	done := a.beginProxy(ns, name)
+	done, _ := a.beginProxy(ns, name)
 	a.stampOpen(context.Background())
 	waitStamp(now.Format(time.RFC3339))
 
@@ -182,7 +182,7 @@ func TestServe_DrainsInFlightRequestOnShutdown(t *testing.T) {
 	started := make(chan struct{})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		done := a.beginProxy("kuso", "app")
+		done, _ := a.beginProxy("kuso", "app")
 		defer done()
 		close(started)
 		time.Sleep(500 * time.Millisecond)

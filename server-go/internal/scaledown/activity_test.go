@@ -54,6 +54,9 @@ func TestRecentlyActive(t *testing.T) {
 		{"old activity → idle", map[string]string{LastActivityAnnotation: now.Add(-45 * time.Minute).Format(time.RFC3339)}, 30, false},
 		{"no annotation → idle", map[string]string{}, 30, false},
 		{"garbage annotation → idle", map[string]string{LastActivityAnnotation: "not-a-time"}, 30, false},
+		// The activator refreshes the stamp only every ActivityStampInterval,
+		// so a window shorter than that must not read a busy env as idle.
+		{"short window, stamp one interval old → active", map[string]string{LastActivityAnnotation: now.Add(-ActivityStampInterval - 30*time.Second).Format(time.RFC3339)}, 1, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
