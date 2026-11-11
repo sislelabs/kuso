@@ -1072,6 +1072,9 @@ func main() {
 				goSafe(logger, "health", func() {
 					hw := health.New(kc, *namespace, notifyDisp, logger)
 					hw.Store = database
+					if buildSvc != nil {
+						hw.BuildBacklog = buildSvc.QueueBacklog
+					}
 					hw.Run(workCtx)
 				})
 			}

@@ -169,7 +169,7 @@ spec:
       port: 5000
       targetPort: registry
 ---
-# v0.9.38: weekly registry GC. The registry binary supports DELETE
+# v0.9.38: registry GC (daily since SCL-4). The registry binary supports DELETE
 # (REGISTRY_STORAGE_DELETE_ENABLED=true above), but every push leaves
 # orphan blobs that the registry's own `garbage-collect` subcommand
 # has to compact. Without this CronJob, a busy build cluster fills the
@@ -192,7 +192,7 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-registry-gc
 spec:
-  schedule: "17 3 * * 0"  # 03:17 every Sunday
+  schedule: "17 3 * * *"  # 03:17 daily (SCL-4: weekly let a busy week fill the PVC)
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
