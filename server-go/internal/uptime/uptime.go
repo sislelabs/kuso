@@ -18,8 +18,12 @@ const (
 	// probeWorkers is the minimum pool; workersFor grows it with the
 	// target count so hanging probes (ProbeTimeout each) can't use up the
 	// tick budget before every target gets a verdict.
-	probeWorkers    = 16
-	maxProbeWorkers = 128
+	probeWorkers = 16
+	// maxProbeWorkers: 512 workers x 5 hanging probes per tick = 2,560
+	// targets with a verdict even when every one times out (a node
+	// outage). Probes are idle goroutines on a socket, so the cost is
+	// file descriptors, not CPU.
+	maxProbeWorkers = 512
 	// tickBudget leaves room inside Interval for the DB write and sends.
 	tickBudget = 50 * time.Second
 )
@@ -200,6 +204,11 @@ func (w *Watcher) Tick(ctx context.Context) {
 		return priorByKey[toProbe[i].Key()].LastCheckedAt.Before(priorByKey[toProbe[j].Key()].LastCheckedAt)
 	})
 	results := w.probeAll(ctx, toProbe)
+	if missed := len(toProbe) - len(results); missed > 0 {
+		// Least-recently-checked go first, so they rotate in next tick.
+		w.Logger.Warn("uptime: tick budget ran out before every target was probed",
+			"targets", len(toProbe), "unchecked", missed)
+	}
 	// After the commit and sends below, with its own deadline: a dead
 	// Traefik makes these probes time out, and that must not eat the
 	// per-service budget.
