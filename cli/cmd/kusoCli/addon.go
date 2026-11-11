@@ -44,7 +44,7 @@ Admin-only.`,
 var addonPublicTCPEnableCmd = &cobra.Command{
 	Use:   "enable <project> <addon>",
 	Short: "Allocate a public TCP port for the addon (admin only)",
-	Example: `  kuso project addon public-tcp enable scubatony scubatony-storage-staging
+	Example: `  kuso project addon public-tcp enable shop postgres
   # then connect at kuso.sislelabs.com:<port> with the addon's own creds`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,13 +56,17 @@ var addonPublicTCPEnableCmd = &cobra.Command{
 			return fmt.Errorf("enable public-tcp: %w", err)
 		}
 		var out struct {
-			Port int `json:"port"`
+			Port    int    `json:"port"`
+			Warning string `json:"warning"`
 		}
 		if err := json.Unmarshal(resp.Body(), &out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 		fmt.Printf("addon %s/%s exposed on public TCP port %d\n", args[0], args[1], out.Port)
 		fmt.Fprintln(cmd.ErrOrStderr(), "note: reachable from the public internet — the addon's own auth is the only gate")
+		if out.Warning != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+out.Warning)
+		}
 		return nil
 	},
 }

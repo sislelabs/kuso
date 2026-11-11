@@ -21,7 +21,39 @@ const KindOrphanS3Secret Kind = "orphan_s3_secret"
 // still hands MinIO's root key to every subscribed pod (BLOB-3).
 const KindS3ConnHoldsRoot Kind = "s3_conn_holds_root"
 
+// KindS3PublicPlaintext: an s3 addon published on a public TCP port.
+// MinIO speaks plain HTTP there; new exposures are refused (BLOB-R3), ones
+// made before that keep working and show up here.
+const KindS3PublicPlaintext Kind = "s3_public_plaintext"
+
 const labelRole = "kuso.sislelabs.com/role"
+
+// ClassifyS3PublicTCP flags an s3 addon with an allocated public TCP port.
+func ClassifyS3PublicTCP(a *kube.KusoAddon) (Issue, bool) {
+	pt := a.Spec.PublicTCP
+	if a.Spec.Kind != "s3" || pt == nil || !pt.Enabled || pt.Port == 0 {
+		return Issue{}, false
+	}
+	project := a.Spec.Project
+	if project == "" {
+		project = a.Labels[kube.LabelProject]
+	}
+	return Issue{
+		Resource:  a.Name,
+		Namespace: a.Namespace,
+		Project:   project,
+		Type:      "addon",
+		AddonKind: "s3",
+		Kind:      KindS3PublicPlaintext,
+		Severity:  SeverityWarning,
+		Summary:   fmt.Sprintf("S3 addon is published on public TCP port %d over plain HTTP.", pt.Port),
+		Detail: "Object bodies, presigned URLs and bucket listings cross the internet unencrypted, and MinIO's root user " +
+			"authenticates on the same port. kuso no longer allows new s3 exposures.",
+		Action:     ActionNone,
+		Fix:        "Move off-cluster clients to an HTTPS endpoint, then disable the public port.",
+		RunbookCmd: fmt.Sprintf("kuso project addon public-tcp disable %s %s", project, strings.TrimPrefix(a.Name, project+"-")),
+	}, true
+}
 
 var s3CredentialRoles = map[string]bool{"s3-root": true, "s3-readonly": true}
 

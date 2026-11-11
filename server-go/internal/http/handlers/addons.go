@@ -147,7 +147,9 @@ func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) 
 	}
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "addon")
-	if !h.requireAddonOwned(ctx, w, project, name) {
+	cur, err := h.Svc.GetOwned(ctx, project, name)
+	if err != nil {
+		h.fail(w, "resolve addon", err)
 		return
 	}
 	port, err := h.Svc.EnablePublicTCP(ctx, project, name)
@@ -166,7 +168,11 @@ func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) 
 			Message:  fmt.Sprintf("addon %s/%s exposed on public TCP port %d", project, name, port),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"port": port})
+	out := map[string]any{"port": port}
+	if warn := addons.PublicTCPWarning(cur.Spec.Kind); warn != "" {
+		out["warning"] = warn
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // DisablePublicTCP frees the addon's allocated TCP port back to the
