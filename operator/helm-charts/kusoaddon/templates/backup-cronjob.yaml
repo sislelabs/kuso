@@ -961,11 +961,36 @@ spec:
                   export RCLONE_CONFIG_DST_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
                   export RCLONE_CONFIG_DST_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
                   export RCLONE_CONFIG_DST_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-                  # DEST is "s3://bucket/path/"; rclone wants "dst:bucket/path".
-                  RC_DEST="dst:${DEST#s3://}"
-                  rclone copy "src:${SRC_BUCKET}" "${RC_DEST}" \
+                  # Encrypt like the DB dumps when the addon has a backup key
+                  # (BLOB-6): an rclone crypt remote over the snapshot root.
+                  # File contents are encrypted; names stay readable (plus a
+                  # .bin suffix) so long keys still fit and the stamp layout
+                  # retention relies on is unchanged. No key: plaintext, as
+                  # before.
+                  SNAP_ROOT="dst:${BUCKET}/${PROJECT}/${ADDON}/"
+                  ENC_JSON=""
+                  if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+                    export RCLONE_CONFIG_ENC_TYPE=crypt
+                    export RCLONE_CONFIG_ENC_REMOTE="dst:${BUCKET}/${PROJECT}/${ADDON}"
+                    export RCLONE_CONFIG_ENC_FILENAME_ENCRYPTION=off
+                    export RCLONE_CONFIG_ENC_DIRECTORY_NAME_ENCRYPTION=false
+                    RCLONE_CONFIG_ENC_PASSWORD=$(rclone obscure "${BACKUP_ENCRYPTION_KEY}")
+                    export RCLONE_CONFIG_ENC_PASSWORD
+                    SNAP_ROOT="enc:"
+                    KEYID=$(printf 'kuso-backup-key:%s' "${BACKUP_ENCRYPTION_KEY}" | sha256sum | cut -c1-16)
+                    ENC_JSON=$(printf ',"encryption":{"alg":"rclone-crypt","keyId":"%s"}' "${KEYID}")
+                  fi
+                  # The snapshot manifest sits in each snapshot prefix, so
+                  # retention removes it with the snapshot. Restore reads it
+                  # to know whether to decrypt.
+                  snapshot_manifest() { # <snapshot dir under PREFIX>
+                    printf '{"payloadKind":"s3-snapshot"%s}\n' "${ENC_JSON}" \
+                      | rclone rcat "dst:${BUCKET}/${PREFIX}$1/.kuso-snapshot.manifest.json" --s3-no-check-bucket
+                  }
+                  rclone copy "src:${SRC_BUCKET}" "${SNAP_ROOT}${TS}/" \
                     --transfers 16 --checkers 16 --retries 3 \
                     --s3-no-check-bucket --stats-one-line --stats 30s
+                  snapshot_manifest "${TS}"
                   echo "==> sync done"
                   # Buckets an app created besides S3_BUCKET (D4) go to
                   # sibling prefixes <TS>.bucket-<name>/, which share the
@@ -974,9 +999,10 @@ spec:
                   if BUCKETS=$(rclone lsf --dirs-only "src:" 2>/dev/null); then
                     for B in $(printf '%s\n' "${BUCKETS}" | tr -d '/' | grep -E '^[a-z0-9][a-z0-9.-]{1,62}$' | grep -vxF "${SRC_BUCKET}" || true); do
                       echo "==> syncing extra bucket ${B}"
-                      rclone copy "src:${B}" "dst:${BUCKET}/${PROJECT}/${ADDON}/${TS}.bucket-${B}/" \
+                      rclone copy "src:${B}" "${SNAP_ROOT}${TS}.bucket-${B}/" \
                         --transfers 16 --checkers 16 --retries 3 \
                         --s3-no-check-bucket --stats-one-line --stats 30s
+                      snapshot_manifest "${TS}.bucket-${B}"
                     done
                   else
                     echo "WARNING: could not list buckets on the addon; only ${SRC_BUCKET} was backed up" >&2
@@ -1046,7 +1072,7 @@ races this Secret just uploads plaintext, as before.
 Back it up: losing this Secret makes the addon's encrypted dumps
 unrecoverable. kubectl -n <ns> get secret <addon>-backup-key -o yaml.
 */ -}}
-{{- if and (.Values.backup).schedule (has .Values.kind (list "postgres" "redis" "mongodb" "mysql")) (not .Values.useInstanceAddon) }}
+{{- if and (.Values.backup).schedule (or (has .Values.kind (list "postgres" "redis" "mongodb" "mysql")) (and (eq .Values.kind "s3") (not .Values.external))) (not .Values.useInstanceAddon) }}
 {{- $keyName := include "kusoaddon.backupKeySecretName" . }}
 {{- $existingKey := lookup "v1" "Secret" .Release.Namespace $keyName }}
 {{- $key := "" }}

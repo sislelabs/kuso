@@ -13,6 +13,7 @@ func NewDefaultRegistry() *Registry {
 		redisProducer{},
 		mongoProducer{},
 		mysqlProducer{},
+		s3Producer{},
 	} {
 		r.byKind[p.Kind()] = p
 	}

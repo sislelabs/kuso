@@ -187,6 +187,29 @@ func TestVerifyScopedCredential(t *testing.T) {
 	}
 }
 
+// BLOB-6: s3 snapshots restore through a Job that writes as MinIO root
+// (a snapshot can carry buckets besides S3_BUCKET).
+func TestRestoreS3Snapshot_Wiring(t *testing.T) {
+	t.Parallel()
+	if _, err := restoreScriptForKind("s3"); err != nil {
+		t.Fatalf("s3 not restorable: %v", err)
+	}
+	refs := map[string]string{}
+	for _, e := range restoreConnEnv("s3", "alpha-files", false) {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			refs[e.Name] = e.ValueFrom.SecretKeyRef.Name + "/" + e.ValueFrom.SecretKeyRef.Key
+		}
+	}
+	for name, want := range map[string]string{
+		"TGT_BUCKET": "alpha-files-conn/S3_BUCKET", "TGT_ENDPOINT": "alpha-files-conn/S3_ENDPOINT",
+		"TGT_ACCESS_KEY": "alpha-files-root/MINIO_ROOT_USER", "TGT_SECRET_KEY": "alpha-files-root/MINIO_ROOT_PASSWORD",
+	} {
+		if refs[name] != want {
+			t.Errorf("%s = %q, want %q", name, refs[name], want)
+		}
+	}
+}
+
 // The scoped key reaches the project's own rendered Secret; the shared
 // one keeps everything else.
 func TestPutScopedCredential_RendersProjectSecret(t *testing.T) {

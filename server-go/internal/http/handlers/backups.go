@@ -808,6 +808,16 @@ func restoreConnEnv(kind, releaseName string, external bool) []corev1.EnvVar {
 			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
 		}
 	}
+	if kind == "s3" {
+		// Root, not the app user: a snapshot can hold buckets besides
+		// S3_BUCKET, which the restore may have to create.
+		return []corev1.EnvVar{
+			envFromSecret("TGT_BUCKET", releaseName+"-conn", "S3_BUCKET"),
+			envFromSecret("TGT_ENDPOINT", releaseName+"-conn", "S3_ENDPOINT"),
+			envFromSecret("TGT_ACCESS_KEY", releaseName+"-root", "MINIO_ROOT_USER"),
+			envFromSecret("TGT_SECRET_KEY", releaseName+"-root", "MINIO_ROOT_PASSWORD"),
+		}
+	}
 	if kind == "mysql" {
 		return []corev1.EnvVar{
 			envFromSecret("MYSQL_HOST", releaseName+"-conn", "MYSQL_HOST"),

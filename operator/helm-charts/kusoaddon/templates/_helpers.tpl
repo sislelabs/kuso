@@ -500,9 +500,7 @@ kusoaddon.backupExtraEnv — env shared by every backup CronJob:
 {{- end -}}
 - { name: OWNER_SINCE, value: {{ $since | quote }} }
 - { name: OWNER_UID,   value: {{ $uid | quote }} }
-{{- if ne .Values.kind "s3" }}
 - { name: BACKUP_ENCRYPTION_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupKeySecretName" . | quote }}, key: key, optional: true } } }
-{{- end }}
 {{- end -}}
 
 {{- define "kusoaddon.backupContainerExtras" -}}
