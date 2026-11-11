@@ -1,12 +1,11 @@
 // Package helmhistory prunes old helm release revisions.
 //
-// The helm-operator (operator-sdk v1.42) never sets Helm's MaxHistory:
-// it has no flag for it and its action config leaves storage history
-// unlimited, so every `helm upgrade` leaves another
-// sh.helm.release.v1.<release>.v<N> Secret behind (papelito-db reached
-// revision 14021). Those Secrets grow kine/etcd and the apiserver watch
-// cache without bound. This sweep does what Helm's own MaxHistory would
-// do: per release, keep the newest Keep revisions and delete older ones.
+// It is a fallback, off by default. Measured on helm-operator v1.42,
+// only the newest sh.helm.release.v1.<release>.v<N> Secret survives an
+// upgrade: the revision NUMBER keeps counting (papelito-db reached 14021)
+// but the older Secrets are gone, so a sweep finds nothing. If a future
+// operator version does keep history, this does what Helm's MaxHistory
+// would: per release, keep the newest Keep revisions, delete the rest.
 //
 // Losing a release's history makes helm-operator reinstall it (for an
 // addon, a fresh StatefulSet render), so the rules are conservative:
@@ -17,7 +16,7 @@
 //   - nor is any deployed or pending-* revision, nor the newest Keep;
 //   - a paginated (incomplete) list aborts the namespace.
 //
-// Mode defaults to dryrun: it logs what it would delete and counts it in
+// Mode defaults to off. dryrun logs what it would delete and counts it in
 // kuso_helm_history_prunable_revisions_total, deleting nothing.
 package helmhistory
 
@@ -53,16 +52,16 @@ const (
 	ModeOn     Mode = "on"
 )
 
-// ParseMode maps the env value to a Mode; anything unrecognised is
-// dryrun, so a typo never turns deletion on.
+// ParseMode maps the env value to a Mode; unset or unrecognised is off,
+// so a typo never turns deletion on and the default costs nothing.
 func ParseMode(s string) Mode {
 	switch Mode(strings.ToLower(strings.TrimSpace(s))) {
-	case ModeOff:
-		return ModeOff
+	case ModeDryRun:
+		return ModeDryRun
 	case ModeOn:
 		return ModeOn
 	default:
-		return ModeDryRun
+		return ModeOff
 	}
 }
 

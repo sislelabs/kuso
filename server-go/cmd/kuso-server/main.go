@@ -1109,13 +1109,11 @@ func main() {
 				}
 				goSafe(logger, "finalizer-sweep", func() { runFinalizerSweep(workCtx, kc, sweepNamespaces, logger) })
 			}
-			// helm-operator v1.42 keeps unlimited release history (no
-			// max-history flag exists), so prune old revision Secrets
-			// here (SCL-16). Keeps the newest KUSO_HELM_HISTORY_MAX
-			// (default 3) per release plus any deployed/pending one.
-			// KUSO_HELM_HISTORY_PRUNE=off|dryrun|on, default dryrun:
-			// it only logs what it would delete until an operator has
-			// reviewed a cycle and set it to on.
+			// Fallback only: on helm-operator v1.42 just the newest
+			// release Secret survives an upgrade, so there is normally
+			// nothing to prune. KUSO_HELM_HISTORY_PRUNE=dryrun|on turns
+			// the sweep on (keeps the newest KUSO_HELM_HISTORY_MAX per
+			// release plus any deployed/pending one); default off.
 			if pruneMode := helmhistory.ParseMode(os.Getenv("KUSO_HELM_HISTORY_PRUNE")); pruneMode != helmhistory.ModeOff && kc.Config != nil {
 				if md, err := metadata.NewForConfig(kc.Config); err != nil {
 					logger.Warn("helm history prune: metadata client", "err", err)

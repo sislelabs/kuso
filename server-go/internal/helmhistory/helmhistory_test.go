@@ -107,8 +107,8 @@ func TestPruneNamespace_DryRunDeletesNothing(t *testing.T) {
 	if got := len(remaining(t, meta)); got != 18 {
 		t.Errorf("%d secrets left, want all 18", got)
 	}
-	if ParseMode("") != ModeDryRun || ParseMode("yes") != ModeDryRun || ParseMode("ON") != ModeOn {
-		t.Error("ParseMode must default to dryrun and only enable deletion on an explicit on")
+	if ParseMode("") != ModeOff || ParseMode("yes") != ModeOff || ParseMode("DryRun") != ModeDryRun || ParseMode("ON") != ModeOn {
+		t.Error("ParseMode must default to off and only enable deletion on an explicit on")
 	}
 }
 
