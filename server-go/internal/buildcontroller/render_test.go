@@ -225,26 +225,29 @@ func TestRenderJobAuthSecretMount(t *testing.T) {
 	}
 }
 
-func TestRenderJobBuildpacksOmitsDockerConfig(t *testing.T) {
+// OPS-2: the creator container runs buildpack and app dependency scripts,
+// and a child can read the creator's /proc/1/environ, so it must hold
+// neither the registry push credential nor the clone token.
+func TestRenderJobBuildpacksHoldsNoCredentials(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Strategy = "buildpacks"
 	b.Spec.Auth = &kube.KusoBuildAuth{SecretName: "ghcr-pull"}
+	b.Spec.Repo.URL = "https://gitlab.com/owner/private.git"
 	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
 	if volumeExists(job.Spec.Template.Spec, "docker-config") {
-		t.Error("buildpacks strategy must not mount docker-config (uses CNB_REGISTRY_AUTH env)")
+		t.Error("buildpacks strategy must not mount docker-config")
 	}
 	bp := findContainer(job.Spec.Template.Spec, "buildpacks")
 	if bp == nil {
 		t.Fatal("buildpacks missing")
 	}
-	var found bool
 	for _, e := range bp.Env {
-		if e.Name == "CNB_REGISTRY_AUTH" {
-			found = true
+		if e.Name == "CNB_REGISTRY_AUTH" || e.Name == "KUSO_GIT_TOKEN" {
+			t.Errorf("buildpacks container carries %s", e.Name)
 		}
 	}
-	if !found {
-		t.Error("CNB_REGISTRY_AUTH env missing")
+	if len(bp.EnvFrom) != 0 {
+		t.Errorf("buildpacks container has envFrom %v", bp.EnvFrom)
 	}
 }
 

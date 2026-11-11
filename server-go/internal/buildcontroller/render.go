@@ -1192,8 +1192,17 @@ cat .kuso-static.Dockerfile
 }
 
 // renderBuildpacksContainer is the CNB lifecycle creator. Runs as
-// 1000:1000 (lifecycle contract). Optional GITHUB_INSTALLATION_TOKEN
-// for private buildpacks / git-hosted deps.
+// 1000:1000 (lifecycle contract). The controller currently refuses
+// buildpacks builds (buildpacksUnsupportedMessage), so this only renders
+// in tests.
+//
+// It deliberately carries no registry credential and no clone token
+// (OPS-2): creator runs buildpack and app dependency scripts as its own
+// children, and those can read the creator's environment through
+// /proc/1/environ. The clone already happened in the clone init
+// container. Re-enabling buildpacks therefore needs the phased lifecycle:
+// analyze/restore/export in the default lifecycle image with
+// CNB_REGISTRY_AUTH, detect/build in the builder image without it.
 func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.ResourceRequirements) corev1.Container {
 	lifecycle := defaultBuildpacksImage
 	builder := defaultBuildpacksBuilder
@@ -1208,20 +1217,6 @@ func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.R
 	imageRef := fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag)
 	envs := []corev1.EnvVar{
 		{Name: "CNB_BUILDER_IMAGE", Value: builder},
-	}
-	if hasAuthSecret(b) {
-		envs = append(envs, corev1.EnvVar{
-			Name: "CNB_REGISTRY_AUTH",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: b.Spec.Auth.SecretName},
-					Key:                  "cnb_registry_auth",
-				},
-			},
-		})
-	}
-	if buildNeedsCloneToken(b) {
-		envs = append(envs, gitTokenEnvVar(buildName))
 	}
 	return corev1.Container{
 		Name:            "buildpacks",

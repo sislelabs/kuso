@@ -536,32 +536,10 @@ spec:
           env:
             - name: CNB_BUILDER_IMAGE
               value: {{ .Values.buildpacks.builderImage | default "paketobuildpacks/builder-jammy-base:latest" | quote }}
-            # Registry auth. The CNB lifecycle reads CNB_REGISTRY_AUTH
-            # as a JSON env: {"<registry>":{"username":"...","password":"..."}}.
-            # We pull it whole from a Secret key the server mints alongside
-            # the build CR — keeps creds out of the manifest and lets us
-            # rotate without re-rendering. When auth.secretName is empty
-            # we assume the in-cluster anonymous registry and omit the env
-            # entirely (lifecycle pushes anonymously).
-            {{- if .Values.auth.secretName }}
-            - name: CNB_REGISTRY_AUTH
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.secretName | quote }}
-                  key: cnb_registry_auth
-            {{- end }}
-            # Buildpacks frequently need a GitHub token for private
-            # buildpacks or to clone Git-hosted dependencies referenced
-            # from package.json/Gemfile. Mount the same installation
-            # token the clone init container uses; lifecycle picks it
-            # up via the standard GIT_ASKPASS env.
-            {{- if gt (int .Values.githubInstallationId) 0 }}
-            - name: GITHUB_INSTALLATION_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kusobuild.fullname" . }}-token
-                  key: token
-            {{- end }}
+            # No registry credential and no clone/installation token
+            # here (review OPS-2): creator runs buildpack and dependency
+            # scripts as children that can read its environment. Mirrors
+            # server-go/internal/buildcontroller/render.go.
           volumeMounts:
             - name: workspace
               mountPath: /workspace
