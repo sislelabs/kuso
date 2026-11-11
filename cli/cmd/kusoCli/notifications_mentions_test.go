@@ -23,36 +23,38 @@ func withNotifFlags(t *testing.T, name, url, mention string, on []string, config
 // The server's notify.mentionFor reads only config.mentions ({event: rule},
 // rules "@here" / "@everyone" / "role:<id>" / "none"). The CLI used to write
 // config.mention + config.mentionOn, which nothing read.
-func TestBuildNotifBody_WritesServerMentionsMap(t *testing.T) {
-	withNotifFlags(t, "disco", "https://discord.example/hook", "here", []string{"build.failed", "pod.crashed"}, "")
-	body, err := buildNotifBody("discord")
-	if err != nil {
-		t.Fatalf("buildNotifBody: %v", err)
-	}
-	want := map[string]any{"build.failed": "@here", "pod.crashed": "@here"}
-	if got := body.Config["mentions"]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("config.mentions = %#v, want %#v", got, want)
-	}
-	if _, ok := body.Config["mention"]; ok {
-		t.Fatalf("legacy config.mention key still written: %#v", body.Config)
-	}
-}
-
-func TestBuildNotifBody_MentionWithoutEventsIsWildcard(t *testing.T) {
-	withNotifFlags(t, "disco", "https://discord.example/hook", "123456", nil, "")
-	body, err := buildNotifBody("discord")
-	if err != nil {
-		t.Fatalf("buildNotifBody: %v", err)
-	}
-	if got := body.Config["mentions"]; !reflect.DeepEqual(got, map[string]any{"*": "role:123456"}) {
-		t.Fatalf("config.mentions = %#v", got)
-	}
-}
-
-func TestBuildNotifBody_RejectsUnknownMention(t *testing.T) {
-	withNotifFlags(t, "disco", "https://discord.example/hook", "ops-team", nil, "")
-	if _, err := buildNotifBody("discord"); err == nil {
-		t.Fatal("want an error for a mention the server can't render")
+func TestBuildNotifBody_Mentions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mention string
+		on      []string
+		want    map[string]any // nil: must error
+	}{
+		{"WritesServerMentionsMap", "here", []string{"build.failed", "pod.crashed"},
+			map[string]any{"build.failed": "@here", "pod.crashed": "@here"}},
+		{"MentionWithoutEventsIsWildcard", "123456", nil, map[string]any{"*": "role:123456"}},
+		// a mention the server can't render
+		{"RejectsUnknownMention", "ops-team", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withNotifFlags(t, "disco", "https://discord.example/hook", tc.mention, tc.on, "")
+			body, err := buildNotifBody("discord")
+			if tc.want == nil {
+				if err == nil {
+					t.Fatal("want an error for a mention the server can't render")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildNotifBody: %v", err)
+			}
+			if got := body.Config["mentions"]; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("config.mentions = %#v, want %#v", got, tc.want)
+			}
+			if _, ok := body.Config["mention"]; ok {
+				t.Fatalf("legacy config.mention key still written: %#v", body.Config)
+			}
+		})
 	}
 }
 

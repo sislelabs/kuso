@@ -7,6 +7,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Destructive commands that mutate live state and previously ran with no
+// confirmation at all. Each goes through confirmDestructive, which fails
+// CLOSED off a TTY (that half is pinned by confirm_test.go). This file
+// pins the per-command half: the --yes flag exists (so automation has a
+// supported opt-in) and the consequence is discoverable from --help.
+//
+// The first wave:
+//
+//	token revoke   — instantly 401s any CI job / agent still using it
+//	domains remove — takes a live production hostname offline
+//	env unset      — variadic KEY list; one stray shell word removes an
+//	                 extra variable, pods roll, values are unrecoverable
+//
 // Consistency sweep: destructive commands that previously ran with NO
 // confirmation while their twins were guarded:
 //
@@ -27,17 +40,21 @@ import (
 //	instance secret unset        — instance-wide, value unrecoverable
 //	group member rm              — twin `grant remove` is guarded
 //
-// Same contract as destructive_guard_test.go: --yes (-y) exists so
-// automation has a supported opt-in, the guard fails CLOSED off a TTY,
-// and the consequence is discoverable from --help before running it.
+// Same contract for all of them: --yes (-y) exists so automation has a
+// supported opt-in, the guard fails CLOSED off a TTY, and the
+// consequence is discoverable from --help before running it.
 
-var sweepGuardedCommands = []struct {
+var guardedCommands = []struct {
 	name string
 	cmd  *cobra.Command
 	// longWant: substrings the Long help must contain so the
 	// consequence is discoverable before the prompt ever fires.
 	longWant []string
 }{
+	{"token revoke", tokenRevokeCmd, []string{"401"}},
+	{"domains remove", domainsRemoveCmd, []string{"rate limit"}},
+	{"env unset", envUnsetCmd, []string{"recoverable"}},
+
 	{"secret unset", secretUnsetCmd, []string{"recoverable"}},
 	{"environment domain rm", environmentDomainRmCmd, []string{"stops serving"}},
 	{"environment domain set", environmentDomainSetCmd, []string{"stops serving"}},
@@ -90,64 +107,29 @@ func TestConfirmTypedName_FailsClosedOffTTY(t *testing.T) {
 	}
 }
 
-func TestSweepGuardedCommands_ExposeYesFlag(t *testing.T) {
-	for _, c := range sweepGuardedCommands {
-		if c.cmd.Flags().Lookup("yes") == nil {
-			t.Errorf("%s: no --yes flag registered; the non-TTY guard would be unbypassable in CI", c.name)
-		}
-	}
-}
-
-func TestSweepGuardedCommands_YesFlagHasShorthand(t *testing.T) {
-	for _, c := range sweepGuardedCommands {
-		f := c.cmd.Flags().Lookup("yes")
-		if f == nil {
-			continue // reported by the test above
-		}
-		if f.Shorthand != "y" {
-			t.Errorf("%s: --yes shorthand = %q, want %q", c.name, f.Shorthand, "y")
-		}
-	}
-}
-
-func TestSweepGuardedCommands_LongHelpStatesConsequence(t *testing.T) {
-	for _, c := range sweepGuardedCommands {
-		if c.cmd.Long == "" {
-			t.Errorf("%s: no Long help; the consequence is undiscoverable before running it", c.name)
-			continue
-		}
-		for _, w := range c.longWant {
-			if !strings.Contains(strings.ToLower(c.cmd.Long), strings.ToLower(w)) {
-				t.Errorf("%s: Long help should mention %q", c.name, w)
+// TestGuardedCommands: without a registered --yes, the non-TTY refusal
+// would be a dead end (automation could never run the command); -y keeps
+// them consistent with the commands that were already guarded; and the
+// prompt only appears once the user has already typed the command, so the
+// consequence has to be discoverable from `--help` beforehand too.
+func TestGuardedCommands(t *testing.T) {
+	for _, c := range guardedCommands {
+		t.Run(c.name, func(t *testing.T) {
+			f := c.cmd.Flags().Lookup("yes")
+			if f == nil {
+				t.Errorf("no --yes flag registered; the non-TTY guard would be unbypassable in CI")
+			} else if f.Shorthand != "y" {
+				t.Errorf("--yes shorthand = %q, want %q", f.Shorthand, "y")
 			}
-		}
-	}
-}
-
-// TestSweepGuardedCommands_AbortNonInteractively drives the shared
-// guard with a simulated non-TTY stdin for a representative prompt of
-// each newly guarded command — the CI / agent / `ssh host kuso ...`
-// case must refuse, naming --yes.
-func TestSweepGuardedCommands_AbortNonInteractively(t *testing.T) {
-	orig := stdinIsTTYFn
-	t.Cleanup(func() { stdinIsTTYFn = orig })
-	stdinIsTTYFn = func() bool { return false }
-
-	for _, prompt := range []string{
-		"Unset secret DATABASE_URL on proj/web [shared]? Pods will roll and the value is not recoverable.",
-		"Unbind app.example.com from proj/web env staging? The hostname stops serving and re-adding it re-requests a certificate.",
-		"Revoke pending bootstrap token abc? Any node join still using it will fail.",
-		"Delete alert rule 42? Its condition stops being watched immediately and the rule is not recoverable.",
-		"Delete notification channel 7? Events stop delivering immediately and its config is not recoverable.",
-	} {
-		err := confirmDestructive(false, prompt)
-		if err == nil {
-			t.Errorf("guard proceeded without --yes off a TTY for prompt %q", prompt)
-			continue
-		}
-		if !strings.Contains(err.Error(), "--yes") {
-			t.Errorf("refusal should mention --yes, got: %v", err)
-		}
+			if c.cmd.Long == "" {
+				t.Fatalf("no Long help; the consequence is undiscoverable before running it")
+			}
+			for _, w := range c.longWant {
+				if !strings.Contains(strings.ToLower(c.cmd.Long), strings.ToLower(w)) {
+					t.Errorf("Long help should mention %q", w)
+				}
+			}
+		})
 	}
 }
 

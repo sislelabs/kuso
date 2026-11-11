@@ -9,34 +9,34 @@ import (
 // A fresh install has no saved instance, but the CLI still constructs
 // and Init()s the client with an empty URL so `kuso login` works. Every
 // request must then fail with the friendly ErrNotConfigured — not
-// resty's raw `unsupported protocol scheme ""`.
+// resty's raw `unsupported protocol scheme ""`. The same gate must cover
+// the raw escape hatch (`kuso api …`).
 func TestUnconfigured_RequestsReturnFriendlyError(t *testing.T) {
-	k := &KusoClient{}
-	k.Init("", "")
+	for _, tc := range []struct {
+		name string
+		call func(k *KusoClient) error
+	}{
+		{"GetProjects", func(k *KusoClient) error { _, err := k.GetProjects(); return err }},
+		{"RawGet", func(k *KusoClient) error { _, err := k.RawGet("/api/projects"); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := &KusoClient{}
+			k.Init("", "")
 
-	_, err := k.GetProjects()
-	if err == nil {
-		t.Fatal("expected an error from an unconfigured client, got nil")
-	}
-	if !errors.Is(err, ErrNotConfigured) {
-		t.Fatalf("errors.Is(err, ErrNotConfigured) = false; got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "kuso login") {
-		t.Errorf("error should point at `kuso login`, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "unsupported protocol scheme") {
-		t.Errorf("raw Go transport artifact leaked through: %v", err)
-	}
-}
-
-// Same gate must cover the raw escape hatch (`kuso api …`).
-func TestUnconfigured_RawGetReturnsFriendlyError(t *testing.T) {
-	k := &KusoClient{}
-	k.Init("", "")
-
-	_, err := k.RawGet("/api/projects")
-	if !errors.Is(err, ErrNotConfigured) {
-		t.Fatalf("errors.Is(err, ErrNotConfigured) = false; got: %v", err)
+			err := tc.call(k)
+			if err == nil {
+				t.Fatal("expected an error from an unconfigured client, got nil")
+			}
+			if !errors.Is(err, ErrNotConfigured) {
+				t.Fatalf("errors.Is(err, ErrNotConfigured) = false; got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "kuso login") {
+				t.Errorf("error should point at `kuso login`, got: %v", err)
+			}
+			if strings.Contains(err.Error(), "unsupported protocol scheme") {
+				t.Errorf("raw Go transport artifact leaked through: %v", err)
+			}
+		})
 	}
 }
 

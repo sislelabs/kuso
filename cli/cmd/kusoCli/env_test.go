@@ -91,7 +91,7 @@ func TestEnvUnset_OnlyDeletesNamedKey(t *testing.T) {
 	// a TTY (this test process has no terminal). Opt in the same way a
 	// script would, with --yes: this test is about WHICH keys get
 	// deleted, not about the prompt. The guard itself is covered in
-	// destructive_guard_test.go.
+	// confirm_test.go and destructive_guard_sweep_test.go.
 	origYes := envUnsetYes
 	envUnsetYes = true
 	t.Cleanup(func() { envUnsetYes = origYes })
@@ -108,56 +108,80 @@ func TestEnvUnset_OnlyDeletesNamedKey(t *testing.T) {
 	}
 }
 
-// TestEnvSet_Secret verifies `kuso env set … --secret` sends
-// {"secretValue":"…"} to the single-var PUT (so the value lands in the
-// kuso-managed <service>-secrets Secret) rather than {"value":"…"} on the
-// bulk POST.
-func TestEnvSet_Secret(t *testing.T) {
-	var (
-		putPath string
-		body    map[string]any
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			http.Error(w, "expected PUT to the single-var endpoint, got "+r.Method, 405)
-			return
-		}
-		putPath = r.URL.Path
-		defer r.Body.Close()
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{}")
-	}))
-	defer srv.Close()
+// TestEnvSet_SingleVarPUT covers both single-var PUT shapes:
+//
+//   - Secret: `kuso env set … --secret` sends {"secretValue":"…"} (so the
+//     value lands in the kuso-managed <service>-secrets Secret) rather than
+//     {"value":"…"} on the bulk POST.
+//   - Auto: the default `kuso env set` (no --secret, no --env) uses the
+//     UNIFIED write, {value, auto:true}, so the SERVER decides storage. It
+//     must NOT fall back to the old read-merge-whole-list POST, and must not
+//     send secretValue/secretRef.
+func TestEnvSet_SingleVarPUT(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		secret   bool
+		arg      string
+		wantPath string
+		want     map[string]any
+		absent   []string
+	}{
+		{"Secret", true, "WETRAVEL_API_KEY=s3cr3t", "/api/projects/alpha/services/web/env-vars/WETRAVEL_API_KEY",
+			map[string]any{"secretValue": "s3cr3t"}, []string{"value"}},
+		{"Auto", false, "FEATURE_X=1", "/api/projects/alpha/services/web/env-vars/FEATURE_X",
+			map[string]any{"auto": true, "value": "1"}, []string{"secretValue", "secretRef"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				putPath string
+				method  string
+				body    map[string]any
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				method = r.Method
+				if r.Method != http.MethodPut {
+					http.Error(w, "expected PUT to the single-var endpoint, got "+r.Method, 405)
+					return
+				}
+				putPath = r.URL.Path
+				defer r.Body.Close()
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, err.Error(), 400)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "{}")
+			}))
+			defer srv.Close()
 
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-	// Reset the package-level flag so state doesn't leak across tests.
-	envSecretFlag = true
-	defer func() { envSecretFlag = false }()
+			api = &kusoApi.KusoClient{}
+			api.Init(srv.URL, "test-token")
+			defer func() { api = nil }()
+			// Package-level flags: set for this row, reset so state doesn't leak.
+			envSecretFlag = tc.secret
+			envScopeFlag = ""
+			defer func() { envSecretFlag = false }()
 
-	args := []string{"alpha", "web", "WETRAVEL_API_KEY=s3cr3t"}
-	if err := envSetCmd.RunE(envSetCmd, args); err != nil {
-		t.Fatalf("set --secret RunE: %v", err)
-	}
-
-	if want := "/api/projects/alpha/services/web/env-vars/WETRAVEL_API_KEY"; putPath != want {
-		t.Errorf("PUT path = %q, want %q", putPath, want)
-	}
-	// Must send secretValue, NOT value.
-	if _, hasValue := body["value"]; hasValue {
-		t.Errorf("body carried plaintext value; want secretValue only: %+v", body)
-	}
-	sv, ok := body["secretValue"]
-	if !ok {
-		t.Fatalf("body missing secretValue: %+v", body)
-	}
-	if sv != "s3cr3t" {
-		t.Errorf("secretValue = %v, want s3cr3t", sv)
+			if err := envSetCmd.RunE(envSetCmd, []string{"alpha", "web", tc.arg}); err != nil {
+				t.Fatalf("set RunE: %v", err)
+			}
+			if method != http.MethodPut {
+				t.Fatalf("expected a PUT (single-var write), got %q", method)
+			}
+			if putPath != tc.wantPath {
+				t.Errorf("PUT path = %q, want %q", putPath, tc.wantPath)
+			}
+			for k, v := range tc.want {
+				if body[k] != v {
+					t.Errorf("body %s = %v, want %v: %+v", k, body[k], v, body)
+				}
+			}
+			for _, k := range tc.absent {
+				if _, has := body[k]; has {
+					t.Errorf("body must not carry %s: %+v", k, body)
+				}
+			}
+		})
 	}
 }
 
@@ -175,65 +199,6 @@ func TestEnvSet_SecretRejectsEnvScope(t *testing.T) {
 	err := envSetCmd.RunE(envSetCmd, []string{"alpha", "web", "K=v"})
 	if err == nil {
 		t.Fatal("expected --secret + --env to error, got nil")
-	}
-}
-
-// TestEnvSet_Auto verifies the default `kuso env set` (no --secret, no --env)
-// now uses the UNIFIED write: a single-var PUT carrying {value, auto:true} so
-// the SERVER decides storage. It must NOT fall back to the old
-// read-merge-whole-list POST, and must not send secretValue/secretRef.
-func TestEnvSet_Auto(t *testing.T) {
-	var (
-		putPath string
-		method  string
-		body    map[string]any
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method = r.Method
-		if r.Method != http.MethodPut {
-			http.Error(w, "expected PUT to the single-var endpoint, got "+r.Method, 405)
-			return
-		}
-		putPath = r.URL.Path
-		defer r.Body.Close()
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "{}")
-	}))
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-	// Ensure the default path (both scoping flags off).
-	envSecretFlag = false
-	envScopeFlag = ""
-
-	args := []string{"alpha", "web", "FEATURE_X=1"}
-	if err := envSetCmd.RunE(envSetCmd, args); err != nil {
-		t.Fatalf("set (auto) RunE: %v", err)
-	}
-
-	if method != http.MethodPut {
-		t.Fatalf("expected a PUT (single-var unified write), got %q", method)
-	}
-	if want := "/api/projects/alpha/services/web/env-vars/FEATURE_X"; putPath != want {
-		t.Errorf("PUT path = %q, want %q", putPath, want)
-	}
-	if body["auto"] != true {
-		t.Errorf("body missing auto:true: %+v", body)
-	}
-	if body["value"] != "1" {
-		t.Errorf("body value = %v, want \"1\"", body["value"])
-	}
-	if _, has := body["secretValue"]; has {
-		t.Errorf("auto write must not send secretValue: %+v", body)
-	}
-	if _, has := body["secretRef"]; has {
-		t.Errorf("auto write must not send secretRef: %+v", body)
 	}
 }
 
@@ -276,81 +241,75 @@ func TestEnvList_RevealHitsRevealURL(t *testing.T) {
 	}
 }
 
-// TestEnvList_TypeClassification covers the one-secret-primitive TYPE column:
-// plain literal → "env", managed secret → "secret", secretKeyRef → "ref"
-// with a "→ name.key" wiring value when NOT revealed.
-func TestEnvList_TypeClassification(t *testing.T) {
-	getBody := `{"masked":false,"revealed":false,"envVars":[
-		{"name":"PLAIN_ONE","value":"hello"},
-		{"name":"MANAGED_ONE","source":"managed-secret","value":""},
-		{"name":"REF_ONE","valueFrom":{"secretKeyRef":{"name":"db-conn","key":"DATABASE_URL"}}}
-	]}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, getBody)
-	}))
-	defer srv.Close()
+// TestEnvList_Rendering covers the one-secret-primitive TYPE column.
+func TestEnvList_Rendering(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		getBody string
+		reveal  bool
+		rows    [][]string // each: cells that must share one rendered row
+		absent  []string
+	}{
+		// plain literal → "env", managed secret → "secret" (masked),
+		// secretKeyRef → "ref" with a "→ name.key" wiring value when NOT revealed.
+		{
+			name: "TypeClassification",
+			getBody: `{"masked":false,"revealed":false,"envVars":[
+				{"name":"PLAIN_ONE","value":"hello"},
+				{"name":"MANAGED_ONE","source":"managed-secret","value":""},
+				{"name":"REF_ONE","valueFrom":{"secretKeyRef":{"name":"db-conn","key":"DATABASE_URL"}}}
+			]}`,
+			rows: [][]string{
+				{"PLAIN_ONE", "hello", "env"},
+				{"MANAGED_ONE", "•••••", "secret"},
+				{"REF_ONE", "→ db-conn.DATABASE_URL", "ref"},
+			},
+		},
+		// When the server reports revealed:true the real resolved value is
+		// printed for managed secrets and refs, not the mask / wiring form.
+		{
+			name: "RevealedValues",
+			getBody: `{"masked":false,"revealed":true,"envVars":[
+				{"name":"MANAGED_ONE","source":"managed-secret","value":"s3cr3t-plain"},
+				{"name":"REF_ONE","value":"postgres://resolved","valueFrom":{"secretKeyRef":{"name":"db-conn","key":"DATABASE_URL"}}}
+			]}`,
+			reveal: true,
+			rows: [][]string{
+				{"MANAGED_ONE", "s3cr3t-plain", "secret"},
+				{"REF_ONE", "postgres://resolved", "ref"},
+			},
+			absent: []string{"•••••", "→ "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.getBody)
+			}))
+			defer srv.Close()
 
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-	envRevealFlag = false
+			api = &kusoApi.KusoClient{}
+			api.Init(srv.URL, "test-token")
+			defer func() { api = nil }()
+			envRevealFlag = tc.reveal
+			defer func() { envRevealFlag = false }()
 
-	out := captureStdout(t, func() {
-		if err := envListCmd.RunE(envListCmd, []string{"alpha", "web"}); err != nil {
-			t.Fatalf("list RunE: %v", err)
-		}
-	})
-
-	// Plain literal → env
-	if !rowHas(out, "PLAIN_ONE", "hello", "env") {
-		t.Errorf("PLAIN_ONE not rendered as env with value 'hello':\n%s", out)
-	}
-	// Managed secret → secret, value masked
-	if !rowHas(out, "MANAGED_ONE", "•••••", "secret") {
-		t.Errorf("MANAGED_ONE not rendered as masked secret:\n%s", out)
-	}
-	// Ref → ref, value shows wiring "→ name.key"
-	if !rowHas(out, "REF_ONE", "→ db-conn.DATABASE_URL", "ref") {
-		t.Errorf("REF_ONE not rendered as ref with wiring target:\n%s", out)
-	}
-}
-
-// TestEnvList_RevealedValues asserts that when the server reports revealed:true
-// the real resolved value is printed in the VALUE column for managed secrets
-// and refs (not the mask / wiring form).
-func TestEnvList_RevealedValues(t *testing.T) {
-	getBody := `{"masked":false,"revealed":true,"envVars":[
-		{"name":"MANAGED_ONE","source":"managed-secret","value":"s3cr3t-plain"},
-		{"name":"REF_ONE","value":"postgres://resolved","valueFrom":{"secretKeyRef":{"name":"db-conn","key":"DATABASE_URL"}}}
-	]}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, getBody)
-	}))
-	defer srv.Close()
-
-	api = &kusoApi.KusoClient{}
-	api.Init(srv.URL, "test-token")
-	defer func() { api = nil }()
-	envRevealFlag = true
-	defer func() { envRevealFlag = false }()
-
-	out := captureStdout(t, func() {
-		if err := envListCmd.RunE(envListCmd, []string{"alpha", "web"}); err != nil {
-			t.Fatalf("list --reveal RunE: %v", err)
-		}
-	})
-
-	if !rowHas(out, "MANAGED_ONE", "s3cr3t-plain", "secret") {
-		t.Errorf("revealed managed secret didn't show plaintext value:\n%s", out)
-	}
-	if !rowHas(out, "REF_ONE", "postgres://resolved", "ref") {
-		t.Errorf("revealed ref didn't show resolved value:\n%s", out)
-	}
-	// The masked / wiring sentinels must NOT appear when revealed.
-	if strings.Contains(out, "•••••") || strings.Contains(out, "→ ") {
-		t.Errorf("revealed output still contains a mask/wiring sentinel:\n%s", out)
+			out := captureStdout(t, func() {
+				if err := envListCmd.RunE(envListCmd, []string{"alpha", "web"}); err != nil {
+					t.Fatalf("list RunE: %v", err)
+				}
+			})
+			for _, row := range tc.rows {
+				if !rowHas(out, row...) {
+					t.Errorf("no row with %q:\n%s", row, out)
+				}
+			}
+			for _, s := range tc.absent {
+				if strings.Contains(out, s) {
+					t.Errorf("output still contains sentinel %q:\n%s", s, out)
+				}
+			}
+		})
 	}
 }
 

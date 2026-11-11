@@ -29,60 +29,37 @@ func resetFlag(t *testing.T, cmdFlags interface {
 	_ = cmdFlags.Set(name, "")
 }
 
-func TestBackupOutputJSONNoLongerCreatesFile(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := backupCmd.Flags().Set("output", "json"); err != nil {
-		t.Fatalf("set -o json: %v", err)
-	}
-	t.Cleanup(func() { resetFlag(t, backupCmd.Flags(), "output") })
+func TestBackupDashOValueRefusedWithFileHint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  *cobra.Command
+		args []string
+		val  string
+	}{
+		// historically `kuso backup -o json` wrote a file named "json"
+		{"BackupOutputJSONNoLongerCreatesFile", backupCmd, nil, "json"},
+		// -o <path> must error too: the file meaning lives on --file only
+		{"BackupOutputPathValueErrorsWithFileHint", backupCmd, nil, "dump.sql.gz"},
+		{"AddonBackupDownloadOutputJSONNoLongerCreatesFile", addonBackupDownloadCmd, []string{"proj", "db"}, "json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			if err := tc.cmd.Flags().Set("output", tc.val); err != nil {
+				t.Fatalf("set -o %s: %v", tc.val, err)
+			}
+			t.Cleanup(func() { resetFlag(t, tc.cmd.Flags(), "output") })
 
-	err := backupCmd.RunE(backupCmd, nil)
-	if err == nil {
-		t.Fatal("kuso backup -o json did not error; historically this wrote a file named \"json\"")
-	}
-	if !strings.Contains(err.Error(), "--file") {
-		t.Errorf("error should point the user at --file, got: %v", err)
-	}
-	if _, statErr := os.Stat("json"); statErr == nil {
-		t.Error("a file literally named \"json\" was created — the exact bug this sweep fixes")
-	}
-}
-
-func TestBackupOutputPathValueErrorsWithFileHint(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := backupCmd.Flags().Set("output", "dump.sql.gz"); err != nil {
-		t.Fatalf("set -o: %v", err)
-	}
-	t.Cleanup(func() { resetFlag(t, backupCmd.Flags(), "output") })
-
-	err := backupCmd.RunE(backupCmd, nil)
-	if err == nil {
-		t.Fatal("kuso backup -o <path> should error and direct the user to --file")
-	}
-	if !strings.Contains(err.Error(), "--file") {
-		t.Errorf("error should mention --file, got: %v", err)
-	}
-	if _, statErr := os.Stat("dump.sql.gz"); statErr == nil {
-		t.Error("-o <path> still wrote a file; the file meaning must live on --file only")
-	}
-}
-
-func TestAddonBackupDownloadOutputJSONNoLongerCreatesFile(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := addonBackupDownloadCmd.Flags().Set("output", "json"); err != nil {
-		t.Fatalf("set -o json: %v", err)
-	}
-	t.Cleanup(func() { resetFlag(t, addonBackupDownloadCmd.Flags(), "output") })
-
-	err := addonBackupDownloadCmd.RunE(addonBackupDownloadCmd, []string{"proj", "db"})
-	if err == nil {
-		t.Fatal("addon-backup download -o json did not error")
-	}
-	if !strings.Contains(err.Error(), "--file") {
-		t.Errorf("error should point the user at --file, got: %v", err)
-	}
-	if _, statErr := os.Stat("json"); statErr == nil {
-		t.Error("a file literally named \"json\" was created")
+			err := tc.cmd.RunE(tc.cmd, tc.args)
+			if err == nil {
+				t.Fatalf("%s -o %s did not error", tc.cmd.CommandPath(), tc.val)
+			}
+			if !strings.Contains(err.Error(), "--file") {
+				t.Errorf("error should point the user at --file, got: %v", err)
+			}
+			if _, statErr := os.Stat(tc.val); statErr == nil {
+				t.Errorf("a file literally named %q was created — the exact bug this sweep fixes", tc.val)
+			}
+		})
 	}
 }
 

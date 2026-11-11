@@ -3,39 +3,42 @@ package kusoCli
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 )
 
-func TestRenderAPIResponse_PrettyJSON(t *testing.T) {
-	var buf bytes.Buffer
-	err := renderAPIResponse(&buf, []byte(`{"b":2,"a":1}`), false, 200, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Pretty-printed, indented output.
-	if !bytes.Contains(buf.Bytes(), []byte("\n  ")) {
-		t.Fatalf("expected indented JSON, got:\n%s", buf.String())
-	}
-}
-
-func TestRenderAPIResponse_RawNonJSON(t *testing.T) {
-	var buf bytes.Buffer
-	if err := renderAPIResponse(&buf, []byte("plain text"), false, 200, nil); err != nil {
-		t.Fatal(err)
-	}
-	if buf.String() != "plain text\n" {
-		t.Fatalf("raw passthrough wrong: %q", buf.String())
-	}
-}
-
-func TestRenderAPIResponse_Include(t *testing.T) {
-	var buf bytes.Buffer
-	h := http.Header{"Content-Type": []string{"application/json"}}
-	if err := renderAPIResponse(&buf, []byte(`{}`), true, 201, h); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(buf.Bytes(), []byte("HTTP 201")) ||
-		!bytes.Contains(buf.Bytes(), []byte("Content-Type: application/json")) {
-		t.Fatalf("include header output wrong:\n%s", buf.String())
+func TestRenderAPIResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		include bool
+		status  int
+		header  http.Header
+		// exact, when set, is the whole expected output; otherwise every
+		// contains substring must appear.
+		exact    string
+		contains []string
+	}{
+		// Pretty-printed, indented output.
+		{name: "PrettyJSON", body: `{"b":2,"a":1}`, status: 200, contains: []string{"\n  "}},
+		{name: "RawNonJSON", body: "plain text", status: 200, exact: "plain text\n"},
+		{name: "Include", body: `{}`, include: true, status: 201,
+			header:   http.Header{"Content-Type": []string{"application/json"}},
+			contains: []string{"HTTP 201", "Content-Type: application/json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := renderAPIResponse(&buf, []byte(tc.body), tc.include, tc.status, tc.header); err != nil {
+				t.Fatal(err)
+			}
+			if tc.exact != "" && buf.String() != tc.exact {
+				t.Fatalf("output = %q, want %q", buf.String(), tc.exact)
+			}
+			for _, w := range tc.contains {
+				if !strings.Contains(buf.String(), w) {
+					t.Fatalf("output missing %q:\n%s", w, buf.String())
+				}
+			}
+		})
 	}
 }
