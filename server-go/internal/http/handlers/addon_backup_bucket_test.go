@@ -22,11 +22,12 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// AUTHZ-02 (narrow part): the backup bucket decides where production DB
-// dumps are written with the instance's S3 credentials, so pointing it
-// somewhere new needs secrets:read (project admin), not Editor. Re-sending
-// the current value (a whole-form save) stays allowed for editors.
-func TestAddonUpdate_BackupBucketChangeNeedsSecretsRead(t *testing.T) {
+// AUTHZ-02 / BLOB-10: the backup bucket decides where production DB dumps
+// are written with the instance's S3 credentials, which reach buckets no
+// project owns, so pointing it somewhere new needs an instance admin.
+// Re-sending the current value (a whole-form save) stays allowed for
+// editors.
+func TestAddonUpdate_BackupBucketChangeNeedsInstanceAdmin(t *testing.T) {
 	d := openTestDB(t)
 	seedUserWithProjectRole(t, d, "ed", "p1", db.ProjectRoleEditor)
 	seedUserWithProjectRole(t, d, "pa", "p1", db.ProjectRoleAdmin)
@@ -55,7 +56,11 @@ func TestAddonUpdate_BackupBucketChangeNeedsSecretsRead(t *testing.T) {
 	patch := func(user, bucket string) int {
 		req := httptest.NewRequest(http.MethodPatch, "/api/projects/p1/addons/pg",
 			strings.NewReader(`{"backup":{"bucket":"`+bucket+`"}}`))
-		req = req.WithContext(auth.WithClaimsForTest(context.Background(), &auth.Claims{UserID: user}))
+		claims := &auth.Claims{UserID: user}
+		if user == "root" {
+			claims.Permissions = []string{string(auth.PermSettingsAdmin)}
+		}
+		req = req.WithContext(auth.WithClaimsForTest(context.Background(), claims))
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		return rec.Code
@@ -77,8 +82,14 @@ func TestAddonUpdate_BackupBucketChangeNeedsSecretsRead(t *testing.T) {
 	if code := patch("ed", "team-backups"); code == http.StatusForbidden {
 		t.Errorf("editor re-sending the current bucket was refused")
 	}
-	if code := patch("pa", "other-bucket"); code == http.StatusForbidden {
-		t.Errorf("project admin changing bucket was refused")
+	if code := patch("pa", "other-bucket"); code != http.StatusForbidden {
+		t.Errorf("project admin changing bucket: status %d, want 403", code)
+	}
+	if got := bucket(); got != "team-backups" {
+		t.Fatalf("bucket = %q after refused project-admin patch", got)
+	}
+	if code := patch("root", "other-bucket"); code == http.StatusForbidden {
+		t.Errorf("instance admin changing bucket was refused")
 	}
 	if got := bucket(); got != "other-bucket" {
 		t.Errorf("bucket = %q, want other-bucket after admin patch", got)

@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -117,6 +118,9 @@ func (c *Client) HealBackupSecrets(ctx context.Context) (int, error) {
 			continue
 		}
 		healed++
+	}
+	if _, err := c.HealScopedBackupSecrets(ctx); err != nil && !errors.Is(err, ErrBackupNotConfigured) && firstErr == nil {
+		firstErr = err
 	}
 	return healed, firstErr
 }

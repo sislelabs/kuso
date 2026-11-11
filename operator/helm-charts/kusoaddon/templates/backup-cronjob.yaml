@@ -284,12 +284,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
@@ -463,12 +463,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
@@ -600,12 +600,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
@@ -725,12 +725,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
@@ -846,12 +846,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
@@ -1026,12 +1026,12 @@ spec:
                 {{- if (.Values.backup).bucket }}
                 - { name: BUCKET,        value: {{ (.Values.backup).bucket | quote }} }
                 {{- else }}
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: bucket, optional: true } } }
                 {{- end }}
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
-                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: {{ include "kusoaddon.backupS3SecretName" . }}, key: region, optional: true } } }
                 {{- include "kusoaddon.backupExtraEnv" . | nindent 16 }}
 {{- end }}
 
