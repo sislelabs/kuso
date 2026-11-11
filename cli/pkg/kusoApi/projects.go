@@ -455,9 +455,20 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 }
 
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
+	return k.DeleteAddonWith(project, addon, false)
+}
+
+// DeleteAddonWith is DeleteAddon; purgeData also removes the data volumes
+// and credentials a plain delete keeps, including those left behind by an
+// earlier plain delete of the same addon.
+func (k *KusoClient) DeleteAddonWith(project, addon string, purgeData bool) (*resty.Response, error) {
 	// ?confirm=<addon> is required server-side. Always pass it; the
 	// CLI gets its own typed-confirm prompt one layer up.
-	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "?confirm=" + esc(addon))
+	path := "/api/projects/" + esc(project) + "/addons/" + esc(addon) + "?confirm=" + esc(addon)
+	if purgeData {
+		path += "&purgeData=true"
+	}
+	return k.client.Delete(path)
 }
 
 // UpdateAddonRequest aliases the apiv1 wire shape. The legacy

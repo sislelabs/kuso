@@ -1485,26 +1485,42 @@ var addonUnsubscribeCmd = &cobra.Command{
 	},
 }
 
-var addonDeleteYes bool
+var (
+	addonDeleteYes   bool
+	addonDeletePurge bool
+)
 
 var addonDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <name>",
 	Aliases: []string{"rm"},
-	Short:   "Delete an addon",
-	Args:    cobra.ExactArgs(2),
+	Short:   "Delete an addon (its data volume and credentials are kept unless --purge-data)",
+	Long: `Delete an addon. By default its data volume and credentials are kept, and
+re-adding the same name is refused until they are removed. --purge-data
+removes them too. It also works after an earlier plain delete, to clear
+the data that delete kept. Purged data is gone for good.`,
+	Example: `  kuso project addon delete shop db
+  kuso project addon delete shop db --purge-data -y`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		if err := confirmDestructive(addonDeleteYes,
-			fmt.Sprintf("Delete addon %s/%s?", args[0], args[1])); err != nil {
+		prompt := fmt.Sprintf("Delete addon %s/%s? Its data volume is kept.", args[0], args[1])
+		if addonDeletePurge {
+			prompt = fmt.Sprintf("Delete addon %s/%s AND permanently erase its data?", args[0], args[1])
+		}
+		if err := confirmDestructive(addonDeleteYes, prompt); err != nil {
 			return err
 		}
-		resp, err := api.DeleteAddon(args[0], args[1])
+		resp, err := api.DeleteAddonWith(args[0], args[1], addonDeletePurge)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("delete addon: %w", err)
 		}
-		fmt.Printf("addon %s/%s deleted\n", args[0], args[1])
+		if addonDeletePurge {
+			fmt.Printf("addon %s/%s deleted with its data\n", args[0], args[1])
+			return nil
+		}
+		fmt.Printf("addon %s/%s deleted; its data was kept (erase it with: kuso project addon delete %s %s --purge-data)\n", args[0], args[1], args[0], args[1])
 		return nil
 	},
 }
@@ -2018,6 +2034,7 @@ func init() {
 	_ = addonAddCmd.MarkFlagRequired("kind")
 	projectAddonCmd.AddCommand(addonDeleteCmd)
 	addonDeleteCmd.Flags().BoolVarP(&addonDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+	addonDeleteCmd.Flags().BoolVar(&addonDeletePurge, "purge-data", false, "also erase the addon's data volume and credentials (irreversible)")
 
 	projectAddonCmd.AddCommand(addonConnectExternalCmd)
 	projectAddonCmd.AddCommand(addonPodsCmd)
