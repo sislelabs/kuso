@@ -188,3 +188,49 @@ VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', 'admin', NOW(), NOW())`
 	tokenJWT := strings.SplitN(strings.SplitN(rr.Body.String(), `"token":"`, 2)[1], `"`, 2)[0]
 	expectOneAuditRow(t, d, "token.issue", "ci-bot", tokenJWT)
 }
+
+// OPS-9: self-minted API tokens, groups and alert channels were silent.
+func TestAudit_OwnTokenGroupAndAlertChannel(t *testing.T) {
+	d := openTestDB(t)
+	if _, err := d.DB.Exec(`INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "instanceRole", "createdAt", "updatedAt")
+VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', 'admin', NOW(), NOW())`); err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := auth.NewIssuer("test-secret-test-secret-test-secret", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &audit.Service{DB: d, Enabled: true}
+	r := chi.NewRouter()
+	(&AdminHandler{DB: d, Issuer: issuer, Audit: a, Logger: quietLogger()}).Mount(r)
+	(&GroupsHandler{DB: d, Audit: a, Logger: quietLogger()}).Mount(r)
+	(&NotificationsHandler{DB: d, Audit: a, Logger: quietLogger()}).Mount(r)
+
+	rr := auditDo(t, r, auditAdmin, http.MethodPost, "/api/tokens/my", `{"name":"laptop"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("mint token: %d %s", rr.Code, rr.Body.String())
+	}
+	tokenJWT := strings.SplitN(strings.SplitN(rr.Body.String(), `"token":"`, 2)[1], `"`, 2)[0]
+	expectOneAuditRow(t, d, "token.create", "laptop", tokenJWT)
+	tokRow := auditRowsFor(t, d, "token.create")[0]
+	if tokRow.severity != "critical" {
+		t.Errorf("token.create severity = %q, want critical", tokRow.severity)
+	}
+	tokID := strings.TrimPrefix(tokRow.resource, "token/")
+	if rr := auditDo(t, r, auditAdmin, http.MethodDelete, "/api/tokens/my/"+tokID, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("revoke token: %d %s", rr.Code, rr.Body.String())
+	}
+	expectOneAuditRow(t, d, "token.revoke", tokID, "")
+
+	if rr := auditDo(t, r, auditAdmin, http.MethodPost, "/api/groups", `{"name":"oncall"}`); rr.Code != http.StatusCreated {
+		t.Fatalf("create group: %d %s", rr.Code, rr.Body.String())
+	}
+	expectOneAuditRow(t, d, "group.create", "oncall", "")
+
+	rr = auditDo(t, r, auditAdmin, http.MethodPost, "/api/notifications",
+		`{"name":"pager","type":"webhook","enabled":true,"config":{"url":"https://hooks.example.com/x","secret":"hmac-s3cret"}}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", rr.Code, rr.Body.String())
+	}
+	expectOneAuditRow(t, d, "notification.create", "pager", "hmac-s3cret")
+}

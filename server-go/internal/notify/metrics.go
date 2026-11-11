@@ -42,3 +42,12 @@ var metricsDelivered = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name:      "delivered_total",
 	Help:      "Outbox rows delivered to an external channel, partitioned by event type.",
 }, []string{"type"})
+
+// metricsDirectFallback counts platform events delivered straight to a
+// channel because the outbox (Postgres) couldn't be written.
+var metricsDirectFallback = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "kuso",
+	Subsystem: "notify",
+	Name:      "direct_fallback_delivered_total",
+	Help:      "Platform events delivered directly to a channel because the outbox write failed, partitioned by event type.",
+}, []string{"type"})

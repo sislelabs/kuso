@@ -699,6 +699,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			PrivateEgress:        req.PrivateEgress,
 			PlatformAPIEgress:    req.PlatformAPIEgress,
 			WaitForCI:            req.WaitForCI,
+			StrictBuildSecrets:   req.StrictBuildSecrets == nil || *req.StrictBuildSecrets,
 			Placement:            req.Placement,
 			Volumes:              createVolumes,
 			Uptime:               createUptime,

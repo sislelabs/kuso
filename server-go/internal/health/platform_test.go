@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -130,5 +131,61 @@ func TestPlatformMissingWorkloadIgnored(t *testing.T) {
 	// Traefik has a Deployment but no pods: that IS down.
 	if n := countType(h.events, notify.EventPlatformUnhealthy); n != 1 {
 		t.Fatalf("platform.unhealthy = %d, want 1 (traefik, no pods); others must be skipped", n)
+	}
+}
+
+// When the page can't be delivered (the control-plane DB is the thing
+// that's down) the episode stays un-alerted and the next tick retries.
+func TestPlatformUndeliveredPageRetries(t *testing.T) {
+	h := newPlatformHarness(t)
+	h.w.emit = nil
+	fails := 2
+	h.w.emitDurable = func(e notify.Event) error {
+		if fails > 0 {
+			fails--
+			return errors.New("outbox down")
+		}
+		h.events = append(h.events, e)
+		return nil
+	}
+	for i := 0; i < 10; i++ {
+		h.tick(t, traefikPod("CrashLoopBackOff", false, 4, ""))
+	}
+	if n := countType(h.events, notify.EventPlatformUnhealthy); n != 1 {
+		t.Fatalf("platform.unhealthy = %d, want 1 delivered after retries", n)
+	}
+}
+
+// A core component scaled to zero is down unless annotated as deliberate;
+// a non-core one (buildkitd, replaced by shards) is skipped.
+func TestPlatformCoreScaledToZero(t *testing.T) {
+	ctx := context.Background()
+	for _, annotated := range []bool{false, true} {
+		h := newPlatformHarness(t)
+		dep, _ := h.cs.AppsV1().Deployments("traefik").Get(ctx, "traefik", metav1.GetOptions{})
+		zero := int32(0)
+		dep.Spec.Replicas = &zero
+		if annotated {
+			dep.Annotations = map[string]string{IntentionallyOffAnnotation: "true"}
+		}
+		if _, err := h.cs.AppsV1().Deployments("traefik").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		bk := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kuso-buildkitd", Namespace: testNS},
+			Spec: appsv1.DeploymentSpec{Replicas: &zero}}
+		if _, err := h.cs.AppsV1().Deployments(testNS).Create(ctx, bk, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 7; i++ {
+			h.w.checkPlatform(ctx)
+			h.now = h.now.Add(time.Minute)
+		}
+		want := 1
+		if annotated {
+			want = 0
+		}
+		if n := countType(h.events, notify.EventPlatformUnhealthy); n != want {
+			t.Fatalf("annotated=%v: platform.unhealthy = %d, want %d (%+v)", annotated, n, want, h.events)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 )
 
@@ -18,6 +19,7 @@ import (
 // AdminHandler; mutations live here.
 type GroupsHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -78,6 +80,7 @@ func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "group.create", "group/"+id, fmt.Sprintf("created group %q", req.Name))
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": req.Name, "description": req.Description})
 }
 
@@ -108,6 +111,7 @@ func (h *GroupsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "group.update", "group/"+chi.URLParam(r, "id"), fmt.Sprintf("renamed group to %q", req.Name))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -168,6 +172,8 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 	// forced the exact "grant then re-login" dance the resolver
 	// removes; a downgrade is enforced by resolution within the TTL).
 	h.DB.EvictAllTenancy()
+	auditAccess(r.Context(), h.Audit, "critical", "group.tenancy", "group/"+chi.URLParam(r, "id"),
+		fmt.Sprintf("set group instance role %q and %d project membership(s)", req.InstanceRole, len(req.ProjectMemberships)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -213,6 +219,7 @@ func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.DB.ClearStalePending(ctx, userID); err != nil {
 		h.Logger.Warn("add member: clear pending", "user", userID, "err", err)
 	}
+	auditAccess(r.Context(), h.Audit, "critical", "group.member.add", "group/"+chi.URLParam(r, "id"), "added user "+userID+" to group")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -240,6 +247,7 @@ func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.InvalidateUserTokens(r.Context(), userID, "group.member.remove", time.Now()); err != nil {
 		h.Logger.Warn("remove member: invalidate user tokens", "user", userID, "group", groupID, "err", err)
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "group.member.remove", "group/"+groupID, "removed user "+userID+" from group")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -272,5 +280,6 @@ func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "group.delete", "group/"+groupID, "deleted group")
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -34,18 +34,19 @@ often points straight at the cause):
 
 1. kubectl, READ-ONLY — this is your PRIMARY tool. Only these verbs are
    allowed: get, describe, logs, top, events. Your ServiceAccount can read
-   pods, nodes and events, and can read pod LOGS only in the incident's
-   namespace ({{NAMESPACE}}). Examples:
+   nodes and events cluster-wide, and pods and pod LOGS only in the
+   incident's namespace ({{NAMESPACE}}). Flags that change the API server
+   or credentials (--server, --kubeconfig, --token, --raw, ...) are refused.
+   Examples:
      kubectl get pods -n {{NAMESPACE}} -o wide | grep {{SERVICE}}
      kubectl describe pod <pod> -n {{NAMESPACE}}
      kubectl logs <pod> -n {{NAMESPACE}} --previous   # the crash's own logs
      kubectl get events -n {{NAMESPACE}} --sort-by=.lastTimestamp
    For a node.unreachable incident the "service" field is the NODE name;
-   inspect the node (kubectl describe node <name>) and its workloads.
+   inspect the node (kubectl describe node <name>) and the events on it.
    Any kubectl WRITE is denied by RBAC — do not attempt mutations.
 
-2. The `kuso` CLI is not authenticated in this release; skip it and rely
-   on kubectl above.
+2. The `kuso` CLI is not available to you; rely on kubectl above.
 
 3. Form a root-cause hypothesis. Prefer the simplest explanation consistent
    with the evidence. Distinguish symptom (pod restarting) from cause (bad

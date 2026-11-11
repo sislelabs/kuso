@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -220,10 +221,11 @@ func (s *KubeSpawner) launch(ctx context.Context, in db.Incident, phase string, 
 		return abort(fmt.Errorf("create %s secret: %w", sec.Name, err))
 	}
 
+	// Fail closed: the agent reads attacker-influenced logs, so it never
+	// runs without its egress policy.
 	np := buildEgressPolicy(in.ID, phase, name, ns, owner)
 	if _, err := s.Kube.Clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, np, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		s.log().Warn("incident: agent egress policy not applied; agent runs with open egress",
-			"job", name, "err", err)
+		return abort(fmt.Errorf("create %s egress policy (agent not started): %w", np.Name, err))
 	}
 
 	if phase == "investigate" && logNS != "" {
@@ -305,15 +307,33 @@ var privateRanges = []string{
 }
 
 // buildEgressPolicy restricts the agent pod to: DNS, kuso-server, the
-// kube-apiserver (kubectl; post-DNAT it's a node IP on :6443), and HTTPS
-// to public addresses (api.anthropic.com, github.com: no stable IPs, so
-// public :443 is the realistic floor).
+// kube-apiserver (investigate only: kubectl; post-DNAT it's a node IP on
+// :6443), and HTTPS to public addresses (api.anthropic.com, github.com:
+// no stable IPs, so public :443 is the realistic floor).
 func buildEgressPolicy(incidentID, phase, jobName, ns string, owner metav1.OwnerReference) *networkingv1.NetworkPolicy {
 	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
 	port := func(p int, proto corev1.Protocol) networkingv1.NetworkPolicyPort {
 		v := intstr.FromInt32(int32(p))
 		return networkingv1.NetworkPolicyPort{Protocol: &proto, Port: &v}
 	}
+	egress := []networkingv1.NetworkPolicyEgressRule{
+		{Ports: []networkingv1.NetworkPolicyPort{port(53, udp), port(53, tcp)}},
+		{
+			To: []networkingv1.NetworkPolicyPeer{{
+				PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{labelApp: "kuso-server"}},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{port(kusoServerPort, tcp)},
+		},
+	}
+	if phase == "investigate" {
+		egress = append(egress, networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{port(6443, tcp)}})
+	}
+	egress = append(egress, networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{
+			IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: privateRanges},
+		}},
+		Ports: []networkingv1.NetworkPolicyPort{port(443, tcp)},
+	})
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            egressPolicyName(jobName),
@@ -326,22 +346,7 @@ func buildEgressPolicy(incidentID, phase, jobName, ns string, owner metav1.Owner
 				labelIncident: incidentID, labelPhase: phase,
 			}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				{Ports: []networkingv1.NetworkPolicyPort{port(53, udp), port(53, tcp)}},
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{labelApp: "kuso-server"}},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{port(kusoServerPort, tcp)},
-				},
-				{Ports: []networkingv1.NetworkPolicyPort{port(6443, tcp)}},
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: privateRanges},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{port(443, tcp)},
-				},
-			},
+			Egress: egress,
 		},
 	}
 }
@@ -368,6 +373,11 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 	// forever; the reaper's investigate timeout is the same bound.
 	deadline := int64(investigateTimeout.Seconds())
 	suspend := true
+	automountSA := phase == "investigate"
+	nonRoot, noEscalation := true, false
+	// uid/gid of the image's "node" user, numeric so the kubelet can
+	// verify runAsNonRoot.
+	agentUID := int64(1000)
 
 	// Feedback so far, newline-joined, for the agent prompt (re-investigate
 	// after operator correction, or the "go" that triggered implement).
@@ -428,6 +438,12 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 			corev1.EnvVar{Name: "REPO_DEFAULT_BRANCH", Value: orDefault(repo.DefaultBranch, "main")},
 			corev1.EnvVar{Name: "GIT_TOKEN", ValueFrom: secretRef(secretKeyGitToken)},
 		)
+		if RunRepoCode() {
+			// Opt-in: lets the agent run the repo's build/test commands,
+			// i.e. code from the repo with the same uid that holds the
+			// Claude credentials and public HTTPS egress.
+			env = append(env, corev1.EnvVar{Name: "AGENT_RUN_REPO_CODE", Value: "true"})
+		}
 		if s.CloneOnly {
 			// Plumbing test: clone + branch, then stop before opening a PR.
 			env = append(env, corev1.EnvVar{Name: "KUSO_INCIDENT_CLONE_ONLY", Value: "true"})
@@ -463,6 +479,15 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
 					ServiceAccountName: agentServiceAccount,
+					// Only investigate drives kubectl; the implement
+					// phase gets no kube credentials at all.
+					AutomountServiceAccountToken: &automountSA,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   &nonRoot,
+						RunAsUser:      &agentUID,
+						RunAsGroup:     &agentUID,
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Volumes: []corev1.Volume{{
 						Name: "cc-creds",
 						VolumeSource: corev1.VolumeSource{
@@ -475,6 +500,10 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 						Name:  "agent",
 						Image: s.image(),
 						Env:   env,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: &noEscalation,
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "cc-creds",
 							MountPath: ccMountPath,
@@ -486,6 +515,11 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo, logN
 		},
 	}
 }
+
+// RunRepoCode reports whether the implement phase may run the repo's
+// build and test commands (KUSO_INCIDENT_AGENT_RUN_REPO_CODE=true on
+// kuso-server). Off by default.
+func RunRepoCode() bool { return os.Getenv("KUSO_INCIDENT_AGENT_RUN_REPO_CODE") == "true" }
 
 // orDefault returns s, or def when s is empty.
 func orDefault(s, def string) string {

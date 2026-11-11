@@ -95,6 +95,8 @@ type Engine struct {
 	episodicFn func(ctx context.Context, r *db.AlertRule, now time.Time) (finding, error)
 	// emitFn replaces e.Notify.Emit in tests; nil means e.Notify.Emit.
 	emitFn func(notify.Event)
+	// emitDurableFn replaces e.Notify.EmitDurable for platform events.
+	emitDurableFn func(notify.Event) error
 
 	// platform is the built-in Prometheus / traffic check state
 	// (platform.go). Only touched from Run's goroutine.

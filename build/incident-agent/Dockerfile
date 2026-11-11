@@ -69,7 +69,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends kubectl gh; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*; \
+    # The real kubectl moves off PATH; kubectl-guard.sh (below) is what
+    # the agent's `kubectl ...` resolves to.
+    mkdir -p /usr/local/libexec/kuso-agent; \
+    mv /usr/bin/kubectl /usr/local/libexec/kuso-agent/kubectl
+
+COPY kubectl-guard.sh /usr/local/bin/kubectl
 
 # Claude Code CLI. Installed globally via npm; `claude` lands on $PATH.
 RUN --mount=type=cache,target=/root/.npm \
@@ -95,7 +101,7 @@ RUN --mount=type=bind,target=/staging,source=. \
       chmod 0755 /usr/local/bin/kuso; \
     fi; \
     /usr/local/bin/kuso --version || /usr/local/bin/kuso version || true; \
-    chmod 0755 /usr/local/bin/incident-agent-entrypoint
+    chmod 0755 /usr/local/bin/incident-agent-entrypoint /usr/local/bin/kubectl
 
 # The agent runs read-only against the cluster and clones into a scratch
 # workdir. Run as a non-root, unprivileged user (node:20 ships `node`,

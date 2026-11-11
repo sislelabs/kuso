@@ -70,6 +70,28 @@ var TokenFile = "/etc/kuso/k3s-token"
 
 var serverTokenWarn sync.Once
 
+// ServerTokenJoinWarning is shown wherever a join is minted while joining
+// nodes would receive the k3s server token (installs that predate the
+// agent-token split).
+const ServerTokenJoinWarning = "joining nodes receive the k3s SERVER token (KUSO_K3S_AGENT_TOKEN is not set), which also unlocks the cluster CA keys. Start k3s with --agent-token and add KUSO_K3S_AGENT_TOKEN to the kuso-k3s-token Secret."
+
+// ErrServerTokenJoinRefused: KUSO_NODE_JOIN_REQUIRE_AGENT_TOKEN=true and
+// only the server token is available.
+var ErrServerTokenJoinRefused = errors.New("node join refused: " + ServerTokenJoinWarning)
+
+// UsingServerToken reports whether joins would hand out the server token.
+func UsingServerToken() bool { return strings.TrimSpace(os.Getenv("KUSO_K3S_AGENT_TOKEN")) == "" }
+
+// CheckJoinTokenPolicy refuses joins on the server token when the install
+// opted in with KUSO_NODE_JOIN_REQUIRE_AGENT_TOKEN=true. Opt-in, so older
+// installs can still add nodes until they move to an agent token.
+func CheckJoinTokenPolicy() error {
+	if UsingServerToken() && os.Getenv("KUSO_NODE_JOIN_REQUIRE_AGENT_TOKEN") == "true" {
+		return ErrServerTokenJoinRefused
+	}
+	return nil
+}
+
 // ReadServerToken returns the k3s server token. Three sources, in
 // order of preference:
 //   1. KUSO_K3S_TOKEN env var (set when the install script copies the

@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
@@ -42,6 +44,7 @@ import (
 type InvitesHandler struct {
 	DB     *db.DB
 	Issuer *auth.Issuer
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -206,6 +209,8 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "critical", "invite.create", "invite/"+inv.ID,
+		fmt.Sprintf("created invite (max uses %d)", req.MaxUses))
 	writeJSON(w, http.StatusCreated, createInviteResponse{
 		Invite: *inv,
 		URL:    inviteURL(r, token),
@@ -300,6 +305,7 @@ func (h *InvitesHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "invite.revoke", "invite/"+id, "revoked invite")
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -71,10 +71,15 @@ type Watcher struct {
 	// the Traefik Service discovery (ingress.go).
 	IngressProbe func(ctx context.Context, url, host string) Result
 	IngressBase  func(ctx context.Context) string
+	// ExternalProbe / ExternalTarget replace the public-path prober and
+	// the KUSO_UPTIME_EXTERNAL_URL lookup (external.go).
+	ExternalProbe  func(ctx context.Context, url string) Result
+	ExternalTarget func() string
 
 	// skipped counts consecutive ticks lost to a failed self-check.
-	skipped int
-	ingress ingressState
+	skipped  int
+	ingress  ingressState
+	external externalState
 }
 
 // selfCheckAddr is dialled to tell "this pod's network is broken" from
@@ -157,6 +162,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 		return
 	}
 	w.skipped = 0
+	// Deferred and independent of the DB reads below, which fail during
+	// a control-plane DB outage.
+	defer w.checkExternal(ctx)
 	targets, err := w.Cluster.Targets(ctx, "")
 	if err != nil {
 		w.Logger.Warn("uptime: read targets", "err", err)

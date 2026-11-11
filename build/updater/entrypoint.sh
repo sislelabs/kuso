@@ -78,6 +78,17 @@ on_err() {
 }
 trap 'on_err $LINENO' ERR
 
+# The server and operator images are rolled under the kuso-server
+# ServiceAccount; a bare tag would run whatever was last pushed to it.
+for img_var in KUSO_SERVER_IMAGE KUSO_OPERATOR_IMAGE; do
+  img="${!img_var:-}"
+  if [ -n "$img" ] && [[ "$img" != *@sha256:* ]] && [ "${KUSO_ALLOW_UNVERIFIED_ASSETS:-}" != "1" ]; then
+    echo "==> ${img_var}=${img} is not pinned by digest; refusing"
+    write_status "failed" "${img} is not pinned by digest in the signed release — nothing applied. Re-run with 'kuso upgrade --allow-unverified' to accept it"
+    exit 1
+  fi
+done
+
 STARTED_AT="$(now)"
 
 # KUSO_SKIP_CRDS=1 is set by the server on a downgrade: the older

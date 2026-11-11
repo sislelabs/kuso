@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
@@ -23,6 +25,7 @@ import (
 type ConfigHandler struct {
 	Cfg    *config.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -115,6 +118,7 @@ func (h *ConfigHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "settings.update", "kuso/settings", "updated instance settings: "+strings.Join(settingKeys(body.Settings), ", "))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -210,6 +214,7 @@ func (h *ConfigHandler) DeleteRunpack(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "runpack.delete", "runpack/"+chi.URLParam(r, "id"), "deleted runpack")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -249,6 +254,7 @@ func (h *ConfigHandler) CreatePodSize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "podsize.create", "podsize/"+p.ID, "created pod size "+p.Name)
 	writeJSON(w, http.StatusCreated, p)
 }
 
@@ -271,6 +277,7 @@ func (h *ConfigHandler) UpdatePodSize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "podsize.update", "podsize/"+p.ID, "updated pod size "+p.Name)
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -287,6 +294,7 @@ func (h *ConfigHandler) DeletePodSize(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "warn", "podsize.delete", "podsize/"+chi.URLParam(r, "id"), "deleted pod size")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -342,5 +350,6 @@ func (h *ConfigHandler) SetDefaultPodSize(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	auditAccess(r.Context(), h.Audit, "info", "podsize.default", "podsize/default", "set default pod size to "+body.Name)
 	writeJSON(w, http.StatusOK, defaultPodSizeBody{Name: body.Name})
 }

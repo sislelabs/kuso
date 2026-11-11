@@ -461,6 +461,32 @@ else
   log "clone image pinned: ${CLONE_IMAGE_PINNED}"
 fi
 
+# ---- 2a'. pin the incident-agent image by digest -------------------
+#
+# The incident agent runs with the operator's Claude credentials and
+# reads cluster state; its default image must not follow a mutable tag.
+# Same scheme as the clone image: the tag stays in the source, the
+# digest is re-resolved and baked in on every ship.
+AGENT_IMAGE_GO=server-go/internal/incidents/jobs.go
+AGENT_IMAGE_REFRESHER=deploy/incident-agent-refresher.yaml
+AGENT_IMAGE_TAG="$(sed -nE 's|^const DefaultAgentImage = "([^"@]+)(@sha256:[0-9a-f]{64})?"|\1|p' "$AGENT_IMAGE_GO")"
+[[ -n "$AGENT_IMAGE_TAG" ]] || fail "could not read DefaultAgentImage from ${AGENT_IMAGE_GO}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin ${AGENT_IMAGE_TAG} to its registry digest in ${AGENT_IMAGE_GO} + ${AGENT_IMAGE_REFRESHER}"
+else
+  AGENT_IMAGE_DIGEST="$(docker buildx imagetools inspect "$AGENT_IMAGE_TAG" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+  [[ "$AGENT_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "could not resolve the registry digest of ${AGENT_IMAGE_TAG} (got '${AGENT_IMAGE_DIGEST}')"
+  AGENT_IMAGE_PINNED="${AGENT_IMAGE_TAG}@${AGENT_IMAGE_DIGEST}"
+  sed -i.bak -E "s|^(const DefaultAgentImage = )\"[^\"]+\"|\\1\"${AGENT_IMAGE_PINNED}\"|" "$AGENT_IMAGE_GO"
+  rm "${AGENT_IMAGE_GO}.bak"
+  sed -i.bak -E "s|image: ghcr.io/sislelabs/kuso-incident-agent:[^[:space:]]+|image: ${AGENT_IMAGE_PINNED}|" "$AGENT_IMAGE_REFRESHER"
+  rm "${AGENT_IMAGE_REFRESHER}.bak"
+  grep -q "\"${AGENT_IMAGE_PINNED}\"" "$AGENT_IMAGE_GO" || fail "incident-agent image pin did not land in ${AGENT_IMAGE_GO}"
+  log "incident-agent image pinned: ${AGENT_IMAGE_PINNED}"
+fi
+
 # ---- 2b. CHANGELOG -------------------------------------------------
 #
 # git-cliff regenerates the full release history from commit messages.
@@ -1029,8 +1055,39 @@ MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/upgrade-manifests.yaml")"
 # instead of trusting raw files under a git tag anyone with push can move.
 INSTALL_TAR_FLAGS=()
 [[ "$(uname -s)" == "Darwin" ]] && INSTALL_TAR_FLAGS+=(--no-mac-metadata)
+# Third-party images in the bundle are rewritten to tag@digest in a staged
+# copy, so the signature covers the bytes a fresh install runs. kuso's own
+# images stay tags here: install.sh rewrites them from the signed
+# release.json's tag@digest. The repo's deploy/ is left untouched.
+INSTALL_STAGE="$(mktemp -d)"
+mkdir -p "$INSTALL_STAGE/operator/config/crd"
+cp -R deploy "$INSTALL_STAGE/deploy"
+cp -R operator/config/crd/bases "$INSTALL_STAGE/operator/config/crd/bases"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin third-party images in the install bundle to their registry digests"
+else
+  while IFS= read -r img; do
+    [[ -n "$img" ]] || continue
+    dg="$(docker buildx imagetools inspect "$img" --format '{{json .Manifest}}' 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+    [[ "$dg" =~ ^sha256:[0-9a-f]{64}$ ]] \
+      || fail "could not resolve the registry digest of ${img} for the install bundle (got '${dg}')"
+    grep -rlF "image: ${img}" "$INSTALL_STAGE/deploy" | while IFS= read -r f; do
+      IMG="$img" PIN="${img}@${dg}" python3 -c '
+import os, re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"(image:\s*)" + re.escape(os.environ["IMG"]) + r"(?=\s|$)", lambda m: m.group(1) + os.environ["PIN"], s)
+open(p, "w").write(s)' "$f"
+    done
+    log "install bundle: ${img} -> @${dg}"
+  done < <(grep -rhoE '^[[:space:]]*(- )?image:[[:space:]]*[^[:space:]#"]+' "$INSTALL_STAGE/deploy" \
+    | sed -E 's/^[[:space:]]*(- )?image:[[:space:]]*//' \
+    | grep -v '^ghcr\.io/sislelabs/' | grep -v '@sha256:' | sort -u)
+fi
 COPYFILE_DISABLE=1 tar -czf "$DIST_DIR/install-manifests.tar.gz" "${INSTALL_TAR_FLAGS[@]}" \
-  deploy operator/config/crd/bases
+  -C "$INSTALL_STAGE" deploy operator/config/crd/bases
+rm -rf "$INSTALL_STAGE"
 INSTALL_MANIFESTS_SHA256="$(sha256_of "$DIST_DIR/install-manifests.tar.gz")"
 [[ "$INSTALL_MANIFESTS_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "could not hash dist/install-manifests.tar.gz (got '${INSTALL_MANIFESTS_SHA256}')"
 
@@ -1607,6 +1664,9 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     # The clone-image digest pin from step 2a.
     server-go/internal/buildcontroller/buildcontroller.go
     operator/helm-charts/kusobuild/templates/job.yaml
+    # The incident-agent digest pin from step 2a'.
+    server-go/internal/incidents/jobs.go
+    deploy/incident-agent-refresher.yaml
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)

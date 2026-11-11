@@ -279,15 +279,19 @@ fi
 # No --dangerously-skip-permissions: head-less `claude -p` denies any tool
 # not on the explicit allowlist below. Investigate gets read-only kubectl
 # verbs plus a Write confined to OUT_DIR; implement gets file edits, local
-# git (no push/remote/config), and the common build/test toolchains. Build
-# and test commands run repo code, so the implement allowlist is a speed
-# bump, not a sandbox: the real bounds are the repo-scoped token (which
-# the agent never sees), the egress NetworkPolicy and the PR review.
+# git (no push/remote/config) and, only when kuso-server opts in with
+# KUSO_INCIDENT_AGENT_RUN_REPO_CODE=true, the common build/test toolchains.
+# Those run repo code as the uid that holds the Claude credentials, with
+# public HTTPS egress, so they are off by default.
+#
+# kubectl is kubectl-guard.sh (refuses --server/--kubeconfig/--token/...),
+# the unauthenticated kuso CLI is not offered (a URL argument is an exfil
+# channel), and the credential files are denied to every read tool.
 if [ "$PHASE" = "investigate" ]; then
   ALLOWED_TOOLS=(
     "Read" "Glob" "Grep" "Write(/${OUT_DIR}/**)"
     "Bash(kubectl get:*)" "Bash(kubectl describe:*)" "Bash(kubectl logs:*)"
-    "Bash(kubectl top:*)" "Bash(kubectl events:*)" "Bash(kuso:*)"
+    "Bash(kubectl top:*)" "Bash(kubectl events:*)"
     "Bash(jq:*)" "Bash(grep:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(sort:*)" "Bash(wc:*)"
   )
 else
@@ -295,18 +299,33 @@ else
     "Read" "Glob" "Grep" "Edit" "MultiEdit" "Write"
     "Bash(git add:*)" "Bash(git commit:*)" "Bash(git diff:*)" "Bash(git status:*)"
     "Bash(git log:*)" "Bash(git show:*)" "Bash(ls:*)"
-    "Bash(go build:*)" "Bash(go test:*)" "Bash(go vet:*)"
-    "Bash(npm ci:*)" "Bash(npm install:*)" "Bash(npm run:*)" "Bash(npm test:*)"
-    "Bash(pnpm install:*)" "Bash(pnpm run:*)" "Bash(pnpm test:*)"
-    "Bash(yarn install:*)" "Bash(yarn run:*)" "Bash(yarn test:*)"
-    "Bash(pip install:*)" "Bash(pytest:*)" "Bash(python -m pytest:*)"
-    "Bash(make:*)" "Bash(cargo build:*)" "Bash(cargo test:*)"
   )
+  if [ "${AGENT_RUN_REPO_CODE:-}" = "true" ]; then
+    ALLOWED_TOOLS+=(
+      "Bash(go build:*)" "Bash(go test:*)" "Bash(go vet:*)"
+      "Bash(npm ci:*)" "Bash(npm install:*)" "Bash(npm run:*)" "Bash(npm test:*)"
+      "Bash(pnpm install:*)" "Bash(pnpm run:*)" "Bash(pnpm test:*)"
+      "Bash(yarn install:*)" "Bash(yarn run:*)" "Bash(yarn test:*)"
+      "Bash(pip install:*)" "Bash(pytest:*)" "Bash(python -m pytest:*)"
+      "Bash(make:*)" "Bash(cargo build:*)" "Bash(cargo test:*)"
+    )
+  fi
 fi
+DENIED_TOOLS=(
+  "Read(//cc/**)" "Read(~/.claude/**)" "Read(//var/run/secrets/**)"
+  "Read(//run/secrets/**)" "Read(//proc/**)"
+  "Edit(~/.claude/**)" "Write(~/.claude/**)"
+  "Bash(kuso:*)"
+)
 
 log "running claude (phase=${PHASE}, incident=${INCIDENT_ID})"
 set +e
-env -u INCIDENT_TOKEN -u GIT_TOKEN -u GH_TOKEN -u GITHUB_TOKEN claude -p "$PROMPT" --add-dir "$OUT_DIR" --allowedTools "${ALLOWED_TOOLS[@]}"
+# core.hooksPath=/dev/null via GIT_CONFIG_* outranks anything the agent
+# writes into the checkout's .git/config, so `git commit` can't run a
+# hook the agent planted.
+env -u INCIDENT_TOKEN -u GIT_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null \
+  claude -p "$PROMPT" --add-dir "$OUT_DIR" --allowedTools "${ALLOWED_TOOLS[@]}" --disallowedTools "${DENIED_TOOLS[@]}"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then

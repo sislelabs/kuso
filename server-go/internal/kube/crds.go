@@ -293,6 +293,60 @@ func create[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResour
 	return &out, nil
 }
 
+// preserveUnknownSpec copies every spec key the live object carries but
+// the typed struct dropped on decode back into out. A server older than
+// the CRD (downgrade, auto-revert after a failed leader gate) otherwise
+// deletes newer spec fields on its first PUT. typedLive is live after a
+// typed round-trip, so "unknown" means "this binary has no field for it";
+// a key the caller's mutation set or cleared is known and left alone.
+// Lists are not descended: their elements are replaced wholesale.
+func preserveUnknownSpec(live, typedLive, out map[string]any) {
+	ls, ok := live["spec"].(map[string]any)
+	if !ok {
+		return
+	}
+	ts, _ := typedLive["spec"].(map[string]any)
+	dst, ok := out["spec"].(map[string]any)
+	if !ok {
+		dst = map[string]any{}
+		out["spec"] = dst
+	}
+	mergeUnknown(ls, ts, dst)
+}
+
+func mergeUnknown(live, typed, out map[string]any) {
+	for k, lv := range live {
+		tv, known := typed[k]
+		if !known {
+			if _, set := out[k]; !set {
+				out[k] = runtime.DeepCopyJSONValue(lv)
+			}
+			continue
+		}
+		lm, lok := lv.(map[string]any)
+		tm, tok := tv.(map[string]any)
+		om, ook := out[k].(map[string]any)
+		if lok && tok && ook {
+			mergeUnknown(lm, tm, om)
+		}
+	}
+}
+
+// overlayUnknownFromLive decodes live into a fresh T to find which spec
+// keys this binary can't represent, then preserves them on u.
+func overlayUnknownFromLive[T any](live, u *unstructured.Unstructured, gvr schema.GroupVersionResource, kind string) error {
+	var typed T
+	if err := fromUnstructured(live, &typed); err != nil {
+		return err
+	}
+	rt, err := toUnstructured(&typed, gvr, kind)
+	if err != nil {
+		return err
+	}
+	preserveUnknownSpec(live.Object, rt.Object, u.Object)
+	return nil
+}
+
 // update is the generic typed → dynamic update helper. Uses Update
 // (PUT) and bumps resourceVersion to whatever the apiserver currently
 // has on conflict, then retries. helm-operator continuously patches
@@ -302,23 +356,29 @@ func create[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResour
 // it — instead we bump rv and retry the same shape, which is correct
 // for spec-only edits because helm-operator only writes status.
 func update[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, kind, namespace string, obj *T) (*T, error) {
-	u, err := toUnstructured(obj, gvr, kind)
+	base, err := toUnstructured(obj, gvr, kind)
 	if err != nil {
 		return nil, err
 	}
+	rv := base.GetResourceVersion()
 	var updated *unstructured.Unstructured
 	rerr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, base.GetName(), metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		u := base.DeepCopy()
+		u.SetResourceVersion(rv)
+		if oerr := overlayUnknownFromLive[T](latest, u, gvr, kind); oerr != nil {
+			return oerr
+		}
 		var uerr error
 		updated, uerr = c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
 		if uerr == nil {
 			return nil
 		}
-		// On conflict, pick up the live resourceVersion and retry.
-		latest, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, u.GetName(), metav1.GetOptions{})
-		if gerr != nil {
-			return gerr
-		}
-		u.SetResourceVersion(latest.GetResourceVersion())
+		// On conflict, retry against the live resourceVersion.
+		rv = latest.GetResourceVersion()
 		return uerr
 	})
 	if rerr != nil {
@@ -364,9 +424,13 @@ func updateWithRetry[T any](
 ) (*T, error) {
 	var out T
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest, gerr := get[T](ctx, c, gvr, namespace, name)
+		raw, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if gerr != nil {
-			return gerr
+			return fmt.Errorf("kube: get %s/%s in %q: %w", gvr.Resource, name, namespace, gerr)
+		}
+		latest := new(T)
+		if derr := fromUnstructured(raw, latest); derr != nil {
+			return derr
 		}
 		before, berr := toUnstructured(latest, gvr, kind)
 		if berr != nil {
@@ -385,6 +449,7 @@ func updateWithRetry[T any](
 			// env refresh run this per env on every event.
 			return fromUnstructured(u, &out)
 		}
+		preserveUnknownSpec(raw.Object, before.Object, u.Object)
 		updated, uerr := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
 		if uerr != nil {
 			return uerr

@@ -156,6 +156,10 @@ type CreateServiceRequest struct {
 	PrivateEgress     bool `json:"privateEgress,omitempty"`
 	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
 	WaitForCI         bool `json:"waitForCI,omitempty"`
+	// StrictBuildSecrets nil = on: new services keep credential-shaped
+	// build env out of Dockerfile build-args (and so out of image
+	// history). Send false to keep the legacy build-arg path.
+	StrictBuildSecrets *bool `json:"strictBuildSecrets,omitempty"`
 	// Placement nil = the project default.
 	Placement *kube.KusoPlacement `json:"placement,omitempty"`
 	// Volumes are created with the production env so the first run

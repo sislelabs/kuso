@@ -29,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -408,7 +409,10 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 // rollback), so we don't bother adding state. The 1-2s round-trip is
 // fine; the caller already accepted a multi-minute job anyway.
 func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", s.Repo, version)
+	if !ValidVersion(version) {
+		return nil, fmt.Errorf("invalid release version %q (want vX.Y.Z)", version)
+	}
+	url :=fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", s.Repo, version)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := s.client.Do(req)
@@ -733,6 +737,32 @@ const allowUnverifiedHint = "re-run with `kuso upgrade --allow-unverified` (API:
 
 func isDigestRef(img string) bool { return strings.Contains(img, "@sha256:") }
 
+// unpinnedImagesBlock refuses a release whose server or operator image is
+// a bare tag: the Job rolls them under the kuso-server ServiceAccount,
+// and a re-pushed tag would run unsigned code. Applies to downgrades too,
+// where older releases may predate the digest pins.
+func unpinnedImagesBlock(m *Manifest) string {
+	var tags []string
+	for _, img := range []string{m.Components.Server.Image, m.Components.Operator.Image} {
+		if img != "" && !isDigestRef(img) {
+			tags = append(tags, img)
+		}
+	}
+	if len(tags) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("release %s does not pin %s by digest; %s",
+		m.Version, strings.Join(tags, " and "), allowUnverifiedHint)
+}
+
+// releaseVersionRe is the tag shape release.sh publishes. A pinned
+// version is interpolated into a GitHub API path, so nothing else gets
+// through.
+var releaseVersionRe = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
+
+// ValidVersion reports whether v is a release tag kuso could publish.
+func ValidVersion(v string) bool { return releaseVersionRe.MatchString(v) }
+
 // verifiedAssetsBlock explains why an upgrade to m can't be applied
 // fully verified, or returns "". Only assets the Job will apply count.
 func verifiedAssetsBlock(m *Manifest, skipBundles bool) string {
@@ -854,6 +884,9 @@ func (s *Service) StartUpdateWith(ctx context.Context, targetVersion string, opt
 		return "", fmt.Errorf("release %s does not pin its updater image by digest; %s", m.Version, allowUnverifiedHint)
 	}
 	if reason := verifiedAssetsBlock(m, downgrade); reason != "" && !opts.AllowUnverified {
+		return "", errors.New(reason)
+	}
+	if reason := unpinnedImagesBlock(m); reason != "" && !opts.AllowUnverified {
 		return "", errors.New(reason)
 	}
 

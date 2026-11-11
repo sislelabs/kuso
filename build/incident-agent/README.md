@@ -161,12 +161,19 @@ environment.
 ## Safety notes
 
 - **Investigate is read-only** — enforced by the `kuso-incident-agent` RBAC,
-  not by trusting the prompt. Pod logs are readable only in the incident's
-  namespace: kuso-server binds `kuso-incident-agent-logs` there at spawn time
-  and the incident reaper unbinds it once no agent needs it.
+  not by trusting the prompt. Pods and their logs are readable only in the
+  incident's namespace: kuso-server binds `kuso-incident-agent-logs` there at
+  spawn time and the incident reaper unbinds it once no agent needs it.
+  `kubectl` is a wrapper that refuses `--server`, `--kubeconfig`, `--token`,
+  `--raw` and the other flags that would send the SA token elsewhere. The
+  implement phase gets no ServiceAccount token at all.
 - **Explicit tool allowlist** — `claude -p` runs with `--allowedTools`
-  (read-only kubectl verbs for investigate; file edits, local git and
-  build/test toolchains for implement), never `--dangerously-skip-permissions`.
+  (read-only kubectl verbs for investigate; file edits and local git for
+  implement), never `--dangerously-skip-permissions`. The Claude credentials,
+  the SA token and `/proc` are on `--disallowedTools`. Build/test toolchains
+  (`npm run`, `make`, `go test`, ...) are added to the implement allowlist
+  only when kuso-server runs with `KUSO_INCIDENT_AGENT_RUN_REPO_CODE=true`:
+  they run repo code as the user that can read the Claude credentials.
 - **Untrusted input is fenced** — the context pack (which carries a crashing
   pod's log tail) is capped server-side, stripped of control characters, and
   wrapped in a per-run random tag the prompt declares as data. The implement
@@ -178,7 +185,8 @@ environment.
   Build/test commands run repo code as the same user, so this bounds rather
   than eliminates what a hijacked agent can reach.
 - **Egress is restricted** — a per-Job NetworkPolicy allows DNS, kuso-server,
-  the kube-apiserver (:6443) and HTTPS to public addresses only (no RFC1918,
-  CGNAT or link-local).
+  the kube-apiserver (:6443, investigate only) and HTTPS to public addresses
+  only (no RFC1918, CGNAT or link-local). If the policy can't be created the
+  Job is deleted and the agent never starts.
 - **No direct push to the default branch** — only a fresh `FIX_BRANCH` is
   pushed; a human merges the PR.

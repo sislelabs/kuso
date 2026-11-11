@@ -21,7 +21,7 @@ const testDigest = "sha256:11111111111111111111111111111111111111111111111111111
 
 // releaseJSON is a release.json whose assets and updater are fully pinned.
 func releaseJSON(tag string) string {
-	return `{"version":"` + tag + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + tag + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + tag + `@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml","sha256":"ab"},"manifests":{"url":"https://example.test/m.yaml","sha256":"cd"}}`
+	return `{"version":"` + tag + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + tag + `@` + testDigest + `"},"operator":{"image":"ghcr.io/sislelabs/kuso-operator:` + tag + `@` + testDigest + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + tag + `@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml","sha256":"ab"},"manifests":{"url":"https://example.test/m.yaml","sha256":"cd"}}`
 }
 
 // pinnedService returns a Service whose GH client serves a signed-off
@@ -99,7 +99,7 @@ func TestStartUpdate_DowngradeSkipsCRDs(t *testing.T) {
 	if env["KUSO_SKIP_MANIFESTS"] != "1" {
 		t.Errorf("KUSO_SKIP_MANIFESTS = %q, want 1 on a downgrade", env["KUSO_SKIP_MANIFESTS"])
 	}
-	if env["KUSO_SERVER_IMAGE"] != "ghcr.io/sislelabs/kuso-server-go:v0.31.0" {
+	if env["KUSO_SERVER_IMAGE"] != "ghcr.io/sislelabs/kuso-server-go:v0.31.0@"+testDigest {
 		t.Errorf("server image = %q", env["KUSO_SERVER_IMAGE"])
 	}
 }
@@ -233,9 +233,29 @@ func TestStartUpdate_DowngradeRefusesTagOnlyUpdater(t *testing.T) {
 		t.Fatalf("want refusal, got %v", err)
 	}
 	// A downgrade target without asset digests is fine: nothing of it is applied.
-	noSha := `{"version":"v0.31.0","crds":{"url":"https://example.test/crds.yaml"},"manifests":{"url":"https://example.test/m.yaml"}}`
+	noSha := `{"version":"v0.31.0","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:v0.31.0@` + testDigest + `"},"operator":{"image":"ghcr.io/sislelabs/kuso-operator:v0.31.0@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml"},"manifests":{"url":"https://example.test/m.yaml"}}`
 	s2, _ := pinnedService(t, "v0.32.4", "v0.31.0", map[string]string{"v0.31.0": noSha})
 	if _, err := s2.StartUpdate(context.Background(), "v0.31.0"); err != nil {
 		t.Fatalf("downgrade to a pre-sha release: %v", err)
+	}
+}
+
+// OPS-12: the Job rolls server and operator under the kuso-server SA, so
+// a tag-only image (an old release, upgrade or downgrade) needs the
+// explicit override; a malformed version never reaches the GitHub API.
+func TestStartUpdate_TagOnlyServerImageNeedsOverride(t *testing.T) {
+	for _, target := range []string{"v0.33.0", "v0.31.0"} {
+		tagOnly := `{"version":"` + target + `","components":{"server":{"image":"ghcr.io/sislelabs/kuso-server-go:` + target + `"},"updater":{"image":"ghcr.io/sislelabs/kuso-updater:` + target + `@` + testDigest + `"}},"crds":{"url":"https://example.test/crds.yaml","sha256":"ab"},"manifests":{"url":"https://example.test/m.yaml","sha256":"cd"}}`
+		s, _ := pinnedService(t, "v0.32.4", target, map[string]string{target: tagOnly})
+		if _, err := s.StartUpdate(context.Background(), target); err == nil || !strings.Contains(err.Error(), "by digest") {
+			t.Fatalf("%s: want a by-digest refusal, got %v", target, err)
+		}
+		if _, err := s.StartUpdateWith(context.Background(), target, UpdateOptions{AllowUnverified: true}); err != nil {
+			t.Fatalf("%s with override: %v", target, err)
+		}
+	}
+	s, _ := pinnedService(t, "v0.32.4", "v0.33.0")
+	if _, err := s.StartUpdate(context.Background(), "v0.33.0/../../evil"); err == nil || !strings.Contains(err.Error(), "invalid release version") {
+		t.Fatalf("want invalid-version refusal, got %v", err)
 	}
 }

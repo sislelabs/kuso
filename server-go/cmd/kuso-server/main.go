@@ -426,7 +426,8 @@ func main() {
 	// replicas the scanner falls back to its heuristic.
 	podKinds := errorscan.NewPodKinds()
 	if !vulnscan.Disabled() {
-		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate")}
+		vulnGate = &vulnscan.Gate{DB: database, Digests: vulnscan.RegistryDigests{}, Logger: logger.With("component", "vulngate"),
+			FailClosed: os.Getenv("KUSO_VULN_GATE_FAIL_CLOSED") == "true"}
 	}
 	// Outbox worker pool — drains the NotificationOutbox table with
 	// exponential backoff. The dispatcher's Emit path enqueues one
@@ -1065,7 +1066,7 @@ func main() {
 				// *Gate there would read as "gate present" and panic.
 				if vulnGate != nil {
 					buildPoller.VulnGate = vulnGate
-					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block"
+					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block" || vulnGate.FailClosed
 				}
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
@@ -1083,6 +1084,11 @@ func main() {
 					}
 					hw.Run(workCtx)
 				})
+			}
+			// Not registered in the liveness registry: a failing ping is
+			// the external monitor's signal, not a reason to restart us.
+			if hb := health.HeartbeatFromEnv(logger, database.DB.PingContext); hb != nil {
+				goSafe(logger, "heartbeat", func() { hb.Run(workCtx) })
 			}
 			// Build controller moved out of startSingletons. It
 			// installs informer handlers at boot (one-shot, gated

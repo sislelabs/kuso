@@ -167,6 +167,10 @@ die()  { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 # releasekey.pub; release.sh refuses to ship when the two differ).
 KUSO_RELEASE_PUBKEY="PA/PGYRHPzk4HkFDek3poIQjFeOyMc+5Nq5zBLhnRks="
 KUSO_MANIFEST_TREE=""
+# Tag (or tag@digest once prepare_manifests verified release.json) the
+# server/operator manifests are rewritten to.
+KUSO_SERVER_IMAGE_REF="$KUSO_SERVER_VERSION"
+KUSO_OPERATOR_IMAGE_REF="$KUSO_VERSION"
 
 # prepare_manifests downloads the release's signed release.json, verifies
 # it against KUSO_RELEASE_PUBKEY, then fetches install-manifests.tar.gz
@@ -216,7 +220,14 @@ prepare_manifests() {
   mkdir -p "${dir}/tree"
   tar -xzf "${dir}/install-manifests.tar.gz" -C "${dir}/tree"
   KUSO_MANIFEST_TREE="${dir}/tree"
-  log "release ${KUSO_SERVER_VERSION} verified; manifests from its signed bundle"
+  # The bundle's kuso images are tags; the signed release.json carries
+  # tag@digest. Run exactly those bytes when the tags match what we install.
+  local ref
+  ref="$(sed -nE 's|.*"server": *\{ *"image": *"[^"]*/kuso-server-go:([^"]+)".*|\1|p' "${dir}/release.json" | head -n1)"
+  [[ "$ref" == "${KUSO_SERVER_VERSION}@sha256:"* ]] && KUSO_SERVER_IMAGE_REF="$ref"
+  ref="$(sed -nE 's|.*"operator": *\{ *"image": *"[^"]*/kuso-operator:([^"]+)".*|\1|p' "${dir}/release.json" | head -n1)"
+  [[ -n "${KUSO_VERSION:-}" && "$ref" == "${KUSO_VERSION}@sha256:"* ]] && KUSO_OPERATOR_IMAGE_REF="$ref"
+  log "release ${KUSO_SERVER_VERSION} verified; manifests from its signed bundle (server ${KUSO_SERVER_IMAGE_REF:-?}, operator ${KUSO_OPERATOR_IMAGE_REF:-?})"
 }
 
 # kuso_manifest <repo path>: a manifest from the verified bundle, or from
@@ -227,6 +238,35 @@ kuso_manifest() {
   else
     curl -sfL "${KUSO_RAW}/$1"
   fi
+}
+
+# fetch_pinned <url> <sha256> <label>: downloads a third-party manifest,
+# checks it against the pinned sha256 and prints the local path. An empty
+# sha256 (a version override without its hash) is refused unless
+# KUSO_ALLOW_UNVERIFIED_MANIFESTS=1.
+fetch_pinned() {
+  local url="$1" want="$2" label="$3" out got
+  out="$(mktemp)"
+  curl -fsSL --retry 3 "$url" -o "$out" || { warn "download failed: ${url}"; return 1; }
+  if [[ -z "$want" ]]; then
+    if [[ "${KUSO_ALLOW_UNVERIFIED_MANIFESTS:-0}" == "1" ]]; then
+      warn "${label}: no pinned sha256, applying unverified (KUSO_ALLOW_UNVERIFIED_MANIFESTS=1)"
+      printf '%s' "$out"
+      return 0
+    fi
+    warn "${label}: no pinned sha256 for this version; pass its sha256 or set KUSO_ALLOW_UNVERIFIED_MANIFESTS=1"
+    return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "$out" | awk '{print $1}')"
+  else
+    got="$(shasum -a 256 "$out" | awk '{print $1}')"
+  fi
+  if [[ "$got" != "$want" ]]; then
+    warn "${label}: sha256 ${got} does not match the pinned ${want}; refusing to apply"
+    return 1
+  fi
+  printf '%s' "$out"
 }
 
 random_string() {
@@ -631,7 +671,11 @@ fi
 # -------- 5. cert-manager --------
 if ! kubectl get ns cert-manager >/dev/null 2>&1; then
   log "installing cert-manager"
-  kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.3/cert-manager.yaml >/dev/null
+  CERT_MANAGER_MANIFEST="$(fetch_pinned \
+    https://github.com/cert-manager/cert-manager/releases/download/v1.21.3/cert-manager.yaml \
+    c04a51295adda2b1a775146751f973e787190778c7f35180861d9678876e5c74 "cert-manager v1.21.3")" \
+    || die "could not fetch a verified cert-manager manifest; fix outbound network and re-run this installer"
+  kubectl apply -f "$CERT_MANAGER_MANIFEST" >/dev/null
   log "waiting for cert-manager-webhook (up to 3 min)..."
   cm_deadline=$((SECONDS + 180))
   until kubectl wait --for=condition=Available --timeout=5s deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do
@@ -786,19 +830,24 @@ EOF
 #
 # ~150 MB image, ~64 MiB steady-state. Idempotent — re-applying the
 # CNPG release manifest is a no-op when CRDs already exist.
+# Fetched from the immutable release asset (not a release branch, which
+# moves) and checked against a pinned sha256. A KUSO_CNPG_VERSION override
+# needs its own KUSO_CNPG_SHA256.
 CNPG_VERSION="${KUSO_CNPG_VERSION:-1.30.1}"
-CNPG_RELEASE_BRANCH="${KUSO_CNPG_BRANCH:-release-1.30}"
+if [[ -z "${KUSO_CNPG_VERSION:-}" ]]; then
+  CNPG_SHA256="37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb"
+else
+  CNPG_SHA256="${KUSO_CNPG_SHA256:-}"
+fi
+CNPG_URL="https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v${CNPG_VERSION}/cnpg-${CNPG_VERSION}.yaml"
 if kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1; then
   log "CloudNativePG already installed; skipping operator install"
 else
   log "installing CloudNativePG operator (v${CNPG_VERSION})"
-  if ! kubectl apply --server-side -f \
-    "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml" \
-    >/dev/null; then
-    die "CloudNativePG operator manifest failed to apply.
-This box likely can't reach raw.githubusercontent.com. Check:
-    curl -fsSL https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml | head
-Fix outbound network (or a proxy), then re-run this installer."
+  CNPG_MANIFEST="$(fetch_pinned "$CNPG_URL" "$CNPG_SHA256" "CloudNativePG v${CNPG_VERSION}")" \
+    || die "could not fetch a verified CloudNativePG manifest from ${CNPG_URL}. Fix outbound network (or a proxy), then re-run this installer."
+  if ! kubectl apply --server-side -f "$CNPG_MANIFEST" >/dev/null; then
+    die "CloudNativePG operator manifest failed to apply (${CNPG_URL}). Re-run this installer once the API server is healthy."
   fi
   log "waiting for CNPG operator to become ready (up to 5 min)"
   kubectl -n cnpg-system wait --for=condition=Available deploy/cnpg-controller-manager --timeout=300s \
@@ -1334,7 +1383,7 @@ log "applying kuso operator (image tag ${KUSO_VERSION})"
 # committed manifest's tag (vX.Y.Z OR v0.1.0-dev legacy) gets
 # replaced with whatever the user asked for.
 kuso_manifest "deploy/operator.yaml" \
-  | sed -E "s|kuso-operator:[A-Za-z0-9._-]+|kuso-operator:${KUSO_VERSION}|g" \
+  | sed -E "s|kuso-operator:[A-Za-z0-9._-]+|kuso-operator:${KUSO_OPERATOR_IMAGE_REF}|g" \
   | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-operator-controller-manager -n kuso-operator-system
@@ -1353,7 +1402,7 @@ kubectl delete clusterrolebinding kuso-server-cluster-admin --ignore-not-found 2
 # regex matches `kuso-server-go:vX.Y.Z` regardless of the embedded
 # tag so an upgrade-via-install works without surgery on the YAML.
 kuso_manifest "deploy/server-go.yaml" \
-  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_IMAGE_REF}|g" \
   | kubectl apply -f - >/dev/null
 
 # Admission fences on kuso's own ServiceAccounts (kuso-server may only
@@ -1407,7 +1456,7 @@ fi
 # Best-effort: a cluster without scale-to-zero users still works, the
 # activator just sits idle. Same image-tag rewrite as the server.
 kuso_manifest "deploy/kuso-activator.yaml" \
-  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_IMAGE_REF}|g" \
   | kubectl apply -f - >/dev/null 2>&1 || warn "kuso-activator apply failed (scale-to-zero wake won't work until fixed)"
 
 # -------- 11a. auxiliary platform manifests --------
