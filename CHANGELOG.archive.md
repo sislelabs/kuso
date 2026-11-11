@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.6] — 2026-09-23
+
+### 🐛 Bug Fixes
+- Fix(backups): stop re-alerting on every restart, retry failed runs ([fc2e095](https://github.com/sislelabs/kuso/commit/fc2e0952042da9380ddcabffae840ae3f5ccc141))
+
 ## [0.26.5] — 2026-09-23
 
 ### 🐛 Bug Fixes

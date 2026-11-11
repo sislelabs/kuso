@@ -19,6 +19,13 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.42.4] — 2026-11-11
+
+### Other
+- Reclaim every kept Secret of a deleted clone addon ([cb07a33](https://github.com/sislelabs/kuso/commit/cb07a33f9b1c8cc4856972fad8e5ad3c973490c6))
+- Cut idle addon CPU and cap ClickHouse memory; add kuso project top ([c2833bf](https://github.com/sislelabs/kuso/commit/c2833bf9f6b4d9a49eac04dea45713d3ca0263cb))
+- Show the source file a cron runs on the Crons tab ([f29ac64](https://github.com/sislelabs/kuso/commit/f29ac64dc7e79b52469fb299b8e6658568dda9f6))
+
 ## [0.42.3] — 2026-11-10
 
 ### Other
@@ -1167,11 +1174,6 @@ messages on every release. The format is loosely based on
 - Test(previewdb): pin the source-to-clone conn pairing map ([861fee4](https://github.com/sislelabs/kuso/commit/861fee4dd9387b3bf68b69052be7d3696875df3f))
 - Test(db,metrics): make stateful tests re-runnable ([200dfe0](https://github.com/sislelabs/kuso/commit/200dfe0001d185043fe9450fc4662357b9826858))
 - Test(alerts): truncate backdated stamp to Postgres precision ([80a8883](https://github.com/sislelabs/kuso/commit/80a88834a70de597cdbd382da439771e93616a46))
-
-## [0.26.6] — 2026-09-23
-
-### 🐛 Bug Fixes
-- Fix(backups): stop re-alerting on every restart, retry failed runs ([fc2e095](https://github.com/sislelabs/kuso/commit/fc2e0952042da9380ddcabffae840ae3f5ccc141))
 
 
 ---
