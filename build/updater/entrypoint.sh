@@ -91,6 +91,18 @@ done
 
 STARTED_AT="$(now)"
 
+# failing_releases prints kind/ns/name of every KusoEnvironment and
+# KusoAddon whose helm release is failing, sorted. Non-zero when the CRs
+# can't be read, so callers can tell "none failing" from "unknown".
+failing_releases() {
+  local out
+  out=$(kubectl get kusoenvironments.application.kuso.sislelabs.com,kusoaddons.application.kuso.sislelabs.com \
+    -A -o json 2>/dev/null) || return 1
+  printf '%s' "$out" | jq -r '.items[]
+    | select(any(.status.conditions[]?; (.type == "ReleaseFailed" or .type == "Irreconcilable") and .status == "True"))
+    | "\(.kind)/\(.metadata.namespace)/\(.metadata.name)"' | sort
+}
+
 # KUSO_SKIP_CRDS=1 is set by the server on a downgrade: the older
 # release's CRDs would drop newer spec fields and the apiserver would
 # prune them from every stored CR. The installed CRDs are a superset the
@@ -183,6 +195,28 @@ write_status "rolling-server" "${KUSO_SERVER_IMAGE}"
 PRIOR_SERVER_IMAGE=$(kubectl get -n "$NS" deploy/kuso-server \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="server")].image}' 2>/dev/null || true)
 
+# The rollout wait must outlast the server's own startupProbe budget
+# (boot-time schema migrations run inside it). A shorter wait declared a
+# slow-but-healthy migration failed and reverted the image mid-migration,
+# leaving the old server on a half-migrated schema. Read the budget from
+# the live Deployment so raising it there can't reopen the gap; capped so
+# the stages still fit the Job's activeDeadlineSeconds (internal/updater).
+server_startup_budget() {
+  local jp='{.spec.template.spec.containers[?(@.name=="server")].startupProbe.'
+  local p f
+  p=$(kubectl get -n "$NS" deploy/kuso-server -o jsonpath="${jp}periodSeconds}" 2>/dev/null || true)
+  f=$(kubectl get -n "$NS" deploy/kuso-server -o jsonpath="${jp}failureThreshold}" 2>/dev/null || true)
+  if [[ "$p" =~ ^[0-9]+$ && "$f" =~ ^[0-9]+$ ]]; then
+    echo $(( p * f ))
+  else
+    echo 300
+  fi
+}
+server_rollout_secs=$(( $(server_startup_budget) + 120 ))
+if [ "$server_rollout_secs" -gt 600 ]; then server_rollout_secs=600; fi
+SERVER_ROLLOUT_TIMEOUT="${KUSO_SERVER_ROLLOUT_TIMEOUT:-${server_rollout_secs}s}"
+echo "==> server rollout timeout ${SERVER_ROLLOUT_TIMEOUT}"
+
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
 
 revert_server() {
@@ -191,7 +225,7 @@ revert_server() {
     echo "==> reverting kuso-server to ${PRIOR_SERVER_IMAGE}"
     write_status "failed" "server image ${KUSO_SERVER_IMAGE} ${why}; reverting to ${PRIOR_SERVER_IMAGE}"
     kubectl set image -n "$NS" deploy/kuso-server "server=${PRIOR_SERVER_IMAGE}" >/dev/null || true
-    if kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
+    if kubectl rollout status -n "$NS" deploy/kuso-server --timeout="$SERVER_ROLLOUT_TIMEOUT"; then
       # The failed image may have migrated the database before it died;
       # the reverted server reports that on /readyz (checks.schema).
       schema=$(curl -s --connect-timeout 5 --max-time 10 "http://kuso-server.${NS}.svc:80/readyz" 2>/dev/null \
@@ -215,7 +249,7 @@ revert_server() {
 # Wrap rollout status so a timeout/crashloop on the new image triggers a
 # revert instead of aborting under `set -e` with the deploy stuck. The
 # explicit `if !` keeps this robust to set -euo pipefail.
-if ! kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s; then
+if ! kubectl rollout status -n "$NS" deploy/kuso-server --timeout="$SERVER_ROLLOUT_TIMEOUT"; then
   echo "==> kuso-server rollout to ${KUSO_SERVER_IMAGE} did NOT become ready"
   revert_server "failed to roll out"
 fi
@@ -303,6 +337,8 @@ else
   write_status "rolling-operator" "${KUSO_OPERATOR_IMAGE}"
   OP_NS="${KUSO_OPERATOR_NS:-kuso-operator-system}"
   OP_TIMEOUT="${KUSO_OPERATOR_ROLLOUT_TIMEOUT:-300s}"
+  # Releases already failing before the roll aren't this upgrade's doing.
+  RELEASES_BEFORE=$(failing_releases || echo "unavailable")
   for d in kuso-operator-controller-manager kuso-operator; do
     if ! kubectl get -n "$OP_NS" "deploy/$d" >/dev/null 2>&1; then
       continue
@@ -331,8 +367,36 @@ else
       fi
       exit 1
     fi
+    OPERATOR_ROLLED=1
     break
   done
+fi
+
+# A new operator image re-renders every chart, so a pod-template change
+# restarts every matching workload and a chart render error fails every
+# release at once, and none of that shows in the Deployment's rollout
+# status. Watch the CRs' helm conditions for a while and report releases
+# that started failing after the roll. Report-only: reverting the operator
+# would re-render everything a second time.
+if [ "${OPERATOR_ROLLED:-}" = "1" ] && [ "$RELEASES_BEFORE" != "unavailable" ]; then
+  SETTLE_SECONDS="${KUSO_RELEASE_SETTLE_SECONDS:-180}"
+  write_status "verifying-releases" "watching helm releases for ${SETTLE_SECONDS}s after the operator roll"
+  settle_deadline=$(( $(date +%s) + SETTLE_SECONDS ))
+  new_failures=""
+  while :; do
+    if now_failing=$(failing_releases); then
+      new_failures=$(comm -13 <(printf '%s\n' "$RELEASES_BEFORE" | sed '/^$/d') <(printf '%s\n' "$now_failing" | sed '/^$/d') || true)
+    fi
+    [ "$(date +%s)" -ge "$settle_deadline" ] && break
+    sleep 30
+  done
+  if [ -n "$new_failures" ]; then
+    n=$(printf '%s\n' "$new_failures" | wc -l | tr -d ' ')
+    names=$(printf '%s\n' "$new_failures" | head -5 | tr '\n' ' ')
+    echo "==> WARNING: ${n} helm release(s) failing since the operator roll:"
+    printf '%s\n' "$new_failures" | sed 's/^/    /'
+    MANIFESTS_WARNING="${MANIFESTS_WARNING:+${MANIFESTS_WARNING}; }${n} helm release(s) started failing after the operator roll (${names% }) — check the kuso-operator logs"
+  fi
 fi
 
 if [ -n "$UNVERIFIED" ]; then

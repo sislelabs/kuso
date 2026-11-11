@@ -412,7 +412,7 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 	if !ValidVersion(version) {
 		return nil, fmt.Errorf("invalid release version %q (want vX.Y.Z)", version)
 	}
-	url :=fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", s.Repo, version)
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", s.Repo, version)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := s.client.Do(req)
@@ -1010,8 +1010,16 @@ func (s *Service) Status(ctx context.Context) (UpdateStatus, bool) {
 		return UpdateStatus{}, false
 	}
 	if !terminalPhase(st.Phase) {
-		if name, failed := s.latestUpdateJobFailed(ctx); failed {
+		name, failed, found, err := s.latestUpdateJob(ctx)
+		switch {
+		case failed:
 			st.Message = fmt.Sprintf("updater job %s failed while %q (%s) — see its pod logs", name, st.Phase, st.Message)
+			st.Phase = "failed"
+		case err == nil && !found && !st.Updated.IsZero() && time.Since(st.Updated) > updateJobDeadline+5*time.Minute:
+			// The failed Job was reaped (TTL) or deleted by hand, so there is
+			// no failed condition left to read, and an in-progress phase
+			// nobody has written for longer than any Job may run is dead.
+			st.Message = fmt.Sprintf("updater job is gone and its last report (%q: %s) is stale — the update did not finish", st.Phase, st.Message)
 			st.Phase = "failed"
 		}
 	}
@@ -1026,16 +1034,18 @@ func terminalPhase(p string) bool {
 	return false
 }
 
-// latestUpdateJobFailed reports whether the most recent updater Job has
+// latestUpdateJob reports whether the most recent updater Job has
 // failed. The entrypoint can exit without writing a terminal phase (a
 // command failing under set -e, OOM, ActiveDeadlineSeconds), which used
 // to leave the UI showing the update in progress forever.
-func (s *Service) latestUpdateJobFailed(ctx context.Context) (string, bool) {
+//
+// found is false when no updater Job exists at all.
+func (s *Service) latestUpdateJob(ctx context.Context) (name string, failed, found bool, err error) {
 	jobs, err := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/managed-by=kuso-server",
 	})
 	if err != nil {
-		return "", false
+		return "", false, false, err
 	}
 	var latest *batchv1.Job
 	for i := range jobs.Items {
@@ -1048,17 +1058,17 @@ func (s *Service) latestUpdateJobFailed(ctx context.Context) (string, bool) {
 		}
 	}
 	if latest == nil {
-		return "", false
+		return "", false, false, nil
 	}
 	if latest.Status.Failed > 0 {
-		return latest.Name, true
+		return latest.Name, true, true, nil
 	}
 	for _, c := range latest.Status.Conditions {
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return latest.Name, true
+			return latest.Name, true, true, nil
 		}
 	}
-	return "", false
+	return latest.Name, false, true, nil
 }
 
 func (s *Service) writeStatus(ctx context.Context, st UpdateStatus) error {
