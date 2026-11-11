@@ -1172,7 +1172,8 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 		// at Job render time anyway. The dispatcher promote path
 		// re-runs ensure when it patches in spec.image (so a queued
 		// CR promoted later still gets the cache).
-		cachePVC = s.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+		preview := req.PreviewEnv != "" || (targetEnv != nil && targetEnv.Spec.Kind == "preview")
+		cachePVC = s.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5, preview)
 	}
 
 	labels := map[string]string{
@@ -2400,7 +2401,7 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 	}
 	cachePVC := ""
 	if !buildCacheDisabled(projCR) {
-		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5, next.Annotations[AnnPreviewEnv] != "")
 	}
 	cachePatch := ""
 	if cachePVC != "" {
