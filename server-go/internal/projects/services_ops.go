@@ -538,6 +538,14 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		scale.ScaleUpPercent = req.Scale.ScaleUpPercent
 		scale.ScaleDownStabilizationSeconds = req.Scale.ScaleDownStabilizationSeconds
 	}
+	// The default autoscale ceiling would put a second pod on a
+	// single-writer volume; with one, the default is a single replica.
+	if singleWriterVolume(createVolumes) != "" && (req.Scale == nil || req.Scale.Max == 0) {
+		scale.Max = scale.MinValue()
+	}
+	if err := validateVolumeScale(createVolumes, scale); err != nil {
+		return nil, err
+	}
 	sleep := &kube.KusoServiceSleep{Enabled: false, AfterMinutes: 30}
 	if req.Sleep != nil {
 		if err := validateSleepNonProduction(req.Sleep.NonProduction); err != nil {
@@ -3016,6 +3024,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if err != nil {
 		return nil, err
 	}
+	if req.Volumes != nil {
+		vols := append([]VolumePatch(nil), (*req.Volumes)...)
+		if err := s.checkVolumeSizes(ctx, ns, project, current, vols); err != nil {
+			return nil, err
+		}
+		req.Volumes = &vols
+	}
 
 	// Project default branch, resolved once for the effective-branch
 	// bookkeeping in the req.Repo block below (a service with no explicit
@@ -3265,6 +3280,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			svc.Spec.Volumes = next
 			volumesChanged = true
+		}
+		if req.Volumes != nil || req.Scale != nil {
+			if err := validateVolumeScale(svc.Spec.Volumes, svc.Spec.Scale); err != nil {
+				return err
+			}
 		}
 		requestLimitsChanged := false
 		if req.RequestLimits != nil {

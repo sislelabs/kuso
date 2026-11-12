@@ -10,7 +10,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 )
 
-// AUTHZ-04: a non-purge delete keeps addon credentials (helm keep) and
+// AUTHZ-14: a non-purge delete keeps addon credentials (helm keep) and
 // volumes; RetainedData must report them so only an instance admin can
 // re-create the name and adopt them.
 func TestRetainedData_ReportsKeptSecretsAndVolumes(t *testing.T) {
@@ -41,7 +41,8 @@ func TestRetainedData_ReportsKeptSecretsAndVolumes(t *testing.T) {
 }
 
 // BLOB-3: backups a deleted project left in the bucket count as retained
-// data; a bucket error must not block creation.
+// data, and a bucket that cannot be checked blocks non-admin creation
+// rather than letting the name through unchecked.
 func TestRetainedData_ReportsRetainedBackups(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t)
@@ -56,7 +57,7 @@ func TestRetainedData_ReportsRetainedBackups(t *testing.T) {
 	if got, err := s.RetainedData(ctx, CreateProjectRequest{Name: "acme"}); err != nil || len(got) != 1 {
 		t.Errorf("acme: retained = %v, err %v", got, err)
 	}
-	if got, err := s.RetainedData(ctx, CreateProjectRequest{Name: "other"}); err != nil || len(got) != 0 {
+	if got, err := s.RetainedData(ctx, CreateProjectRequest{Name: "other"}); err != nil || len(got) != 1 {
 		t.Errorf("other: retained = %v, err %v", got, err)
 	}
 }

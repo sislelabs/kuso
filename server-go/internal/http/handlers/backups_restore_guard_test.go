@@ -144,7 +144,7 @@ func TestStartPreRestoreSnapshot(t *testing.T) {
 func TestSnapshotWaitShell(t *testing.T) {
 	t.Parallel()
 	since := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
-	c := snapshotWaitContainer("kuso-backup-s3", "", "shop/shop-db/", since)
+	c := snapshotWaitContainer("kuso-backup-s3", "", "shop/shop-db/", since, "", "", "")
 	for _, tc := range []struct {
 		name    string
 		listing string

@@ -257,8 +257,11 @@ func (h *BackupsHandler) RetainedBackups(ctx context.Context, project string) ([
 		return nil, nil
 	}
 	cli, bucket, err := h.s3Client(ctx)
+	if errors.Is(err, errBackupNotConfigured) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil // backups not configured
+		return nil, err
 	}
 	names, err := orphanScanner{cli: cli, bucket: bucket}.childPrefixes(ctx, project+"/")
 	if err != nil {

@@ -95,6 +95,7 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/admin/backup-settings/projects/{project}/policy", h.ScopedCredentialPolicy)
 	r.Get("/api/admin/backups/orphans", h.ListOrphanBackups)
 	r.Post("/api/admin/backups/orphans/purge", h.PurgeOrphanBackups)
+	r.Post("/api/admin/backups/adopt", h.AdoptBackups)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
@@ -333,6 +334,61 @@ func listOwnedBackups(ctx context.Context, cli s3.ListObjectsV2APIClient, bucket
 	return items, total, nil
 }
 
+const s3SnapshotManifest = ".kuso-snapshot.manifest.json"
+
+type s3SnapshotLister interface {
+	s3.ListObjectsV2APIClient
+	s3ObjectHeader
+}
+
+// listS3Snapshots lists an s3 addon's snapshots: one row per <stamp>/ or
+// <stamp>.bucket-<name>/ prefix, keyed by that prefix (restore accepts
+// it), newest first, plus the total. Listing objects instead filled the
+// capped response with the newest snapshot's files (BLOB-3). A prefix
+// without its manifest is a run that failed partway (every completed run
+// writes one, encrypted or not) and is left out (BLOB-8).
+func listS3Snapshots(ctx context.Context, cli s3SnapshotLister, bucket, prefix string, limit int, keep func(BackupObject) bool) ([]BackupObject, int, error) {
+	var items []BackupObject
+	p := s3.NewListObjectsV2Paginator(cli, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, cp := range page.CommonPrefixes {
+			snap := aws.ToString(cp.Prefix)
+			when := backupObjectTime(prefix, snap, time.Time{})
+			if when.IsZero() {
+				continue // not a snapshot
+			}
+			obj := BackupObject{Key: snap, When: when}
+			if keep != nil && !keep(obj) {
+				continue
+			}
+			if _, err := cli.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(snap + s3SnapshotManifest)}); err != nil {
+				if isS3NotFound(err) {
+					continue
+				}
+				return nil, 0, err
+			}
+			items = append(items, obj)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Key > items[j].Key })
+	total := len(items)
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		items = []BackupObject{}
+	}
+	return items, total, nil
+}
+
 // instanceTenantBackupLoc is where an instance-shared tenant's database is
 // backed up: the instance addon's CronJob dumps every database on the shared
 // server as <prefix><ts>.db-<db>.sql.gz.
@@ -467,9 +523,14 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	addonFQN := cr.Name
 	prefix := project + "/" + addonFQN + "/"
 	own := h.addonBackupOwnership(ctx, cli, bucket, prefix, cr)
-	items, total, err := listOwnedBackups(ctx, cli, bucket, prefix, backupListLimit, func(o BackupObject) bool {
-		return own.owns(backupObjectTime(prefix, o.Key, o.When))
-	})
+	keep := func(o BackupObject) bool { return own.owns(backupObjectTime(prefix, o.Key, o.When)) }
+	var items []BackupObject
+	var total int
+	if cr.Spec.Kind == "s3" {
+		items, total, err = listS3Snapshots(ctx, cli, bucket, prefix, backupListLimit, keep)
+	} else {
+		items, total, err = listOwnedBackups(ctx, cli, bucket, prefix, backupListLimit, keep)
+	}
 	if err != nil {
 		h.Logger.Error("backup: list", "err", err)
 		writeErr(w, http.StatusBadGateway, "list failed: "+err.Error())
@@ -735,7 +796,8 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		if snap != nil {
 			resp["snapshotJob"] = snap.Name
 			job.Spec.Template.Spec.InitContainers = append(job.Spec.Template.Spec.InitContainers,
-				snapshotWaitContainer(credSecret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since))
+				snapshotWaitContainer(credSecret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since,
+					snapshotSeries(req.Key), siblingDB, destCR.Name+"-conn"))
 			deadline := *job.Spec.ActiveDeadlineSeconds + int64(snapshotWait.Seconds())
 			job.Spec.ActiveDeadlineSeconds = &deadline
 		}
@@ -1042,10 +1104,12 @@ func (h *BackupsHandler) mirrorBackupSecret(ctx context.Context, ns string) erro
 // on read as well as write — otherwise list/download/restore would
 // look in the instance bucket for artifacts the CronJob wrote
 // elsewhere, and silently find nothing.
+var errBackupNotConfigured = errors.New("backup not configured")
+
 func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, error) {
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil, "", errors.New("backup not configured: PUT /api/admin/backup-settings first")
+		return nil, "", fmt.Errorf("%w: PUT /api/admin/backup-settings first", errBackupNotConfigured)
 	}
 	if err != nil {
 		return nil, "", err

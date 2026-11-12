@@ -1023,10 +1023,18 @@ spec:
                     printf '{"payloadKind":"s3-snapshot"%s}\n' "${ENC_JSON}" \
                       | rclone rcat "dst:${BUCKET}/${PREFIX}$1/.kuso-snapshot.manifest.json" --s3-no-check-bucket
                   }
+                  # A copy that fails partway leaves a snapshot with no
+                  # manifest, and each retry starts a new TS: remove the
+                  # unfinished one on the way out (BLOB-8). CUR is only set
+                  # between a copy's start and its manifest landing.
+                  CUR=""
+                  trap 'if [ -n "${CUR}" ]; then echo "==> removing incomplete snapshot ${PREFIX}${CUR}/" >&2; rclone purge "dst:${BUCKET}/${PREFIX}${CUR}/" || true; fi' EXIT
+                  CUR="${TS}"
                   rclone copy "src:${SRC_BUCKET}" "${SNAP_ROOT}${TS}/" \
                     --transfers 16 --checkers 16 --retries 3 \
                     --s3-no-check-bucket --stats-one-line --stats 30s
                   snapshot_manifest "${TS}"
+                  CUR=""
                   echo "==> sync done"
                   # Buckets an app created besides S3_BUCKET (D4) go to
                   # sibling prefixes <TS>.bucket-<name>/, which share the
@@ -1035,10 +1043,12 @@ spec:
                   if BUCKETS=$(rclone lsf --dirs-only "src:" 2>/dev/null); then
                     for B in $(printf '%s\n' "${BUCKETS}" | tr -d '/' | grep -E '^[a-z0-9][a-z0-9.-]{1,62}$' | grep -vxF "${SRC_BUCKET}" || true); do
                       echo "==> syncing extra bucket ${B}"
+                      CUR="${TS}.bucket-${B}"
                       rclone copy "src:${B}" "${SNAP_ROOT}${TS}.bucket-${B}/" \
                         --transfers 16 --checkers 16 --retries 3 \
                         --s3-no-check-bucket --stats-one-line --stats 30s
                       snapshot_manifest "${TS}.bucket-${B}"
+                      CUR=""
                     done
                   else
                     echo "WARNING: could not list buckets on the addon; only ${SRC_BUCKET} was backed up" >&2
