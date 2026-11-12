@@ -235,6 +235,14 @@ if [[ "${KUSO_RELEASE_ALLOW_DIRTY:-0}" != "1" ]]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
     fail "working tree is dirty. commit/stash or set KUSO_RELEASE_ALLOW_DIRTY=1"
   fi
+  # The image builds COPY these directories wholesale, so an untracked
+  # file in them ships in an image that matches no commit CI tested.
+  # Scoped to the build inputs so local notes elsewhere don't block a ship.
+  untracked="$(git ls-files --others --exclude-standard -- web server-go api coolify compose operator build)"
+  if [[ -n "$untracked" ]]; then
+    fail "untracked files would be copied into the release images (commit, delete or gitignore them, or set KUSO_RELEASE_ALLOW_DIRTY=1):
+$untracked"
+  fi
 fi
 
 # CI gate: refuse to ship a HEAD whose GitHub Actions `test` run isn't
