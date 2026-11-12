@@ -9,13 +9,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kuso/server/internal/testsh"
 )
 
 // backupImage is the image the rendered CronJob runs. The prune shell has
 // to be exercised in it, not on the host: the retention bug was that the
 // image's busybox `date` could not parse what GNU date parses, so every
 // object was skipped while the Job still exited 0.
-const backupImage = "ghcr.io/sislelabs/kuso-backup:latest"
+var backupImage = testsh.BackupImageRef
 
 const (
 	pruneBegin = "# retention-prune:begin"
@@ -72,7 +74,7 @@ func ensureImage(t *testing.T, docker, img string, flags ...string) {
 func requireBackupImage(t *testing.T) string {
 	t.Helper()
 	docker := requireDocker(t)
-	ensureImage(t, docker, backupImage, "--platform", "linux/amd64")
+	testsh.BackupImage(t, docker)
 	return docker
 }
 
@@ -107,7 +109,7 @@ echo "---RM---"
 cat /tmp/rm.log 2>/dev/null || true
 `, listing, lsRC, block)
 
-	cmd := exec.Command(docker, "run", "--rm", "-i", "--platform", "linux/amd64",
+	cmd := exec.Command(docker, "run", "--rm", "-i",
 		"--entrypoint", "sh", backupImage, "-s")
 	cmd.Stdin = strings.NewReader(script)
 	var out bytes.Buffer

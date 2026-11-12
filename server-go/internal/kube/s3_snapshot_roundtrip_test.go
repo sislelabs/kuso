@@ -112,7 +112,7 @@ printf 'EXTRA-BUCKET-BODY' | mc pipe addon/extra/e.txt >/dev/null`)
 		return env
 	}
 	inImage := func(sh string, env []string) (string, error) {
-		args := []string{"run", "--rm", "--platform", "linux/amd64", "--network", id}
+		args := []string{"run", "--rm", "--network", id}
 		for _, e := range env {
 			args = append(args, "-e", e)
 		}

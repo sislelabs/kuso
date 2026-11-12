@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"kuso/server/internal/kube"
+
+	"kuso/server/internal/testsh"
 )
 
 func TestParseDrillLog(t *testing.T) {
@@ -127,14 +129,9 @@ POSTGRES_USER=kuso sh /fx/drill.sh; echo "SUPER_RC=$?"
 echo "LEFT=$(psql -qAt -h "$H" -U kuso -d app -c "select count(*) from pg_database where datname like 'kuso_drill_%'")"
 echo "LIVE=$(psql -qAt -h "$H" -U kuso -d app -c "select count(*) from t")"
 `
-	ensure := exec.Command(docker, "image", "inspect", backupJobImage)
-	if ensure.Run() != nil {
-		if out, err := run("pull", "-q", "--platform", "linux/amd64", backupJobImage); err != nil {
-			t.Fatalf("pull: %v\n%s", err, out)
-		}
-	}
-	out, err := run("run", "--rm", "--platform", "linux/amd64", "--network", id, "-v", dir+":/fx:ro",
-		"-e", "H="+id+"-pg", "--entrypoint", "sh", backupJobImage, "-c", setup)
+	image := testsh.BackupImage(t, docker)
+	out, err := run("run", "--rm", "--network", id, "-v", dir+":/fx:ro",
+		"-e", "H="+id+"-pg", "--entrypoint", "sh", image, "-c", setup)
 	if err != nil {
 		t.Fatalf("drill run: %v\n%s", err, out)
 	}

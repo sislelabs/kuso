@@ -3,7 +3,6 @@ package kube
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kuso/server/internal/backup"
+
+	"kuso/server/internal/testsh"
 )
 
 // renderedCronJobScript returns the first container's shell of the backup
@@ -48,17 +49,6 @@ func renderedCronJobScript(t *testing.T, kind string, sets ...string) string {
 	return ""
 }
 
-// localBackupImage builds build/backup from this tree for the host arch, so
-// a Dockerfile fix is proven before it is published.
-func localBackupImage(t *testing.T, docker string) string {
-	t.Helper()
-	const ref = "kuso-backup:localtest"
-	if out, err := exec.Command(docker, "build", "-q", "-t", ref, filepath.Join("..", "..", "..", "build", "backup")).CombinedOutput(); err != nil {
-		t.Fatalf("build backup image: %v\n%s", err, out)
-	}
-	return ref
-}
-
 // fakeS3Shell puts an `aws` on PATH that maps s3://<bucket>/<key> onto
 // /store, enough for the backup and restore scripts' cp calls.
 const fakeS3Shell = `mkdir -p /tmp/bin /store
@@ -83,7 +73,7 @@ export PATH=/tmp/bin:$PATH
 // DB-2).
 func TestMySQLBackupRestore_Docker(t *testing.T) {
 	docker := requireDocker(t)
-	image := localBackupImage(t, docker)
+	image := testsh.BackupImage(t, docker)
 	const mysqlImage = "mysql:8.4"
 	ensureImage(t, docker, mysqlImage)
 	script := renderedCronJobScript(t, "mysql")
