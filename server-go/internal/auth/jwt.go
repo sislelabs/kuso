@@ -15,6 +15,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// iat/exp carry microseconds, matching the Postgres timestamp of a
+// user's revocation watermark. At the default whole-second precision a
+// login in the same second as a role, grant or password change got an
+// iat before the watermark and was rejected on its first request.
+// Integer-second tokens issued earlier still verify.
+func init() { jwt.TimePrecision = time.Microsecond }
+
 // Claims mirrors the payload the TS auth.service.ts emits via JwtService.
 //
 // Field tags match the TS shape exactly — the existing CLI parses these
