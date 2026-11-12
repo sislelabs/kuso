@@ -82,6 +82,37 @@ func planVolumeSizes(prev []kube.KusoVolume, vols []VolumePatch, pvcs map[string
 	return nil
 }
 
+// singleWriterVolume returns the first volume only one pod can safely
+// write ("" access mode is the chart's ReadWriteOnce default), "" if none.
+func singleWriterVolume(vols []kube.KusoVolume) string {
+	for _, v := range vols {
+		switch v.AccessMode {
+		case "", "ReadWriteOnce", "ReadWriteOncePod":
+			return v.Name
+		}
+	}
+	return ""
+}
+
+// validateVolumeScale refuses more than one replica, fixed or autoscaled,
+// on a service with a single-writer volume: the extra pods either share
+// the disk on one node (concurrent writers on the same files) or hang in
+// Multi-Attach errors (BLOB-9).
+func validateVolumeScale(vols []kube.KusoVolume, scale *kube.KusoScaleSpec) error {
+	if scale == nil {
+		return nil
+	}
+	replicas := max(scale.MinValue(), scale.Max)
+	if replicas <= 1 {
+		return nil
+	}
+	if name := singleWriterVolume(vols); name != "" {
+		return fmt.Errorf("%w: volume %q is ReadWriteOnce, so only one replica can use it, but the service scales to %d; set min and max replicas to 1 (kuso service set --replicas 1 --max-replicas 1), or use a ReadWriteMany volume",
+			ErrInvalid, name, replicas)
+	}
+	return nil
+}
+
 // checkVolumeSizes runs planVolumeSizes against the PVCs of svc's envs,
 // filling in sizes on vols.
 func (s *Service) checkVolumeSizes(ctx context.Context, ns, project string, svc *kube.KusoService, vols []VolumePatch) error {
