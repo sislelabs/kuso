@@ -1575,7 +1575,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if parentSvc != nil && parentSvc.Spec.Previews != nil && parentSvc.Spec.Previews.Seed != "" {
 		buildImage := previewSeedImage(seedBuild, proj.Name, short, pr.PullRequest.Head.SHA)
 		seedEnvVars := envVarsForSeed(mergedEnvVars)
-		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, fmt.Sprintf("preview-pr-%d", pr.Number), buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars); err != nil {
+		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, fmt.Sprintf("preview-pr-%d", pr.Number), buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars, parentSvc.Spec.PrivateEgress, parentSvc.Spec.PlatformAPIEgress); err != nil {
 			d.Logger.Warn("preview seed job", "env", envName, "err", err)
 		}
 	}
