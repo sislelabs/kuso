@@ -253,20 +253,24 @@ func prBodyAt(t *testing.T, action string, number int, updatedAt, closedAt strin
 func TestPRClose_TombstoneOrdersByGitHubTime(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	// Relative to now: an absolute date ages past the 24h in-process
+	// tombstone TTL and the test starts failing a day after it was written.
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Minute)
+	at := func(min int) string { return base.Add(time.Duration(min) * time.Minute).Format(time.RFC3339) }
 	for _, tc := range []struct {
 		name  string
 		steps [][]byte
 		want  bool
 	}{
 		{"late synchronize", [][]byte{
-			prBodyAt(t, "opened", 8, "2026-11-11T10:00:00Z", ""),
-			prBodyAt(t, "closed", 8, "2026-11-11T10:05:00Z", "2026-11-11T10:05:00Z"),
-			prBodyAt(t, "synchronize", 8, "2026-11-11T10:03:00Z", ""),
+			prBodyAt(t, "opened", 8, at(0), ""),
+			prBodyAt(t, "closed", 8, at(5), at(5)),
+			prBodyAt(t, "synchronize", 8, at(3), ""),
 		}, false},
 		{"opened after close", [][]byte{
-			prBodyAt(t, "opened", 8, "2026-11-11T10:00:00Z", ""),
-			prBodyAt(t, "closed", 8, "2026-11-11T10:05:00Z", "2026-11-11T10:05:00Z"),
-			prBodyAt(t, "opened", 8, "2026-11-11T10:10:00Z", ""),
+			prBodyAt(t, "opened", 8, at(0), ""),
+			prBodyAt(t, "closed", 8, at(5), at(5)),
+			prBodyAt(t, "opened", 8, at(10), ""),
 		}, true},
 		{"untimed opened after close", [][]byte{
 			prBodyAt(t, "opened", 8, "", ""),
