@@ -109,6 +109,20 @@ func (h *BackupsHandler) startPreRestoreSnapshot(ctx context.Context, ns string,
 	// its pod, strictly after this.
 	since := time.Now().UTC().Truncate(time.Second)
 	job := manualJobFromCronJob(cj, since)
+	// No retention prune: the snapshot is the series' newest dump, so its
+	// prune could push the very dump being restored past KEEP_MIN and delete
+	// it mid-restore. The prune skips at RETENTION_DAYS=0; the next
+	// scheduled run prunes as usual.
+	pod := &job.Spec.Template.Spec
+	for _, cs := range [][]corev1.Container{pod.InitContainers, pod.Containers} {
+		for i := range cs {
+			for j := range cs[i].Env {
+				if cs[i].Env[j].Name == "RETENTION_DAYS" {
+					cs[i].Env[j] = corev1.EnvVar{Name: "RETENTION_DAYS", Value: "0"}
+				}
+			}
+		}
+	}
 	suffix := fmt.Sprintf("-pre-%d", since.Unix())
 	base := cj.Name
 	if len(base)+len(suffix) > 63 {
