@@ -162,3 +162,24 @@ func TestAlertURL(t *testing.T) {
 		t.Errorf("global alert url %q", got)
 	}
 }
+
+func TestDiscordPayload_RunTerminalEventsNameWhoStartedIt(t *testing.T) {
+	cmd := []string{"sh", "-c", "seed"}
+	for _, tc := range []struct {
+		e    Event
+		want string
+	}{
+		{RunFailed("scubatony", "scubatony", "r1", cmd, "ivo", "Job has reached the specified backoff limit", 19000), "by ivo"},
+		{RunSucceeded("scubatony", "scubatony", "r1", cmd, "ivo", 19000), "by ivo"},
+		{RunFailed("scubatony", "scubatony", "r1", cmd, "", "boom", 0), "by system"},
+	} {
+		tc.e.Timestamp = time.Now()
+		var vals []string
+		for _, f := range fieldsOf(embedOf(discordPayload(tc.e, ""))) {
+			vals = append(vals, f["value"].(string))
+		}
+		if !strings.Contains(strings.Join(vals, " | "), tc.want) {
+			t.Errorf("%s: fields %q lack %q", tc.e.Title, vals, tc.want)
+		}
+	}
+}

@@ -256,6 +256,15 @@ func NodeRecovered(node string, downFor time.Duration) Event {
 	}
 }
 
+// runByField names who started the run; "system" for crons and release hooks.
+func runByField(triggeredByUser string) EventField {
+	by := triggeredByUser
+	if by == "" {
+		by = "system"
+	}
+	return EventField{Name: "By", Value: "by " + by, Inline: true}
+}
+
 func runCommand(command []string) string {
 	cmd := strings.Join(command, " ")
 	if len(cmd) > 200 {
@@ -264,8 +273,8 @@ func runCommand(command []string) string {
 	return "`" + cmd + "`"
 }
 
-func runFields(runName string, durationMs int64) []EventField {
-	fields := []EventField{{Name: "Run", Value: "`" + runName + "`", Inline: true}}
+func runFields(runName, triggeredByUser string, durationMs int64) []EventField {
+	fields := []EventField{{Name: "Run", Value: "`" + runName + "`", Inline: true}, runByField(triggeredByUser)}
 	if durationMs > 0 {
 		fields = append(fields, EventField{
 			Name: "Took", Value: formatShortDuration(time.Duration(durationMs) * time.Millisecond), Inline: true,
@@ -277,10 +286,6 @@ func runFields(runName string, durationMs int64) []EventField {
 // RunStarted: a KusoRun was created. The poller fires RunSucceeded /
 // RunFailed at the terminal transition.
 func RunStarted(project, service, runName string, command []string, triggeredByUser string) Event {
-	by := triggeredByUser
-	if by == "" {
-		by = "system"
-	}
 	return Event{
 		Type:        EventRunStarted,
 		Title:       "▶ Run started · " + Scope(project, service, ""),
@@ -291,13 +296,13 @@ func RunStarted(project, service, runName string, command []string, triggeredByU
 		Severity:    "info",
 		Fields: []EventField{
 			{Name: "Run", Value: "`" + runName + "`", Inline: true},
-			{Name: "By", Value: "by " + by, Inline: true},
+			runByField(triggeredByUser),
 		},
 	}
 }
 
 // RunSucceeded: the run's Job completed. durationMs 0 = unknown.
-func RunSucceeded(project, service, runName string, command []string, durationMs int64) Event {
+func RunSucceeded(project, service, runName string, command []string, triggeredByUser string, durationMs int64) Event {
 	return Event{
 		Type:        EventRunSucceeded,
 		Title:       "✓ Run succeeded · " + Scope(project, service, ""),
@@ -306,14 +311,14 @@ func RunSucceeded(project, service, runName string, command []string, durationMs
 		Service:     service,
 		URL:         runEventURL(project, service),
 		Severity:    "info",
-		Fields:      runFields(runName, durationMs),
+		Fields:      runFields(runName, triggeredByUser, durationMs),
 		DurationMs:  durationMs,
 	}
 }
 
 // RunFailed: the run's Job failed. message is the Job's failure
 // condition (typically the kubelet reason + exit code).
-func RunFailed(project, service, runName string, command []string, message string, durationMs int64) Event {
+func RunFailed(project, service, runName string, command []string, triggeredByUser, message string, durationMs int64) Event {
 	desc := runCommand(command)
 	if message != "" {
 		desc += "\n" + message
@@ -327,7 +332,7 @@ func RunFailed(project, service, runName string, command []string, message strin
 		Service:     service,
 		URL:         runEventURL(project, service),
 		Severity:    "error",
-		Fields:      runFields(runName, durationMs),
+		Fields:      runFields(runName, triggeredByUser, durationMs),
 		DurationMs:  durationMs,
 		Links: []EventLink{
 			{Label: "Runs", URL: runEventURL(project, service)},

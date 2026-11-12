@@ -2499,9 +2499,9 @@ func (a runsNotifyAdapter) Emit(e runs.RunEvent) {
 	case "started":
 		a.d.Emit(notify.RunStarted(e.Project, e.Service, e.RunName, e.Command, e.UserName))
 	case "succeeded":
-		a.d.Emit(notify.RunSucceeded(e.Project, e.Service, e.RunName, e.Command, e.DurationMs))
+		a.d.Emit(notify.RunSucceeded(e.Project, e.Service, e.RunName, e.Command, e.UserName, e.DurationMs))
 	case "failed":
-		a.d.Emit(notify.RunFailed(e.Project, e.Service, e.RunName, e.Command, e.Message, e.DurationMs))
+		a.d.Emit(notify.RunFailed(e.Project, e.Service, e.RunName, e.Command, e.UserName, e.Message, e.DurationMs))
 	}
 }
 
