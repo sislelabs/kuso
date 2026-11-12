@@ -90,10 +90,17 @@ func TestCheckConfigRepoBinding(t *testing.T) {
 	}}
 	bound := configBoundRepos(proj, []unstructured.Unstructured{svc}, "org/site")
 
-	for _, repo := range []string{"", "https://github.com/org/app", "https://github.com/org/worker", "org/site", "https://gitlab.com/x/y"} {
+	for _, repo := range []string{"", "https://github.com/org/app", "https://github.com/org/worker", "https://github.com/org/site", "https://github.com/org/app#apps/web"} {
 		f := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "api", Repo: repo}}}
 		if err := checkConfigRepoBinding(f, bound); err != nil {
 			t.Errorf("repo %q refused: %v", repo, err)
+		}
+	}
+	// SEC-1 (2026-11-12): other hosts are held to the same binding.
+	for _, repo := range []string{"https://gitlab.com/x/y", "https://attacker.example/org/site"} {
+		f := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "api", Repo: repo}}}
+		if err := checkConfigRepoBinding(f, bound); !errors.Is(err, ErrConfigRepoNotBound) {
+			t.Errorf("repo %q: err = %v, want ErrConfigRepoNotBound", repo, err)
 		}
 	}
 	f := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "api"}, {Name: "x", Repo: "https://github.com/org/private-b"}}}
@@ -135,6 +142,19 @@ func TestCheckConfigExecChanges(t *testing.T) {
 		if err := checkConfigExecChanges(plan(name), f, proj, svcs, "org/app"); !errors.Is(err, ErrConfigExecNotAllowed) {
 			t.Errorf("%s: err = %v, want ErrConfigExecNotAllowed", name, err)
 		}
+	}
+	// SEC-1 (2026-11-12): a push can't repoint another repo's service at
+	// the pushed repo (or a lookalike on another host) and then count it
+	// as built by the push.
+	for _, to := range []string{"https://github.com/org/app", "https://attacker.example/org/app"} {
+		ff := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "api"}, {Name: "worker", Repo: to}, {Name: "tool"}}}
+		if err := checkConfigExecChanges(plan("worker"), ff, proj, svcs, "org/app"); !errors.Is(err, ErrConfigExecNotAllowed) {
+			t.Errorf("repoint worker to %s: err = %v, want ErrConfigExecNotAllowed", to, err)
+		}
+	}
+	ff := &spec.File{Project: "p", Services: []spec.ServiceSpec{{Name: "fresh", Repo: "https://attacker.example/org/app"}}}
+	if err := checkConfigExecChanges(plan("fresh"), ff, proj, svcs, "org/app"); !errors.Is(err, ErrConfigExecNotAllowed) {
+		t.Errorf("new service on lookalike host: err = %v, want ErrConfigExecNotAllowed", err)
 	}
 
 	// SEC-3: env changes count on services the pushed repo doesn't build,

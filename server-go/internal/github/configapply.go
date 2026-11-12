@@ -79,8 +79,8 @@ func splitFullName(fullName string) (owner, repo string) {
 func configBoundRepos(proj *kube.KusoProject, svcs []unstructured.Unstructured, pushedFullName string) map[string]bool {
 	bound := map[string]bool{}
 	add := func(u string) {
-		if owner, name := ParseGithubRepoURL(u); owner != "" {
-			bound[strings.ToLower(owner+"/"+name)] = true
+		if id := kube.RepoIdentity(u); id != "" {
+			bound[id] = true
 		}
 	}
 	if proj != nil && proj.Spec.DefaultRepo != nil {
@@ -92,22 +92,23 @@ func configBoundRepos(proj *kube.KusoProject, svcs []unstructured.Unstructured, 
 		}
 	}
 	if pushedFullName != "" {
-		bound[strings.ToLower(pushedFullName)] = true
+		bound["github.com/"+strings.ToLower(pushedFullName)] = true
 	}
 	return bound
 }
 
-// checkConfigRepoBinding refuses a kuso.yaml whose services name a
-// GitHub repo outside bound. Non-GitHub repos pass: no App token is
-// ever minted for them.
+// checkConfigRepoBinding refuses a kuso.yaml whose services name a repo
+// outside bound, on any host: a new repo picks the code a service's
+// secrets run with, App token or not (SEC-1).
 func checkConfigRepoBinding(f *spec.File, bound map[string]bool) error {
 	for _, s := range f.Services {
-		owner, name := ParseGithubRepoURL(s.Repo)
-		if owner == "" {
+		repo, _, _ := strings.Cut(s.Repo, "#") // repo#path shorthand
+		r := kube.RepoIdentity(repo)
+		if r == "" {
 			continue
 		}
-		if r := strings.ToLower(owner + "/" + name); !bound[r] {
-			return fmt.Errorf("%w: kuso.yaml service %q points at github.com/%s, which project %q doesn't use yet; add it from the dashboard or `kuso apply` as an instance admin or editor first",
+		if !bound[r] {
+			return fmt.Errorf("%w: kuso.yaml service %q points at %s, which project %q doesn't use yet; add it from the dashboard or `kuso apply` as an instance admin or editor first",
 				ErrConfigRepoNotBound, s.Name, r, f.Project)
 		}
 	}
@@ -152,15 +153,22 @@ func checkConfigExecChanges(plan *spec.Plan, f *spec.File, proj *kube.KusoProjec
 	for i := range svcs {
 		live[strings.TrimPrefix(svcs[i].GetName(), f.Project+"-")] = &svcs[i]
 	}
+	// An existing service is judged by what it builds now, not by what
+	// the push asks for: otherwise the push could repoint a service at
+	// the pushed repo (or flip it off runtime=image) and then pass as
+	// "built by the pushed repo" (SEC-1).
 	builtByPushed := func(name string) bool {
-		d := desired[name]
-		runtime := d.Runtime
-		if runtime == "" && live[name] != nil {
-			runtime, _, _ = unstructured.NestedString(live[name].Object, "spec", "runtime")
-		}
-		repo := d.Repo
-		if repo == "" {
-			repo, _ = serviceEffectiveRepo(live[name], proj)
+		var runtime, repo string
+		if l := live[name]; l != nil {
+			runtime, _, _ = unstructured.NestedString(l.Object, "spec", "runtime")
+			repo, _ = serviceEffectiveRepo(l, proj)
+		} else {
+			d := desired[name]
+			runtime = d.Runtime
+			repo, _, _ = strings.Cut(d.Repo, "#")
+			if repo == "" {
+				repo, _ = serviceEffectiveRepo(nil, proj)
+			}
 		}
 		return runtime != "image" && repoMatches(repo, pushed)
 	}

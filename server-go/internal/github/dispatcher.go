@@ -1890,14 +1890,14 @@ func (d *Dispatcher) previewTerminating(ctx context.Context, ns, project, envNam
 }
 
 // repoMatches checks if the configured repo URL points at the same
-// owner/name as the GitHub event's full_name. We tolerate ".git"
-// suffixes and case differences.
+// owner/name on github.com as the GitHub event's full_name. We tolerate
+// ".git" suffixes and case differences, but not another host:
+// https://attacker.example/acme/web is not acme/web (SEC-1).
 func repoMatches(configuredURL, fullName string) bool {
-	if configuredURL == "" {
+	if configuredURL == "" || fullName == "" {
 		return false
 	}
-	lower := strings.ToLower(strings.TrimSuffix(builds.NormalizeRepoURL(configuredURL), ".git"))
-	return strings.HasSuffix(lower, "/"+strings.ToLower(fullName))
+	return kube.RepoIdentity(configuredURL) == "github.com/"+strings.ToLower(fullName)
 }
 
 // extractMergedPR digs the PR number out of a merge commit message.

@@ -61,6 +61,10 @@ func TestRepoMatches(t *testing.T) {
 		{"git@github.com:example/alpha.git", "example/alpha", true},
 		{"git@github.com:Example/Alpha", "example/alpha", true},
 		{"git@github.com:example/alpha.git", "example/beta", false},
+		// SEC-1 (2026-11-12): the host must be github.com, not just the suffix.
+		{"https://attacker.example/example/alpha", "example/alpha", false},
+		{"https://gitlab.com/example/alpha.git", "example/alpha", false},
+		{"https://evil.example/x/example/alpha", "example/alpha", false},
 	}
 	for _, tc := range cases {
 		if got := repoMatches(tc.url, tc.fullName); got != tc.want {

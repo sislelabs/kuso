@@ -14,9 +14,9 @@ import (
 
 // Execution-bearing service fields (SEC-1). Each one picks code that runs
 // with the service's env (its secret, addon conns, shared secrets): the
-// run command, the image, the release hook, and the build-time command,
-// builder images and build args (NIXPACKS_*_CMD among them) that run with
-// the build env. Setting one is therefore the same capability as reading
+// run command, the image, the release hook, the source repo, branch, path
+// and Dockerfile, and the build-time command, builder images and build
+// args (NIXPACKS_*_CMD among them) that run with the build env. Setting one is therefore the same capability as reading
 // secret values, and handlers gate it on the project admin role.
 //
 // Clearing a field back to its default is not gated: the default runs the
@@ -33,6 +33,10 @@ const (
 	ExecFieldBuildpackBuilder = "buildpacks.builderImage"
 	ExecFieldBuildpackLife    = "buildpacks.lifecycleImage"
 	ExecFieldBuildArgs        = "buildArgs"
+	ExecFieldRepo             = "repo"
+	ExecFieldRepoBranch       = "repo.branch"
+	ExecFieldRepoPath         = "repo.path"
+	ExecFieldDockerfile       = "dockerfile"
 )
 
 // ExecPatchFields returns the execution-bearing fields req would actually
@@ -46,6 +50,23 @@ func ExecPatchFields(cur *kube.KusoServiceSpec, req PatchServiceRequest) []strin
 	var out []string
 	if req.Runtime != nil && normRuntime(*req.Runtime) != normRuntime(cur.Runtime) {
 		out = append(out, ExecFieldRuntime)
+	}
+	// An empty URL drops the service back to the project's default repo.
+	if req.Repo != nil && strings.TrimSpace(req.Repo.URL) != "" {
+		var c kube.KusoRepoRef
+		if cur.Repo != nil {
+			c = *cur.Repo
+		}
+		if kube.RepoIdentity(req.Repo.URL) != kube.RepoIdentity(c.URL) {
+			out = append(out, ExecFieldRepo)
+		}
+		out = appendIfSet(out, ExecFieldRepoBranch, req.Repo.Branch, c.DefaultBranch)
+		if normRepoPath(req.Repo.Path) != normRepoPath(c.Path) {
+			out = append(out, ExecFieldRepoPath)
+		}
+	}
+	if req.Dockerfile != nil {
+		out = appendIfSet(out, ExecFieldDockerfile, *req.Dockerfile, cur.Dockerfile)
 	}
 	if req.Image != nil {
 		repo := strings.TrimSpace(req.Image.Repository)
@@ -149,6 +170,14 @@ func appendIfSet(out []string, field, want, have string) []string {
 		return append(out, field)
 	}
 	return out
+}
+
+func normRepoPath(p string) string {
+	p = strings.TrimPrefix(strings.TrimSpace(p), "./")
+	if p = strings.Trim(p, "/"); p == "." {
+		return ""
+	}
+	return p
 }
 
 func normRuntime(rt string) string {

@@ -2,6 +2,26 @@ package kube
 
 import "testing"
 
+func TestRepoIdentity(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"https://github.com/Acme/Web.git", "github.com/acme/web"},
+		{" https://x:tok@github.com/acme/web/ ", "github.com/acme/web"},
+		{"git@github.com:acme/web.git", "github.com/acme/web"},
+		{"github.com/acme/web", "github.com/acme/web"},
+		{"https://www.github.com/acme/web", "github.com/acme/web"},
+		{"git+https://gitlab.com/g/sub/r", "gitlab.com/g/sub/r"},
+		{"https://git.example:8443/acme/web", "git.example:8443/acme/web"},
+		{"https://attacker.example/acme/web", "attacker.example/acme/web"},
+	}
+	for _, c := range cases {
+		if got := RepoIdentity(c.in); got != c.want {
+			t.Errorf("RepoIdentity(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestStripRepoURLCredentials(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ in, want string }{

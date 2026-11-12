@@ -48,7 +48,10 @@ func TestRequireRepoBound(t *testing.T) {
 	}{
 		{"project default repo", editor, []string{"https://github.com/ACME/shop.git"}, nil, true},
 		{"sibling service repo", editor, []string{"https://github.com/acme/worker"}, nil, true},
-		{"non-github host", editor, []string{"https://gitlab.com/acme/other"}, nil, true},
+		{"bound repo, scp form", editor, []string{"git@github.com:acme/shop"}, nil, true},
+		// SEC-1 (2026-11-12): any host the project doesn't build from.
+		{"non-github host", editor, []string{"https://gitlab.com/acme/other"}, nil, false},
+		{"same path, other host", editor, []string{"https://attacker.example/acme/shop"}, nil, false},
 		{"bound installation", editor, nil, []int64{7}, true},
 		{"new github repo", editor, []string{"https://github.com/acme/infra-secrets"}, nil, false},
 		{"foreign installation", editor, nil, []int64{99}, false},

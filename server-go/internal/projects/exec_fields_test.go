@@ -35,6 +35,43 @@ func TestExecPatchFields_OnlyRealChanges(t *testing.T) {
 	}
 }
 
+// SEC-1 (2026-11-12): the repo, branch, path and Dockerfile pick the code
+// a service's secrets run with. A redacted or reformatted echo of the
+// stored repo isn't a change; clearing back to the default isn't gated.
+func TestExecPatchFields_Repo(t *testing.T) {
+	cur := &kube.KusoServiceSpec{
+		Repo:       &kube.KusoRepoRef{URL: "https://bot:tok@github.com/acme/web.git", DefaultBranch: "main", Path: "apps/web"},
+		Dockerfile: "Dockerfile",
+	}
+	str := func(s string) *string { return &s }
+	for _, req := range []PatchServiceRequest{
+		{Repo: &PatchRepoRequest{URL: "https://github.com/acme/web", Branch: "main", Path: "./apps/web/"}},
+		{Repo: &PatchRepoRequest{URL: "git@github.com:ACME/web.git", Branch: "main", Path: "apps/web"}},
+		{Repo: &PatchRepoRequest{URL: "https://github.com/acme/web", Path: "apps/web"}},
+		{Repo: &PatchRepoRequest{}},
+		{Dockerfile: str("")},
+		{Dockerfile: str("Dockerfile")},
+	} {
+		if got := ExecPatchFields(cur, req); len(got) != 0 {
+			t.Errorf("%+v flagged: %v", req.Repo, got)
+		}
+	}
+	for _, c := range []struct {
+		req  PatchServiceRequest
+		want string
+	}{
+		{PatchServiceRequest{Repo: &PatchRepoRequest{URL: "https://gitlab.com/attacker/x", Branch: "main", Path: "apps/web"}}, ExecFieldRepo},
+		{PatchServiceRequest{Repo: &PatchRepoRequest{URL: "https://attacker.example/acme/web", Branch: "main", Path: "apps/web"}}, ExecFieldRepo},
+		{PatchServiceRequest{Repo: &PatchRepoRequest{URL: "https://github.com/acme/web", Branch: "evil", Path: "apps/web"}}, ExecFieldRepoBranch},
+		{PatchServiceRequest{Repo: &PatchRepoRequest{URL: "https://github.com/acme/web", Branch: "main", Path: "tools/x"}}, ExecFieldRepoPath},
+		{PatchServiceRequest{Dockerfile: str("Dockerfile.evil")}, ExecFieldDockerfile},
+	} {
+		if got := ExecPatchFields(cur, c.req); !slices.Contains(got, c.want) {
+			t.Errorf("ExecPatchFields(%+v) = %v, want %s", c.req.Repo, got, c.want)
+		}
+	}
+}
+
 // Env names that load or choose code are exec fields; ordinary app
 // config must stay editor-writable.
 func TestIsExecEnvName(t *testing.T) {

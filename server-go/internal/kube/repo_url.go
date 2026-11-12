@@ -87,3 +87,47 @@ func RepoURLEchoesRedacted(stored, incoming string) bool {
 	m := repoUserinfoRe.FindStringSubmatch(stored)
 	return m != nil && m[1]+m[3] == incoming
 }
+
+// RepoIdentity reduces a git remote to a comparable host/path key
+// ("github.com/acme/web"): scheme, credentials, a trailing ".git" or "/"
+// and case are dropped, and scp-style git@host:org/repo becomes
+// host/org/repo. Two URLs with the same identity clone the same repo.
+// Returns "" for an empty URL.
+func RepoIdentity(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "git+")
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	head := s
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		head = s[:i]
+	}
+	if at := strings.LastIndexByte(head, '@'); at >= 0 {
+		s = s[at+1:]
+		head = head[at+1:]
+	}
+	// scp-style host:org/repo; host:8443/org/repo is a port and stays.
+	if host, rest, ok := strings.Cut(head, ":"); ok && !isAllDigits(rest) {
+		s = host + "/" + strings.TrimPrefix(s[len(host)+1:], "/")
+	}
+	s = strings.TrimPrefix(s, "www.")
+	s = strings.TrimRight(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	return strings.TrimRight(s, "/")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}

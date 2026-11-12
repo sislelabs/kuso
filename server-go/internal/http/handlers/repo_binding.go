@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"kuso/server/internal/auth"
-	"kuso/server/internal/github"
+	"kuso/server/internal/kube"
 )
 
 // requireRepoBound gates writes that point a service or project at a
@@ -18,8 +17,9 @@ import (
 // own. Such callers may only use repos and installations the project
 // already references. Instance admins and instance editors
 // (projects:create) pass: they already list every App repo through
-// /api/github/repos to create projects. Non-GitHub hosts pass; no App
-// token is ever minted for them.
+// /api/github/repos to create projects. Other hosts are held to the same
+// rule: a repo the project doesn't use yet picks the code its services'
+// secrets run with (SEC-1), whether or not an App token clones it.
 func (h *ProjectsHandler) requireRepoBound(ctx context.Context, w http.ResponseWriter, project string, urls []string, installationIDs []int64) bool {
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
@@ -31,8 +31,8 @@ func (h *ProjectsHandler) requireRepoBound(ctx context.Context, w http.ResponseW
 	}
 	var wantRepos []string
 	for _, u := range urls {
-		if owner, name := github.ParseGithubRepoURL(u); owner != "" {
-			wantRepos = append(wantRepos, strings.ToLower(owner+"/"+name))
+		if id := kube.RepoIdentity(u); id != "" {
+			wantRepos = append(wantRepos, id)
 		}
 	}
 	var wantInsts []int64
@@ -52,8 +52,8 @@ func (h *ProjectsHandler) requireRepoBound(ctx context.Context, w http.ResponseW
 	boundRepos := map[string]bool{}
 	boundInsts := map[int64]bool{}
 	addRepo := func(u string) {
-		if owner, name := github.ParseGithubRepoURL(u); owner != "" {
-			boundRepos[strings.ToLower(owner+"/"+name)] = true
+		if id := kube.RepoIdentity(u); id != "" {
+			boundRepos[id] = true
 		}
 	}
 	proj, err := h.Svc.Get(ctx, project)
@@ -84,7 +84,7 @@ func (h *ProjectsHandler) requireRepoBound(ctx context.Context, w http.ResponseW
 	for _, r := range wantRepos {
 		if !boundRepos[r] {
 			writeErr(w, http.StatusForbidden, fmt.Sprintf(
-				"github.com/%s isn't used by project %s yet; an instance admin or instance editor has to add it first", r, project))
+				"%s isn't used by project %s yet; an instance admin or instance editor has to add it first", r, project))
 			return false
 		}
 	}
