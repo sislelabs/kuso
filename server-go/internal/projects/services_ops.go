@@ -2993,6 +2993,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if err != nil {
 		return nil, err
 	}
+	if req.Volumes != nil {
+		vols := append([]VolumePatch(nil), (*req.Volumes)...)
+		if err := s.checkVolumeSizes(ctx, ns, project, current, vols); err != nil {
+			return nil, err
+		}
+		req.Volumes = &vols
+	}
 
 	// Project default branch, resolved once for the effective-branch
 	// bookkeeping in the req.Repo block below (a service with no explicit
