@@ -2280,31 +2280,38 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 			}
 		}
 	}
-	if callerGroup != "production" {
-		var conns []string
-		for _, ev := range rewritten {
-			if name, _ := secretRefNameOf(ev.ValueFrom); name != "" {
-				conns = append(conns, name)
-			}
-		}
-		if len(conns) > 0 {
-			var mounted []string
-			callerFQN := serviceCRName(project, service)
-			envs, lerr := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project, labelEnv: callerGroup})
-			if lerr != nil {
-				return nil, fmt.Errorf("list %s envs: %w", callerGroup, lerr)
-			}
-			for i := range envs {
-				if envs[i].Spec.Service == callerFQN {
-					mounted = append(mounted, envs[i].Spec.EnvFromSecrets...)
-				}
-			}
-			if err := s.checkGroupAddonRefs(ctx, ns, project, callerGroup, mounted, conns); err != nil {
-				return nil, err
-			}
+	var conns []string
+	for _, ev := range rewritten {
+		if name, _ := secretRefNameOf(ev.ValueFrom); name != "" {
+			conns = append(conns, name)
 		}
 	}
+	if err := s.checkCallerGroupRefs(ctx, ns, project, service, callerGroup, conns); err != nil {
+		return nil, err
+	}
 	return rewritten, nil
+}
+
+// checkCallerGroupRefs runs checkGroupAddonRefs for an env-group clone
+// service's secretKeyRef conns, against what its group env mounts. A
+// production service's refs pass here; propagation withholds them from
+// its isolated envs instead.
+func (s *Service) checkCallerGroupRefs(ctx context.Context, ns, project, service, callerGroup string, conns []string) error {
+	if callerGroup == "production" || len(conns) == 0 {
+		return nil
+	}
+	var mounted []string
+	callerFQN := serviceCRName(project, service)
+	envs, lerr := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project, labelEnv: callerGroup})
+	if lerr != nil {
+		return fmt.Errorf("list %s envs: %w", callerGroup, lerr)
+	}
+	for i := range envs {
+		if envs[i].Spec.Service == callerFQN {
+			mounted = append(mounted, envs[i].Spec.EnvFromSecrets...)
+		}
+	}
+	return s.checkGroupAddonRefs(ctx, ns, project, callerGroup, mounted, conns)
 }
 
 // pendingConnOwned decides a speculative <project>-<addon>-conn ref the

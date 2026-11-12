@@ -194,6 +194,12 @@ func TestSetEnv_IsolatedGroupRefToUnclonedAddonRejected(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("SetEnvScopedVar err = %v, want ErrConflict", err)
 	}
+	// ISO-2 (2026-11-12): the single-var secretRef write runs the same check.
+	_, err = s.SetEnvVar(context.Background(), "acme", "web-staging", "REDIS_URL",
+		SetEnvVarRequest{SecretRef: &SetEnvVarSecretRefBody{Name: "acme-cache-conn", Key: "REDIS_URL"}})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("SetEnvVar secretRef err = %v, want ErrConflict", err)
+	}
 	// Production is never restricted.
 	if err := s.SetEnv(context.Background(), "acme", "web", []EnvVar{{Name: "REDIS_URL", Value: "${{ cache.REDIS_URL }}"}}); err != nil {
 		t.Fatalf("production ref: %v", err)

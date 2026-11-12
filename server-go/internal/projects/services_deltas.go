@@ -319,6 +319,15 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		if err := rejectHiddenSharedKeyRef(req.SecretRef.Name, req.SecretRef.Key); err != nil {
 			return nil, err
 		}
+		// Same env-group check bulk SetEnv runs (ISO-2): a staging clone
+		// may not name a production conn its group has no clone of.
+		cur, err := s.GetService(ctx, project, service)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkCallerGroupRefs(ctx, ns, project, service, serviceGroup(cur), []string{req.SecretRef.Name}); err != nil {
+			return nil, err
+		}
 		next.ValueFrom = map[string]any{
 			"secretKeyRef": map[string]any{
 				"name": req.SecretRef.Name,
