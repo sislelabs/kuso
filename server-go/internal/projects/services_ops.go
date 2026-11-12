@@ -1311,6 +1311,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// staging env's API_URL targets <svc>-staging instead. (production
 	// is a no-op in rescopeServiceRefLiterals.)
 	scopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, req.Name)
+	if serviceGroup(svc) == "production" {
+		scopedSvcEnvVars = rescopePublicHosts(scopedSvcEnvVars, s.namedEnvPublicHosts(ctx, ns, project, req.Name, svc.Name, host))
+	}
 	s.warnMissingServiceRefTargets(ctx, ns, project, envCRName, scopedSvcEnvVars)
 	// Re-scope explicit addon secretKeyRef env-vars (e.g. DATABASE_URL ->
 	// <project>-db-conn) onto this env's clone conns. An explicit env entry

@@ -289,6 +289,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					svcRefScope = "production"
 				}
 				rescopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, svcRefScope)
+				if svcRefScope != "production" && !addons.IsPreviewEnv(env) {
+					rescopedSvcEnvVars = rescopePublicHosts(rescopedSvcEnvVars, s.namedEnvPublicHosts(ctx, ns, project, envScope, "", ""))
+				}
 				merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 					ctx, ns, project,
 					svc.Spec.SharedEnvKeys,
@@ -668,6 +671,64 @@ func (s *Service) propagateServiceBranch(ctx context.Context, ns, project, servi
 			"env", env.Name, "from", oldBranch, "to", newBranch)
 	}
 	return errors.Join(errs...)
+}
+
+// namedEnvPublicHosts is the public-host counterpart of
+// rescopeServiceRefLiterals (ISO-4): it maps every production service's
+// public hosts (custom domains, production env host) to
+// the host of that service's envScope env, so a ${{ svc.PUBLIC_URL }}
+// resolved against production points a named env at its own siblings.
+// selfFQN/selfHost add the caller's env when it doesn't exist yet
+// (AddEnvironment). Services with no envScope env keep production's host.
+func (s *Service) namedEnvPublicHosts(ctx context.Context, ns, project, envScope, selfFQN, selfHost string) map[string]string {
+	services, err := s.listServicesForProject(ctx, project)
+	if err != nil {
+		return nil
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return nil
+	}
+	type svcScope struct{ svc, scope string }
+	host := map[svcScope]string{}
+	for i := range envs {
+		host[svcScope{envs[i].Spec.Service, envs[i].Labels[labelEnv]}] = envs[i].Spec.Host
+	}
+	if selfFQN != "" && selfHost != "" {
+		host[svcScope{selfFQN, envScope}] = selfHost
+	}
+	out := map[string]string{}
+	for i := range services {
+		svc := &services[i]
+		to := strings.ToLower(host[svcScope{svc.Name, envScope}])
+		if serviceGroup(svc) != "production" || to == "" {
+			continue
+		}
+		for _, d := range svc.Spec.Domains {
+			if d.Host != "" {
+				out[strings.ToLower(d.Host)] = to
+			}
+		}
+		if h := host[svcScope{svc.Name, "production"}]; h != "" {
+			out[strings.ToLower(h)] = to
+		}
+	}
+	return out
+}
+
+// rescopePublicHosts rewrites the hosts in literal values through hosts.
+func rescopePublicHosts(in []kube.KusoEnvVar, hosts map[string]string) []kube.KusoEnvVar {
+	if len(hosts) == 0 {
+		return in
+	}
+	out := make([]kube.KusoEnvVar, len(in))
+	for i, e := range in {
+		if e.ValueFrom == nil {
+			e.Value, _ = rewriteProdHosts(e.Value, hosts)
+		}
+		out[i] = e
+	}
+	return out
 }
 
 // rescopeServiceRefLiterals walks every envVar value looking for the

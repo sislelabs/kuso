@@ -328,6 +328,11 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 				svcRefScope = "production"
 			}
 			v = rescopeServiceRefLiterals([]kube.KusoEnvVar{v}, ns, svcRefScope)[0]
+			// Only a resolved ref is rescoped: a typed production URL in an
+			// override is the user's deliberate choice.
+			if svcRefScope != "production" && !addons.IsPreviewEnv(env) && strings.Contains(req.Value, "${{") {
+				v = rescopePublicHosts([]kube.KusoEnvVar{v}, s.namedEnvPublicHosts(ctx, ns, project, envScope, "", ""))[0]
+			}
 			if envScope != "production" {
 				if !cloneMapLoaded {
 					cloneByOrigin = s.envCloneConnByOrigin(ctx, ns, project, envScope)
