@@ -69,7 +69,15 @@ func (s *Service) instanceHasPooler(ctx context.Context, perProjectDSN string) b
 	if err != nil || u.Hostname() == "" {
 		return false
 	}
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, u.Hostname()+"-conn", metav1.GetOptions{})
+	// The managed instance's admin DSN carries the qualified host
+	// ("kuso-instance-pg.kuso.svc"); its Secret is keyed by the Service name.
+	// Only names in the home namespace qualify, so an external host's first
+	// label can't pick up some unrelated addon's conn Secret.
+	name, rest, dotted := strings.Cut(u.Hostname(), ".")
+	if dotted && rest != s.Namespace && rest != s.Namespace+".svc" && rest != s.Namespace+".svc.cluster.local" {
+		return false
+	}
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, name+"-conn", metav1.GetOptions{})
 	if err != nil {
 		return false
 	}
@@ -326,11 +334,20 @@ func poolerDSN(directDSN string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("direct DSN has no host")
 	}
-	u.Host = fmt.Sprintf("%s-pooler:6432", host)
+	u.Host = poolerHostFor(host) + ":6432"
 	q := u.Query()
 	q.Set("sslmode", "disable")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// poolerHostFor suffixes the Service name, not the whole host:
+// "kuso-instance-pg.kuso.svc" → "kuso-instance-pg-pooler.kuso.svc".
+func poolerHostFor(host string) string {
+	if name, rest, ok := strings.Cut(host, "."); ok {
+		return name + "-pooler." + rest
+	}
+	return host + "-pooler"
 }
 
 // writeInstanceAddonConnSecret writes (or updates) the addon's
@@ -376,7 +393,7 @@ func instanceAddonConnData(dsn, password string, poolerExists bool, hostNS strin
 			return nil, fmt.Errorf("derive pooler DSN: %w", perr)
 		}
 		poolerURL = QualifyInClusterHost(pURL, hostNS)
-		poolerHost = QualifyInClusterHost(host+"-pooler", hostNS)
+		poolerHost = QualifyInClusterHost(poolerHostFor(host), hostNS)
 		poolerPort = "6432"
 	}
 	dsn = QualifyInClusterHost(dsn, hostNS)
@@ -573,7 +590,14 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
-	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, dsn)); err != nil {
+	// Keep an existing tenant's pooled/direct mode: flipping it rewrites
+	// DATABASE_URL and restarts every consumer. Only a missing Secret
+	// picks the mode afresh.
+	pooled := s.instanceHasPooler(ctx, dsn)
+	if before != nil {
+		pooled = len(before["POOLER_HOST"]) > 0
+	}
+	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, pooled); err != nil {
 		return err
 	}
 	if !connDataEqual(before, s.connSecretData(ctx, ns, connSecretName(fqn))) {

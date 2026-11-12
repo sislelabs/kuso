@@ -92,3 +92,38 @@ func TestWriteInstanceConnSecret_LeavesExternalHostsAlone(t *testing.T) {
 		}
 	}
 }
+
+// DB-2: the managed instance's admin DSN is harvested with a qualified host
+// (kuso-instance-pg.kuso.svc). The pooler lookup and the pooler host must
+// key off the Service name, or every tenant silently routes direct.
+func TestInstancePooler_QualifiedAdminHost(t *testing.T) {
+	t.Parallel()
+	s := customNSInstanceService(t)
+	ctx := context.Background()
+	const qualified = "postgres://e2e_db:pw@kuso-instance-pg.kuso.svc:5432/e2e_db?sslmode=disable"
+	if !s.instanceHasPooler(ctx, qualified) {
+		t.Error("instanceHasPooler = false for the qualified instance host")
+	}
+	data, err := instanceAddonConnData(qualified, "pw", true, "kuso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"POOLER_HOST":  "kuso-instance-pg-pooler.kuso.svc",
+		"DATABASE_URL": "postgres://e2e_db:pw@kuso-instance-pg-pooler.kuso.svc:6432/e2e_db?sslmode=disable",
+	} {
+		if got := string(data[k]); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+
+	// An external host whose first label matches a home-namespace addon's
+	// conn Secret must not borrow its pooler.
+	s.Kube.Clientset = kubefake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop-db-conn", Namespace: "kuso"},
+		Data:       map[string][]byte{"POOLER_HOST": []byte("shop-db-pooler")},
+	})
+	if s.instanceHasPooler(ctx, "postgres://u:pw@shop-db.example.com:5432/app") {
+		t.Error("instanceHasPooler = true for an external host")
+	}
+}
