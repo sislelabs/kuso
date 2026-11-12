@@ -63,3 +63,20 @@ func TestAddService_SingleWriterVolumeDefaultsToOneReplica(t *testing.T) {
 		t.Errorf("explicit max 4 with an RWO volume: err=%v, want invalid", err)
 	}
 }
+
+// Services created before BLOB-9 often pair an RWO volume with the old
+// autoscale default; an unrelated scale edit on them must keep working.
+func TestPatchService_GrandfathersExistingVolumeScaleConflict(t *testing.T) {
+	t.Parallel()
+	sc := &kube.KusoScaleSpec{Max: 5}
+	sc.SetMin(1)
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{BaseDomain: "alpha.example.com"}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000, Scale: sc,
+			Volumes: []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 1}}}),
+	)
+	one, three := 1, 3
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Scale: &PatchScaleRequest{Min: &one, Max: &three}}); err != nil {
+		t.Errorf("scale edit on a pre-existing RWO+autoscale service: %v", err)
+	}
+}

@@ -3114,6 +3114,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Stopped = *req.Stopped
 			stoppedChanged = true
 		}
+		// Services that already pair a single-writer volume with autoscaling
+		// (the old default) keep working; only a patch that creates the
+		// conflict is refused, so unrelated scale edits don't start failing.
+		volumeScaleWasOK := validateVolumeScale(svc.Spec.Volumes, svc.Spec.Scale) == nil
 		scaleChanged := false
 		if req.Scale != nil {
 			if svc.Spec.Scale == nil {
@@ -3281,7 +3285,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Volumes = next
 			volumesChanged = true
 		}
-		if req.Volumes != nil || req.Scale != nil {
+		if (req.Volumes != nil || req.Scale != nil) && volumeScaleWasOK {
 			if err := validateVolumeScale(svc.Spec.Volumes, svc.Spec.Scale); err != nil {
 				return err
 			}
