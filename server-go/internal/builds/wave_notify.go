@@ -45,10 +45,21 @@ type waveRecord struct {
 // finished within a day is past the promotion hold's own 2h expiry.
 const waveRecordTTL = 24 * time.Hour
 
+// waveCreationWindow bounds how far apart two builds of one push may have
+// been created. The webhook fans a push out to every service within
+// seconds; a same-SHA build created later is a redeploy or retry, not
+// part of that push.
+const waveCreationWindow = 5 * time.Minute
+
 // waveKey identifies b's push wave, or "" when b is not a wave member
-// (a manual or synthetic-ref build, or one without a repo).
+// (a manual, API or system build, a synthetic-ref build, or one without
+// a repo). A user/API trigger with an explicit --ref carries the push's
+// SHA too, so the trigger source is what keeps it out of the wave.
 func waveKey(b *kube.KusoBuild) string {
 	if b == nil || b.Spec.DryRun || !shaRE.MatchString(b.Spec.Ref) || isBranchHeadBuild(b) {
+		return ""
+	}
+	if src := b.Annotations[annTriggerSource]; src != "" && src != "webhook" {
 		return ""
 	}
 	repo := buildRepoURL(b)
@@ -69,6 +80,9 @@ func waveMembers(b *kube.KusoBuild, all []kube.KusoBuild) []*kube.KusoBuild {
 	for i := range all {
 		s := &all[i]
 		if s.Name == b.Name || s.Spec.Service == b.Spec.Service || waveKey(s) != key {
+			continue
+		}
+		if d := s.CreationTimestamp.Sub(b.CreationTimestamp.Time); d > waveCreationWindow || d < -waveCreationWindow {
 			continue
 		}
 		if cur := bySvc[s.Spec.Service]; cur == nil || latestOf([]*kube.KusoBuild{cur, s}) == s {
@@ -121,10 +135,13 @@ func (p *Poller) recordWaveMember(b *kube.KusoBuild, all []kube.KusoBuild, res w
 		p.waves[key] = rec
 	}
 	rec.touched = now
-	rec.results[b.Name] = res
+	_, seen := rec.results[b.Name]
 	if rec.claimed {
-		return true, nil, nil
+		// The summary already went out. A build it didn't include is a
+		// later same-SHA build and posts its own card.
+		return seen, nil, nil
 	}
+	rec.results[b.Name] = res
 	for _, m := range members {
 		if _, ok := rec.results[m.Name]; ok {
 			continue
