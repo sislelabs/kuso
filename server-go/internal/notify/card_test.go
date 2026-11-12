@@ -119,7 +119,16 @@ func TestDiscordPayload_ContentIsPingPlusWhy(t *testing.T) {
 	// Plain text even when the description carries markdown.
 	f := Event{Type: EventBuildFailed, Severity: "error", Timestamp: time.Now(), Title: "✗ Build failed · e2e / web",
 		Description: "**Fix** the `@everyone` [thing](https://x.example)\nsecond line"}
-	if p := discordPayload(f, "@here"); p["content"] != "@here Fix the `@everyone` thing (https://x.example)" {
+	if p := discordPayload(f, "@here"); p["content"] != "@here Fix the `@​everyone` thing (https://x.example)" {
+		t.Errorf("content %q", p["content"])
+	}
+
+	// OPS-5: parse=["everyone"] for the configured @here also enables
+	// @everyone, so a reason taken from a commit message must not carry a
+	// live @everyone/@here next to it.
+	g := Event{Type: EventBuildFailed, Severity: "error", Timestamp: time.Now(), Title: "✗ Build failed · e2e / web",
+		Description: "notify @everyone and @here about the migration"}
+	if p := discordPayload(g, "@here"); p["content"] != "@here notify @​everyone and @​here about the migration" {
 		t.Errorf("content %q", p["content"])
 	}
 

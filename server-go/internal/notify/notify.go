@@ -868,6 +868,14 @@ func allowedMentionsFor(mention string) map[string]any {
 
 var roleMentionRE = regexp.MustCompile(`<@&(\d+)>`)
 
+// massMentionReplacer breaks @everyone/@here in text that sits next to
+// the configured mention. allowed_mentions parse=["everyone"] (needed for
+// @here) also enables @everyone, so a commit message or crash reason
+// saying "@everyone" would otherwise ping the whole server.
+var massMentionReplacer = strings.NewReplacer("@everyone", "@​everyone", "@here", "@​here")
+
+func defuseMassMentions(s string) string { return massMentionReplacer.Replace(s) }
+
 // tone is the at-a-glance colour class every renderer (Discord embed
 // colour, Slack bar, text-channel emoji) derives from, so they agree.
 type tone int
@@ -1071,7 +1079,7 @@ func discordPayload(e Event, mention string) map[string]any {
 	// there's no content — the push falls back to the embed's title and
 	// plain description, and the channel doesn't show the same line twice.
 	if mention != "" {
-		payload["content"] = truncateRunes(mention+" "+pingWhy, 2000)
+		payload["content"] = truncateRunes(mention+" "+defuseMassMentions(pingWhy), 2000)
 	}
 	// Allowed_mentions explicitly enables the parsing — without this
 	// Discord strips @here / @everyone for hardened webhooks. Roles need
