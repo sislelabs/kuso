@@ -118,6 +118,22 @@ var noHAKinds = map[string]bool{
 	"mysql":    true,
 }
 
+// tlsRequireUnsupported names why tls=require can't be honoured, or "".
+// Only the single-node postgres chart serves TLS: postgres-ha hard-codes
+// sslmode=disable, and external / instance-shared conn data follow their
+// source DSN, so the field would be silently inert.
+func tlsRequireUnsupported(ha, external bool, instanceAddon string) string {
+	switch {
+	case external:
+		return "tls=require does not apply to external addons — set sslmode in the external connection URL instead"
+	case instanceAddon != "":
+		return "tls=require does not apply to instance-shared databases — the connection follows the instance's admin DSN"
+	case ha:
+		return "tls=require is not supported with ha=true yet — the HA chart serves plaintext connection URLs; use ha=false or drop tls"
+	}
+	return ""
+}
+
 // SupportedKinds are the addon kinds the kusoaddon chart can deploy. Keep
 // in sync with $supported in
 // operator/helm-charts/kusoaddon/templates/unsupported.yaml.
@@ -572,6 +588,11 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	}
 	if req.UseInstanceAddon != "" && req.Kind != "postgres" {
 		return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres", ErrInvalid)
+	}
+	if req.TLS == "require" {
+		if msg := tlsRequireUnsupported(req.HA, isExternal, req.UseInstanceAddon); msg != "" {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, msg)
+		}
 	}
 	// Resolve externalCredentials into a real Secret BEFORE the CR is built —
 	// spec.external is captured below, and resync-external later reads the
@@ -1102,6 +1123,14 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 			}
 			if v == "require" && addon.Spec.Kind != "postgres" {
 				return fmt.Errorf("%w: tls=require is only supported on kind=postgres addons", ErrInvalid)
+			}
+			// Only a change is refused, so a revision replay of an addon
+			// that already carries the inert value still passes.
+			if v == "require" && v != addon.Spec.TLS {
+				ext := addon.Spec.External != nil && addon.Spec.External.SecretName != ""
+				if msg := tlsRequireUnsupported(addon.Spec.HA, ext, addon.Spec.UseInstanceAddon); msg != "" {
+					return fmt.Errorf("%w: %s", ErrInvalid, msg)
+				}
 			}
 			addon.Spec.TLS = v
 		}

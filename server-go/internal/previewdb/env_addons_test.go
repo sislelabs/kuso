@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
@@ -195,6 +197,27 @@ func TestEnsureEnvAddons_CloneCarriesTLS(t *testing.T) {
 	}
 	if clone.Spec.TLS != "require" {
 		t.Fatalf("clone tls = %q, want require (source spec.tls dropped by the cloner)", clone.Spec.TLS)
+	}
+}
+
+// An instance tenant created before Add refused tls=require there must still
+// clone: the cloner drops the inert value rather than inheriting the refusal.
+func TestEnsureEnvAddons_InstanceTenantDropsInertTLS(t *testing.T) {
+	src := addonCR("alpha", "pg", "postgres")
+	src.Spec.TLS = "require"
+	src.Spec.UseInstanceAddon = "pg"
+	c, _ := newTestCloner(t, "alpha", src)
+	// No instance secrets: the provision itself fails further on, past the
+	// TLS guard, which is all this needs.
+	c.Kube.Clientset = kubefake.NewSimpleClientset()
+
+	_, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-38", EnvAddonOpts{
+		Kinds:      []string{"postgres"},
+		NameSuffix: "-pr-38",
+		PreviewPR:  "38",
+	})
+	if err != nil && strings.Contains(err.Error(), "tls=require") {
+		t.Fatalf("instance-tenant clone refused over inert tls: %v", err)
 	}
 }
 

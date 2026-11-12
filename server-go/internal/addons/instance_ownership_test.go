@@ -368,3 +368,35 @@ func TestResyncInstanceAddon_KeepsWorkingCredentials(t *testing.T) {
 		t.Errorf("conn DSN changed on resync of a healthy addon:\n before %s\n after  %s", before, after)
 	}
 }
+
+// DB-2: resync must keep a tenant's pooled/direct mode. Re-deriving it
+// flipped pooled tenants to direct and restarted every consumer.
+func TestResyncInstanceAddon_KeepsPoolingMode(t *testing.T) {
+	p := uniqueProject(t)
+	s, adminDSN := instancePGService(t, p)
+	dropTestIdent(t, adminDSN, pgIdentifier(p, "db"))
+	if err := instanceAdd(s, p, "db"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	ctx := context.Background()
+	ns, name := "kuso-"+p, connSecretName(addonCRName(p, "db"))
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pooled, err := instanceAddonConnData(string(sec.Data["DIRECT_URL"]), string(sec.Data["POSTGRES_PASSWORD"]), true, "kuso")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec.Data = pooled
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResyncInstanceAddon(ctx, p, "db"); err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	after := s.connSecretData(ctx, ns, name)
+	if got, want := string(after["DATABASE_URL"]), string(pooled["DATABASE_URL"]); got != want {
+		t.Errorf("resync moved a pooled tenant: DATABASE_URL = %q, want %q", got, want)
+	}
+}

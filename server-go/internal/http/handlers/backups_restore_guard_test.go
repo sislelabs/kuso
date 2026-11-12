@@ -106,6 +106,9 @@ func TestRestoreKeyCopy_OwnedAtCreation(t *testing.T) {
 func TestStartPreRestoreSnapshot(t *testing.T) {
 	t.Parallel()
 	cj := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "shop-db-backup", Namespace: "kuso-shop", UID: "cj-uid"}}
+	cj.Spec.JobTemplate.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "backup", Env: []corev1.EnvVar{{Name: "RETENTION_DAYS", Value: "7"}},
+	}}
 	pg := &kube.KusoAddon{ObjectMeta: metav1.ObjectMeta{Name: "shop-db"}, Spec: kube.KusoAddonSpec{Kind: "postgres"}}
 	ctx := context.Background()
 
@@ -116,6 +119,13 @@ func TestStartPreRestoreSnapshot(t *testing.T) {
 	}
 	if len(job.OwnerReferences) != 1 || job.OwnerReferences[0].UID != "cj-uid" || len(job.Name) > 63 {
 		t.Errorf("snapshot job = %s %+v", job.Name, job.OwnerReferences)
+	}
+	// DB-3: the snapshot must not prune, or it can delete the dump being restored.
+	if got := job.Spec.Template.Spec.Containers[0].Env[0].Value; got != "0" {
+		t.Errorf("snapshot RETENTION_DAYS = %q, want 0 (no prune)", got)
+	}
+	if got := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env[0].Value; got != "7" {
+		t.Errorf("CronJob template mutated: RETENTION_DAYS = %q", got)
 	}
 
 	h = &BackupsHandler{Kube: &kube.Client{Clientset: fake.NewSimpleClientset()}}

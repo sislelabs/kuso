@@ -55,6 +55,39 @@ func TestAdd_HASupportedKindsPass(t *testing.T) {
 	}
 }
 
+// DB-5: tls=require is only honoured by the single-node postgres chart. On
+// HA, instance-shared and external addons the app still got sslmode=disable,
+// so the request is refused instead of silently accepted.
+func TestTLSRequire_RejectedWhereInert(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := fakeService(t, seedProj("alpha"))
+	for name, req := range map[string]CreateAddonRequest{
+		"ha":       {Name: "ha", Kind: "postgres", HA: true, TLS: "require"},
+		"instance": {Name: "shared", Kind: "postgres", UseInstanceAddon: "pg", TLS: "require"},
+		"external": {Name: "ext", Kind: "postgres", TLS: "require", External: &kube.KusoAddonExternal{SecretName: "s"}},
+	} {
+		if _, err := s.Add(ctx, "alpha", req); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "tls=require") {
+			t.Errorf("add %s: got %v, want a tls=require ErrInvalid", name, err)
+		}
+	}
+	if _, err := s.Add(ctx, "alpha", CreateAddonRequest{Name: "pg", Kind: "postgres", TLS: "require"}); err != nil {
+		t.Errorf("single-node tls=require: %v", err)
+	}
+
+	req := "require"
+	s = fakeService(t, seedProj("alpha"),
+		seedAddonSpec("alpha", "ha", kube.KusoAddonSpec{Kind: "postgres", Project: "alpha", HA: true}),
+		seedAddonSpec("alpha", "legacy", kube.KusoAddonSpec{Kind: "postgres", Project: "alpha", HA: true, TLS: "require"}))
+	if _, err := s.Update(ctx, "alpha", "ha", UpdateAddonRequest{TLS: &req}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("update ha to require: got %v, want ErrInvalid", err)
+	}
+	// A replay of an addon already carrying the value must still pass.
+	if _, err := s.Update(ctx, "alpha", "legacy", UpdateAddonRequest{TLS: &req}); err != nil {
+		t.Errorf("no-op update on legacy require: %v", err)
+	}
+}
+
 // TestAdd_ConcurrentCreateMapsToConflict — a create that loses the race
 // between the existence preflight and the CR write must surface the
 // same ErrConflict + "already exists" message the preflight produces,

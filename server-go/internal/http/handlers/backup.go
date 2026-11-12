@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -314,7 +315,7 @@ func (h *BackupHandler) dsnForPgTools() string {
 		return ""
 	}
 	if v, ok := sec.Data["dsn"]; ok && len(v) > 0 {
-		return string(v)
+		return directPgDSN(string(v))
 	}
 	// CNPG-bootstrap shape uses 'username'; legacy / external-Postgres
 	// installs may have 'user'. Try both.
@@ -343,8 +344,18 @@ func (h *BackupHandler) dsnForPgTools() string {
 	if user == "" || dbName == "" {
 		return ""
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		url.QueryEscape(user), url.QueryEscape(pass), host, port, url.QueryEscape(dbName))
+	return directPgDSN(fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		url.QueryEscape(user), url.QueryEscape(pass), host, port, url.QueryEscape(dbName)))
+}
+
+var pgbouncerHostRe = regexp.MustCompile(`@kuso-pgbouncer((\.[A-Za-z0-9.-]+)?)(:[0-9]+)?/`)
+
+// directPgDSN points a kuso-pgbouncer DSN at the primary, like the restore's
+// direct_dsn. pg_dump's session SETs (empty search_path, statement_timeout=0)
+// run as autocommit statements, so through the transaction pooler they stay
+// on whichever backend ran them and leak into kuso-server's own queries.
+func directPgDSN(dsn string) string {
+	return pgbouncerHostRe.ReplaceAllString(dsn, "@kuso-postgres-rw${1}:5432/")
 }
 
 func (h *BackupHandler) createRestoreSecret(ctx context.Context, name string, dump []byte) error {
