@@ -122,17 +122,37 @@ func (h *BackupsHandler) startPreRestoreSnapshot(ctx context.Context, ns string,
 	return created, since, "", nil
 }
 
-// snapshotWaitShell blocks until a backup manifest stamped at or after
-// SNAP_SINCE appears under SNAP_PREFIX, i.e. until the pre-restore
-// snapshot has fully uploaded. If it never does, the init container fails
-// and the restore never touches the database.
+// snapshotWaitShell blocks until the pre-restore snapshot's manifest for
+// SNAP_SERIES (the name after the stamp, e.g. ".db-orders.sql.gz.manifest.json")
+// stamped at or after SNAP_SINCE appears under SNAP_PREFIX. A postgres run
+// uploads the primary dump first and each other database after it, so
+// waiting for any manifest let a per-database restore start before that
+// database's undo copy existed (BLOB-4). Empty SNAP_SERIES (a key with no
+// stamp) waits for any manifest. When SNAP_DB names a database the server
+// doesn't have yet there is nothing to save, so the primary series is
+// enough; if that can't be checked, the gate keeps waiting for SNAP_DB's
+// own dump. If the manifest never appears, the init container fails and
+// the restore never touches the database.
 const snapshotWaitShell = `
 set -eu
+if [ -n "${SNAP_DB:-}" ]; then
+  _i=0
+  until _have=$(printf '%s\n' "SELECT 1 FROM pg_database WHERE datname = :'db'" \
+      | PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -v db="${SNAP_DB}" -tA 2>/dev/null); do
+    _i=$((_i+1))
+    if [ "${_i}" -ge 30 ]; then _have=unknown; break; fi
+    sleep 2
+  done
+  if [ -z "${_have}" ]; then
+    echo "==> database ${SNAP_DB} does not exist yet: nothing to save beyond the primary dump"
+    SNAP_SERIES="${SNAP_PRIMARY_SERIES}"
+  fi
+fi
 _end=$(( $(date +%s) + SNAP_WAIT_SECONDS ))
-echo "==> waiting for the pre-restore snapshot under s3://${BUCKET}/${SNAP_PREFIX} (stamped >= ${SNAP_SINCE})"
+echo "==> waiting for the pre-restore snapshot under s3://${BUCKET}/${SNAP_PREFIX} (stamped >= ${SNAP_SINCE}, series ${SNAP_SERIES:-any})"
 while :; do
   _hit=$(aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${SNAP_PREFIX}" 2>/dev/null \
-    | awk -v s="${SNAP_SINCE}" '$4 ~ /\.manifest\.json$/ && substr($4, 1, 16) >= s { print $4; exit }' || true)
+    | awk -v s="${SNAP_SINCE}" -v series="${SNAP_SERIES:-}" '$4 ~ /\.manifest\.json$/ && substr($4, 1, 16) >= s && (series == "" || substr($4, 17) == series) { print $4; exit }' || true)
   if [ -n "${_hit}" ]; then echo "==> pre-restore snapshot saved: ${SNAP_PREFIX}${_hit}"; exit 0; fi
   if [ "$(date +%s)" -ge "${_end}" ]; then
     echo "==> pre-restore snapshot did not complete in time; the database was NOT touched. Check the snapshot Job, or retry with skipSnapshot (CLI --skip-snapshot)." >&2
@@ -142,14 +162,39 @@ while :; do
 done
 `
 
+// snapshotSeries returns the manifest name, minus its stamp, that the
+// pre-restore snapshot writes for the data a restore of key overwrites:
+// the same series as key ("" when key carries no stamp).
+func snapshotSeries(key string) string {
+	base := key[strings.LastIndex(key, "/")+1:]
+	if m := backupStampRe.FindString(base); m == "" || m == base {
+		return ""
+	}
+	return base[len(backupStampLayout):] + ".manifest.json"
+}
+
 // snapshotWaitContainer is the restore Job's init container gating the
-// restore on its snapshot.
-func snapshotWaitContainer(s3Secret, bucketOverride, prefix string, since time.Time) corev1.Container {
+// restore on its snapshot. series is snapshotSeries of the restored key;
+// siblingDB, when set, is the postgres database a per-database dump
+// restores into, and connSecret the destination's conn Secret used to
+// check whether that database exists yet.
+func snapshotWaitContainer(s3Secret, bucketOverride, prefix string, since time.Time, series, siblingDB, connSecret string) corev1.Container {
 	env := append([]corev1.EnvVar{
 		{Name: "SNAP_PREFIX", Value: prefix},
 		{Name: "SNAP_SINCE", Value: since.UTC().Format(backupStampLayout)},
+		{Name: "SNAP_SERIES", Value: series},
 		{Name: "SNAP_WAIT_SECONDS", Value: fmt.Sprintf("%d", int(snapshotWait.Seconds()))},
 	}, restoreS3EnvFrom(s3Secret, bucketOverride)...)
+	if siblingDB != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "SNAP_DB", Value: siblingDB},
+			corev1.EnvVar{Name: "SNAP_PRIMARY_SERIES", Value: ".sql.gz.manifest.json"},
+			envFromSecret("POSTGRES_HOST", connSecret, "POSTGRES_HOST"),
+			envFromSecret("POSTGRES_USER", connSecret, "POSTGRES_USER"),
+			envFromSecret("POSTGRES_DB", connSecret, "POSTGRES_DB"),
+			envFromSecret("POSTGRES_PASSWORD", connSecret, "POSTGRES_PASSWORD"),
+		)
+	}
 	return corev1.Container{
 		Name:            "wait-snapshot",
 		Image:           backupJobImage,

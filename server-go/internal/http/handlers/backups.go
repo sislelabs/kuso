@@ -796,7 +796,8 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		if snap != nil {
 			resp["snapshotJob"] = snap.Name
 			job.Spec.Template.Spec.InitContainers = append(job.Spec.Template.Spec.InitContainers,
-				snapshotWaitContainer(credSecret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since))
+				snapshotWaitContainer(credSecret, destCR.BackupBucket(""), project+"/"+destCR.Name+"/", since,
+					snapshotSeries(req.Key), siblingDB, destCR.Name+"-conn"))
 			deadline := *job.Spec.ActiveDeadlineSeconds + int64(snapshotWait.Seconds())
 			job.Spec.ActiveDeadlineSeconds = &deadline
 		}
