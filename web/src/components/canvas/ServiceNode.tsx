@@ -303,20 +303,42 @@ function buildRefText(build?: BuildSummary) {
   return { label, title, failed, live };
 }
 
+// Same tokens as the Deployments panel's build badges.
+function buildDotClass(status: string): string {
+  switch (status.toLowerCase()) {
+    case "succeeded":
+    case "completed":
+      return "bg-[var(--success)]";
+    case "failed":
+    case "error":
+      return "bg-[var(--error)]";
+    case "release-failed":
+      return "bg-[var(--warning)]";
+    case "running":
+    case "pending":
+      return "bg-[var(--building)] animate-pulse";
+    default:
+      return "bg-[var(--text-tertiary)]";
+  }
+}
+
 function BuildRef({ build }: { build?: BuildSummary }) {
   const t = buildRefText(build);
-  if (!t) return null;
+  if (!build || !t) return null;
   return (
     <span
       className={cn(
-        "ml-auto min-w-[3.5rem] shrink-[4] truncate font-mono text-xs",
+        "ml-auto inline-flex min-w-[3.5rem] shrink-[4] items-center gap-1.5 font-mono text-xs",
         t.failed && !t.live ? "text-[var(--error)]" : "text-[var(--text-tertiary)]",
       )}
       title={t.title}
     >
-      {t.failed && !t.live && <span className="sr-only">Latest build failed: </span>}
-      {t.live && <span className="sr-only">Running </span>}
-      {t.label}
+      <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", buildDotClass(build.status ?? ""))} />
+      <span className="truncate">
+        {t.failed && !t.live && <span className="sr-only">Latest build failed: </span>}
+        {t.live && <span className="sr-only">Running </span>}
+        {t.label}
+      </span>
     </span>
   );
 }
