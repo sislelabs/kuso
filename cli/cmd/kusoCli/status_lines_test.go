@@ -18,6 +18,19 @@ func TestLastBuildLinePicksNewest(t *testing.T) {
 	}
 }
 
+// OPS-4: a queued build, or one that failed before it started, has no
+// startedAt; it must still win over the older green build.
+func TestLastBuildLineCountsUnstartedBuilds(t *testing.T) {
+	builds := []statusBuild{
+		{ID: "b-queued", Status: "queued", CreatedAt: "2026-09-28T10:00:00Z"},
+		{ID: "b-live-old", Status: "succeeded", StartedAt: "2026-09-27T10:01:00Z", CreatedAt: "2026-09-27T10:00:00Z"},
+		{ID: "b-archived", Status: "succeeded", StartedAt: "2026-09-20T10:00:00Z"},
+	}
+	if got := latestBuild(builds); got == nil || got.ID != "b-queued" {
+		t.Errorf("latest = %+v, want b-queued", got)
+	}
+}
+
 func TestIsolationWarning(t *testing.T) {
 	on, off := true, false
 	for _, tc := range []struct {

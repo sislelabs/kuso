@@ -221,11 +221,12 @@ type statusBuild struct {
 	Status       string `json:"status"`
 	Branch       string `json:"branch"`
 	StartedAt    string `json:"startedAt"`
+	CreatedAt    string `json:"createdAt,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
-// lastBuildLine summarises the newest build by startedAt. The list is
-// live CRs followed by archived records, so its order isn't trusted.
+// lastBuildLine summarises the newest build. The list is live CRs
+// followed by archived records, so its order isn't trusted.
 func lastBuildLine(builds []statusBuild) string {
 	latest := latestBuild(builds)
 	if latest == nil {
@@ -241,11 +242,19 @@ func lastBuildLine(builds []statusBuild) string {
 	return line
 }
 
+// latestBuild ranks by creation time, falling back to startedAt for
+// archived records (the server sends createdAt for live builds only).
+// Ranking by startedAt alone hid a queued build, or one that failed
+// before it started, behind the previous green build.
 func latestBuild(builds []statusBuild) *statusBuild {
 	var latest *statusBuild
 	var latestAt time.Time
 	for i := range builds {
-		t, _ := time.Parse(time.RFC3339, builds[i].StartedAt)
+		at := builds[i].CreatedAt
+		if at == "" {
+			at = builds[i].StartedAt
+		}
+		t, _ := time.Parse(time.RFC3339, at)
 		if latest == nil || t.After(latestAt) {
 			latest, latestAt = &builds[i], t
 		}

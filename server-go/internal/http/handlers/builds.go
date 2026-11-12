@@ -401,13 +401,17 @@ type buildSummary struct {
 	// manual build without GitHub branch resolution carries a synthetic
 	// "<branch>-<nonce>" ref, which read as a SHA in every UI; that ref
 	// is in Ref.
-	CommitSha       string `json:"commitSha,omitempty"`
-	Ref             string `json:"ref,omitempty"`
-	CommitMessage   string `json:"commitMessage,omitempty"`
-	ImageTag        string `json:"imageTag,omitempty"`
-	Status          string `json:"status"`
-	StartedAt       string `json:"startedAt,omitempty"`
-	FinishedAt      string `json:"finishedAt,omitempty"`
+	CommitSha     string `json:"commitSha,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	CommitMessage string `json:"commitMessage,omitempty"`
+	ImageTag      string `json:"imageTag,omitempty"`
+	Status        string `json:"status"`
+	StartedAt     string `json:"startedAt,omitempty"`
+	FinishedAt    string `json:"finishedAt,omitempty"`
+	// CreatedAt is the CR's creation time, set for live builds only. A
+	// queued build, or one that failed before it started, has no
+	// StartedAt; this is what still ranks it as the newest.
+	CreatedAt       string `json:"createdAt,omitempty"`
 	TriggeredBy     string `json:"triggeredBy,omitempty"`     // user|webhook|api|system
 	TriggeredByUser string `json:"triggeredByUser,omitempty"` // username for source=user
 	// ErrorMessage is the extracted failure cause for status=failed
@@ -511,6 +515,9 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	}
 	if b.Spec.Image != nil {
 		out.ImageTag = b.Spec.Image.Tag
+	}
+	if !b.CreationTimestamp.IsZero() {
+		out.CreatedAt = b.CreationTimestamp.UTC().Format(time.RFC3339)
 	}
 	// Phase + timing live on annotations because helm-operator
 	// rewrites .status on every reconcile. The legacy .status.phase
@@ -776,17 +783,13 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // it as a fresh start.
 type createBuildBody struct {
 	buildSummary
-	Existing  bool   `json:"existing"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	Existing bool `json:"existing"`
 }
 
 func createBuildResponse(out builds.CreateOutcome) (int, createBuildBody) {
 	body := createBuildBody{Existing: out.Existing}
 	if out.Build != nil {
 		body.buildSummary = toBuildSummary(*out.Build)
-		if !out.Build.CreationTimestamp.IsZero() {
-			body.CreatedAt = out.Build.CreationTimestamp.UTC().Format(time.RFC3339)
-		}
 	}
 	if out.Existing {
 		return http.StatusOK, body
