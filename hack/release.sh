@@ -896,8 +896,12 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
       -t "${BACKUP_IMAGE}:latest" \
       -f build/backup/Dockerfile \
       build/backup >/dev/null
+    # Capture first: grep -q exits on the first match, and under pipefail
+    # the SIGPIPE it sends imagetools failed the check on a good image.
+    backup_manifest="$(docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" 2>/dev/null)" \
+      || fail "cannot inspect ${BACKUP_IMAGE}:${VERSION}"
     for arch in amd64 arm64; do
-      docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" 2>/dev/null | grep -q "linux/${arch}" \
+      grep -q "linux/${arch}" <<<"$backup_manifest" \
         || fail "${BACKUP_IMAGE}:${VERSION} has no linux/${arch} variant"
     done
     log "backup image pushed: ${BACKUP_IMAGE}:${VERSION} (amd64+arm64)"
