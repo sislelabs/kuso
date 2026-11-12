@@ -315,3 +315,21 @@ func TestPatchService_ValidatesBuildArgKeys(t *testing.T) {
 		t.Fatalf("want ErrInvalid for malformed buildArg key at patch, got %v", err)
 	}
 }
+
+// SEC-2 (2026-11-12): a pending ref is only accepted when no other project
+// could own the conn name. foo saving ${{ foo-bar-db.X }} before foo-bar
+// has a "db" addon would otherwise bind foo-bar's credentials later.
+func TestSetEnvPending_RefusesOverlappingProjectConn(t *testing.T) {
+	t.Parallel()
+	s := overlapFixture(t)
+	ctx := context.Background()
+	pending := SetEnvOpts{AllowPending: true}
+
+	err := s.SetEnvWithOpts(ctx, "foo", "api", []EnvVar{{Name: "DB", Value: "${{ foo-bar-db.DATABASE_URL }}"}}, pending)
+	if err == nil {
+		t.Fatal("ref to foo-bar's future addon accepted")
+	}
+	if err := s.SetEnvWithOpts(ctx, "foo", "api", []EnvVar{{Name: "DB", Value: "${{ db.DATABASE_URL }}"}}, pending); err != nil {
+		t.Fatalf("own pending addon refused: %v", err)
+	}
+}

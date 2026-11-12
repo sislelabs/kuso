@@ -2327,6 +2327,19 @@ func (s *Service) pendingConnOwned(ctx context.Context, ns, project, name string
 				return false
 			}
 		}
+		// With no addon CR yet there's no label to settle ownership, so
+		// a name another project could also produce is refused: project
+		// "a" saving a-b-db-conn would otherwise bind project "a-b"'s
+		// credentials the day a-b creates its "db" addon (SEC-2).
+		projs, lerr := s.List(ctx)
+		if lerr != nil {
+			return false
+		}
+		for i := range projs {
+			if p := projs[i].Name; p != project && strings.HasPrefix(name, p+"-") {
+				return false
+			}
+		}
 		return true
 	}
 	if err != nil {
