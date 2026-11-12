@@ -98,13 +98,32 @@ func RepoIdentity(raw string) string {
 	if s == "" {
 		return ""
 	}
+	// Callers gate or bind on this key, so a URL git could resolve to a
+	// different host than the slicing below sees must never reduce to a
+	// real identity: "https://evil.com#@github.com/acme/web" clones
+	// evil.com. Such URLs get a key that only matches the identical string.
+	unmatchable := "invalid:" + s
+	if strings.ContainsAny(s, "?#\\ \t\r\n") || strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return unmatchable
+	}
 	s = strings.TrimPrefix(s, "git+")
+	hasScheme := false
 	if i := strings.Index(s, "://"); i >= 0 {
 		s = s[i+3:]
+		hasScheme = true
 	}
 	head := s
 	if i := strings.IndexByte(s, '/'); i >= 0 {
 		head = s[:i]
+	}
+	if strings.Count(head, "@") > 1 {
+		return unmatchable
+	}
+	// scp-style user@host:path: git takes the host up to the first ':',
+	// so a ':' before the '@' (evil.com:x@github.com:acme/web) means the
+	// part after '@' is path, not host.
+	if at := strings.IndexByte(head, '@'); at >= 0 && !hasScheme && strings.Contains(head[:at], ":") {
+		return unmatchable
 	}
 	if at := strings.LastIndexByte(head, '@'); at >= 0 {
 		s = s[at+1:]

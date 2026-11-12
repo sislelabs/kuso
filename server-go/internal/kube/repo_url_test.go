@@ -105,3 +105,28 @@ func TestStripRepoURLCredentials_Whitespace(t *testing.T) {
 		t.Error("whitespace-prefixed credential URL not detected")
 	}
 }
+
+// URLs git would resolve to another host than the naive slicing must
+// never reduce to the bound repo's identity.
+func TestRepoIdentity_AmbiguousURLsNeverMatch(t *testing.T) {
+	t.Parallel()
+	const bound = "github.com/acme/web"
+	for _, in := range []string{
+		"https://evil.com#@github.com/acme/web",
+		"https://evil.com?@github.com/acme/web",
+		"https://evil.com\\@github.com/acme/web",
+		"https://a@evil.com@github.com/acme/web",
+		"evil.com:x@github.com:acme/web",
+		"https://evil.com/@github.com/acme/web",
+		"https://git hub.com/acme/web",
+	} {
+		if got := RepoIdentity(in); got == bound {
+			t.Errorf("RepoIdentity(%q) = %q, collides with the bound repo", in, got)
+		}
+	}
+	for _, in := range []string{"git@github.com:acme/web.git", "https://u:p@github.com/acme/web", "ssh://git@github.com/acme/web"} {
+		if got := RepoIdentity(in); got != bound {
+			t.Errorf("RepoIdentity(%q) = %q, want %q", in, got, bound)
+		}
+	}
+}
