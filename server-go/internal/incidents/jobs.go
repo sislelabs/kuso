@@ -152,17 +152,18 @@ func (s *KubeSpawner) log() *slog.Logger {
 }
 
 // logNamespace is the one namespace the agent may read pod logs in.
-// Project-less incidents (node.unreachable) get none.
+// Project-less incidents (node.unreachable) get none, and so do projects
+// in the home namespace: a binding there would cover every home-namespace
+// tenant plus kuso-server itself, which a prompt-injected log line could
+// steer the agent into reading.
 func (s *KubeSpawner) logNamespace(ctx context.Context, in db.Incident) string {
-	if in.Project == "" {
+	if in.Project == "" || s.ProjectNamespace == nil {
 		return ""
 	}
-	if s.ProjectNamespace != nil {
-		if ns := s.ProjectNamespace(ctx, in.Project); ns != "" {
-			return ns
-		}
+	if ns := s.ProjectNamespace(ctx, in.Project); ns != "" && ns != s.namespace() {
+		return ns
 	}
-	return s.namespace()
+	return ""
 }
 
 // SpawnInvestigate launches the read-only investigation Job. The agent

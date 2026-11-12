@@ -42,7 +42,7 @@ func TestDoWake_StampsActivityBeforeScalingUp(t *testing.T) {
 				scaledown.PreSleepReplicasAnnotation: "2",
 			},
 		},
-		"spec": map[string]any{"replicaCount": int64(0)},
+		"spec": map[string]any{"image": map[string]any{"repository": "registry/app", "tag": "v1"}, "replicaCount": int64(0)},
 	}}
 	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
 		t.Fatalf("seed env: %v", err)
@@ -95,7 +95,7 @@ func TestDoWake_NeverScalesAwakeDeploymentDown(t *testing.T) {
 		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
 		"kind":       "KusoEnvironment",
 		"metadata":   map[string]any{"name": name, "namespace": ns},
-		"spec":       map[string]any{"replicaCount": int64(4)},
+		"spec":       map[string]any{"image": map[string]any{"repository": "registry/app", "tag": "v1"}, "replicaCount": int64(4)},
 	}}
 	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
 		t.Fatalf("seed env: %v", err)

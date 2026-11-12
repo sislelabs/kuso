@@ -50,3 +50,23 @@ func PodSecretNames(vars []corev1.EnvVar, envFrom []string) []string {
 	}
 	return out
 }
+
+const (
+	LabelEgressPublic      = "kuso.sislelabs.com/network-egress-public"
+	LabelEgressPlatformAPI = "kuso.sislelabs.com/network-egress-platform-api"
+)
+
+// EgressLabels are the egress opt-in labels for a pod that runs an env's
+// code outside its Deployment (release hooks, seeds, migrations). Mirrors the
+// kusoenvironment chart: public egress unless privateEgress, platform-API
+// egress only when asked for.
+func EgressLabels(privateEgress, platformAPIEgress bool) map[string]string {
+	out := map[string]string{}
+	if !privateEgress {
+		out[LabelEgressPublic] = "true"
+	}
+	if platformAPIEgress {
+		out[LabelEgressPlatformAPI] = "true"
+	}
+	return out
+}

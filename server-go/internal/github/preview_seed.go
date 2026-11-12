@@ -63,7 +63,7 @@ const (
 // Returns immediately after the Job spec is submitted; the actual
 // seed runs asynchronously. Errors here mean we couldn't even submit
 // the Job (typically: kube apiserver unreachable, namespace gone).
-func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, envScope, image, seedCmd string, envFromSecrets []string, envVars []envVar) error {
+func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, envScope, image, seedCmd string, envFromSecrets []string, envVars []envVar, privateEgress, platformAPIEgress bool) error {
 	if seedCmd == "" {
 		return nil
 	}
@@ -114,12 +114,18 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					// Project label so the project netpols let the pod reach
-					// the preview DB; public egress matches the release Job,
-					// which runs the same user image.
-					Labels: seedPodLabels(project, envCRName, envScope, envFromSecrets, podEnv),
+					// the preview DB; egress matches the release Job, which
+					// runs the same user image.
+					Labels: seedPodLabels(project, envCRName, envScope, envFromSecrets, podEnv, privateEgress, platformAPIEgress),
 				},
+				// Runs the PR's code, so the same sandbox as its env pods.
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: boolPtr(false),
+					EnableServiceLinks:           boolPtr(false),
+					SecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{{
 						Name:    "seed",
 						Image:   image,
@@ -127,6 +133,10 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 						Args:    []string{seedCmd},
 						Env:     podEnv,
 						EnvFrom: envFrom,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: boolPtr(false),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
 					}},
 				},
 			},
@@ -151,16 +161,14 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 // corev1.EnvVar). One-way conversion only — the dispatcher writes
 // envs to the env CR via the kube types, AND submits them to a
 // kube Job via corev1 here.
-// seedPodLabels: project label so the project netpols apply, public egress
-// like the release Job (same user image), and the preview's env identity
-// plus addon subscriptions so env isolation admits it to its own clones and
-// keeps it away from production (ISO-3).
-func seedPodLabels(project, envCRName, envScope string, envFromSecrets []string, podEnv []corev1.EnvVar) map[string]string {
-	out := map[string]string{
-		"kuso.sislelabs.com/preview-seed":          envCRName,
-		"kuso.sislelabs.com/project":               project,
-		"kuso.sislelabs.com/network-egress-public": "true",
-	}
+// seedPodLabels: project label so the project netpols apply, the service's
+// egress like the release Job (same user image), and the preview's env
+// identity plus addon subscriptions so env isolation admits it to its own
+// clones and keeps it away from production (ISO-3).
+func seedPodLabels(project, envCRName, envScope string, envFromSecrets []string, podEnv []corev1.EnvVar, privateEgress, platformAPIEgress bool) map[string]string {
+	out := kube.EgressLabels(privateEgress, platformAPIEgress)
+	out["kuso.sislelabs.com/preview-seed"] = envCRName
+	out["kuso.sislelabs.com/project"] = project
 	if envScope == "" {
 		envScope = envCRName
 	}

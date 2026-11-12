@@ -395,10 +395,11 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 		"kuso.sislelabs.com/role":    "release",
 		"kuso.sislelabs.com/project": env.Spec.Project,
 		"kuso.sislelabs.com/service": env.Spec.Service,
-		// release Jobs are short-lived; grant the same
-		// public-egress so curl-based migrations (rare
-		// but real) can reach package CDNs etc.
-		"kuso.sislelabs.com/network-egress-public": "true",
+	}
+	// Same egress as the env's own pods: a privateEgress service's hook
+	// mounts the same DB credentials and must not reach the internet.
+	for k, v := range kube.EgressLabels(env.Spec.PrivateEgress, env.Spec.PlatformAPIEgress) {
+		podLabels[k] = v
 	}
 	// ISO-3: the Job runs the env's (for a preview, the PR's) code, so the
 	// env-isolation policies must see it as that env, not as a legacy pod
@@ -406,6 +407,8 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 	for k, v := range kube.EnvIsolationLabels(env.Spec.EnvScope, kube.PodSecretNames(envVars, env.Spec.EnvFromSecrets)) {
 		podLabels[k] = v
 	}
+
+	nodeSelector, affinity, tolerations := PlacementScheduling(env.Spec.Placement)
 
 	backoff := int32(0) // One shot — never retry a failed migration.
 	parallelism := int32(1)
@@ -449,6 +452,9 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptrBool(false),
 					ImagePullSecrets:             pullSecrets,
+					NodeSelector:                 nodeSelector,
+					Affinity:                     affinity,
+					Tolerations:                  tolerations,
 					// wait-for-addons: a freshly-provisioned project addon
 					// (postgres/redis/nats) may still be bootstrapping when
 					// the build finishes and this release Job fires — and an

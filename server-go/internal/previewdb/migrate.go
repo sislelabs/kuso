@@ -110,9 +110,11 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 	// empty DATABASE_URI and falls back to localhost.
 	envVars := kube.CoreEnvVars(env.Spec.EnvVars)
 	podLabels := map[string]string{
-		"kuso.sislelabs.com/role":                  "preview-migrate",
-		"kuso.sislelabs.com/project":               project,
-		"kuso.sislelabs.com/network-egress-public": "true",
+		"kuso.sislelabs.com/role":    "preview-migrate",
+		"kuso.sislelabs.com/project": project,
+	}
+	for k, v := range kube.EgressLabels(env.Spec.PrivateEgress, env.Spec.PlatformAPIEgress) {
+		podLabels[k] = v
 	}
 	// The pod runs the PR's code: label it as the preview (its env scope,
 	// preview-pr-N, plus its addon subscriptions) so the env-isolation
@@ -127,6 +129,8 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 	for k, v := range kube.EnvIsolationLabels(scope, kube.PodSecretNames(envVars, env.Spec.EnvFromSecrets)) {
 		podLabels[k] = v
 	}
+
+	nodeSelector, affinity, tolerations := releaserun.PlacementScheduling(env.Spec.Placement)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -157,6 +161,9 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptrBool(false),
+					NodeSelector:                 nodeSelector,
+					Affinity:                     affinity,
+					Tolerations:                  tolerations,
 					// TCP-wait on the clone DB before migrating — the clone
 					// StatefulSet's ClusterIP transiently refuses connections
 					// while it comes up / reconciles its Service. With

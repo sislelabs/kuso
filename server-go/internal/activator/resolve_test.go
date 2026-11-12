@@ -254,7 +254,7 @@ func TestWakeAndWait_OverHoldCapStillWakes(t *testing.T) {
 		"kind":       "KusoEnvironment",
 		"metadata": map[string]any{"name": name, "namespace": ns,
 			"annotations": map[string]any{"kuso.sislelabs.com/pre-sleep-replicas": "2"}},
-		"spec": map[string]any{"replicaCount": int64(0)},
+		"spec": map[string]any{"image": map[string]any{"repository": "registry/app", "tag": "v1"}, "replicaCount": int64(0)},
 	}}
 	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
 		t.Fatal(err)

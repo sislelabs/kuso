@@ -87,7 +87,7 @@ func TestServe_FailsFastOnUnstartablePod(t *testing.T) {
 		"apiVersion": "application.kuso.sislelabs.com/v1alpha1",
 		"kind":       "KusoEnvironment",
 		"metadata":   map[string]any{"name": name, "namespace": ns},
-		"spec":       map[string]any{"kind": "custom", "host": "staging.example.com", "replicaCount": int64(1)},
+		"spec":       map[string]any{"image": map[string]any{"repository": "registry/app", "tag": "v1"}, "kind": "custom", "host": "staging.example.com", "replicaCount": int64(1)},
 	}}
 	if err := dyn.Tracker().Create(kube.GVREnvironments, env, ns); err != nil {
 		t.Fatal(err)

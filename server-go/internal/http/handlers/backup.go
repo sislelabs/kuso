@@ -405,7 +405,9 @@ func (h *BackupHandler) createRestoreJob(ctx context.Context, jobName, secretNam
 					},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:                corev1.RestartPolicyNever,
+					AutomountServiceAccountToken: ptrBool(false),
+					EnableServiceLinks:           ptrBool(false),
 					// Pod-level security context: drop root, no
 					// privilege escalation, seccomp default. The
 					// pod runs psql against a Secret-backed dump —
