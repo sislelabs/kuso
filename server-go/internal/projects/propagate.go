@@ -316,13 +316,14 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if envScope != "production" {
 					merged = rescopeAddonConnRefsByOrigin(merged, s.envCloneConnByOrigin(ctx, ns, project, envScope))
 				}
+				var optIn []kube.KusoEnvVar
+				if svc.Spec.Previews != nil {
+					optIn = svc.Spec.Previews.PreviewEnvVars
+				}
 				if addons.IsPreviewEnv(env) {
-					var optIn []kube.KusoEnvVar
-					if svc.Spec.Previews != nil {
-						optIn = svc.Spec.Previews.PreviewEnvVars
-					}
 					merged = addons.DropPreviewSharedRefs(merged, project, optIn)
 				}
+				prevEnvVars := env.Spec.EnvVars
 				env.Spec.EnvVars = merged
 				// Filter the propagated envFromSecrets by the addon
 				// subscription. nil SubscribedAddons = legacy auto-
@@ -351,6 +352,12 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					if len(withheld) > 0 {
 						slog.WarnContext(ctx, "propagate: production addon conns withheld from an isolated env (no clone for it)",
 							"project", project, "env", envName, "withheld", withheld)
+					}
+					var withheldVars []string
+					env.Spec.EnvVars, withheldVars = addons.WithholdProductionConnRefs(env.Spec.EnvVars, prevEnvVars, env.Spec.EnvFromSecrets, all, envScope, preview, optIn)
+					if len(withheldVars) > 0 {
+						slog.WarnContext(ctx, "propagate: env vars referencing production addon conns withheld from an isolated env (no clone for it)",
+							"project", project, "env", envName, "withheld", withheldVars)
 					}
 					if preview {
 						prunedFrom = addons.ScrubPreviewSharedMounts(prunedFrom, project)

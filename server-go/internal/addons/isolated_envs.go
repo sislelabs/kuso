@@ -106,6 +106,86 @@ func WithholdProductionConns(next, prev []string, all []kube.KusoAddon, envScope
 	return kept, withheld
 }
 
+// WithholdProductionConnRefs is WithholdProductionConns for explicit env
+// vars: a secretKeyRef into a production conn wins over envFrom, so an env
+// can be pointed at production data through one even when its envFrom
+// list is clean (ISO-1/ISO-2). It runs after the clone rescope, so a
+// production conn still referenced has no clone for this env.
+//
+//   - preview envs: a ref to a conn not SharedWithPreviews is dropped
+//     unless optIn (previews.previewEnvVars) names that var and Secret; a
+//     native s3 ref moves to its PreviewReadOnlyConn.
+//   - named envs that own at least one clone: a ref to a cloneable-kind
+//     conn is dropped unless the env already read it, through the same
+//     var (prevVars) or a whole-Secret mount (prevFrom).
+//   - production and named envs without clones are untouched.
+func WithholdProductionConnRefs(vars, prevVars []kube.KusoEnvVar, prevFrom []string, all []kube.KusoAddon, envScope string, preview bool, optIn []kube.KusoEnvVar) (kept []kube.KusoEnvVar, withheld []string) {
+	if !preview && (envScope == "" || envScope == "production") {
+		return vars, nil
+	}
+	byConn := make(map[string]*kube.KusoAddon, len(all))
+	isolated := preview
+	for i := range all {
+		a := &all[i]
+		if env := a.Labels[kube.LabelEnv]; env != "" {
+			if env == envScope {
+				isolated = true
+			}
+			continue
+		}
+		byConn[connSecretName(a.Name)] = a
+	}
+	if !isolated {
+		return vars, nil
+	}
+	refName := func(v kube.KusoEnvVar) string {
+		ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+		name, _ := ref["name"].(string)
+		return name
+	}
+	hasRef := func(list []kube.KusoEnvVar, name, secret string) bool {
+		return slices.ContainsFunc(list, func(v kube.KusoEnvVar) bool { return v.Name == name && refName(v) == secret })
+	}
+	kept = make([]kube.KusoEnvVar, 0, len(vars))
+	for _, v := range vars {
+		conn := refName(v)
+		a, ok := byConn[conn]
+		switch {
+		case !ok:
+		case preview && !SharedWithPreviews(a):
+			if !hasRef(optIn, v.Name, conn) {
+				withheld = append(withheld, v.Name+"->"+conn)
+				continue
+			}
+		case preview && PreviewReadOnlyConn(a) != "":
+			v = withSecretRefName(v, PreviewReadOnlyConn(a))
+		case !preview && cloneableForNamedEnvs(a) && !hasRef(prevVars, v.Name, conn) && !slices.Contains(prevFrom, conn):
+			withheld = append(withheld, v.Name+"->"+conn)
+			continue
+		}
+		kept = append(kept, v)
+	}
+	return kept, withheld
+}
+
+// withSecretRefName returns v with its secretKeyRef pointed at name. The
+// ValueFrom maps are copied so the caller's slice isn't mutated.
+func withSecretRefName(v kube.KusoEnvVar, name string) kube.KusoEnvVar {
+	ref, _ := v.ValueFrom["secretKeyRef"].(map[string]any)
+	nref := make(map[string]any, len(ref))
+	for k, val := range ref {
+		nref[k] = val
+	}
+	nref["name"] = name
+	vf := make(map[string]any, len(v.ValueFrom))
+	for k, val := range v.ValueFrom {
+		vf[k] = val
+	}
+	vf["secretKeyRef"] = nref
+	v.ValueFrom = vf
+	return v
+}
+
 // AnnotationSharedS3ReadOnly marks a named env (staging/qa) that shares the
 // project's s3 addons instead of owning copies: it mounts each native
 // bucket through the read-only user, like a preview does (BLOB-R9). Only
