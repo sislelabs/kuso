@@ -59,6 +59,23 @@ type buildSummary struct {
 	NotPromotedReason string        `json:"notPromotedReason,omitempty"`
 	QueuePosition     int           `json:"queuePosition,omitempty"`
 	LiveEnvs          []string      `json:"liveEnvs,omitempty"`
+	// Existing is set on a trigger response that coalesced into a build
+	// already in flight instead of starting a new one.
+	Existing bool `json:"existing,omitempty"`
+}
+
+// buildTriggerText is the build tool's text result. A coalesced trigger
+// must not read as a fresh start: the in-flight build may not be the
+// deploy the caller asked for.
+func buildTriggerText(out buildSummary) string {
+	text := fmt.Sprintf("build %s triggered (status=%s)", out.ID, out.Status)
+	if out.Existing {
+		text = fmt.Sprintf("build already in progress (coalesced into %s, status=%s); no new build was started", out.ID, out.Status)
+	}
+	if out.Branch != "" {
+		text += "\n  branch: " + out.Branch
+	}
+	return text
 }
 
 // failureClass mirrors the server's failures.Classification (subset).
@@ -117,12 +134,8 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		if err := client.PostJSON(ctx, path, body, &out); err != nil {
 			return nil, buildSummary{}, fmt.Errorf("trigger build: %w", err)
 		}
-		text := fmt.Sprintf("build %s triggered (status=%s)", out.ID, out.Status)
-		if out.Branch != "" {
-			text += "\n  branch: " + out.Branch
-		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			Content: []mcp.Content{&mcp.TextContent{Text: buildTriggerText(out)}},
 		}, out.fenced(), nil
 	})
 
