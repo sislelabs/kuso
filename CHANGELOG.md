@@ -19,6 +19,113 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.44.0] — 2026-11-12
+
+### Other
+- Refuse only a new volume/replica conflict, not edits to existing services ([813d3e4](https://github.com/sislelabs/kuso/commit/813d3e46d6066b259c55c8c246d128815f6f6d4e))
+- Refuse a ReadWriteOnce volume on a service that scales past one pod ([86359e5](https://github.com/sislelabs/kuso/commit/86359e515fbec7879466fd7ebb46e9fa9eaf2c2e))
+- Refuse volume sizes an existing PVC can't take ([2568c62](https://github.com/sislelabs/kuso/commit/2568c62bbf2bc404425ac2a978e3086c404f61d6))
+- Gate a restore on its own database's pre-restore dump ([2888373](https://github.com/sislelabs/kuso/commit/2888373fcc1bae26299155a4e92db2441b5de119))
+- List s3 addon backups one row per complete snapshot ([9ac05a3](https://github.com/sislelabs/kuso/commit/9ac05a3a3d7a2a664ad86efc480f666aa781aad0))
+- Refuse repo URLs whose host git would parse differently from RepoIdentity ([708c1fa](https://github.com/sislelabs/kuso/commit/708c1faaf1d086293b6bda9127d80d5fa4f0d281))
+- Rank kuso status's last build by creation time ([52ee4dc](https://github.com/sislelabs/kuso/commit/52ee4dc12f4db4cf0cbcddf9fd06ce5a0fa5448f))
+- Fail the release preflight on untracked files in image build inputs ([24eb816](https://github.com/sislelabs/kuso/commit/24eb8160cdd87163f92a699db4a21285cc92d5f5))
+- Never coalesce a real build into a dry run ([500ce7d](https://github.com/sislelabs/kuso/commit/500ce7dc1340076aadf924e2baf4830a9cd0b34a))
+- Warn when uptime enable on a service is overridden by the project ([287e0a0](https://github.com/sislelabs/kuso/commit/287e0a0bec91d6c49ab49066bb4a4d58c2d8b223))
+- Audit instance vulnscan settings changes and forced addon image updates ([2087e9c](https://github.com/sislelabs/kuso/commit/2087e9c7ca69af03df2df8dff5df2687f2d353bd))
+- Drop the webhook URL from notify delivery errors ([917a512](https://github.com/sislelabs/kuso/commit/917a51214e25184698c063f36098dbe9d3f3ab28))
+- Defuse @everyone and @here in the Discord ping reason ([53f479e](https://github.com/sislelabs/kuso/commit/53f479e00e2117b5ba0527183c0a467b8174a070))
+- Keep later same-SHA builds out of a finished push wave ([79656a0](https://github.com/sislelabs/kuso/commit/79656a0a032615b69034a8ec21298be70dc0dd8a))
+- Wait for a changed bootID before finalizing a pkgupdates reboot ([9d114a5](https://github.com/sislelabs/kuso/commit/9d114a5ffba5c5be3b672fd15d8dc7c676d4a9c9))
+- Grant the incident agent log access only in a project's own namespace ([5ba94a4](https://github.com/sislelabs/kuso/commit/5ba94a4c19e2ab4fb4d62fd5e2956498fcaca8d4))
+- Don't wake an env that has no image yet ([fd22faa](https://github.com/sislelabs/kuso/commit/fd22faa1a236c952dbdfaa109990d6a388cd82de))
+- Run project http crons as production under env isolation ([7aa314f](https://github.com/sislelabs/kuso/commit/7aa314f901124966e9f975c457626ad5811ee6d1))
+- Harden the preview seed, clone-seed and restore Job pods ([19fd6fc](https://github.com/sislelabs/kuso/commit/19fd6fc4f536720a733fe0f8dd46190abbdc9bb1))
+- Give release, preview-seed and preview-migrate Jobs the env's egress and placement ([54621b5](https://github.com/sislelabs/kuso/commit/54621b59c92273786ddc5efdf7cae88fd48dc78d))
+- Route new managed instance-PG tenants through its pooler ([c3578d3](https://github.com/sislelabs/kuso/commit/c3578d3ee1856c46aa0fdd996582cfec462c1ff3))
+- Reject tls=require on HA, instance-shared and external postgres addons ([380d14b](https://github.com/sislelabs/kuso/commit/380d14b6bef27abdf026a816ed73d561d260a5dc))
+- Skip the retention prune in the pre-restore snapshot ([dc8fc32](https://github.com/sislelabs/kuso/commit/dc8fc32415d62b332136be3bc19683ca544ae268))
+- Dump the control-plane DB from the primary, not through PgBouncer ([e19cc8c](https://github.com/sislelabs/kuso/commit/e19cc8c6b09b3f5c0c825de774040f700f3d8ec0))
+- Rescope public service hosts for named envs ([38e3854](https://github.com/sislelabs/kuso/commit/38e385464b75359b7f1284d59bfb58fc2a138ef7))
+- Run the env-group addon check on single-var secretRef writes ([ca4b428](https://github.com/sislelabs/kuso/commit/ca4b4289a91e1ab4779e1d3c12f980beeb46367f))
+- Withhold production conn refs from isolated envs on propagation ([8ef2ecb](https://github.com/sislelabs/kuso/commit/8ef2ecb38864c176452614fa4c72aeefd541c66a))
+- Refuse pending env refs another project could own ([f009113](https://github.com/sislelabs/kuso/commit/f00911384b0ac1157facd8757a737818aa99f537))
+- Gate repo, branch, path and Dockerfile changes as exec fields ([0bbb56a](https://github.com/sislelabs/kuso/commit/0bbb56a06fd92b9fd955611c3cf6ec7ea408f4b1))
+- Use timestamps relative to now in the PR tombstone ordering test ([5b350e9](https://github.com/sislelabs/kuso/commit/5b350e9dc11a315b48d8d16ce1fa7c82bef47193))
+- Compare token iat with the revocation watermark at millisecond precision ([e40098f](https://github.com/sislelabs/kuso/commit/e40098fd1039b1fa7a8d4ef0e7e7a732b3d640a3))
+- Stop kuso's uptime checks from keeping sleep-routed envs awake ([edd831e](https://github.com/sislelabs/kuso/commit/edd831e088e4b2588cc3b80bb57f520ca20892f4))
+- Issue JWTs with microsecond iat so logins after a role change work ([53ab556](https://github.com/sislelabs/kuso/commit/53ab556d35fdff92cbe43da6ce0f28a420d87b67))
+- Post one deploy card per monorepo push instead of one per service ([b7d534d](https://github.com/sislelabs/kuso/commit/b7d534dfe425d01dd2d0e3eb74d6960b2fe4b69a))
+- Name who started a run in its succeeded and failed notifications ([8833dc8](https://github.com/sislelabs/kuso/commit/8833dc80e8531da6d9c044bd81e461fab0eb989e))
+- Run Docker backup tests on the image built from the tree ([ab4c5a1](https://github.com/sislelabs/kuso/commit/ab4c5a1011e9a1dc0aa66b067b83d10e86975643))
+- Stop smoke waits early and stop leaking test volumes ([edb1cd1](https://github.com/sislelabs/kuso/commit/edb1cd1bd3fd560be616893e480e6bead169ff17))
+- Replay drill dumps as the addon's conn role ([df4a6d8](https://github.com/sislelabs/kuso/commit/df4a6d8142acd9ed094d96febd013ad096109524))
+- Read the gate tests' since from the database clock ([7b703c5](https://github.com/sislelabs/kuso/commit/7b703c5b95ab563334c62a92e917403fd88c4a5c))
+- Note why MySQL backup and restore skip server cert verification ([72b16f6](https://github.com/sislelabs/kuso/commit/72b16f6d264f311ba6bdc224acd5c3ef8180efc6))
+- Drill appRole addons as the admin role and smoke-test mysql backups ([3ced367](https://github.com/sislelabs/kuso/commit/3ced36792fb2c2d00f67a158e64e212380bd2212))
+- Refuse plaintext s3 snapshots for an addon that encrypts unless allowUnverified ([efd29ce](https://github.com/sislelabs/kuso/commit/efd29cefa207914699430e945e17aa1e6a306ab7))
+- Make scheduled control-plane backups restorable and encrypted ([19438fe](https://github.com/sislelabs/kuso/commit/19438fefa49c12c04bb96da7d4b6d75a6c533100))
+- Make MySQL backups connect and complete, and ship kuso-backup for arm64 ([a05320c](https://github.com/sislelabs/kuso/commit/a05320c6112909df1b6f04375d42a148fe16fe92))
+- Give new native database addons a non-superuser app role and add password rotation ([9a2e1f9](https://github.com/sislelabs/kuso/commit/9a2e1f99b8aa8a5d057e6f4acf244ac4397a6e10))
+- Guard addon restores and add a restore drill ([b116010](https://github.com/sislelabs/kuso/commit/b1160101eea4114566694685a8f4a7528bd5ee7a))
+- Bound instance-PG tenants and alert on filling database volumes ([0fe360b](https://github.com/sislelabs/kuso/commit/0fe360ba84e1af38654815dad18efd4302d9efcc))
+- Make blocking node public IPs opt-in ([4ce9a94](https://github.com/sislelabs/kuso/commit/4ce9a94a5a2cd1be3e0fc2fd91ac332385d2c9c0))
+- Let read-only git global options through the incident-agent guard ([0cdfe61](https://github.com/sislelabs/kuso/commit/0cdfe612dd9b1dfd9cd1cca34611c4a05ce42a4c))
+- Alert on node disk fill from the kubelet, not per local-path volume ([1040444](https://github.com/sislelabs/kuso/commit/104044474e9571aecd135f640e0964c94d3f831a))
+- Page through a DB outage after a restart and treat a pod-less kuso-postgres as down ([e8a6d19](https://github.com/sislelabs/kuso/commit/e8a6d199126f4dc4611ee8f3dfbacd53b2e4876c))
+- Audit node join, node labels, registry credential, Coolify import and env isolation ([c95e881](https://github.com/sislelabs/kuso/commit/c95e8814bf4f0f1720e20f7299e37dde11417406))
+- Report unsafe platform settings in the health scan ([b7be665](https://github.com/sislelabs/kuso/commit/b7be665afd2958a18b506f02cf9a994e5b1e175f))
+- Pin build-Job images by digest and build them multi-arch ([e9615be](https://github.com/sislelabs/kuso/commit/e9615bec6e2fb302300f025d7b3b681de0d1a6df))
+- Bind release.json to its tag and require an explicit downgrade ([7a991e3](https://github.com/sislelabs/kuso/commit/7a991e3f608dc3603913c8d169b36f86f8b7275a))
+- Keep incident-agent tokens out of the container env and guard its git ([97c0e9a](https://github.com/sislelabs/kuso/commit/97c0e9a7beba3153151dc55788f9c39bafd3689f))
+- Confine addon console pages to their own mount ([274e7bc](https://github.com/sislelabs/kuso/commit/274e7bc68fb97de76d764ce325f68e6b57e228f4))
+- Move the session cookie to __Host-kuso_jwt over HTTPS ([68c2a69](https://github.com/sislelabs/kuso/commit/68c2a693c0eb76dc3d9766cd25c8662fbd88e066))
+- Make WebSocket tickets single-use across replicas ([f42fb1b](https://github.com/sislelabs/kuso/commit/f42fb1b496533e76353ede98ba35f98df5257752))
+- Refuse typed <x>-<project> instance hosts that aren't a real env group ([59e3586](https://github.com/sislelabs/kuso/commit/59e3586770b5666f523a60c57045f4d74b1abc2c))
+- Gate revision reverts on execution fields like a direct edit ([434123c](https://github.com/sislelabs/kuso/commit/434123c171b3d4157c52057e7d01f162057e7ef1))
+- Gate code-loading env var names on the project admin role ([9a8f3c3](https://github.com/sislelabs/kuso/commit/9a8f3c3baeff9c46b4e9e1bee715d2c865e43211))
+- Write pre-deploy snapshots of scoped projects with their own backup key ([3a61426](https://github.com/sislelabs/kuso/commit/3a61426d4d7899572baba9f4e05e0b3e1ea274b6))
+- Restore instance-tenant dumps in scoped projects through a Job-owned key copy ([d6ca111](https://github.com/sislelabs/kuso/commit/d6ca1116860b3f6ff5238a8cd4b640cc9e6a761c))
+- Document s3 snapshot cost and registry recovery; extend smoke checks ([2cde3bb](https://github.com/sislelabs/kuso/commit/2cde3bbf4f580a37a8600a709ac4fe9cfa1aaebb))
+- Mount shared production buckets read-only on new staging envs ([af15009](https://github.com/sislelabs/kuso/commit/af15009b83e18dec93c92a3ae970d8d40d3ef675))
+- Report an anonymous in-cluster registry in kuso health ([5d9265e](https://github.com/sislelabs/kuso/commit/5d9265ece25de46260e74a381070e86340bc7a3f))
+- Flag Dockerfiles that pull another project's in-cluster images ([f660d3b](https://github.com/sislelabs/kuso/commit/f660d3b71c881c29ce6364b8ff4f532729542663))
+- Let --purge-data reach an addon's retained data after a plain delete ([36703d8](https://github.com/sislelabs/kuso/commit/36703d8721409f858438b3c5273764b827bb764d))
+- Refuse new public TCP exposures of s3 addons ([38974dc](https://github.com/sislelabs/kuso/commit/38974dced3b6e7ebc71c36b7534d1771af7b9c22))
+- Keep the bucket-wide backup key out of scoped project namespaces ([cbbfca3](https://github.com/sislelabs/kuso/commit/cbbfca3785744a2134021a8d8755d11eba6bf7ac))
+- Create S3 admin Job secrets owned by their Job and hash-truncate long names ([f653231](https://github.com/sislelabs/kuso/commit/f653231b778d345e1a69f0228a26ed68583b1363))
+- Wait out server migrations and report releases the operator roll broke ([6887fa3](https://github.com/sislelabs/kuso/commit/6887fa3c8cd2469179471ffa6b2708914d0af39a))
+- Evict activator and traefik pods from lost nodes and spread the activator ([0ae23cb](https://github.com/sislelabs/kuso/commit/0ae23cb286af6ca2dff63fe29673b2d4ec9c3565))
+- Harden the activator and scaledown against load, wedged rollouts and stamp churn ([5fbd1ba](https://github.com/sislelabs/kuso/commit/5fbd1ba5bc0edb3f07f9d17902e81bd92b8abf7b))
+- Leave LogLine rows out of the nightly control-plane dump ([eac523b](https://github.com/sislelabs/kuso/commit/eac523bbd333c3682822a7d179ace9fa97c2f963))
+- Raise the uptime probe pool to 512 workers and log unchecked targets ([534e8f7](https://github.com/sislelabs/kuso/commit/534e8f713dbe550910bffaa21357106982de7335))
+- Default the helm history pruner to off and correct its premise ([893c71d](https://github.com/sislelabs/kuso/commit/893c71d67c46873f7377f5bbea31ec431c751026))
+- Start logship stream buffers at 4 KiB and cap them at what LogLine stores ([f1f43e0](https://github.com/sislelabs/kuso/commit/f1f43e06e5a345224eb5bb1c24d2e7f0e1c42504))
+- Bound log search cost and surface the effective log retention ([f052683](https://github.com/sislelabs/kuso/commit/f05268322562a105ffe1f50caa56e74a5a8916e7))
+- Cache per-namespace pod metrics for 5s across serial Describe calls ([0b939e2](https://github.com/sislelabs/kuso/commit/0b939e2edce0b2ff764a1d7b27d5ec9f37d6243d))
+- Serve managed-secret key names from the synced cache only ([59e99bd](https://github.com/sislelabs/kuso/commit/59e99bdae0e55aecf6b188037ac64889089c9039))
+- Fold duplicated server-go tests into tables ([b23546c](https://github.com/sislelabs/kuso/commit/b23546cdbe126412b6947fd7b3a52056cfd67083))
+- Fold duplicated cli and mcp tests into tables ([aa821c0](https://github.com/sislelabs/kuso/commit/aa821c0cdd31e64d60cf5950caeef597f7fc15ce))
+- Resolve a module-root package in make test-pkg ([baed2e0](https://github.com/sislelabs/kuso/commit/baed2e0702ec383c7b9207243d852cf3a941a9fe))
+- Document the per-package test databases and the docker opt-in ([7510bac](https://github.com/sislelabs/kuso/commit/7510bacb3a26784aeea67979dcc5af780de8056b))
+- Make the namespace-binding and drain retry pacing injectable for tests ([0aaf070](https://github.com/sislelabs/kuso/commit/0aaf070ad6fb86b8af384c2c06014e8f3cc0a19f))
+- Run DB test packages in parallel and make the docker tests opt-in ([73ed5b5](https://github.com/sislelabs/kuso/commit/73ed5b51b028e1c32ce35dfdc68b1f292775e6d1))
+- Make the sandbox exercise backups, previews, sleep and isolation ([d076753](https://github.com/sislelabs/kuso/commit/d076753cb914d3b8be2a58aac0f361dbe271672e))
+- Make the Postgres-backed test targets safe to run from parallel worktrees ([8973cff](https://github.com/sislelabs/kuso/commit/8973cff997217c6bf3ebc1332421c83eaeb2ed97))
+
+### ✨ Features
+- Add an admin-only adopt action for a predecessor's backups ([0e486f0](https://github.com/sislelabs/kuso/commit/0e486f046169fea9b8987931ca38b6d9edce36c7))
+- Add a one-step buildkitd mTLS switch and restrict gateway frontends ([7f3e0c4](https://github.com/sislelabs/kuso/commit/7f3e0c46e46fc5d40831ec0ec1f00d807cc87ce9))
+- Add kuso registry rebuild to recover from a lost registry volume ([64954ed](https://github.com/sislelabs/kuso/commit/64954ed981e2e07eacc1c183c213bdf1a9b377f5))
+
+### 🐛 Bug Fixes
+- Fix the backup image platform check failing on a good image under pipefail ([96a07e3](https://github.com/sislelabs/kuso/commit/96a07e3e7a3e56bac229d6633e90e10308b87b81))
+- Fix two smoke checks that misread their own output ([cc9953f](https://github.com/sislelabs/kuso/commit/cc9953fa5072b7360e73949912e6d5a455e835c6))
+- Fix env and preview isolation gaps from the 2026-11-11 re-review ([edb4210](https://github.com/sislelabs/kuso/commit/edb4210f96017d1ce8ae57ec170245c1b8c733da))
+
+### 🧹 Chores
+- Remove an s3 snapshot's partial copy when its run fails ([dfe802a](https://github.com/sislelabs/kuso/commit/dfe802a165383de4295f5e994e1ba9165c1c23e8))
+
 ## [0.43.1] — 2026-11-11
 
 ### Other
@@ -1141,11 +1248,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix server-side addon access for custom-namespace projects ([80e0988](https://github.com/sislelabs/kuso/commit/80e0988a1f381c2513973700ed328fc3d8d8ec4b))
 - Fix env isolation, seed networking and multi-repo service add ([e2ebf54](https://github.com/sislelabs/kuso/commit/e2ebf54cc3fb01aed168bfb58c024907ee502525))
-
-## [0.26.9] — 2026-09-28
-
-### Other
-- Reclaim PVCs, conn and TLS secrets on env-group delete ([f45889e](https://github.com/sislelabs/kuso/commit/f45889e59d2cd5af746ef3b9001ceb34150f327b))
 
 
 ---

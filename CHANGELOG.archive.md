@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.9] — 2026-09-28
+
+### Other
+- Reclaim PVCs, conn and TLS secrets on env-group delete ([f45889e](https://github.com/sislelabs/kuso/commit/f45889e59d2cd5af746ef3b9001ceb34150f327b))
+
 ## [0.26.8] — 2026-09-28
 
 ### Other

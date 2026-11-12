@@ -131,7 +131,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: activator
-          image: ghcr.io/sislelabs/kuso-server-go:v0.43.1
+          image: ghcr.io/sislelabs/kuso-server-go:v0.44.0
           args: ["--activator"]
           securityContext:
             allowPrivilegeEscalation: false
