@@ -25,7 +25,7 @@ rb_code() {
 rb_is() { [[ "$(rb_code "${@:2}")" == "$1" ]]; }
 
 rb_user_id() {
-  "$K" api GET "users/username/${RB_USER}" 2>/dev/null | jq -r '.id // empty' 2>/dev/null
+  { "$K" api GET "users/username/${RB_USER}" 2>/dev/null || true; } | jq -r '.id // empty' 2>/dev/null || true
 }
 
 rbac_main() {

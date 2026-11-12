@@ -43,7 +43,7 @@ bk_job_succeeded() {
 
 # bk_restore <args...>: start a restore and print its job name. The CLI
 # may print a pre-restore snapshot line first.
-bk_restore() { "$K" addon-backup restore "$@" | awk '/^restore job /{print $3}'; }
+bk_restore() { "$K" addon-backup restore "$@" | awk '/^restore job [^ ]+ started/{print $3}'; }
 
 bk_mysql() {
   node_kubectl -n "$BK_NS" exec "${BK_PROJECT}-sql-0" -c mysql -- \
@@ -92,7 +92,7 @@ backup_main() {
   bk_psql db "DELETE FROM smoke_rows WHERE name='alpha'; INSERT INTO smoke_rows VALUES ('gamma')" >/dev/null
   job="$(bk_restore "$BK_PROJECT" db "$key" --confirm db)"
   check "a second restore into db is refused while ${job} runs" \
-    bash -c '! "$1" addon-backup restore "$2" db "$3" --confirm db --skip-snapshot 2>&1 | grep -q "^restore job "' _ "$K" "$BK_PROJECT" "$key"
+    bash -c '! "$1" addon-backup restore "$2" db "$3" --confirm db --skip-snapshot 2>&1 | grep -q "^restore job [^ ]* started"' _ "$K" "$BK_PROJECT" "$key"
   check "in-place restore job ${job} (after its pre-restore snapshot) succeeded" eventually 600 bk_job_succeeded "$job"
   check "rows are back to alpha,beta" eventually 60 bk_rows_are db "alpha,beta"
 
