@@ -255,6 +255,12 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 		}
 		if existing == nil {
 			created = true
+			cloneTLS := s.Spec.TLS
+			if s.Spec.UseInstanceAddon != "" {
+				// Inert on an instance tenant, and Add now refuses it there;
+				// a source that predates that check must still clone.
+				cloneTLS = ""
+			}
 			if _, err := c.Addons.Add(ctx, project, addons.CreateAddonRequest{
 				Name:    cloneShort,
 				Kind:    s.Spec.Kind,
@@ -272,7 +278,7 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 				// encrypted DB connections in production crashloop in
 				// previews (previews inherit ENVIRONMENT via shared
 				// secrets).
-				TLS:              s.Spec.TLS,
+				TLS:              cloneTLS,
 				ExtraLabels:      extraLabels,
 				ExtraAnnotations: extraAnnotations,
 			}); err != nil {
