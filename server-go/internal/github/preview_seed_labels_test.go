@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -35,6 +36,24 @@ func TestRunPreviewSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	}
 	if got := labels["conn.kuso.sislelabs.com/6a1a8e2c8ce5027f4d4d"]; got != "true" {
 		t.Errorf("pod template lacks the clone DB subscriber label: %v", labels)
+	}
+
+	// ISO-6: the seed runs PR code, so it gets the env pods' sandbox.
+	spec := jobs.Items[0].Spec.Template.Spec
+	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+		t.Errorf("seed pod automountServiceAccountToken not false")
+	}
+	if spec.EnableServiceLinks == nil || *spec.EnableServiceLinks {
+		t.Errorf("seed pod enableServiceLinks not false")
+	}
+	if spec.SecurityContext == nil || spec.SecurityContext.SeccompProfile == nil ||
+		spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("seed pod seccomp not RuntimeDefault")
+	}
+	sc := spec.Containers[0].SecurityContext
+	if sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+		t.Errorf("seed container securityContext = %+v, want no privesc + drop ALL", sc)
 	}
 }
 

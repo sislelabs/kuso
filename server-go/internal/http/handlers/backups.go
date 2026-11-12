@@ -1779,7 +1779,12 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 					},
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:                corev1.RestartPolicyNever,
+					AutomountServiceAccountToken: ptrBool(false),
+					EnableServiceLinks:           ptrBool(false),
+					SecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{{
 						Name:            "restore",
 						Image:           backupJobImage,
@@ -1787,6 +1792,10 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 						Command:         []string{"sh", "-c"},
 						Args:            []string{restoreShell},
 						Env:             env,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptrBool(false),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
 					}},
 				},
 			},

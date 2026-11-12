@@ -118,8 +118,14 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 					// runs the same user image.
 					Labels: seedPodLabels(project, envCRName, envScope, envFromSecrets, podEnv, privateEgress, platformAPIEgress),
 				},
+				// Runs the PR's code, so the same sandbox as its env pods.
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: boolPtr(false),
+					EnableServiceLinks:           boolPtr(false),
+					SecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{{
 						Name:    "seed",
 						Image:   image,
@@ -127,6 +133,10 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 						Args:    []string{seedCmd},
 						Env:     podEnv,
 						EnvFrom: envFrom,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: boolPtr(false),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
 					}},
 				},
 			},
