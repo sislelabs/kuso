@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1260,14 +1261,18 @@ func (d *Dispatcher) post(ctx context.Context, url string, body any, extra http.
 // postSync is post with the error returned to the caller. Used by
 // SendDirect so the Test endpoint can show "401 from Discord" or
 // similar in the UI instead of a misleading 204.
-func (d *Dispatcher) postSync(ctx context.Context, url string, body any, extra http.Header) error {
+//
+// Errors never carry the target URL: for Slack/Discord/Mattermost the URL
+// is the secret, and these errors land in the outbox lastError column and
+// the dead-letter log. Go's *url.Error formats as `Post "<url>": …`.
+func (d *Dispatcher) postSync(ctx context.Context, target string, body any, extra http.Header) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, "POST", target, bytes.NewReader(buf))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return fmt.Errorf("build request: %w", stripURLFromErr(err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "kuso-server")
@@ -1278,7 +1283,7 @@ func (d *Dispatcher) postSync(ctx context.Context, url string, body any, extra h
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("post: %w", err)
+		return fmt.Errorf("post: %w", stripURLFromErr(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -1313,6 +1318,16 @@ func (d *Dispatcher) sendWebhookSync(ctx context.Context, url, secret string, e 
 //   - Discord et al.: the secret is the last `/`-segment
 //     (`/.../<id>/<token>`); drop it, keeping the id so different
 //     channels stay distinguishable in logs.
+// stripURLFromErr drops the URL a *url.Error wraps around its cause,
+// keeping the cause (and its type, for errors.As) intact.
+func stripURLFromErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}
+
 func redact(url string) string {
 	if strings.Contains(url, "api.telegram.org") {
 		// Telegram token is mid-URL, not the trailing segment; redactTelegram

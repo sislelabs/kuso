@@ -73,3 +73,32 @@ func TestSafeDeliveryErrorDropsText(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// OPS-8: postSync's raw error goes into the outbox lastError column and
+// the dead-letter log, so it must not carry the webhook URL either.
+func TestPostSyncErrorOmitsURL(t *testing.T) {
+	t.Parallel()
+	const token = "SECRETTOKEN-1a2b3c"
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := closed.Addr().String()
+	_ = closed.Close()
+	d := &Dispatcher{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), client: &http.Client{Timeout: 2 * time.Second}}
+	for _, target := range []string{
+		"http://" + deadAddr + "/api/webhooks/1/" + token,
+		"http://" + deadAddr + "/hook?token=" + token,
+		"http://[bad/" + token,
+	} {
+		err := d.postSync(context.Background(), target, map[string]string{}, nil)
+		if err == nil {
+			t.Fatalf("%s: want an error", target)
+		}
+		if strings.Contains(err.Error(), token) {
+			t.Errorf("error leaks the URL: %v", err)
+		}
+	}
+	// The cause is kept, so the category mapping still works.
+	err := d.postSync(context.Background(), "http://"+deadAddr+"/x/"+token, map[string]string{}, nil)
+	if got := SafeDeliveryError(err); got != "couldn't connect" {
+		t.Errorf("SafeDeliveryError = %q, want couldn't connect", got)
+	}
+}
