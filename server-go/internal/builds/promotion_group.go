@@ -426,6 +426,7 @@ func (p *Poller) stampHoldExpired(ctx context.Context, ns string, b *kube.KusoBu
 			Fields:   fields,
 			Links:    buildCardLinks(b.Spec.Project, short, "cancelled", targets, nil),
 		})
+		p.noteWaveMember(ctx, ns, b, waveMemberResult{Phase: "superseded", Label: short, DurationMs: buildDurationMs(b)})
 	}
 	return nil
 }
@@ -483,6 +484,7 @@ func (p *Poller) stampHeldSuperseded(ctx context.Context, ns string, b *kube.Kus
 			Fields:      fields,
 			Links:       buildCardLinks(b.Spec.Project, short, "superseded", targets, nil),
 		})
+		p.noteWaveMember(ctx, ns, b, waveMemberResult{Phase: "superseded", Label: short, DurationMs: buildDurationMs(b)})
 	}
 	return nil
 }

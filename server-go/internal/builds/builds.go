@@ -1781,6 +1781,11 @@ type Poller struct {
 	promotingMu sync.Mutex
 	promoting   map[string]struct{}
 
+	// waveMu guards waves: terminal results of push-wave members, so the
+	// last member of a monorepo push posts one card (wave_notify.go).
+	waveMu sync.Mutex
+	waves  map[string]*waveRecord
+
 	// archiveQueue dispatches archiveLogs work to a bounded worker
 	// pool so a tick that finds 15 builds finishing simultaneously
 	// doesn't block the leader poller for tens of seconds while it
@@ -3100,7 +3105,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// the window — taking the snapshot synchronously here costs ~1s
 	// and removes that race.
 	p.queueArchive(ctx, ns, b, "succeeded")
-	if p.Notifier != nil {
+	if p.Notifier != nil && !p.noteWaveMember(ctx, ns, b, p.waveResultFor(ctx, ns, b, "succeeded", notDeployed)) {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		// Title shows the cosmetic displayName when set (slug fallback);
 		// URLs + the Service field below stay the slug for deep-links.
@@ -3313,6 +3318,11 @@ func (p *Poller) markFailedClassified(ctx context.Context, ns string, b *kube.Ku
 			Fields:         fields,
 			Links:          buildCardLinks(b.Spec.Project, short, "failed", targets, &classification),
 			Classification: &classification,
+		})
+		// The failure posts now; it also counts toward the wave's
+		// summary, which posts once the held siblings resolve.
+		p.noteWaveMember(ctx, ns, b, waveMemberResult{
+			Phase: "failed", Label: label, DurationMs: buildDurationMs(b),
 		})
 	}
 	return nil
