@@ -15,17 +15,23 @@ func TestTokenIssuedAfterWatermarkIsNotBeforeIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watermark := time.Now()
-	tok, err := iss.Sign(Claims{UserID: "u1", Username: "u"})
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 500; i++ {
+		watermark := time.Now().Truncate(time.Microsecond) // Postgres timestamptz precision
+		tok, err := iss.Sign(Claims{UserID: "u1", Username: "u"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := iss.Verify(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.IssuedAt == nil || IssuedBefore(c.IssuedAt.Time, watermark) {
+			t.Fatalf("token issued after watermark %v read as revoked (iat %v)", watermark, c.IssuedAt)
+		}
 	}
-	c, err := iss.Verify(tok)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.IssuedAt == nil || c.IssuedAt.Time.Before(watermark) {
-		t.Fatalf("iat %v is before a watermark %v set just before signing", c.IssuedAt, watermark)
+	// A token from a few milliseconds before the watermark is revoked.
+	if !IssuedBefore(time.Now().Add(-5*time.Millisecond), time.Now()) {
+		t.Fatal("a token issued before the watermark was not revoked")
 	}
 }
 

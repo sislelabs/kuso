@@ -15,12 +15,26 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// iat/exp carry microseconds, matching the Postgres timestamp of a
-// user's revocation watermark. At the default whole-second precision a
-// login in the same second as a role, grant or password change got an
-// iat before the watermark and was rejected on its first request.
-// Integer-second tokens issued earlier still verify.
-func init() { jwt.TimePrecision = time.Microsecond }
+// TokenTimePrecision is how finely iat/exp are written. At the default
+// whole second, a login in the same second as a role, grant or password
+// change got an iat before the revocation watermark and was rejected on
+// its first request. Milliseconds, not microseconds: the claim is a JSON
+// float of seconds, and float64 can't hold a microsecond-precision Unix
+// time exactly. Integer-second tokens issued earlier still verify.
+const TokenTimePrecision = time.Millisecond
+
+func init() { jwt.TimePrecision = TokenTimePrecision }
+
+// IssuedBefore reports whether a token issued at iat predates a user's
+// revocation watermark. Parsing the float claim can land one unit of
+// TokenTimePrecision low, so a token is revoked only when it is a whole
+// unit older than the watermark: one issued within ~1ms of it stays valid.
+func IssuedBefore(iat, watermark time.Time) bool {
+	if watermark.IsZero() {
+		return false
+	}
+	return iat.Add(TokenTimePrecision).Before(watermark.Truncate(TokenTimePrecision))
+}
 
 // Claims mirrors the payload the TS auth.service.ts emits via JwtService.
 //

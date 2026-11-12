@@ -189,14 +189,14 @@ func makeRevocationChecker(database revocationStore) auth.RevocationChecker {
 		// Per-user watermark check.
 		if userID != "" && !iat.IsZero() {
 			if cached, state := cache.getWatermark(userID); state == cacheFresh {
-				if !cached.IsZero() && iat.Before(cached) {
+				if auth.IssuedBefore(iat, cached) {
 					return true
 				}
 			} else {
 				watermark, err := database.UserTokenWatermark(ctx, userID)
 				if err != nil {
 					if cached, s := cache.getWatermark(userID); s != cacheMiss {
-						if !cached.IsZero() && iat.Before(cached) {
+						if auth.IssuedBefore(iat, cached) {
 							return true
 						}
 					} else {
@@ -206,7 +206,7 @@ func makeRevocationChecker(database revocationStore) auth.RevocationChecker {
 					}
 				} else {
 					cache.putWatermark(userID, watermark)
-					if !watermark.IsZero() && iat.Before(watermark) {
+					if auth.IssuedBefore(iat, watermark) {
 						return true
 					}
 				}
