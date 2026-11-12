@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"kuso/pkg/kusoApi"
@@ -13,9 +14,13 @@ import (
 func TestUptimeCommandsSendExpectedPatch(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"project":{"spec":{}}}`)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		got = r.Method + " " + r.URL.Path + " " + string(body)
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer srv.Close()
@@ -41,6 +46,38 @@ func TestUptimeCommandsSendExpectedPatch(t *testing.T) {
 		}
 		if got != c.want {
 			t.Errorf("%v sent %q, want %q", c.args, got, c.want)
+		}
+	}
+}
+
+// OPS-10: a project-level disable wins over a service enable, so the CLI
+// must not leave the user believing the service is checked again.
+func TestUptimeEnableServiceWarnsWhenProjectDisabled(t *testing.T) {
+	for _, c := range []struct {
+		project  string
+		wantWarn bool
+	}{
+		{`{"project":{"spec":{"uptime":{"disabled":true}}}}`, true},
+		{`{"project":{"spec":{}}}`, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodGet && r.URL.Path == "/api/projects/shop" {
+				_, _ = io.WriteString(w, c.project)
+				return
+			}
+			_, _ = io.WriteString(w, `{}`)
+		}))
+		api = &kusoApi.KusoClient{}
+		api.Init(srv.URL, "test-token")
+		out, err := runRoot(t, "uptime", "enable", "shop", "web")
+		srv.Close()
+		api = nil
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(out, "warning: uptime checks are disabled for project shop"); got != c.wantWarn {
+			t.Errorf("project %s: warned=%v, want %v (output %q)", c.project, got, c.wantWarn, out)
 		}
 	}
 }

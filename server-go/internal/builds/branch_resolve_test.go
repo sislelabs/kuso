@@ -197,6 +197,33 @@ func TestCreateWithOutcome_ReportsCoalesced(t *testing.T) {
 	}
 }
 
+// OPS-1: a dry run never promotes, so a real deploy triggered right after
+// one must not coalesce into it (and the reverse).
+func TestCreate_DryRunAndRealBuildNeverCoalesce(t *testing.T) {
+	t.Parallel()
+	for _, order := range [][2]bool{{true, false}, {false, true}} {
+		s := fakeService(t,
+			seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+			seedService("alpha", "web"),
+		)
+		first, err := s.CreateWithOutcome(context.Background(), "alpha", "web", CreateBuildRequest{DryRun: order[0]})
+		if err != nil {
+			t.Fatalf("first: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond) // distinct synthetic-ref suffix
+		second, err := s.CreateWithOutcome(context.Background(), "alpha", "web", CreateBuildRequest{DryRun: order[1]})
+		if err != nil {
+			t.Fatalf("second: %v", err)
+		}
+		if second.Existing || second.Build.Name == first.Build.Name {
+			t.Errorf("dryRun=%v then dryRun=%v coalesced into %q", order[0], order[1], first.Build.Name)
+		}
+		if second.Build.Spec.DryRun != order[1] {
+			t.Errorf("second build dryRun=%v, want %v", second.Build.Spec.DryRun, order[1])
+		}
+	}
+}
+
 // A manual trigger that resolves HEAD must not be folded into an
 // in-flight build of a DIFFERENT commit — that's a different intent.
 func TestCreate_ManualDoesNotCoalesceIntoDifferentCommit(t *testing.T) {

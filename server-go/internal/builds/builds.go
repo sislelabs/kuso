@@ -1088,7 +1088,11 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// (or a synthetic one, whose commit is unknown); an in-flight build
 	// of an older commit is a different intent.
 	if manual {
-		if existing, err := s.findRecentForBranch(ctx, ns, project, fqn, branch, 30*time.Second); err == nil && existing != nil {
+		previewTarget := req.PreviewEnv
+		if previewTarget == "" && targetEnv != nil && targetEnv.Spec.Kind == "preview" {
+			previewTarget = targetEnv.Name
+		}
+		if existing, err := s.findRecentForBranch(ctx, ns, project, fqn, branch, req.DryRun, previewTarget, 30*time.Second); err == nil && existing != nil {
 			if syntheticRef || !shaRE.MatchString(existing.Spec.Ref) || existing.Spec.Ref == sha {
 				return existing, true, nil
 			}

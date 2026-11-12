@@ -96,3 +96,45 @@ func TestWaveSummaryCard(t *testing.T) {
 		t.Errorf("all green: title %q severity %q", card.Title, card.Severity)
 	}
 }
+
+// SCL-2 (a): once a wave's summary has posted, a later build of the same
+// SHA (a webhook retry, or a manual --ref redeploy) must post its own card
+// instead of being folded into the claimed wave and swallowed.
+func TestRecordWaveMember_ClaimedWaveDoesNotSwallowLaterBuild(t *testing.T) {
+	p := &Poller{}
+	all := waveOf("succeeded", "succeeded", "running")
+	if _, members, _ := p.recordWaveMember(&all[2], all, ok("web")); members == nil {
+		t.Fatal("wave summary did not post")
+	}
+	// A webhook retry of api, created right after: it shares the wave key
+	// and window, but the summary already went out without it.
+	retry := gb("b-scuba-api-retry", "scuba-api", shaA, waveRepo, "running", time.Now(), map[string]string{annTriggerSource: "webhook"})
+	all = append(all, retry)
+	if in, members, _ := p.recordWaveMember(&all[3], all, ok("api")); in || members != nil {
+		t.Errorf("later build after the summary: inWave=%v summary=%v, want its own card", in, members != nil)
+	}
+	manual := gb("b-scuba-cms-manual", "scuba-cms", shaA, waveRepo, "running", time.Now(), map[string]string{annTriggerSource: "user"})
+	all = append(all, manual)
+	if in, _, _ := p.recordWaveMember(&all[4], all, ok("cms")); in {
+		t.Error("a user-triggered --ref redeploy joined the push wave")
+	}
+}
+
+// SCL-2 (b): after a leader change the record map is empty. A redeploy of
+// one service by SHA must not post an "N services" summary built from the
+// original push's builds still in the cache.
+func TestRecordWaveMember_RedeployAfterLeaderChangeIsNotAWave(t *testing.T) {
+	old := time.Now().Add(-2 * time.Hour)
+	all := []kube.KusoBuild{
+		gb("b-scuba-api", "scuba-api", shaA, waveRepo, "succeeded", old, map[string]string{annTriggerSource: "webhook"}),
+		gb("b-scuba-cms", "scuba-cms", shaA, waveRepo, "succeeded", old, map[string]string{annTriggerSource: "webhook"}),
+	}
+	for _, src := range []string{"user", "api", "webhook"} {
+		p := &Poller{} // fresh leader: no records
+		b := gb("b-scuba-web-"+src, "scuba-web", shaA, waveRepo, "running", time.Now(), map[string]string{annTriggerSource: src})
+		list := append(append([]kube.KusoBuild{}, all...), b)
+		if in, members, _ := p.recordWaveMember(&list[2], list, ok("web")); in || members != nil {
+			t.Errorf("source=%s: inWave=%v summary=%v, want its own card", src, in, members != nil)
+		}
+	}
+}

@@ -33,6 +33,18 @@ const ApplyStateAnnotation = "kuso.sislelabs.com/pkg-apply-state"
 // operator or nodewatch cordoned for another reason).
 const CordonAnnotation = "kuso.sislelabs.com/cordoned-by-pkgupdates"
 
+// BootIDAnnotation records the node's bootID when a reboot-apply starts.
+// The kubelet keeps reporting Ready for ~40s after `systemctl reboot`, so
+// Ready alone can't tell "rebooted and back" from "not down yet"; a
+// changed bootID can. Kept out of the apply-state JSON because the Job's
+// set_state rewrites that whole value.
+const BootIDAnnotation = "kuso.sislelabs.com/pkg-apply-boot-id"
+
+// rebootEvidenceTimeout bounds how long a Ready node may sit in
+// phase=rebooting without showing it rebooted. Past it we stop waiting,
+// leave the node cordoned and alert instead of uncordoning blindly.
+const rebootEvidenceTimeout = 30 * time.Minute
+
 var rebootApplyMu sync.Mutex
 
 // applyJobName is deterministic per node so the concurrency lock is just
@@ -106,8 +118,8 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 	// cordoned only briefly; we uncordon on a non-reboot 'done' too.
 	if allowReboot {
 		patch := fmt.Sprintf(
-			`{"spec":{"unschedulable":true},"metadata":{"annotations":{%q:"true"}}}`,
-			CordonAnnotation)
+			`{"spec":{"unschedulable":true},"metadata":{"annotations":{%q:"true",%q:%q}}}`,
+			CordonAnnotation, BootIDAnnotation, live.Status.NodeInfo.BootID)
 		if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
 			ctx, node, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("cordon before apply: %w", err)
@@ -328,6 +340,12 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		if !nodeReady(n) {
 			continue // still down / not back yet
 		}
+		if st.Phase == "rebooting" && !rebootObserved(n, st) {
+			if at, perr := time.Parse(time.RFC3339, st.At); perr != nil || time.Since(at) > rebootEvidenceTimeout {
+				w.giveUpOnReboot(ctx, n.Name, logger)
+			}
+			continue // Ready, but it hasn't gone down yet
+		}
 		// The script already wrote a terminal result (failed, or done
 		// without needing a reboot) and only our up-front cordon is left.
 		// Lift it, but keep the phase + reason: this node did not reboot.
@@ -377,7 +395,10 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		// wedge in settling forever on a parse error.
 		const settleWindow = 3 * time.Minute
 		at, perr := time.Parse(time.RFC3339, st.At)
-		settledOut := perr != nil || time.Since(at) > settleWindow
+		// Coming from rebooting, always pass through settling: st.At is
+		// then the reboot stamp, and a slow reboot would otherwise skip
+		// the sweep window entirely.
+		settledOut := st.Phase == "settling" && (perr != nil || time.Since(at) > settleWindow)
 
 		if swept > 0 || !settledOut {
 			// Still cleaning up or inside the settle window — hold in
@@ -396,6 +417,48 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 			w.Notify.Emit(notifyApplyDone(n.Name))
 		}
 		logger.Info("pkgupdates: node finished patch+reboot", "node", n.Name)
+	}
+}
+
+// rebootObserved reports whether a Ready node shows evidence that it
+// actually rebooted since the apply stamped phase=rebooting: its bootID
+// differs from the one recorded at Apply, or (no recorded bootID, e.g. an
+// apply started by an older server) its Ready condition last flipped
+// after the rebooting stamp.
+func rebootObserved(n *corev1.Node, st ApplyState) bool {
+	before := n.Annotations[BootIDAnnotation]
+	now := n.Status.NodeInfo.BootID
+	if before != "" && now != "" {
+		return before != now
+	}
+	at, err := time.Parse(time.RFC3339, st.At)
+	if err != nil {
+		return false
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.LastTransitionTime.Time.After(at)
+		}
+	}
+	return false
+}
+
+// giveUpOnReboot ends an apply whose node never showed a reboot. The node
+// stays cordoned, but our marker is dropped so the cordon becomes the
+// operator's to lift: we can't tell whether it is safe to schedule on.
+func (w *Watcher) giveUpOnReboot(ctx context.Context, node string, logger *slog.Logger) {
+	reason := fmt.Sprintf("node stayed Ready without rebooting for %s after the reboot was scheduled; "+
+		"left cordoned: check it, reboot it by hand if needed, then uncordon", rebootEvidenceTimeout)
+	patch := fmt.Sprintf(`{"spec":{"unschedulable":true},"metadata":{"annotations":{%q:null}}}`, CordonAnnotation)
+	if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
+		ctx, node, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		logger.Warn("pkgupdates: drop cordon marker after missing reboot", "node", node, "err", err)
+		return
+	}
+	_ = w.setApplyState(ctx, node, "failed", reason)
+	logger.Warn("pkgupdates: no reboot observed, leaving node cordoned", "node", node)
+	if w.Notify != nil {
+		w.Notify.Emit(notifyRebootNotObserved(node, reason))
 	}
 }
 

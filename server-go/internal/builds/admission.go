@@ -282,7 +282,11 @@ func (s *Service) listBuildsForAdmission(ctx context.Context, ns, project, selec
 // `window`, or nil if none. Used to coalesce rapid synthetic-ref
 // redeploys so spam-clicking the Redeploy button doesn't pile up
 // duplicate queue entries.
-func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, branch string, window time.Duration) (*kube.KusoBuild, error) {
+//
+// Only a build of the same intent matches: a dry run never stands in for
+// a real deploy (it skips promotion) or the other way round, and a build
+// for one preview env never stands in for another env's.
+func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, branch string, dryRun bool, previewEnv string, window time.Duration) (*kube.KusoBuild, error) {
 	if s.Kube == nil {
 		return nil, nil
 	}
@@ -302,7 +306,7 @@ func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, bra
 		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
 			continue
 		}
-		if b.Spec.Branch != branch {
+		if b.Spec.Branch != branch || b.Spec.DryRun != dryRun || b.Annotations[AnnPreviewEnv] != previewEnv {
 			continue
 		}
 		if !b.CreationTimestamp.Time.IsZero() && b.CreationTimestamp.Time.Before(cutoff) {

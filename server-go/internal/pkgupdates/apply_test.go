@@ -220,13 +220,16 @@ func TestReconcileRebootsUncordonsAndSweeps(t *testing.T) {
 			Name: "worker",
 			Annotations: map[string]string{
 				CordonAnnotation:     "true",
+				BootIDAnnotation:     "boot-before",
 				ApplyStateAnnotation: `{"phase":"rebooting","at":"","log":""}`,
 			},
 		},
 		Spec: corev1.NodeSpec{Unschedulable: true},
-		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
-			{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
-		}},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{BootID: "boot-after"},
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}},
 	}
 	strandedPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "pooler", Namespace: "kuso"},
@@ -265,13 +268,16 @@ func TestReconcileRebootsSweepsLateStrandedPod(t *testing.T) {
 				Name: "server2",
 				Annotations: map[string]string{
 					CordonAnnotation:     "true",
+					BootIDAnnotation:     "boot-before",
 					ApplyStateAnnotation: `{"phase":"rebooting","at":"` + nowRFC() + `","log":""}`,
 				},
 			},
 			Spec: corev1.NodeSpec{Unschedulable: true},
-			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
-				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
-			}},
+			Status: corev1.NodeStatus{
+				NodeInfo: corev1.NodeSystemInfo{BootID: "boot-after"},
+				Conditions: []corev1.NodeCondition{
+					{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+				}},
 		}
 	}
 	cs := kubefake.NewSimpleClientset(readyNode())
@@ -516,6 +522,112 @@ func TestReconcileRebootsKeepsTerminalPhase(t *testing.T) {
 				t.Errorf("apply-state rewritten to %+v, want phase %q with the original log", st, phase)
 			}
 		})
+	}
+}
+
+// SCL-1: the kubelet keeps reporting Ready for ~40s after the Job runs
+// `systemctl reboot`, so a Ready node in phase=rebooting is not evidence of
+// a finished reboot. Finalize only once the bootID changed (or, without a
+// recorded bootID, once Ready flipped after the rebooting stamp); after
+// rebootEvidenceTimeout give up and leave the node cordoned.
+func TestReconcileRebootsWaitsForRealReboot(t *testing.T) {
+	t.Parallel()
+	mk := func(at time.Time, recordedBoot, liveBoot string, readySince time.Time) *corev1.Node {
+		ann := map[string]string{
+			CordonAnnotation:     "true",
+			ApplyStateAnnotation: `{"phase":"rebooting","at":"` + at.UTC().Format(time.RFC3339) + `","log":""}`,
+		}
+		if recordedBoot != "" {
+			ann[BootIDAnnotation] = recordedBoot
+		}
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker", Annotations: ann},
+			Spec:       corev1.NodeSpec{Unschedulable: true},
+			Status: corev1.NodeStatus{
+				NodeInfo: corev1.NodeSystemInfo{BootID: liveBoot},
+				Conditions: []corev1.NodeCondition{{
+					Type: corev1.NodeReady, Status: corev1.ConditionTrue,
+					LastTransitionTime: metav1.NewTime(readySince),
+				}},
+			},
+		}
+	}
+	now := time.Now()
+	longAgo := now.Add(-24 * time.Hour)
+	cases := []struct {
+		name          string
+		node          *corev1.Node
+		wantPhase     string
+		wantCordoned  bool
+		wantOurMarker bool
+	}{
+		{"same bootID, not down yet", mk(now.Add(-15*time.Second), "b1", "b1", longAgo), "rebooting", true, true},
+		{"bootID changed", mk(now.Add(-2*time.Minute), "b1", "b2", now.Add(-time.Minute)), "settling", false, false},
+		{"no recorded bootID, Ready never flipped", mk(now.Add(-15*time.Second), "", "b1", longAgo), "rebooting", true, true},
+		{"no recorded bootID, Ready flipped after stamp", mk(now.Add(-2*time.Minute), "", "b1", now.Add(-time.Minute)), "settling", false, false},
+		{"no reboot past the timeout", mk(now.Add(-rebootEvidenceTimeout-time.Minute), "b1", "b1", longAgo), "failed", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := kubefake.NewSimpleClientset(tc.node)
+			w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+			w.reconcileReboots(context.Background(), slogDiscard())
+			n, _ := cs.CoreV1().Nodes().Get(context.Background(), "worker", metav1.GetOptions{})
+			if got := parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase; got != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", got, tc.wantPhase)
+			}
+			if n.Spec.Unschedulable != tc.wantCordoned {
+				t.Errorf("unschedulable = %v, want %v", n.Spec.Unschedulable, tc.wantCordoned)
+			}
+			if (n.Annotations[CordonAnnotation] == "true") != tc.wantOurMarker {
+				t.Errorf("cordon marker = %q, want ours=%v", n.Annotations[CordonAnnotation], tc.wantOurMarker)
+			}
+		})
+	}
+}
+
+// A reboot that took longer than the settle window must still pass through
+// settling: the window is measured from the rebooting stamp on that first
+// pass, which used to send a slow reboot straight to done.
+func TestReconcileRebootsSlowRebootStillSettles(t *testing.T) {
+	t.Parallel()
+	at := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Annotations: map[string]string{
+			CordonAnnotation:     "true",
+			BootIDAnnotation:     "b1",
+			ApplyStateAnnotation: `{"phase":"rebooting","at":"` + at + `","log":""}`,
+		}},
+		Spec: corev1.NodeSpec{Unschedulable: true},
+		Status: corev1.NodeStatus{
+			NodeInfo:   corev1.NodeSystemInfo{BootID: "b2"},
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	cs := kubefake.NewSimpleClientset(node)
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+	w.reconcileReboots(context.Background(), slogDiscard())
+	n, _ := cs.CoreV1().Nodes().Get(context.Background(), "worker", metav1.GetOptions{})
+	if got := parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase; got != "settling" {
+		t.Errorf("phase = %q, want settling", got)
+	}
+}
+
+// Apply records the pre-reboot bootID alongside the cordon.
+func TestApplyRecordsBootID(t *testing.T) {
+	t.Parallel()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Annotations: map[string]string{Annotation: `{"count":3,"pkgMgr":"apt"}`}},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{BootID: "boot-1"}},
+	}
+	cs := kubefake.NewSimpleClientset(node)
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+	if err := w.Apply(context.Background(), "a", true); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	n, _ := cs.CoreV1().Nodes().Get(context.Background(), "a", metav1.GetOptions{})
+	if n.Annotations[BootIDAnnotation] != "boot-1" {
+		t.Errorf("boot-id annotation = %q, want boot-1", n.Annotations[BootIDAnnotation])
 	}
 }
 

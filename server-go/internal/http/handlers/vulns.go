@@ -535,7 +535,7 @@ func (h *VulnsHandler) AddonShow(w http.ResponseWriter, r *http.Request) {
 // AddonUpdateImage pins the addon to its tag's newest image now. The
 // addon restarts.
 func (h *VulnsHandler) AddonUpdateImage(w http.ResponseWriter, r *http.Request) {
-	_, a, ok := h.addon(w, r, db.ProjectRoleEditor)
+	project, a, ok := h.addon(w, r, db.ProjectRoleEditor)
 	if !ok {
 		return
 	}
@@ -548,6 +548,8 @@ func (h *VulnsHandler) AddonUpdateImage(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "update image", err)
 		return
 	}
+	h.audit(r.Context(), "vulns.addon.update_image", project, chi.URLParam(r, "addon"),
+		"forced addon image update to its tag's newest image (addon restarts)")
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -687,6 +689,7 @@ func (h *VulnsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "read settings", err)
 		return
 	}
+	prev := in
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
@@ -702,6 +705,18 @@ func (h *VulnsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.SetVulnScanSettings(r.Context(), in, by); err != nil {
 		h.fail(w, "write settings", err)
 		return
+	}
+	// Warn severity: this switch loosens or tightens every service's gate
+	// at once, and the settings row keeps only the latest editor.
+	if h.Audit != nil {
+		h.Audit.Log(r.Context(), audit.Entry{
+			User:     auditUser(r.Context()),
+			Severity: "warn",
+			Action:   "vulns.settings.set",
+			Resource: "vulns",
+			Message: fmt.Sprintf("instance vulnscan mode %s → %s (scanAddons %v → %v, autoUpdateAddons %v → %v)",
+				prev.Mode, in.Mode, prev.ScanAddons, in.ScanAddons, prev.AutoUpdateAddons, in.AutoUpdateAddons),
+		})
 	}
 	if h.OnSettingsChange != nil {
 		h.OnSettingsChange()

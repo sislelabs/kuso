@@ -201,6 +201,22 @@ func notifyApplyDone(node string) notify.Event {
 	}
 }
 
+// notifyRebootNotObserved alerts that a patch+reboot never rebooted and
+// the node was left cordoned.
+func notifyRebootNotObserved(node, reason string) notify.Event {
+	return notify.Event{
+		Type:        notify.EventNodeUpdatesApplied,
+		Timestamp:   time.Now().UTC(),
+		Title:       "Host update reboot not observed · " + node,
+		Description: reason,
+		Body:        "Node " + node + " was patched but did not reboot. It is still cordoned.",
+		URL:         nodesURL,
+		Severity:    "error",
+		Extra:       map[string]string{"node": node},
+		Links:       []notify.EventLink{{Label: "Nodes", URL: nodesURL}},
+	}
+}
+
 // itoa is a tiny strconv.Itoa to avoid the import for one call.
 func itoa(n int) string {
 	if n == 0 {
