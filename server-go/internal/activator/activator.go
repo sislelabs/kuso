@@ -333,6 +333,12 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	wctx, cancel := context.WithTimeout(ctx, a.holdTimeout)
 	defer cancel()
 	if err := a.wakeAndWait(wctx, ns, env); err != nil {
+		if errors.Is(err, errNotDeployed) {
+			w.Header().Set("Retry-After", "30")
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "service has not been deployed yet, please retry once its first build finishes", http.StatusServiceUnavailable)
+			return
+		}
 		a.logger.Warn("activator: wake failed", "ns", ns, "env", env, "err", err)
 		var sf *startFailure
 		if errors.As(err, &sf) {
@@ -752,6 +758,9 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	return err
 }
 
+// errNotDeployed: the env has no image yet, so there is nothing to wake.
+var errNotDeployed = errors.New("activator: env has no image yet")
+
 // errHoldCapacity: too many requests are already held waiting for wakes.
 var errHoldCapacity = errors.New("activator: held-request capacity reached")
 
@@ -832,6 +841,13 @@ func (a *Activator) startWake(ns, name string) (st *wakeState, inFlight bool) {
 // request path, so its first server-side call doesn't hit a 0-endpoint
 // Service (see scaledown/dependencies.go).
 func (a *Activator) doWake(ctx context.Context, ns, name string) error {
+	// A new preview/named env waits at 0 for its first build. Raising it
+	// would start a pod with image ":latest" (InvalidImageName) and answer
+	// a misleading "failed to start".
+	if env, err := a.kc.GetKusoEnvironment(ctx, ns, name); err == nil && env != nil &&
+		(env.Spec.Image == nil || env.Spec.Image.Repository == "") {
+		return errNotDeployed
+	}
 	if err := scaledown.Wake(ctx, a.kc, a.logger, ns, name, a.now()); err != nil {
 		return err
 	}
