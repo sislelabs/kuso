@@ -116,11 +116,16 @@ spec:
                   # --clean --if-exists: the restore API loads the dump over
                   # a live schema (boot always creates every table), which
                   # only works when the dump drops each object first.
+                  # Dump from the primary, not kuso-pgbouncer: pg_dump's
+                  # session SETs (search_path='', statement_timeout=0) are
+                  # autocommit, so through the transaction pooler they stay
+                  # on pooled backends and break kuso-server's queries.
+                  DIRECT_DSN=$(printf '%s' "$KUSO_DB_DSN" | sed -E 's#@kuso-pgbouncer((\.[A-Za-z0-9.-]+)?)(:[0-9]+)?/#@kuso-postgres-rw\1:5432/#')
                   pg_dump --format=plain --no-owner --no-privileges \
                     --clean --if-exists \
                     --quote-all-identifiers \
                     --exclude-table-data-and-children='"LogLine"' \
-                    "$KUSO_DB_DSN" > "$RAW"
+                    "$DIRECT_DSN" > "$RAW"
                   gzip -9 "$RAW" # produces $DUMP, removes $RAW
 
                   SIZE=$(stat -c%s "$DUMP")
