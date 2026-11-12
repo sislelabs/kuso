@@ -379,7 +379,9 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	// activator IS in-path for 100% of this traffic, so it's the correct
 	// place to stamp a last-activity marker. Throttled to at most once per
 	// activityStampInterval per env to avoid an API write per request.
-	a.recordActivity(ctx, ns, env)
+	if countsAsActivity(r) {
+		a.recordActivity(ctx, ns, env)
+	}
 	done, ok := a.beginProxy(ns, env)
 	if !ok {
 		w.Header().Set("Retry-After", "5")
@@ -397,6 +399,17 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 		a.kickWake(ns, env)
 	}))
 	proxy.ServeHTTP(w, r)
+}
+
+// uptimeUserAgentPrefix is the User-Agent of kuso's own uptime checks
+// (internal/uptime/probe.go). Their ingress check sends a few hosts a
+// minute through Traefik, which reaches a sleep-routed env via this
+// activator; stamped as activity, it kept those envs awake forever.
+const uptimeUserAgentPrefix = "kuso-uptime/"
+
+// countsAsActivity reports whether a request should keep its env awake.
+func countsAsActivity(r *http.Request) bool {
+	return !strings.HasPrefix(r.UserAgent(), uptimeUserAgentPrefix)
 }
 
 // beginProxy registers an open proxied request for ns/env and returns

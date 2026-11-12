@@ -3,6 +3,7 @@ package activator
 import (
 	"context"
 	"log/slog"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -66,5 +67,21 @@ func TestRecordActivity_DoesNotBlockOnSlowAPIServer(t *testing.T) {
 			t.Fatalf("stamp never landed asynchronously (err=%v)", err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCountsAsActivity_IgnoresKusoUptimeChecks(t *testing.T) {
+	for ua, want := range map[string]bool{
+		"kuso-uptime/1":   false,
+		"Mozilla/5.0":     true,
+		"":                true,
+		"curl/8.7.1":      true,
+		"my-kuso-uptime/": true,
+	} {
+		r := httptest.NewRequest("GET", "http://web.example/", nil)
+		r.Header.Set("User-Agent", ua)
+		if got := countsAsActivity(r); got != want {
+			t.Errorf("User-Agent %q: countsAsActivity = %v, want %v", ua, got, want)
+		}
 	}
 }

@@ -31,13 +31,15 @@ sleep_main() {
   require "env ${env} is ready" eventually 240 sl_ready "$env"
   require "web answers before sleeping" eventually 60 http_200 "$host" /
 
-  step "wait for the idle env to scale to zero (up to 8 minutes)"
+  # --after 1m is raised to the 6-minute floor (scaledown.stampWindow),
+  # and activity is stamped at most every 4 minutes, so allow 12.
+  step "wait for the idle env to scale to zero (up to 12 minutes)"
   t0=$SECONDS
-  if eventually 480 sl_asleep "$env"; then
+  if eventually 720 sl_asleep "$env"; then
     pass "env scaled to 0 after $((SECONDS - t0))s idle"
   else
     node_kubectl -n kuso logs deploy/kuso-server --since=10m 2>/dev/null | grep -i scaledown | tail -10 >&2 || true
-    fail "env scaled to 0 within 8 minutes"; exit 1
+    fail "env scaled to 0 within 12 minutes"; exit 1
   fi
 
   step "a request wakes it"
