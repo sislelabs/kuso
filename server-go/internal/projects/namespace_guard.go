@@ -115,13 +115,14 @@ func (s *Service) RetainedData(ctx context.Context, req CreateProjectRequest) ([
 	// Off-cluster backups outlive the project too (BLOB-3). The backup
 	// handler already hides a predecessor's dumps from a re-created
 	// project; this keeps the name itself admin-only until an admin
-	// purges them. Best-effort: an unreachable bucket must not block
-	// project creation, and the ownership rule still applies.
+	// purges them. A bucket that can't be checked counts as holding
+	// some, so only an admin can take the name while it is unreachable.
 	if s.RetainedBackups != nil {
 		if b, err := s.RetainedBackups(ctx, req.Name); err == nil {
 			out = append(out, b...)
 		} else {
 			slog.Default().Warn("project create: check retained backups", "project", req.Name, "err", err)
+			out = append(out, "backups under "+req.Name+"/ (backup bucket could not be checked)")
 		}
 	}
 	if ns != s.Namespace {

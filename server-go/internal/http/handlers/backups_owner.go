@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/backup"
 	"kuso/server/internal/kube"
 )
@@ -40,7 +41,10 @@ import (
 //     the marker scheme keep their history.
 //
 // Anything else is a predecessor's data: invisible to the new owner, kept
-// in the bucket, and removable only through the audited admin purge.
+// in the bucket, and removable only through the audited admin purge. An
+// admin can instead hand it to the live addon (AdoptBackups), which is
+// the recovery path after a cluster rebuild or an accidental addon delete:
+// re-create the addon, adopt, restore.
 const (
 	backupOwnerMarker     = ".kuso-owner.json"
 	backupOwnerClaimsDone = "kuso-meta/backup-owner-claims-v1"
@@ -215,6 +219,88 @@ func claimLegacyBackupOwners(ctx context.Context, cli backupClaimClient, default
 		return fmt.Errorf("write claim marker: %w", err)
 	}
 	return nil
+}
+
+// adoptBackupPrefix rewrites prefix's owner marker to name cr, so every
+// dump under it, a predecessor's included, becomes cr's. It returns the
+// UID the marker named before ("" when there was none).
+func adoptBackupPrefix(ctx context.Context, cli backupClaimClient, bucket, project string, cr *kube.KusoAddon, now time.Time) (string, error) {
+	if cr.UID == "" {
+		return "", errors.New("addon has no UID")
+	}
+	prefix := project + "/" + cr.Name + "/"
+	prev, err := readBackupOwner(ctx, cli, bucket, prefix)
+	if err != nil {
+		return "", fmt.Errorf("read owner marker: %w", err)
+	}
+	body, _ := json.Marshal(backupOwnerRecord{AddonUID: string(cr.UID), Project: project, Addon: cr.Name, ClaimedAt: now.UTC()})
+	if _, err := cli.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(prefix + backupOwnerMarker),
+		Body: strings.NewReader(string(body)), ContentType: aws.String("application/json"),
+	}); err != nil {
+		return "", fmt.Errorf("write owner marker: %w", err)
+	}
+	if prev == nil {
+		return "", nil
+	}
+	return prev.AddonUID, nil
+}
+
+// AdoptBackupsRequest names the live addon to hand its prefix's backups
+// to. Confirm must echo "<project>/<addon>".
+type AdoptBackupsRequest struct {
+	Project string `json:"project"`
+	Addon   string `json:"addon"`
+	Confirm string `json:"confirm"`
+}
+
+// AdoptBackups gives a live addon the dumps a same-name predecessor left
+// under <project>/<addon>/ (BLOB-1). Admin-only and audited: a project
+// that reuses a deleted project's name must not inherit its data by
+// accident.
+func (h *BackupsHandler) AdoptBackups(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var req AdoptBackupsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Project == "" || req.Addon == "" {
+		writeErr(w, http.StatusBadRequest, "project and addon required")
+		return
+	}
+	if req.Confirm != req.Project+"/"+req.Addon {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("adopting hands every backup under this name to the live addon: set \"confirm\":%q to acknowledge", req.Project+"/"+req.Addon))
+		return
+	}
+	ctx, cancel := backupCtx(r)
+	defer cancel()
+	cr, _, err := h.ownedAddon(ctx, req.Project, req.Addon)
+	if err != nil {
+		writeAddonErr(w, err)
+		return
+	}
+	if cr.Spec.UseInstanceAddon != "" {
+		writeErr(w, http.StatusBadRequest, "an instance-shared database has no backup prefix of its own")
+		return
+	}
+	cli, bucket, err := h.s3Client(ctx)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	bucket = cr.BackupBucket(bucket)
+	prev, err := adoptBackupPrefix(ctx, cli, bucket, req.Project, cr, time.Now())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User: auditUser(ctx), Severity: "critical", Action: "backup.adopt",
+			Pipeline: req.Project, App: cr.Name, Resource: "backup",
+			Message: fmt.Sprintf("addon %s (uid %s) adopted the backups under s3://%s/%s/%s/ (previous owner uid %q)", cr.Name, cr.UID, bucket, req.Project, cr.Name, prev),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"prefix": req.Project + "/" + cr.Name + "/", "previousUID": prev})
 }
 
 // readBackupKey returns the encryption key, "" when the Secret doesn't

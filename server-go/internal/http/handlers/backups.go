@@ -95,6 +95,7 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Get("/api/admin/backup-settings/projects/{project}/policy", h.ScopedCredentialPolicy)
 	r.Get("/api/admin/backups/orphans", h.ListOrphanBackups)
 	r.Post("/api/admin/backups/orphans/purge", h.PurgeOrphanBackups)
+	r.Post("/api/admin/backups/adopt", h.AdoptBackups)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/run", h.RunBackup)
@@ -1042,10 +1043,12 @@ func (h *BackupsHandler) mirrorBackupSecret(ctx context.Context, ns string) erro
 // on read as well as write — otherwise list/download/restore would
 // look in the instance bucket for artifacts the CronJob wrote
 // elsewhere, and silently find nothing.
+var errBackupNotConfigured = errors.New("backup not configured")
+
 func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, error) {
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil, "", errors.New("backup not configured: PUT /api/admin/backup-settings first")
+		return nil, "", fmt.Errorf("%w: PUT /api/admin/backup-settings first", errBackupNotConfigured)
 	}
 	if err != nil {
 		return nil, "", err

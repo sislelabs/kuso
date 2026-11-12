@@ -96,7 +96,7 @@ You need a fresh `install.sh` run on a new box, then a `kuso restore` of the las
    kuso login --api https://kuso.example.com -u admin -p '<password from install summary>'
    kuso restore /backups/last-good.sql.gz
    ```
-4. Wait for kuso to reconcile. The CRDs in your old cluster are gone; they need to be recreated. The fastest path is to re-import each project from its repo via the UI / CLI, then restore addon data from your addon backups (see below).
+4. Wait for kuso to reconcile. The CRDs in your old cluster are gone; they need to be recreated. The fastest path is to re-import each project from its repo via the UI / CLI, then restore addon data from your addon backups (see below). A re-created addon only lists dumps taken after it was created. To restore older ones, an instance admin first hands them to it: `kuso api POST admin/backups/adopt -f project=<project> -f addon=<addon-cr-name> -f confirm=<project>/<addon-cr-name>`. The same step recovers the dumps of an addon deleted by mistake and re-added.
 
 For warm-spare DR (faster than re-running install), point `kuso-postgres-conn` at managed Postgres with cross-region replication and snapshot the etcd / k3s state separately. Out of the box this isn't a one-button thing — you wire it up.
 
