@@ -84,7 +84,7 @@ func uptimeRow(s kusoApi.UptimeServiceStatus) []string {
 	return []string{s.Service, s.State, relativeAge(s.Since), latency, relativeAge(s.LastCheckedAt), detail}
 }
 
-func setUptimeDisabled(args []string, disabled bool) error {
+func setUptimeDisabled(cmd *cobra.Command, args []string, disabled bool) error {
 	if api == nil {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
@@ -106,7 +106,34 @@ func setUptimeDisabled(args []string, disabled bool) error {
 		return fmt.Errorf("update service: %w", err)
 	}
 	fmt.Printf("service %s/%s uptime checks %s\n", args[0], args[1], verb)
+	if !disabled && projectUptimeDisabled(args[0]) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: uptime checks are disabled for project %s, so %s/%s stays unchecked until you run 'kuso uptime enable %s'\n",
+			args[0], args[0], args[1], args[0])
+	}
 	return nil
+}
+
+// projectUptimeDisabled reports the project-level opt-out, which wins
+// over a service's own setting. A failed read reports false: the service
+// patch already succeeded and this only decides whether to warn.
+func projectUptimeDisabled(project string) bool {
+	resp, err := api.GetProject(project)
+	if checkRespErr(resp, err) != nil {
+		return false
+	}
+	var pr struct {
+		Project struct {
+			Spec struct {
+				Uptime *struct {
+					Disabled bool `json:"disabled"`
+				} `json:"uptime"`
+			} `json:"spec"`
+		} `json:"project"`
+	}
+	if json.Unmarshal(resp.Body(), &pr) != nil {
+		return false
+	}
+	return pr.Project.Spec.Uptime != nil && pr.Project.Spec.Uptime.Disabled
 }
 
 var uptimeDisableCmd = &cobra.Command{
@@ -114,7 +141,7 @@ var uptimeDisableCmd = &cobra.Command{
 	Short: "Stop uptime checks for a project, or for one service",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return setUptimeDisabled(args, true)
+		return setUptimeDisabled(cmd, args, true)
 	},
 }
 
@@ -123,7 +150,7 @@ var uptimeEnableCmd = &cobra.Command{
 	Short: "Resume uptime checks for a project, or for one service",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return setUptimeDisabled(args, false)
+		return setUptimeDisabled(cmd, args, false)
 	},
 }
 
