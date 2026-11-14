@@ -10,19 +10,34 @@ import (
 )
 
 type scriptedProm struct {
+	// vals / errs answer trafficQuery, one entry per tick.
 	vals []float64
 	errs []error
-	i    int
+	// quiet / steady answer quietQuery and steadyQuery for the same
+	// tick; a missing entry reads as no traffic and no steady history.
+	quiet, steady []float64
+	i             int
 	// active / failing answer the all-5xx check's two queries.
 	active, failing float64
 }
 
 func (s *scriptedProm) next(_ context.Context, q string) (float64, error) {
+	tick := s.i - 1
+	at := func(xs []float64) float64 {
+		if tick >= 0 && tick < len(xs) {
+			return xs[tick]
+		}
+		return 0
+	}
 	switch q {
 	case activeServicesQuery:
 		return s.active, nil
 	case failingServicesQuery:
 		return s.failing, nil
+	case quietQuery:
+		return at(s.quiet), nil
+	case steadyQuery:
+		return at(s.steady), nil
 	}
 	i := s.i
 	s.i++
@@ -59,17 +74,21 @@ func countType(evs []notify.Event, typ notify.EventType) int {
 	return n
 }
 
-// Traffic that drops from a real rate to zero fires once after the
-// zero streak, and recovers once when it returns.
+// Steady traffic followed by a quiet window fires once, and recovers
+// once when requests come back.
 func TestPlatformTrafficDropFiresOnce(t *testing.T) {
 	var got []notify.Event
-	p := &scriptedProm{vals: []float64{5, 5, 0, 0, 0, 0, 0, 4}}
-	e := newPlatformEngine(p, &got)
-	runTicks(e, 4)
-	if n := countType(got, notify.EventIngressDown); n != 0 {
-		t.Fatalf("fired after 2 zero ticks, want none yet: %d", n)
+	p := &scriptedProm{
+		vals:   []float64{5, 0, 0, 4},
+		quiet:  []float64{5, 3, 0, 0},
+		steady: []float64{30, 30, 30, 30},
 	}
-	runTicks(e, 3)
+	e := newPlatformEngine(p, &got)
+	runTicks(e, 2)
+	if n := countType(got, notify.EventIngressDown); n != 0 {
+		t.Fatalf("fired before the quiet window was empty: %d", n)
+	}
+	runTicks(e, 1)
 	if n := countType(got, notify.EventIngressDown); n != 1 {
 		t.Fatalf("ingress.down count = %d, want exactly 1", n)
 	}
@@ -79,9 +98,26 @@ func TestPlatformTrafficDropFiresOnce(t *testing.T) {
 	}
 }
 
+// The live false alarm: a low-traffic cluster gets requests in bursts
+// (a minute at 0.3 req/s, then several silent minutes). Silence after a
+// burst is idle, not an outage, so it must not page however long the
+// gap.
+func TestPlatformBurstyTrafficSilenceNeverFires(t *testing.T) {
+	var got []notify.Event
+	p := &scriptedProm{
+		vals:   []float64{0.42, 0, 0, 0, 0, 0},
+		quiet:  []float64{0.3, 0.01, 0.01, 0, 0, 0},
+		steady: []float64{14, 14, 13, 12, 12, 11},
+	}
+	e := newPlatformEngine(p, &got)
+	runTicks(e, 6)
+	if len(got) != 0 {
+		t.Fatalf("bursty traffic going quiet paged: %v", got)
+	}
+}
+
 // A fresh process that starts while traffic is already zero (upgrade
-// during an idle period, or an outage that predates this process) must
-// not page: there is no baseline.
+// during an idle period) has no steady history and must not page.
 func TestPlatformZeroTrafficFromFirstTickNeverFires(t *testing.T) {
 	var got []notify.Event
 	e := newPlatformEngine(&scriptedProm{vals: []float64{0, 0, 0, 0, 0, 0}}, &got)
@@ -95,8 +131,13 @@ func TestPlatformZeroTrafficFromFirstTickNeverFires(t *testing.T) {
 // when the public path is broken; they must not hide the drop.
 func TestPlatformProbeOnlyTrafficCountsAsZero(t *testing.T) {
 	var got []notify.Event
-	e := newPlatformEngine(&scriptedProm{vals: []float64{5, 5, 0.05, 0.05, 0.05}}, &got)
-	runTicks(e, 5)
+	p := &scriptedProm{
+		vals:   []float64{0.05},
+		quiet:  []float64{0.05},
+		steady: []float64{30},
+	}
+	e := newPlatformEngine(p, &got)
+	runTicks(e, 1)
 	if n := countType(got, notify.EventIngressDown); n != 1 {
 		t.Fatalf("ingress.down count = %d with only probe traffic left, want 1", n)
 	}
@@ -106,7 +147,12 @@ func TestPlatformProbeOnlyTrafficCountsAsZero(t *testing.T) {
 // reachable) is retried next tick instead of being marked sent.
 func TestPlatformUndeliveredPageRetries(t *testing.T) {
 	var got []notify.Event
-	e := newPlatformEngine(&scriptedProm{vals: []float64{5, 0, 0, 0, 0}}, &got)
+	p := &scriptedProm{
+		vals:   []float64{0, 0, 0},
+		quiet:  []float64{0, 0, 0},
+		steady: []float64{30, 30, 30},
+	}
+	e := newPlatformEngine(p, &got)
 	fails := 1
 	e.emitDurableFn = func(ev notify.Event) error {
 		if fails > 0 {
@@ -116,7 +162,7 @@ func TestPlatformUndeliveredPageRetries(t *testing.T) {
 		got = append(got, ev)
 		return nil
 	}
-	runTicks(e, 5) // fires on tick 3 (fails), retried on tick 4
+	runTicks(e, 3) // fires on tick 1 (fails), retried on tick 2
 	if n := countType(got, notify.EventIngressDown); n != 1 {
 		t.Fatalf("ingress.down delivered %d times, want 1 (retry after a failed send)", n)
 	}
@@ -144,16 +190,6 @@ func TestPlatformAll5xx(t *testing.T) {
 	runTicks(e, 1)
 	if n := countType(got, notify.EventPlatformRecovered); n != 1 {
 		t.Fatalf("recovered count = %d, want 1", n)
-	}
-}
-
-// A near-idle cluster tapering to zero never had "meaningful" traffic.
-func TestPlatformLightTrafficToZeroNeverFires(t *testing.T) {
-	var got []notify.Event
-	e := newPlatformEngine(&scriptedProm{vals: []float64{0.05, 0.02, 0, 0, 0, 0}}, &got)
-	runTicks(e, 6)
-	if len(got) != 0 {
-		t.Fatalf("got %d events for light traffic tapering off, want 0", len(got))
 	}
 }
 

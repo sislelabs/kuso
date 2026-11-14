@@ -15,31 +15,42 @@ import (
 // envs below minReq, so a dead Traefik read as healthy silence) and an
 // "every host answers 5xx" check (per-service 5xx rules are opt-in).
 //
-// State lives in memory. A fresh process (upgrade, leader handover)
-// starts with no baseline, so the first tick only seeds it and nothing
-// fires until a later tick sees a real transition.
+// Firing state lives in memory; the traffic history the "traffic
+// stopped" check judges comes from Prometheus, so a fresh process
+// (upgrade, leader handover) needs no warm-up. The 5xx check's streak
+// starts at zero, so it can't fire on a fresh process's first tick.
 
 const (
 	// promFailThreshold: consecutive failed ticks before
 	// alert.engine_degraded. Five minutes rides out a Prometheus roll.
 	promFailThreshold = 5
 	// trafficQuery is total request rate across every Traefik service.
+	// It doubles as the Prometheus health check and the recovery signal.
 	trafficQuery = `sum(rate(traefik_service_requests_total[2m]))`
 	// probeFloor (req/s) is traffic kuso generates itself: the uptime
 	// watcher sends up to 3 requests a minute through Traefik's
 	// ClusterIP. Those keep flowing when the public path (LB, firewall,
 	// DNS) is broken, so a rate at or under this floor counts as zero.
 	probeFloor = 0.075
-	// trafficMinRate (req/s) is what counts as "had traffic" before the
-	// drop. About 12 requests a minute including the probes: an idle or
-	// near-idle cluster never qualifies, so it can't fire on a quiet night.
-	trafficMinRate = 0.2
-	// trafficZeroTicks: consecutive zero-traffic ticks before firing.
-	// Longer than a Prometheus restart's scrape gap.
-	trafficZeroTicks = 3
 	// trafficRecoverRate is what counts as traffic flowing again, above
 	// the probe floor.
 	trafficRecoverRate = 0.01
+
+	// "Traffic stopped" means the last 15 minutes were silent right after
+	// 30 minutes in which nearly every minute had real requests. Silence
+	// alone can't tell dead from idle: small clusters get traffic in
+	// bursts with gaps of 20+ minutes (a 48h replay of the live cluster
+	// fired the old "last reading >= 0.2/s, then 3 silent minutes" rule
+	// 51 times with Traefik healthy, and this rule 0 times). A cluster
+	// whose traffic isn't steady never arms the check.
+	//
+	// quietQuery is the request rate over the quiet window.
+	quietQuery = `sum(rate(traefik_service_requests_total[15m]))`
+	// steadyQuery counts the minutes with real traffic in the 30 minutes
+	// before the quiet window.
+	steadyQuery = `count_over_time((sum(rate(traefik_service_requests_total[1m])) > 0.075)[30m:1m] offset 15m)`
+	// steadyMinMinutes of the ~30 sampled minutes must have had traffic.
+	steadyMinMinutes = 27
 
 	// activeServicesQuery / failingServicesQuery count Traefik services
 	// with traffic, and those where most of it is 5xx. When every active
@@ -58,10 +69,6 @@ type platformState struct {
 	degraded    bool
 	degradedAt  time.Time
 
-	// baseline is the last observed non-zero traffic rate before the
-	// current zero streak; 0 = none observed yet in this process.
-	baseline    float64
-	zeroStreak  int
 	ingressDown bool
 	downAt      time.Time
 
@@ -117,29 +124,37 @@ func (e *Engine) platformTick(ctx context.Context, now time.Time) {
 	}
 	st.promFails = 0
 
-	switch {
-	case v > probeFloor:
-		if st.ingressDown && v >= probeFloor+trafficRecoverRate &&
+	if st.ingressDown {
+		if v >= probeFloor+trafficRecoverRate &&
 			e.emitDurable(notify.PlatformRecovered("ingress traffic", now.Sub(st.downAt))) {
 			st.ingressDown = false
 		}
-		// Light traffic lowers the baseline too, so a quiet night that
-		// tapers off to zero doesn't look like a sudden stop.
-		st.baseline = v
-		st.zeroStreak = 0
-	default:
-		if st.baseline >= trafficMinRate {
-			st.zeroStreak++
-			if st.zeroStreak >= trafficZeroTicks && !st.ingressDown &&
-				e.emitDurable(notify.IngressDown("traffic stopped",
-					fmt.Sprintf("Requests through Traefik dropped from %.2f/s to zero across every host for %d minutes (kuso's own uptime probes excluded). Traefik, its load balancer or the public DNS/firewall path may be down.",
-						st.baseline, st.zeroStreak))) {
-				st.ingressDown = true
-				st.downAt = now
-			}
-		}
+	} else if v <= probeFloor {
+		e.trafficStoppedTick(ctx, now)
 	}
 	e.all5xxTick(ctx, now)
+}
+
+// trafficStoppedTick fires ingress.down when the quiet window is empty
+// and the window before it had steady traffic. A failed query is unknown,
+// not zero, and is retried next tick.
+func (e *Engine) trafficStoppedTick(ctx context.Context, now time.Time) {
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	quiet, err := e.promScalar(qctx, quietQuery)
+	if err != nil || quiet > probeFloor {
+		return
+	}
+	steady, err := e.promScalar(qctx, steadyQuery)
+	if err != nil || steady < steadyMinMinutes {
+		return
+	}
+	if e.emitDurable(notify.IngressDown("traffic stopped",
+		fmt.Sprintf("No requests reached any host through Traefik for %d minutes, after %d of the previous 30 minutes had steady traffic (kuso's own uptime probes excluded). Traefik, its load balancer or the public DNS/firewall path may be down.",
+			15, min(int(steady), 30)))) {
+		e.platform.ingressDown = true
+		e.platform.downAt = now
+	}
 }
 
 // all5xxTick fires ingress.down when every service with traffic has
