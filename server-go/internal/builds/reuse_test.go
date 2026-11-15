@@ -79,6 +79,10 @@ func TestReuseKey(t *testing.T) {
 		"public env":      func(b *kube.KusoBuild) { b.Spec.PublicEnv = []string{"API_URL"} },
 		"static settings": func(b *kube.KusoBuild) { b.Spec.Static = &kube.KusoStaticSpec{OutputDir: "dist"} },
 	}
+	differs["preview build"] = func(b *kube.KusoBuild) {
+		b.Annotations[AnnPreviewEnv] = "puncho-render-pr-7"
+		b.Annotations[AnnPreviewPR] = "7"
+	}
 	for name, mut := range differs {
 		b := reuseBuild("b", "render", now)
 		mut(b)
@@ -369,5 +373,33 @@ func TestPoller_ReuseUnderSiblingHoldNoDeadlock(t *testing.T) {
 		if buildPhase(got) != "succeeded" {
 			t.Errorf("%s: phase=%q hold=%q — sibling hold deadlocked", name, buildPhase(got), got.Annotations[annPromoteHold])
 		}
+	}
+}
+
+// ISO-3: a PR's preview build can't supply a sibling service's
+// production image, nor another PR's preview; previews of the same PR
+// still share.
+func TestReuseSource_PreviewScope(t *testing.T) {
+	t0 := time.Now().Add(-time.Minute)
+	preview := func(name, svc, pr string, at time.Time) *kube.KusoBuild {
+		b := reuseBuild(name, svc, at)
+		b.Annotations[AnnPreviewEnv] = "puncho-" + svc + "-pr-" + pr
+		b.Annotations[AnnPreviewPR] = pr
+		return b
+	}
+	pr7web := preview("puncho-web-pr7", "web", "7", t0)
+	prodRender := reuseBuild("puncho-render-x", "render", t0.Add(time.Second))
+	if src := ReuseSource(prodRender, []*kube.KusoBuild{pr7web}); src != nil {
+		t.Errorf("production build reused preview image %s", src.Name)
+	}
+	if src := ReuseSource(preview("puncho-render-pr8", "render", "8", t0.Add(time.Second)), []*kube.KusoBuild{pr7web}); src != nil {
+		t.Errorf("PR 8 preview reused PR 7's image %s", src.Name)
+	}
+	if src := ReuseSource(preview("puncho-render-pr7", "render", "7", t0.Add(time.Second)), []*kube.KusoBuild{pr7web}); src == nil {
+		t.Error("same-PR sibling preview should reuse")
+	}
+	prodWeb := reuseBuild("puncho-web-x", "web", t0)
+	if src := ReuseSource(preview("puncho-render-pr7b", "render", "7", t0.Add(time.Second)), []*kube.KusoBuild{prodWeb}); src != nil {
+		t.Errorf("preview build reused production image %s", src.Name)
 	}
 }

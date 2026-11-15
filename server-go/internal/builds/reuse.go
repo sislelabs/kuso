@@ -65,6 +65,11 @@ type reuseKeyFields struct {
 	Static     *kube.KusoStaticSpec     `json:"static"`
 	Buildpacks *kube.KusoBuildpacksSpec `json:"buildpacks"`
 	PublicEnv  []string                 `json:"publicEnv"`
+	// Preview is empty for a non-preview build and names the pull request
+	// for a preview one. Preview builds use a per-preview buildkit cache
+	// namespace a PR can poison, so a production build must never copy a
+	// preview image, and a preview only copies its own PR's (ISO-3).
+	Preview string `json:"preview,omitempty"`
 }
 
 // reuseKey returns the identity of everything that determines a build's
@@ -115,12 +120,27 @@ func reuseKey(b *kube.KusoBuild) (string, bool) {
 		Static:     b.Spec.Static,
 		Buildpacks: b.Spec.Buildpacks,
 		PublicEnv:  publicEnv,
+		Preview:    reusePreviewScope(b),
 	})
 	if err != nil {
 		return "", false
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), true
+}
+
+// reusePreviewScope is the preview identity two builds must share to
+// reuse each other: the PR number, or the preview env name when the PR
+// number wasn't stamped.
+func reusePreviewScope(b *kube.KusoBuild) string {
+	env := b.Annotations[AnnPreviewEnv]
+	if env == "" {
+		return ""
+	}
+	if pr := b.Annotations[AnnPreviewPR]; pr != "" {
+		return "pr:" + pr
+	}
+	return "env:" + env
 }
 
 // buildCreatedBefore is the total order reuse relies on: creation time,
