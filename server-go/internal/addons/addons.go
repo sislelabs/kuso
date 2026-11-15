@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"kuso/server/internal/kube"
@@ -1446,7 +1445,7 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// roll back the delete.
 	// By the CR's short name: name may be the pre-qualified FQN, which
 	// matches neither shape a service records its subscription in.
-	s.unsubscribeFromAddon(ctx, ns, project, ShortName(project, fqn))
+	unsubErr := s.unsubscribeFromAddon(ctx, ns, project, ShortName(project, fqn))
 	// Exclude the just-deleted addon's conn secret: the addon List() in
 	// refreshEnvSecrets is served from the eventually-consistent watch
 	// cache, which frequently still returns the addon we just deleted.
@@ -1463,7 +1462,10 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// guard did nothing at all. Every caller reaches Delete with a short
 	// name, so it was defeated on every code path.
 	if err := s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true}); err != nil {
-		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, err)
+		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, errors.Join(err, unsubErr))
+	}
+	if unsubErr != nil {
+		return fmt.Errorf("%w: addon deleted but unsubscribing services failed: %w", ErrEnvRefresh, unsubErr)
 	}
 	if haPurgeErr != nil {
 		return fmt.Errorf("addon deleted but its data was not purged: %w", haPurgeErr)
@@ -1563,9 +1565,9 @@ func addonPVCSelector(fqn string) string {
 //
 // Lives in the addons package to keep the delete path self-contained;
 // see B3.2 audit note. A future refactor could route through
-// projects.UnsubscribeAddon to centralise the per-service lock; for
-// now we do a best-effort merge-patch each service.
-func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonShort string) {
+// projects.UnsubscribeAddon to centralise the per-service lock. Every
+// write is attempted; the failures come back joined.
+func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonShort string) (err error) {
 	// Defensive: the fake dynamic client used in unit tests panics on
 	// List for GVRs whose list-kind isn't registered. Production
 	// always has the KusoServiceList kind wired, so the recover is a
@@ -1577,59 +1579,54 @@ func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonSh
 			// subscription entry that the next user save will clean up
 		}
 	}()
+	// Match short ("pg") AND fully-qualified ("tickero-pg") shape so a
+	// service that recorded its subscription as the FQN gets cleaned up too.
+	isThis := func(sub string) bool { return sub == addonShort || sub == project+"-"+addonShort }
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
 	if err != nil {
-		return
+		return fmt.Errorf("list services: %w", err)
 	}
+	var errs []error
 	for i := range raw.Items {
 		svcU := &raw.Items[i]
 		current, found, _ := unstructured.NestedStringSlice(svcU.Object, "spec", "subscribedAddons")
-		if !found {
+		if !found || !slices.ContainsFunc(current, isThis) {
 			continue
 		}
-		filtered := make([]string, 0, len(current))
-		changed := false
-		for _, sub := range current {
-			// Match short ("pg") AND fully-qualified ("tickero-pg")
-			// shape so a service that recorded its subscription as
-			// the FQN gets cleaned up too.
-			if sub == addonShort || sub == project+"-"+addonShort {
-				changed = true
-				continue
+		// Read-modify-write with conflict retry: a merge-patch of the
+		// whole list raced a concurrent subscribe and could drop it.
+		if _, uerr := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, svcU.GetName(), func(live *kube.KusoService) error {
+			if live.Spec.SubscribedAddons != nil {
+				live.Spec.SubscribedAddons = slices.DeleteFunc(slices.Clone(live.Spec.SubscribedAddons), isThis)
 			}
-			filtered = append(filtered, sub)
+			return nil
+		}); uerr != nil {
+			errs = append(errs, fmt.Errorf("service %s: %w", svcU.GetName(), uerr))
 		}
-		if !changed {
-			continue
-		}
-		patch := []byte(fmt.Sprintf(`{"spec":{"subscribedAddons":%s}}`, mustJSON(filtered)))
-		_, _ = s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
-			Patch(ctx, svcU.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
 	}
 	// The env CRs carry a mirror of the subscription that the env refresh
 	// filters on. Left stale, re-adding the same name re-mounted the new
 	// addon on every env whose service had since stopped subscribing.
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{kube.LabelProject: project})
 	if err != nil {
-		return
+		return errors.Join(append(errs, fmt.Errorf("list envs: %w", err))...)
 	}
 	for i := range envs {
-		if !slices.ContainsFunc(envs[i].Spec.SubscribedAddons, func(sub string) bool {
-			return sub == addonShort || sub == project+"-"+addonShort
-		}) {
+		if !slices.ContainsFunc(envs[i].Spec.SubscribedAddons, isThis) {
 			continue
 		}
-		_, _ = s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envs[i].Name, func(live *kube.KusoEnvironment) error {
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envs[i].Name, func(live *kube.KusoEnvironment) error {
 			if live.Spec.SubscribedAddons == nil {
 				return nil
 			}
-			live.Spec.SubscribedAddons = slices.DeleteFunc(slices.Clone(live.Spec.SubscribedAddons), func(sub string) bool {
-				return sub == addonShort || sub == project+"-"+addonShort
-			})
+			live.Spec.SubscribedAddons = slices.DeleteFunc(slices.Clone(live.Spec.SubscribedAddons), isThis)
 			return nil
-		})
+		}); uerr != nil {
+			errs = append(errs, fmt.Errorf("env %s: %w", envs[i].Name, uerr))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 // serviceSubscriptions returns each project service's non-nil
