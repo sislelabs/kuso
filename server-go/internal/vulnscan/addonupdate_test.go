@@ -195,6 +195,7 @@ func TestAddonUpdaterRollsScannedImageInWindow(t *testing.T) {
 		Launch: inline, RolloutWait: -1}
 	settings := db.DefaultVulnScanSettings()
 	settings.AutoUpdateAddons = true
+	settings.NightlyHourUTC = 3 // the times below assume a 03:00 window
 	state := func() AddonUpdateState {
 		st, err := AddonUpdateStateFor(ctx, d, store.addons[0])
 		if err != nil || st == nil {
