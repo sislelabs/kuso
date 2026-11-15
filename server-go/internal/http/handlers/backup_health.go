@@ -26,9 +26,10 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	addons, addonsComplete := backuphealth.ComputeAddons(ctx, h.Kube, h.Namespace)
 	volumes, volumesComplete := backuphealth.ComputeServiceVolumes(ctx, h.Kube, h.Namespace)
-	unexportedKeys, keysComplete := backuphealth.UnexportedBackupKeys(ctx, h.Kube)
+	cp := backuphealth.Compute(ctx, h.Kube, h.Namespace)
+	keys := backuphealth.ComputeBackupKeys(ctx, h.Kube, time.Now(), cp.Configured)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"backup":     backuphealth.Compute(ctx, h.Kube, h.Namespace),
+		"backup":     cp,
 		"registryGC": backuphealth.RegistryGC(ctx, h.Kube, h.Namespace),
 		// Per-addon backup CronJob health. Previously invisible: an
 		// addon with spec.backup whose runs all failed on a missing
@@ -52,9 +53,12 @@ func (h *BackupHandler) BackupHealth(w http.ResponseWriter, r *http.Request) {
 		// backup storage is not configured.
 		"bucket": computeBackupBucketSafety(ctx, h.Kube, h.Namespace),
 		// Backup encryption keys never exported (kuso backup keys export):
-		// a lost cluster takes their addons' encrypted dumps with it.
-		// A warning, never part of any Healthy verdict.
-		"backupKeysUnexported": unexportedKeys,
-		"backupKeysComplete":   keysComplete,
+		// a lost cluster takes every dump they sealed with it. backupKeys
+		// carries the verdict: a key unexported past the grace period is
+		// unhealthy, and the watcher alerts on it. The two flat fields are
+		// kept for older CLIs.
+		"backupKeys":           keys,
+		"backupKeysUnexported": keys.Unexported,
+		"backupKeysComplete":   keys.Complete,
 	})
 }

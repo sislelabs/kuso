@@ -793,26 +793,27 @@ func (w *Watcher) tick(ctx context.Context) {
 	s := Compute(cctx, w.Kube, w.Namespace)
 	gc := RegistryGC(cctx, w.Kube, w.Namespace)
 	addons, addonsComplete := ComputeAddons(cctx, w.Kube, w.Namespace)
+	keys := ComputeBackupKeys(cctx, w.Kube, time.Now(), s.Configured)
 	cancel()
 
 	// A failed read keeps the previous state: no transition, no event.
 	// Carrying verdicts per subsystem was not enough, because severity
 	// and (after a restart) the addon part still moved, so one flake sent
 	// two spurious alerts. The next complete tick decides.
-	incomplete := s.Indeterminate || gc.Indeterminate || !addonsComplete
+	incomplete := s.Indeterminate || gc.Indeterminate || !addonsComplete || !keys.Complete
 	if !incomplete {
 		w.incompleteTicks = 0
 	} else if w.incompleteTicks++; w.incompleteTicks < maxIncompleteTicks {
 		w.Logger.Warn("backup health: evaluation incomplete, keeping previous state",
-			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete)
+			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete, "keys", keys.Complete)
 		return
 	}
-	backupOK, gcOK, addonsOK := s.Healthy, gc.Healthy, AddonsHealthy(addons)
+	backupOK, gcOK, addonsOK, keysOK := s.Healthy, gc.Healthy, AddonsHealthy(addons), keys.Healthy
 	var unreadable []string
 	if incomplete {
 		// Past the bound: the real verdict is unknown, so report which
 		// checks can't be read rather than a guess about their health.
-		backupOK, gcOK, addonsOK = true, true, true
+		backupOK, gcOK, addonsOK, keysOK = true, true, true, true
 		if s.Indeterminate {
 			unreadable = append(unreadable, "backup")
 		}
@@ -821,6 +822,9 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		if !addonsComplete {
 			unreadable = append(unreadable, "addon-backups")
+		}
+		if !keys.Complete {
+			unreadable = append(unreadable, "backup-keys")
 		}
 	}
 
@@ -848,6 +852,12 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		parts = append(parts, "addon-backups("+strings.Join(names, "+")+")")
 	}
+	if !keysOK {
+		// The key names are part of the state, so a key that newly goes
+		// overdue re-alerts even while older ones are still unexported.
+		parts = append(parts, "backup-keys("+strings.Join(keys.Overdue, "+")+")")
+		details = append(details, keys.Detail)
+	}
 	if len(unreadable) > 0 {
 		parts = append(parts, "unreadable("+strings.Join(unreadable, "+")+")")
 		details = append(details, fmt.Sprintf(
@@ -857,6 +867,11 @@ func (w *Watcher) tick(ctx context.Context) {
 	severity := alertSeverity(s, gc)
 	if len(unreadable) > 0 {
 		severity = "warn"
+	}
+	if !keysOK && keys.ControlPlaneOverdue {
+		// The control-plane key seals the dump a rebuilt cluster restores
+		// from first; losing it makes the whole DR path dead on arrival.
+		severity = "error"
 	}
 	if !addonsOK {
 		// A missing backup Secret is a config-level "you have no
@@ -905,6 +920,7 @@ func (w *Watcher) tick(ctx context.Context) {
 			backup: s, backupOK: backupOK,
 			gc: gc, gcOK: gcOK,
 			failingAddons:   failing,
+			keys:            keysForReport(keys, keysOK),
 			unreadable:      unreadable,
 			incompleteTicks: w.incompleteTicks,
 			severity:        severity,
@@ -917,6 +933,14 @@ func (w *Watcher) tick(ctx context.Context) {
 	}
 }
 
+// keysForReport keeps the key verdict out of a card unless it failed.
+func keysForReport(k BackupKeysStatus, ok bool) BackupKeysStatus {
+	if ok {
+		return BackupKeysStatus{}
+	}
+	return k
+}
+
 // backupsURL is the in-app backups settings page (web/src/app/(app)/settings/backups).
 const backupsURL = "/settings/backups"
 
@@ -926,11 +950,13 @@ const maxAddonLines = 10
 
 // unhealthyReport is everything one backup.failed card describes.
 type unhealthyReport struct {
-	backup          Status
-	backupOK        bool
-	gc              RegistryGCStatus
-	gcOK            bool
-	failingAddons   []AddonBackupStatus
+	backup        Status
+	backupOK      bool
+	gc            RegistryGCStatus
+	gcOK          bool
+	failingAddons []AddonBackupStatus
+	// keys is set only when unexported keys fail health (Overdue non-empty).
+	keys            BackupKeysStatus
 	unreadable      []string
 	incompleteTicks int
 	severity        string
@@ -949,6 +975,8 @@ func failedEvent(r unhealthyReport) notify.Event {
 		// control-plane backup outranks the rest; keep the default
 	case !r.gcOK:
 		what = "Registry garbage-collection unhealthy"
+	case len(r.failingAddons) == 0 && len(r.keys.Overdue) > 0:
+		what = "Backup keys never exported off-cluster"
 	default:
 		what = "Addon backups failing"
 	}
@@ -980,6 +1008,9 @@ func failedEvent(r unhealthyReport) notify.Event {
 		}
 		lines = append(lines, "• **"+name+"** — "+a.Detail+lastSuccess(a.LastSuccessAt))
 	}
+	if len(r.keys.Overdue) > 0 {
+		lines = append(lines, "• **Backup keys** — "+r.keys.Detail)
+	}
 	if len(r.unreadable) > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"• Can't read **%s** (%d failed checks in a row) — failures there aren't being detected. Check kuso-server logs and RBAC.",
@@ -1008,7 +1039,7 @@ func failedEvent(r unhealthyReport) notify.Event {
 
 // recoveredEvent is the backup.succeeded card closing a failed episode.
 func recoveredEvent() notify.Event {
-	msg := "Control-plane backups, registry GC and addon backups are all healthy."
+	msg := "Control-plane backups, registry GC and addon backups are all healthy, and every backup key is exported."
 	return notify.Event{
 		Type:        notify.EventBackupOK,
 		Timestamp:   time.Now().UTC(),

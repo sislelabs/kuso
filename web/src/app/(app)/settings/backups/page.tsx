@@ -56,6 +56,7 @@ interface BackupHealthResp {
   addonBackupsComplete?: boolean;
   serviceVolumes?: ServiceVolumeRow[];
   backupKeysUnexported?: string[];
+  backupKeys?: { healthy: boolean; overdue: string[]; controlPlaneOverdue?: boolean; detail: string };
   bucket?: BucketSafety | null;
 }
 interface BucketSafety {
@@ -264,13 +265,19 @@ function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
           </ul>
         </SettingsNotice>
       ) : null}
-      {(health.data.backupKeysUnexported?.length ?? 0) > 0 && (
-        <SettingsNotice tone="warning" title="Backup encryption keys exist only in this cluster">
-          {health.data.backupKeysUnexported?.length} addon key(s) have never been exported. If the cluster is lost, those
-          addons&apos; encrypted backups can&apos;t be read. Run <code>kuso backup keys export</code> and store the file
-          off-cluster.
+      {health.data.backupKeys && !health.data.backupKeys.healthy ? (
+        <SettingsNotice tone="error" title="Backup encryption keys exist only in this cluster">
+          {health.data.backupKeys.overdue.length} backup key(s)
+          {health.data.backupKeys.controlPlaneOverdue ? ", including the control-plane database key," : ""} have never been
+          exported. If the cluster is lost, every backup they encrypted is unreadable. Run{" "}
+          <code>kuso backup keys export --file &lt;path&gt;</code> and store the file off-cluster.
         </SettingsNotice>
-      )}
+      ) : (health.data.backupKeysUnexported?.length ?? 0) > 0 ? (
+        <SettingsNotice tone="warning" title="New backup keys not exported yet">
+          {health.data.backupKeysUnexported?.length} backup key(s) have never been exported. Run{" "}
+          <code>kuso backup keys export</code> and store the file off-cluster.
+        </SettingsNotice>
+      ) : null}
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />

@@ -47,3 +47,18 @@ func TestRenderBackupSettingsHidesSecret(t *testing.T) {
 		t.Errorf("unexpected:\n%s", out)
 	}
 }
+
+func TestRenderBackupHealth_KeysFailing(t *testing.T) {
+	body := `{"backup":{"healthy":true},"registryGC":{"healthy":true},"addonBackupsComplete":true,"serviceVolumesComplete":true,
+	"backupKeysUnexported":["kuso/kuso-controlplane-backup-key"],
+	"backupKeys":{"healthy":false,"overdue":["kuso/kuso-controlplane-backup-key"],"detail":"1 backup encryption key(s) have never been exported. Run kuso backup keys export"}}`
+	var h backupHealthView
+	if err := json.Unmarshal([]byte(body), &h); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	renderBackupHealth(&buf, h)
+	if out := buf.String(); !strings.Contains(out, "backup keys: FAILING") || !strings.Contains(out, "kuso backup keys export") {
+		t.Errorf("unexported keys past the grace must read FAILING:\n%s", out)
+	}
+}

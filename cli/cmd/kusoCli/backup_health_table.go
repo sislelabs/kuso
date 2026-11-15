@@ -51,6 +51,12 @@ type backupHealthView struct {
 	} `json:"serviceVolumes"`
 	ServiceVolumesComplete bool     `json:"serviceVolumesComplete"`
 	BackupKeysUnexported   []string `json:"backupKeysUnexported"`
+	// BackupKeys is absent on servers older than the key-health verdict.
+	BackupKeys *struct {
+		Healthy bool     `json:"healthy"`
+		Overdue []string `json:"overdue"`
+		Detail  string   `json:"detail"`
+	} `json:"backupKeys"`
 	Bucket                 *struct {
 		Bucket           string   `json:"bucket"`
 		InsecureEndpoint bool     `json:"insecureEndpoint"`
@@ -137,6 +143,10 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 	}
 	if !h.ServiceVolumesComplete {
 		fmt.Fprintln(w, "  (service volume list incomplete: a lookup failed)")
+	}
+	if k := h.BackupKeys; k != nil && !k.Healthy {
+		fmt.Fprintf(w, "\nbackup keys: FAILING\n  %s\n", k.Detail)
+		return
 	}
 	if n := len(h.BackupKeysUnexported); n > 0 {
 		fmt.Fprintf(w, "\nWARNING: %d backup encryption key(s) exist only in this cluster; if it is lost, those addons' encrypted dumps are unreadable.\n", n)
