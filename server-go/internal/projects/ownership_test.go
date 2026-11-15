@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"kuso/server/internal/kube"
@@ -331,5 +332,29 @@ func TestSetEnvPending_RefusesOverlappingProjectConn(t *testing.T) {
 	}
 	if err := s.SetEnvWithOpts(ctx, "foo", "api", []EnvVar{{Name: "DB", Value: "${{ db.DATABASE_URL }}"}}, pending); err != nil {
 		t.Fatalf("own pending addon refused: %v", err)
+	}
+}
+
+// SEC-3: the collision also bites when the other project is created
+// later, so a pending ref to a dashed addon name is refused even with no
+// colliding project today. Dash-free names, and dashed addons that exist
+// and carry this project's label, still pass.
+func TestSetEnvPending_RefusesRefAFutureProjectCouldOwn(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{}),
+		seedService("acme", "api", kube.KusoServiceSpec{Project: "acme"}),
+		seedAddon("acme", "main-db", "postgres"),
+	)
+	ctx := context.Background()
+	pending := SetEnvOpts{AllowPending: true}
+	err := s.SetEnvWithOpts(ctx, "acme", "api", []EnvVar{{Name: "DB", Value: "${{ prod-db.DATABASE_URL }}"}}, pending)
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "create the addon first") {
+		t.Fatalf("pending ref acme-prod-db-conn: want ErrInvalid telling to create the addon first, got %v", err)
+	}
+	for _, ref := range []string{"${{ db.DATABASE_URL }}", "${{ main-db.DATABASE_URL }}"} {
+		if err := s.SetEnvWithOpts(ctx, "acme", "api", []EnvVar{{Name: "DB", Value: ref}}, pending); err != nil {
+			t.Errorf("%s refused: %v", ref, err)
+		}
 	}
 }

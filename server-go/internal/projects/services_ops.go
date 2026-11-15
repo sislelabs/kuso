@@ -2286,8 +2286,11 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 			return nil, err
 		}
 		if verr := s.validateSecretRefNameIn(project, service, refName, ownedAddonConn); verr != nil {
-			if !opts.AllowPending || !s.pendingConnOwned(ctx, ns, project, refName) {
+			if !opts.AllowPending {
 				return nil, verr
+			}
+			if perr := s.pendingConnOwned(ctx, ns, project, refName); perr != nil {
+				return nil, fmt.Errorf("env var %q: %w", ev.Name, perr)
 			}
 		}
 	}
@@ -2327,13 +2330,15 @@ func (s *Service) checkCallerGroupRefs(ctx context.Context, ns, project, service
 
 // pendingConnOwned decides a speculative <project>-<addon>-conn ref the
 // owned set doesn't list yet (addon informer lag right after `kuso apply`
-// created it). A live GET of the addon CR settles ownership: absent means
-// still pending, present must carry this project's label. The label check
-// matters because names are only prefix-unique: project "a" addon "b-db"
-// and project "a-b" addon "db" both yield "a-b-db-conn".
-func (s *Service) pendingConnOwned(ctx context.Context, ns, project, name string) bool {
+// created it, or an addon the caller is about to add). A live GET of the
+// addon CR settles ownership: present must carry this project's label.
+// The label check matters because names are only prefix-unique: project
+// "a" addon "b-db" and project "a-b" addon "db" both yield "a-b-db-conn".
+// It returns nil when the ref may be stored, else an ErrInvalid saying why.
+func (s *Service) pendingConnOwned(ctx context.Context, ns, project, name string) error {
+	notOwned := fmt.Errorf("%w: secretRef.name %q is not a secret owned by project %q", ErrInvalid, name, project)
 	if !strings.HasPrefix(name, project+"-") || !strings.HasSuffix(name, "-conn") {
-		return false
+		return notOwned
 	}
 	addonCR := strings.TrimSuffix(name, "-conn")
 	a, err := s.Kube.GetKusoAddon(ctx, ns, addonCR)
@@ -2342,28 +2347,26 @@ func (s *Service) pendingConnOwned(ctx context.Context, ns, project, name string
 		// that one belongs to something other than an addon of ours.
 		if s.Kube.Clientset != nil {
 			if _, serr := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); serr == nil || !apierrors.IsNotFound(serr) {
-				return false
+				return notOwned
 			}
 		}
-		// With no addon CR yet there's no label to settle ownership, so
-		// a name another project could also produce is refused: project
-		// "a" saving a-b-db-conn would otherwise bind project "a-b"'s
-		// credentials the day a-b creates its "db" addon (SEC-2).
-		projs, lerr := s.List(ctx)
-		if lerr != nil {
-			return false
+		// With no addon CR yet there's no label to settle ownership. A
+		// dashed addon name is one another project, existing or created
+		// later, can also produce: project "a" saving a-b-db-conn would
+		// bind project "a-b"'s credentials the day a-b adds a "db" addon
+		// (SEC-2, SEC-3). Only a dash-free addon name is unambiguous.
+		if short := strings.TrimSuffix(strings.TrimPrefix(name, project+"-"), "-conn"); strings.Contains(short, "-") {
+			return fmt.Errorf("%w: addon %q doesn't exist yet and its name could also belong to another project's addon; create the addon first, then reference it", ErrInvalid, short)
 		}
-		for i := range projs {
-			if p := projs[i].Name; p != project && strings.HasPrefix(name, p+"-") {
-				return false
-			}
-		}
-		return true
+		return nil
 	}
 	if err != nil {
-		return false
+		return notOwned
 	}
-	return a.Labels[labelProject] == project
+	if a.Labels[labelProject] != project {
+		return notOwned
+	}
+	return nil
 }
 
 // buildAddonResolver returns a closure that maps an addon ref name
