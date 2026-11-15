@@ -145,8 +145,38 @@ func TestExecEnvSetFields(t *testing.T) {
 			t.Errorf("%s: ExecEnvSetFields = %v, want %v", c.name, got, c.want)
 		}
 	}
-	got := ExecCreateFields(CreateServiceRequest{EnvValues: []EnvValue{{Name: "NIXPACKS_START_CMD", Value: "env"}}})
+	got := ExecCreateFields(CreateServiceRequest{EnvValues: []EnvValue{{Name: "NIXPACKS_START_CMD", Value: "env"}}}, nil)
 	if !slices.Equal(got, []string{"env.NIXPACKS_START_CMD"}) {
 		t.Errorf("ExecCreateFields(env) = %v", got)
+	}
+}
+
+// SEC-2: create takes the same repo/branch/path/Dockerfile gate as PATCH,
+// measured against the project's default repo.
+func TestExecCreateFieldsRepoSource(t *testing.T) {
+	proj := &kube.KusoRepoRef{URL: "https://github.com/acme/app", DefaultBranch: "main", Path: "apps/web"}
+	repo := func(url, branch, path string) *CreateServiceRepo {
+		return &CreateServiceRepo{URL: url, DefaultBranch: branch, Path: path}
+	}
+	cases := []struct {
+		name string
+		req  CreateServiceRequest
+		proj *kube.KusoRepoRef
+		want []string
+	}{
+		{"project repo as the UI sends it", CreateServiceRequest{Repo: repo("https://github.com/acme/app.git", "main", "")}, proj, nil},
+		{"project default path", CreateServiceRequest{Repo: repo("", "", "./apps/web/")}, proj, nil},
+		{"default Dockerfile", CreateServiceRequest{Dockerfile: "./Dockerfile"}, proj, nil},
+		{"no project branch falls back to main", CreateServiceRequest{Repo: repo("", "main", "")}, &kube.KusoRepoRef{}, nil},
+		{"other branch", CreateServiceRequest{Repo: repo("", "x", "")}, proj, []string{ExecFieldRepoBranch}},
+		{"other repo", CreateServiceRequest{Repo: repo("https://github.com/acme/other", "", "")}, proj, []string{ExecFieldRepo}},
+		{"other path", CreateServiceRequest{Repo: repo("", "", "tools/x")}, proj, []string{ExecFieldRepoPath}},
+		{"other Dockerfile", CreateServiceRequest{Dockerfile: "Dockerfile.evil"}, proj, []string{ExecFieldDockerfile}},
+		{"no project repo", CreateServiceRequest{Repo: repo("https://github.com/acme/app", "", "")}, nil, []string{ExecFieldRepo}},
+	}
+	for _, c := range cases {
+		if got := ExecCreateFields(c.req, c.proj); !slices.Equal(got, c.want) {
+			t.Errorf("%s: ExecCreateFields = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -432,6 +432,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 						note = "; prune ignored (set spec.configAsCode.allowPrune to let pushes delete)"
 						d.Logger.Warn("config-as-code: prune:true ignored on push; project hasn't opted in", "project", proj.Name)
 					}
+					parsed.DefaultRepo = proj.Spec.DefaultRepo
 					plan, err := spec.PlanFor(ctx, d.Kube, d.nsFor(ctx, proj.Name), parsed)
 					if err != nil {
 						return err

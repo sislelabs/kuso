@@ -128,9 +128,33 @@ func ExecPatchFields(cur *kube.KusoServiceSpec, req PatchServiceRequest) []strin
 }
 
 // ExecCreateFields returns the execution-bearing fields a new service
-// would be created with. A plain repo-built service returns none.
-func ExecCreateFields(req CreateServiceRequest) []string {
+// would be created with. projRepo is the project's default repo: a
+// service on that repo, at its default branch and root path, with the
+// default Dockerfile, returns none. Anything else picks other code to run
+// with the project's addon conns and shared secrets, like the same change
+// on PATCH does (SEC-2).
+func ExecCreateFields(req CreateServiceRequest, projRepo *kube.KusoRepoRef) []string {
 	var out []string
+	if req.Repo != nil {
+		var p kube.KusoRepoRef
+		if projRepo != nil {
+			p = *projRepo
+		}
+		if u := strings.TrimSpace(req.Repo.URL); u != "" && kube.RepoIdentity(u) != kube.RepoIdentity(p.URL) {
+			out = append(out, ExecFieldRepo)
+		}
+		projBranch := p.DefaultBranch
+		if projBranch == "" {
+			projBranch = "main" // what builds fall back to
+		}
+		out = appendIfSet(out, ExecFieldRepoBranch, req.Repo.DefaultBranch, projBranch)
+		if rp := normRepoPath(req.Repo.Path); rp != "" && rp != normRepoPath(p.Path) {
+			out = append(out, ExecFieldRepoPath)
+		}
+	}
+	if d := strings.TrimPrefix(strings.TrimSpace(req.Dockerfile), "./"); d != "" && d != "Dockerfile" {
+		out = append(out, ExecFieldDockerfile)
+	}
 	if req.Image != nil && strings.TrimSpace(req.Image.Repository) != "" {
 		out = append(out, ExecFieldImage)
 	}

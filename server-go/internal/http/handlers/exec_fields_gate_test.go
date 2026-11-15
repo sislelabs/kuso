@@ -170,4 +170,15 @@ func TestServiceExecFieldsNeedProjectAdmin(t *testing.T) {
 		`{"name":"x","runtime":"image","image":{"repository":"busybox"},"command":["printenv"]}`); rr.Code != http.StatusForbidden || fake.added {
 		t.Errorf("editor create image service: status %d added=%v, want 403 and no create", rr.Code, fake.added)
 	}
+	// SEC-2: a new service on another branch builds that branch with the
+	// project's conns, so create takes the PATCH gate too.
+	if fake, rr := do(editor, http.MethodPost, "/api/projects/p1/services",
+		`{"name":"z","repo":{"defaultBranch":"x"},"dockerfile":"Dockerfile.x"}`); rr.Code != http.StatusForbidden || fake.added ||
+		!strings.Contains(rr.Body.String(), "repo.branch") {
+		t.Errorf("editor create on another branch: status %d (%s) added=%v, want 403 and no create", rr.Code, rr.Body.String(), fake.added)
+	}
+	if fake, rr := do(editor, http.MethodPost, "/api/projects/p1/services",
+		`{"name":"z","repo":{"defaultBranch":"main"},"runtime":"dockerfile","port":8080}`); rr.Code >= 300 || !fake.added {
+		t.Errorf("editor create on the default branch: status %d (%s) added=%v, want created", rr.Code, rr.Body.String(), fake.added)
+	}
 }

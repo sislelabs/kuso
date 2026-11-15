@@ -77,6 +77,11 @@ type File struct {
 	Services      []ServiceSpec      `yaml:"services,omitempty"`
 	Addons        []AddonSpec        `yaml:"addons,omitempty"`
 	Crons         []CronSpec         `yaml:"crons,omitempty"`
+	// DefaultRepo is the live project's default repo, set by the caller
+	// before PlanFor. kuso.yaml can't declare it; the plan uses it to tell
+	// a new service on the project's own repo from one that picks other
+	// code (projects.ExecCreateFields).
+	DefaultRepo *kube.KusoRepoRef `yaml:"-" json:"-"`
 }
 
 // ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
@@ -650,7 +655,7 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	for name, s := range desiredSvcs {
 		if !liveSvcByShort[name] {
 			plan.ServicesToCreate = append(plan.ServicesToCreate, name)
-			if ex := projects.ExecCreateFields(serviceCreateReq(s)); len(ex) > 0 {
+			if ex := projects.ExecCreateFields(serviceCreateReq(s), f.DefaultRepo); len(ex) > 0 {
 				plan.ExecChanges = append(plan.ExecChanges, ExecChange{Resource: "service:" + name, Fields: ex})
 			}
 			for _, key := range secretMarkedKeys(s.Env) {

@@ -1045,9 +1045,16 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRepoBound(ctx, w, project, addURLs, addInsts) {
 		return
 	}
-	if f := projects.ExecCreateFields(addReq); len(f) > 0 && !callerCanReadSecrets(ctx, h.DB, project) {
-		refuseExecFields(w, f)
-		return
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		proj, err := h.Svc.Get(ctx, project)
+		if err != nil {
+			h.fail(w, "add service", err)
+			return
+		}
+		if f := projects.ExecCreateFields(addReq, proj.Spec.DefaultRepo); len(f) > 0 {
+			refuseExecFields(w, f)
+			return
+		}
 	}
 	out, err := h.Svc.AddService(ctx, project, addReq)
 	if err != nil {
@@ -1209,6 +1216,9 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if p, perr := h.Kube.GetKusoProject(ctx, h.Namespace, f.Project); perr == nil && p != nil {
+		f.DefaultRepo = p.Spec.DefaultRepo
+	}
 	plan, err := spec.PlanFor(ctx, h.Kube, spec.ExecNamespace(ctx, h.Kube, h.Namespace, f.Project), f)
 	if err != nil {
 		h.Logger.Error("apply: plan", "err", err)
