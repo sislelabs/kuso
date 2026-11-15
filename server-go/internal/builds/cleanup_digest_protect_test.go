@@ -149,3 +149,61 @@ func (f *erroringResolveDeleter) DeleteImageTag(_ context.Context, repo, tag str
 func (f *erroringResolveDeleter) ResolveTagDigest(context.Context, string, string) (string, error) {
 	return "", context.DeadlineExceeded
 }
+
+// BLOB-12: a tag kept in the window for rollback (not live on any env)
+// shares a manifest with an aged-out rebuild; untagging the aged-out one
+// deletes the manifest and silently breaks that rollback target.
+func TestSweepImagesPastWindow_ProtectsKeptWindowDigests(t *testing.T) {
+	t.Parallel()
+
+	seedB := func(name, tag string, sec int64) seed {
+		return typedSeed(kube.GVRBuilds, "KusoBuild", &kube.KusoBuild{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "kuso",
+				CreationTimestamp: metav1.NewTime(time.Unix(sec, 0)),
+				Labels:            map[string]string{"kuso.sislelabs.com/build-state": "done"},
+				Annotations:       map[string]string{annPhase: "succeeded"},
+			},
+			Spec: kube.KusoBuildSpec{
+				Project: "alpha", Service: "alpha-web",
+				Image: &kube.KusoImage{Repository: "reg.local:5000/alpha/web", Tag: tag},
+			},
+		})
+	}
+	env := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-production", Namespace: "kuso"},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: "alpha", Service: "alpha-web", Kind: "production",
+			Image: &kube.KusoImage{Repository: "reg.local:5000/alpha/web", Tag: "livetag0000"},
+		},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", env),
+		seedB("alpha-web-live", "livetag0000", 900),
+		seedB("alpha-web-prev", "prevtag0000", 700), // in window, rollback target only
+		seedB("alpha-web-dup", "duptag00000", 500),  // aged out, same manifest as prevtag
+		seedB("alpha-web-old", "uniqtag0000", 100),  // aged out, unique
+	)
+	del := &fakeDeleter{digests: map[string]string{
+		"alpha/web:livetag0000": "sha256:live-cc",
+		"alpha/web:prevtag0000": "sha256:shared-aa",
+		"alpha/web:duptag00000": "sha256:shared-aa",
+		"alpha/web:uniqtag0000": "sha256:unique-bb",
+	}}
+
+	if _, err := SweepImagesPastWindow(context.Background(), s.Kube, "kuso", nil, del, 2, nil); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	deleted := map[string]bool{}
+	for _, d := range del.deleted {
+		deleted[d] = true
+	}
+	if deleted["alpha/web:duptag00000"] {
+		t.Errorf("untagged a tag sharing its manifest with the kept rollback target prevtag: %v", del.deleted)
+	}
+	if !deleted["alpha/web:uniqtag0000"] {
+		t.Errorf("unshared aged-out tag not swept: %v", del.deleted)
+	}
+}

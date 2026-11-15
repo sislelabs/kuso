@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -411,7 +412,23 @@ func SweepImagesPastWindow(
 	for k := range live.digests {
 		protectedDigests[k] = true
 	}
-	for pt := range protected {
+	// Every tag the sweep keeps is load-bearing at the digest level too:
+	// a rollback target in the keep window (or a failed build still in
+	// its grace) shares a manifest with an aged-out rebuild of the same
+	// commit just as a live env tag can (BLOB-12).
+	digestGuarded := maps.Clone(protected)
+	targetTags := map[string]bool{}
+	for _, t := range targets {
+		targetTags[t.repo+":"+t.tag] = true
+	}
+	for k, recs := range byKey {
+		for _, r := range recs {
+			if key := k.project + "/" + k.service + ":" + r.imageTag; !targetTags[key] {
+				digestGuarded[key] = true
+			}
+		}
+	}
+	for pt := range digestGuarded {
 		idx := strings.LastIndex(pt, ":")
 		if idx < 0 {
 			continue
