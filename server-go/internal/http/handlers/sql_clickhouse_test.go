@@ -1,6 +1,14 @@
 package handlers
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+)
 
 func TestBlockedClickHouseBuiltin(t *testing.T) {
 	blocked := []string{
@@ -159,16 +167,27 @@ func TestChIdentifier(t *testing.T) {
 	}
 }
 
-func TestChStringLiteral(t *testing.T) {
-	cases := map[string]string{
-		"events":     "'events'",
-		"o'brien":    `'o\'brien'`,
-		`back\slash`: `'back\\slash'`,
+// DB-12: metadata lookups bind database/table as query parameters; the
+// values must never appear in the SQL text.
+func TestClickhouseMetadataUsesParams(t *testing.T) {
+	var gotSQL string
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotSQL, gotQuery = string(b), r.URL.Query()
+		_, _ = w.Write([]byte(`{"meta":[{"name":"count()","type":"UInt64"}],"data":[["1"]],"rows":1}`))
+	}))
+	defer srv.Close()
+	db, tbl := `o'brien\`, "ev' OR 1=1 --"
+	ok, err := (&BackupsHandler{}).clickhouseTableExists(context.Background(), chConnInfo{baseURL: srv.URL}, db, tbl)
+	if err != nil || !ok {
+		t.Fatalf("clickhouseTableExists = %v, %v", ok, err)
 	}
-	for in, want := range cases {
-		if got := chStringLiteral(in); got != want {
-			t.Errorf("chStringLiteral(%q) = %q, want %q", in, got, want)
-		}
+	if strings.Contains(gotSQL, "brien") || strings.Contains(gotSQL, "OR 1=1") {
+		t.Errorf("value interpolated into SQL: %q", gotSQL)
+	}
+	if gotQuery.Get("param_db") != db || gotQuery.Get("param_tbl") != tbl {
+		t.Errorf("params = %v, want param_db=%q param_tbl=%q", gotQuery, db, tbl)
 	}
 }
 

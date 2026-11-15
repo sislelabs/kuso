@@ -333,7 +333,17 @@ func stringifyJSONCell(raw json.RawMessage) string {
 // chSelect runs a read query (readonly=2) and returns the parsed JSONCompact
 // result. Shared by the introspection helpers below and the rows browser.
 func (h *BackupsHandler) chSelect(ctx context.Context, info chConnInfo, sqlText string) (SQLQueryResponse, error) {
+	return h.chSelectParams(ctx, info, sqlText, nil)
+}
+
+// chSelectParams is chSelect with ClickHouse query parameters: each
+// params[k] binds to a {k:Type} placeholder in sqlText, sent as the
+// param_k URL value so values never enter the SQL text.
+func (h *BackupsHandler) chSelectParams(ctx context.Context, info chConnInfo, sqlText string, params map[string]string) (SQLQueryResponse, error) {
 	q := url.Values{}
+	for k, v := range params {
+		q.Set("param_"+k, v)
+	}
 	if info.database != "" {
 		q.Set("database", info.database)
 	}
@@ -370,7 +380,7 @@ func (h *BackupsHandler) chSelect(ctx context.Context, info chConnInfo, sqlText 
 // backticks. ClickHouse processes backslash escapes inside backtick-quoted
 // identifiers (like string literals), so a trailing `\` would escape the
 // closing backtick and break out — we must escape backslash BEFORE the
-// backtick, mirroring chStringLiteral. pq.QuoteIdentifier (double-quotes) is
+// backtick. pq.QuoteIdentifier (double-quotes) is
 // wrong for ClickHouse. Callers still pass only allowlisted (exists-checked)
 // identifiers; this is belt-and-suspenders.
 func chIdentifier(id string) string {
@@ -379,18 +389,11 @@ func chIdentifier(id string) string {
 	return "`" + id + "`"
 }
 
-// chStringLiteral single-quote-escapes a value for a WHERE = '...' literal.
-func chStringLiteral(v string) string {
-	return "'" + strings.ReplaceAll(strings.ReplaceAll(v, "\\", "\\\\"), "'", "\\'") + "'"
-}
-
 // clickhouseTableExists confirms database.table is a real table.
 func (h *BackupsHandler) clickhouseTableExists(ctx context.Context, info chConnInfo, database, table string) (bool, error) {
-	sqlText := fmt.Sprintf(
-		"SELECT count() FROM system.tables WHERE database = %s AND name = %s",
-		chStringLiteral(database), chStringLiteral(table),
-	)
-	out, err := h.chSelect(ctx, info, sqlText)
+	out, err := h.chSelectParams(ctx, info,
+		"SELECT count() FROM system.tables WHERE database = {db:String} AND name = {tbl:String}",
+		map[string]string{"db": database, "tbl": table})
 	if err != nil {
 		return false, err
 	}
@@ -404,12 +407,11 @@ func (h *BackupsHandler) clickhouseTableExists(ctx context.Context, info chConnI
 // shared columnsResponse. Nullability + enum values are derived from the CH
 // type string. Editable is always false — see the file header.
 func (h *BackupsHandler) clickhouseColumns(ctx context.Context, info chConnInfo, database, table string) (columnsResponse, error) {
-	sqlText := fmt.Sprintf(`SELECT name, type, default_expression, is_in_primary_key, position
+	res, err := h.chSelectParams(ctx, info, `SELECT name, type, default_expression, is_in_primary_key, position
 		FROM system.columns
-		WHERE database = %s AND table = %s
+		WHERE database = {db:String} AND table = {tbl:String}
 		ORDER BY position`,
-		chStringLiteral(database), chStringLiteral(table))
-	res, err := h.chSelect(ctx, info, sqlText)
+		map[string]string{"db": database, "tbl": table})
 	if err != nil {
 		return columnsResponse{}, err
 	}
