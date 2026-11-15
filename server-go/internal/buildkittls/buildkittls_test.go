@@ -163,3 +163,74 @@ func TestSetEnabled(t *testing.T) {
 		t.Fatal("daemon not restarted")
 	}
 }
+
+// ISO-1: an upgraded install (secret minted enabled=false) gets client auth
+// turned on automatically, but only on a daemon that mounts the Secret,
+// only while no build is in flight, never over an operator's explicit
+// choice, and with exactly one daemon restart.
+func TestAutoEnable(t *testing.T) {
+	ctx := context.Background()
+	s, cs := newStore()
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: daemonDeployment, Namespace: "kuso"}}
+	if _, err := cs.AppsV1().Deployments("kuso").Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	idle := func(context.Context) (bool, error) { return false, nil }
+	busy := func(context.Context) (bool, error) { return true, nil }
+	// Counted from the client's actions: the restartedAt annotation has
+	// one-second granularity, so a second restart could leave it unchanged.
+	restarts := func() int {
+		n := 0
+		for _, a := range cs.Actions() {
+			if a.GetVerb() == "patch" && a.GetResource().Resource == "deployments" {
+				n++
+			}
+		}
+		return n
+	}
+
+	if done, _, err := s.AutoEnable(ctx, idle); done || !errors.Is(err, ErrDaemonPredatesTLS) {
+		t.Fatalf("old daemon: done=%v err=%v", done, err)
+	}
+	if on, _ := s.Enabled(ctx); on {
+		t.Fatal("enabled on a daemon that can't serve TLS")
+	}
+
+	dep.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{
+		Secret: &corev1.SecretVolumeSource{SecretName: SecretName},
+	}}}
+	if _, err := cs.AppsV1().Deployments("kuso").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if done, flipped, err := s.AutoEnable(ctx, busy); done || flipped || err != nil {
+		t.Fatalf("builds in flight: done=%v flipped=%v err=%v", done, flipped, err)
+	}
+	if on, _ := s.Enabled(ctx); on || restarts() != 0 {
+		t.Fatal("enabled or restarted while builds were in flight")
+	}
+
+	if done, flipped, err := s.AutoEnable(ctx, idle); !done || !flipped || err != nil {
+		t.Fatalf("idle: done=%v flipped=%v err=%v", done, flipped, err)
+	}
+	if on, _ := s.Enabled(ctx); !on {
+		t.Fatal("not enabled once idle")
+	}
+	if n := restarts(); n != 1 {
+		t.Fatalf("daemon restarts = %d, want 1", n)
+	}
+	if done, flipped, err := s.AutoEnable(ctx, idle); !done || flipped || err != nil || restarts() != 1 {
+		t.Fatalf("second call: done=%v flipped=%v err=%v restarts=%d", done, flipped, err, restarts())
+	}
+
+	// An operator's explicit "off" sticks.
+	if err := s.SetEnabled(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if done, flipped, err := s.AutoEnable(ctx, func(context.Context) (bool, error) { called = true; return false, nil }); !done || flipped || err != nil {
+		t.Fatalf("operator off: done=%v flipped=%v err=%v", done, flipped, err)
+	}
+	if on, _ := s.Enabled(ctx); on || called {
+		t.Fatalf("operator's off overridden: on=%v busy consulted=%v", on, called)
+	}
+}

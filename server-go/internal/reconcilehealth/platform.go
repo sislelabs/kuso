@@ -62,7 +62,8 @@ func (s *Scanner) buildkitTLSIssue(ctx context.Context, ns string) (Issue, bool)
 		Resource: buildkitdDeploymentName, Namespace: ns, Type: platformType,
 		Kind: KindBuildkitTLSOff, Severity: SeverityWarning,
 		Summary: "The shared build daemon accepts unauthenticated clients",
-		Detail: "Mutual TLS on kuso-buildkitd is off (installs that predate it keep it off on upgrade). User build code, " +
+		Detail: "Mutual TLS on kuso-buildkitd is off. kuso-server turns it on once no build is in flight, unless an operator " +
+			"switched it off or the running daemon predates the tls volume. Until then user build code, " +
 			"such as a static buildCmd or a fork-PR preview build, can open its own buildkit session and write cache " +
 			"another project's build later reads.",
 		Fix:        "Turn on client certificates for kuso-buildkitd (restarts the daemon; running builds are interrupted)",

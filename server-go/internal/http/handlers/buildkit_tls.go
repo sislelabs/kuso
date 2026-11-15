@@ -16,8 +16,9 @@ import (
 )
 
 // BuildkitTLSHandler is the one-step switch for the build daemon's client
-// authentication. Installs that predate it run the daemon unauthenticated
-// until an operator flips this; nothing turns it on during an upgrade.
+// authentication. kuso-server turns it on by itself on installs that
+// predate it (buildkittls.AutoEnable) once no build is in flight; a value
+// set here is the operator's and AutoEnable leaves it alone.
 type BuildkitTLSHandler struct {
 	Store  *buildkittls.Store
 	Audit  *audit.Service

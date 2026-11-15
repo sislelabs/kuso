@@ -31,14 +31,17 @@
 #
 # Client auth (mutual TLS). Fresh installs require it from the start.
 # On an install that predates it, kuso-server mints kuso-buildkitd-tls
-# with enabled=false and mirrors the client certificate into every
-# namespace a build runs in; build Jobs try TLS first and fall back to
-# plaintext, so switching needs no coordination. To switch on:
-#   kubectl apply -f deploy/buildkitd.yaml      # only if the daemon predates the tls volume
-#   kuso api POST system/buildkit-tls -f enabled=true   # flips the switch + restarts the daemon
-# Revert: the same call with enabled=false. Builds created by a
-# kuso-server older than this file can't use TLS, so only switch once no
-# such build is queued. While it is off, `kuso health` lists it.
+# with enabled=false, mirrors the client certificate into every namespace
+# a build runs in, then sets enabled=true and restarts the daemon itself
+# the first time no build is in flight (review ISO-1: RUN steps share this
+# pod's netns and reach 127.0.0.1:1234, so only mTLS keeps them off the
+# daemon). Build Jobs try TLS first and fall back to plaintext.
+# The updater does not roll this Deployment: a daemon older than the tls
+# volume below stays unauthenticated until this file is applied by hand
+#   kubectl apply -f deploy/buildkitd.yaml
+# Opt out / revert: kuso api POST system/buildkit-tls -f enabled=false
+# (recorded as the operator's choice; kuso-server won't turn it back on).
+# While it is off, `kuso health` lists it.
 #
 # State: persistent /var/lib/buildkit so a daemon restart doesn't
 # nuke every cache. 20Gi is generous for a 4-project install;
