@@ -575,3 +575,23 @@ data:
   ADMIN_USER: {{ index . 2 | b64enc | quote }}
   ADMIN_PASSWORD: {{ index . 3 | b64enc | quote }}
 {{- end -}}
+
+{{- /* The kuso-backup image every backup CronJob runs. The jobs get DB
+       passwords, S3 credentials and the backup key, so a release pins it:
+       hack/release.sh rewrites the line below to the release's tag@digest
+       (it must stay alone on its line). The :latest value only exists in
+       an unreleased tree. .Values.backup.image still overrides. */ -}}
+{{- define "kusoaddon.backupImageDefault" -}}
+ghcr.io/sislelabs/kuso-backup:latest
+{{- end }}
+
+{{- define "kusoaddon.backupImage" -}}
+{{- default (include "kusoaddon.backupImageDefault" .) (.Values.backup).image -}}
+{{- end }}
+
+{{- /* A digest never changes, so a cached copy is correct; a tag must be
+       re-pulled or each node keeps whatever it cached first (after the
+       pg_dump-18 rebuild, two of three nodes kept the pg16 image). */ -}}
+{{- define "kusoaddon.backupImagePullPolicy" -}}
+{{- if contains "@sha256:" (include "kusoaddon.backupImage" .) }}IfNotPresent{{ else }}Always{{ end -}}
+{{- end }}

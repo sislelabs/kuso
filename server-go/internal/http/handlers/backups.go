@@ -1851,8 +1851,8 @@ func buildRestoreJob(ns, jobName, project, destAddon, srcAddon, restoreShell str
 					},
 					Containers: []corev1.Container{{
 						Name:            "restore",
-						Image:           backupJobImage,
-						ImagePullPolicy: corev1.PullAlways,
+						Image:           backup.Image(),
+						ImagePullPolicy: backup.ImagePullPolicy(backup.Image()),
 						Command:         []string{"sh", "-c"},
 						Args:            []string{restoreShell},
 						Env:             env,

@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/audit"
+	"kuso/server/internal/backup"
 )
 
 // A control-plane dump up to secretRestoreMax rides to the restore Job in a
@@ -242,8 +243,8 @@ func (h *BackupHandler) s3RestoreJob(jobName, key, digest string) *batchv1.Job {
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:            "restore",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullAlways,
+						Image:           backup.Image(),
+						ImagePullPolicy: backup.ImagePullPolicy(backup.Image()),
 						Command:         []string{"sh", "-c"},
 						Args:            []string{s3RestoreScript},
 						Env:             env,
