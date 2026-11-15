@@ -113,19 +113,22 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 }
 
 // downloadPostgres runs pg_dump against the addon's DB and streams the
-// gzipped SQL. Version skew: the bundled client is postgresql16-client,
-// so pg_dump handles PG <=16. A future PG-17+ addon would make pg_dump
-// refuse with "server version too new" — the client gets a 502 with
-// pg_dump's error, not a corrupt file. Bump the Dockerfile's
-// client version when we ship a newer Postgres addon.
+// gzipped SQL. The image ships clients 16/17/18; pgDumpFor picks the one
+// matching the server's major (see pgClientBin for why both directions
+// matter).
 func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns string, cr *kube.KusoAddon, stamp string) {
 	dsn, err := h.addonDSN(ctx, ns, cr)
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "backup unavailable: "+err.Error())
 		return
 	}
+	pgDump, err := pgDumpFor(ctx, dsn)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "backup failed: "+err.Error())
+		return
+	}
 
-	cmd := exec.CommandContext(ctx, "pg_dump",
+	cmd := exec.CommandContext(ctx, pgDump,
 		"--format=plain", "--no-owner", "--no-acl", "--clean", "--if-exists",
 		dsn,
 	)

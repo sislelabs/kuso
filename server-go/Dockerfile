@@ -117,11 +117,15 @@ LABEL org.opencontainers.image.source="https://github.com/sislelabs/kuso"
 LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Next.js SPA"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
-# postgresql16-client carries pg_dump + psql at the version that
-# matches the bundled Postgres pod. ca-certificates is needed for
-# any outbound TLS (GitHub client + kube apiserver). tzdata is so
-# log timestamps render with the operator's TZ if KUSO_TZ is set.
-RUN apk add --no-cache postgresql16-client ca-certificates tzdata && \
+# postgresql{16,17,18}-client: pg_dump/psql for the control-plane and
+# addon direct-download endpoints. Installed side by side under
+# /usr/libexec/postgresql<major>/; handlers/pgclient.go picks the one that
+# matches the server's major, like build/backup's image does (a newer
+# client's dump won't restore into an older server, an older client
+# refuses a newer server). ca-certificates is needed for any outbound TLS
+# (GitHub client + kube apiserver). tzdata is so log timestamps render
+# with the operator's TZ if KUSO_TZ is set.
+RUN apk add --no-cache postgresql16-client postgresql17-client postgresql18-client ca-certificates tzdata && \
     addgroup -S kuso && adduser -S -G kuso kuso
 
 COPY --from=build /out/kuso-server /usr/local/bin/kuso-server

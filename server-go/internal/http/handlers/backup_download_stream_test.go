@@ -108,6 +108,9 @@ func TestBackupDownload_PgDumpFailureIs502(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "pg_dump"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(bin, "psql"), []byte("#!/bin/sh\necho 160004\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", bin)
 
 	cs := k8sfake.NewSimpleClientset(&corev1.Secret{
