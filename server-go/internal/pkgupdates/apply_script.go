@@ -11,7 +11,8 @@ package pkgupdates
 //  4. if reboot required AND ALLOW_REBOOT=false → done, but flag
 //     rebootRequired in the apply-state (operator reboots deliberately).
 //  5. if reboot required AND ALLOW_REBOOT=true → cordon (mark ours) →
-//     drain (best-effort; single-node has nowhere to go) → set state
+//     drain (skipped on a single node: nowhere to go; a PDB-blocked
+//     eviction fails the apply without rebooting) → set state
 //     rebooting → DETACHED reboot (survives the Job pod dying with the
 //     node). The kuso-server rejoin reconcile uncordons + finalizes.
 //
@@ -84,13 +85,15 @@ drain_pod_list() {
 # drain_node — evict every drainable pod on this node via the Eviction
 # API, so workloads reschedule onto other Ready nodes BEFORE the host
 # reboots, then wait for the evicted pods to be gone. An eviction blocked
-# by a PodDisruptionBudget is retried for up to 120s PER POD, then we
-# move on (never wedge an apply forever on a stubborn PDB). The node is
+# by a PodDisruptionBudget is retried for up to 120s PER POD, then given
+# up on (never wedge an apply forever on a stubborn PDB). The node is
 # already cordoned by the caller, so nothing reschedules back onto it.
 #
-# Returns non-zero when the drain can't be done safely (no jq, pod list
-# unreadable); the caller then fails the apply instead of rebooting a
-# multi-node worker undrained.
+# Returns 1 when the drain can't be done safely (no jq, pod list
+# unreadable) and 2 when a PDB kept a pod on the node (listed in
+# /tmp/drain_blocked). Either way the caller fails the apply instead of
+# rebooting: a PDB that allows 0 disruptions (kuso-postgres) means the
+# reboot would take down exactly what it protects.
 drain_node() {
   if ! command -v jq >/dev/null 2>&1; then
     echo "pkg-apply: drain: jq unavailable"
@@ -103,6 +106,7 @@ drain_node() {
   [ "${count:-0}" -eq 0 ] && return 0
 
   : > /tmp/evicted
+  : > /tmp/drain_blocked
   while read -r nsname; do
     [ -z "$nsname" ] && continue
     ns=${nsname%%/*}; pod=${nsname#*/}
@@ -119,11 +123,12 @@ drain_node() {
         404) echo "pkg-apply: drain: $ns/$pod already gone"; break ;;
       esac
       if [ "$(date +%s)" -ge "$deadline" ]; then
-        echo "pkg-apply: drain: gave up on $ns/$pod (HTTP $code, PDB/blocked); proceeding"; break
+        echo "pkg-apply: drain: gave up on $ns/$pod (HTTP $code, PDB/blocked)"; echo "$nsname" >> /tmp/drain_blocked; break
       fi
       sleep 5
     done
   done < /tmp/drain_pods
+  [ -s /tmp/drain_blocked ] && return 2
 
   # Evicted pods still run their grace period. Rebooting under them
   # kills them uncleanly, so wait (bounded) until they've left the node.
@@ -189,7 +194,11 @@ READY=$(ready_node_count) || fail "could not count Ready nodes (GET /api/v1/node
 echo "pkg-apply: ready node count = $READY"
 if [ "${READY:-0}" -gt 1 ]; then
   set_state draining "draining $NODE before reboot ($READY ready nodes)"
-  drain_node || fail "patched, but could not drain $NODE safely (see Job log); not rebooting — reboot it by hand after draining"
+  drain_node; drc=$?
+  if [ "$drc" -eq 2 ]; then
+    fail "patched, but a PodDisruptionBudget kept $(tr '\n' ' ' < /tmp/drain_blocked)on $NODE; not rebooting. Make room for those pods elsewhere (or reboot by hand at a safe time), then rerun with reboot allowed"
+  fi
+  [ "$drc" -eq 0 ] || fail "patched, but could not drain $NODE safely (see Job log); not rebooting — reboot it by hand after draining"
 else
   echo "pkg-apply: single ready node — skipping drain (nowhere to reschedule)"
 fi
