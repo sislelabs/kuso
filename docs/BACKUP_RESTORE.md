@@ -167,19 +167,56 @@ kubectl -n kuso rollout restart deployment kuso-server
 ```
 
 If the Cluster itself is broken (failed bootstrap, missing
-`kuso-postgres-app` Secret, primary stuck `Pending`):
+`kuso-postgres-app` Secret, primary stuck `Pending`), the fix is a fresh
+Cluster plus a restore. **Deleting the Cluster deletes its data.** CNPG
+sets an ownerReference from every `kuso-postgres-N` PVC to the
+`Cluster/kuso-postgres` object, so a plain `kubectl delete cluster`
+garbage-collects the PVCs with it. A new Cluster bootstraps with
+`initdb`, which always creates an **empty** database; it does not
+re-attach to old data.
+
+Check the ownership yourself before you start:
 
 ```bash
-# 1. Delete the Cluster (NOT the PVCs — those carry your data).
-kubectl -n kuso delete cluster kuso-postgres
-# 2. Delete the now-stale credentials Secrets.
-kubectl -n kuso delete secret kuso-postgres-conn kuso-postgres-app
-# 3. Re-run install.sh; it'll mint fresh credentials and let CNPG
-#    bootstrap a new Cluster against the existing PVCs.
+kubectl -n kuso get pvc -l cnpg.io/cluster=kuso-postgres \
+  -o custom-columns=PVC:.metadata.name,PV:.spec.volumeName,OWNER:.metadata.ownerReferences[0].kind
 ```
 
-This loses no data — CNPG's bootstrap re-attaches to existing PVCs.
-Verify by running `kuso backup` afterwards and inspecting row counts.
+Steps 1 and 2 are safe. Step 3 onwards is destructive.
+
+```bash
+# 1. Get a restorable dump BEFORE touching anything.
+#    a) If Postgres still answers: kuso backup --file kuso-pre-rebuild.sql.gz
+#       (or the "Manual fallback" pg_dump above).
+#    b) If it doesn't: take the newest kuso-postgres/daily/<DD>.sql.gz from
+#       the backup bucket, and make sure you hold the exported
+#       kuso-controlplane-backup-key (kuso backup keys export). Those dumps
+#       are encrypted; without the key they are useless.
+#    No dump and no key: STOP. Repair the Cluster in place instead.
+
+# 2. Keep the old volume as a last-resort copy: switch every PV behind the
+#    Cluster's PVCs to Retain, so deleting the PVC leaves the data on disk.
+for pv in $(kubectl -n kuso get pvc -l cnpg.io/cluster=kuso-postgres -o jsonpath='{.items[*].spec.volumeName}'); do
+  kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+done
+
+# 3. DESTRUCTIVE: delete the Cluster. Its PVCs go with it; the PVs from
+#    step 2 stay behind as Released.
+kubectl -n kuso delete cluster kuso-postgres
+# 4. DESTRUCTIVE: delete the now-stale credentials Secrets.
+kubectl -n kuso delete secret kuso-postgres-conn kuso-postgres-app
+# 5. Re-run install.sh. It mints fresh credentials and CNPG bootstraps a
+#    new, EMPTY Cluster.
+# 6. Load the dump from step 1 (add --key-file <file> for an S3 dump):
+kuso restore kuso-pre-rebuild.sql.gz
+```
+
+Check the restore (log in, `kuso get projects`, spot-check row counts)
+before you clean up. Only then delete the retained PVs from step 2 with
+`kubectl delete pv <name>` (on local-path, also remove the directory it
+names). Recovering straight from a retained PV without a dump needs a
+CNPG `bootstrap.recovery` or `pg_basebackup` setup that this runbook does
+not cover.
 
 ## What we don't do (and probably won't)
 
