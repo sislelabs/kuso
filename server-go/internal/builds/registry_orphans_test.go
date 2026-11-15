@@ -418,6 +418,27 @@ func TestSweepOrphanRepositories_ListErrorAborts(t *testing.T) {
 	}
 }
 
+// BLOB-13: buildpacks images carry the reproducible-build epoch as their
+// created date, so a just-pushed one looked decades old and an orphan
+// repo was swept with no grace. An undatable image keeps the repo.
+func TestSweepOrphanRepositories_ReproducibleEpochIsNotOld(t *testing.T) {
+	t.Parallel()
+	f := newFakeRegistry()
+	f.put("gone/bp", "b1", "sha256:bp1", time.Date(1980, 1, 1, 0, 0, 1, 0, time.UTC))
+	f.put("gone/api", "a1", "sha256:api1", oldImage)
+	reg := startFakeRegistry(t, f)
+	kc, _, _ := fakeClusterKube(t, nil)
+
+	res := sweepOn(t, kc, reg, OrphanSweepOn)
+
+	if got := f.deletedSorted(); !slices.Equal(got, []string{"gone/api@sha256:api1"}) {
+		t.Fatalf("deleted %v, want only the dated orphan", got)
+	}
+	if res.ReposTooYoung != 1 {
+		t.Errorf("undatable repo not counted as skipped: %+v", res)
+	}
+}
+
 func TestSweepOrphanRepositories_DryRunDeletesNothing(t *testing.T) {
 	t.Parallel()
 	f := newFakeRegistry()
