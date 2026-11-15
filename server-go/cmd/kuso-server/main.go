@@ -328,6 +328,9 @@ func main() {
 			logger.Warn("admin: ensure admin group (no seed)", "err", err)
 		}
 	}
+	if err := database.EnsureDefaultAlertRules(ctx); err != nil {
+		logger.Warn("alerts: seed default rules", "err", err)
+	}
 
 	// Session lifetime is now a live, admin-editable Setting (session.*
 	// keys) instead of the boot-only JWT_EXPIRESIN env var. To preserve

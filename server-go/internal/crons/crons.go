@@ -14,11 +14,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"kuso/server/internal/cronsched"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/registryauth"
 )
@@ -146,7 +148,8 @@ type CreateCronRequest struct {
 	PinImage bool `json:"pinImage,omitempty"`
 	// Concurrency, default Forbid. One of Allow/Forbid/Replace.
 	ConcurrencyPolicy string `json:"concurrencyPolicy,omitempty"`
-	// 0 = no deadline.
+	// 0 = defaulted at create time (defaultActiveDeadline); an Update
+	// to 0 removes the deadline.
 	ActiveDeadlineSeconds int `json:"activeDeadlineSeconds,omitempty"`
 	// StartingDeadlineSeconds bounds the missed-schedule lookback so a
 	// fallen-behind CronJob self-heals instead of wedging. 0 = defaulted
@@ -469,7 +472,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			Suspend:                 req.Suspend,
 			PinImage:                req.PinImage,
 			ConcurrencyPolicy:       policy,
-			ActiveDeadlineSeconds:   req.ActiveDeadlineSeconds,
+			ActiveDeadlineSeconds:   defaultActiveDeadline(req.ActiveDeadlineSeconds, req.Schedule, time.Now()),
 			StartingDeadlineSeconds: defaultStartingDeadline(req.StartingDeadlineSeconds),
 			Image:                   prod.Spec.Image,
 			EnvFromSecrets:          prod.Spec.EnvFromSecrets,
@@ -574,7 +577,7 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			Suspend:                 req.Suspend,
 			PinImage:                req.PinImage,
 			ConcurrencyPolicy:       policy,
-			ActiveDeadlineSeconds:   req.ActiveDeadlineSeconds,
+			ActiveDeadlineSeconds:   defaultActiveDeadline(req.ActiveDeadlineSeconds, req.Schedule, time.Now()),
 			StartingDeadlineSeconds: defaultStartingDeadline(req.StartingDeadlineSeconds),
 			OnFailure:               req.OnFailure,
 		},
@@ -695,6 +698,24 @@ func (s *Service) checkReleaseName(ctx context.Context, ns, fqn string) error {
 // stops a fallen-behind CronJob (>100 missed schedules) from wedging
 // permanently. Callers wanting kube's unbounded default can't express it
 // via the create path — that trade is intentional (self-heal by default).
+// defaultActiveDeadline bounds a new cron's runs when the request leaves
+// the deadline unset. Under the default Forbid policy a run that hangs
+// (a stuck socket, a lock wait) otherwise skips every later schedule
+// with nothing failing. 10x the schedule interval, kept within 1h-24h
+// so a slow run on a tight schedule isn't killed mid-work.
+func defaultActiveDeadline(v int, schedule string, now time.Time) int {
+	if v > 0 {
+		return v
+	}
+	d := 24 * time.Hour
+	if s, err := cronsched.Parse(schedule); err == nil {
+		if iv := s.Interval(now.UTC()); iv > 0 {
+			d = min(max(10*iv, time.Hour), 24*time.Hour)
+		}
+	}
+	return int(d.Seconds())
+}
+
 func defaultStartingDeadline(v int) int {
 	if v <= 0 {
 		return 300

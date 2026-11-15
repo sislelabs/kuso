@@ -105,6 +105,10 @@ type Activator struct {
 	activityMu sync.Mutex
 	lastStamp  map[string]time.Time
 
+	// kickMu / lastKick throttle kickWake per env (kickWakeInterval).
+	kickMu   sync.Mutex
+	lastKick map[string]time.Time
+
 	// readyMu / readyAt remember when each env (ns/name) was last seen
 	// with a ready endpoint, so the per-request fast path doesn't LIST
 	// EndpointSlices on every proxied request. A ClusterRole without
@@ -501,6 +505,9 @@ func (a *Activator) stampOpen(ctx context.Context) {
 // refused dial, and fastReady answers "ready" optimistically when it
 // can't LIST, which would make the re-wake a no-op.
 func (a *Activator) kickWake(ns, name string) {
+	if !a.claimKick(ns + "/" + name) {
+		return
+	}
 	st, _ := a.startWake(ns, name)
 	go func() {
 		<-st.done
@@ -508,6 +515,33 @@ func (a *Activator) kickWake(ns, name string) {
 			a.logger.Warn("activator: re-wake after refused dial", "ns", ns, "env", name, "err", st.err)
 		}
 	}()
+}
+
+// kickWakeInterval is the least time between two kickWakes of one env.
+// Every wake rewrites the env CR, and each write makes the helm-operator
+// reconcile the release; an awake env whose listener flaps (a restart, a
+// crash loop) refuses dial after dial, which was a CR write per proxied
+// request. The refused request still drops the ready cache, so later
+// requests that find no ready endpoint wake through the held path.
+const kickWakeInterval = 30 * time.Second
+
+func (a *Activator) claimKick(key string) bool {
+	now := a.now()
+	a.kickMu.Lock()
+	defer a.kickMu.Unlock()
+	if last, ok := a.lastKick[key]; ok && now.Sub(last) < kickWakeInterval {
+		return false
+	}
+	if a.lastKick == nil {
+		a.lastKick = map[string]time.Time{}
+	}
+	for k, t := range a.lastKick {
+		if now.Sub(t) >= kickWakeInterval {
+			delete(a.lastKick, k)
+		}
+	}
+	a.lastKick[key] = now
+	return true
 }
 
 type dialRetryHookKey struct{}

@@ -118,3 +118,33 @@ func TestSeedCertExpiryMigration(t *testing.T) {
 		t.Errorf("seed ignored an existing cert rule: %d rules", n)
 	}
 }
+
+// The default rollout_failing rule lands once; deleting it sticks across
+// later boots, which is what the Setting marker is for.
+func TestEnsureDefaultAlertRules_SeedsOnceAndDeleteSticks(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	clean := func() {
+		_, _ = d.ExecContext(ctx, `DELETE FROM "Setting" WHERE key = $1`, defaultRolloutFailingSeededKey)
+		_, _ = d.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "kind" = $1`, AlertKindRolloutFailing)
+	}
+	clean()
+	t.Cleanup(clean)
+
+	if err := d.EnsureDefaultAlertRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := findRule(t, d, "default-rollout-failing")
+	if r == nil || !r.Enabled || r.Kind != AlertKindRolloutFailing || r.Project != "" {
+		t.Fatalf("default rule = %+v", r)
+	}
+	if err := d.DeleteAlertRule(ctx, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.EnsureDefaultAlertRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r := findRule(t, d, "default-rollout-failing"); r != nil {
+		t.Fatal("deleted default rule came back on the next boot")
+	}
+}

@@ -46,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/cronsched"
 	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
@@ -56,6 +57,16 @@ import (
 // already gone out. Stored on the Job itself so the dedupe survives a
 // restart; the Job's own GC (failedJobsHistoryLimit) cleans it up.
 const notifiedAnnotation = "kuso.sislelabs.com/cron-failure-notified"
+
+// overrunAnnotation marks a still-running Job whose "blocking its
+// schedule" alert has gone out, so it fires once per run across restarts.
+const overrunAnnotation = "kuso.sislelabs.com/cron-overrun-notified"
+
+// overrunGrace is how far past the next scheduled start a run must be
+// before it counts as blocking: the CronJob controller skips that start
+// under Forbid, and the grace keeps a run finishing right at the
+// boundary from paging.
+const overrunGrace = time.Minute
 
 // staleFailureAge bounds how old an unstamped failure may be and still
 // alert. A Job that failed during a restart or roll (minutes) still
@@ -125,6 +136,10 @@ type Watcher struct {
 	// doesn't re-fire on every tick. Pruned each tick against the live
 	// Job set (see tick) so it doesn't grow unbounded.
 	dispatched map[types.UID]struct{}
+	// overrun caches, per running Job UID, when the run starts blocking
+	// its schedule, so the cron is read once per run rather than every
+	// tick. Zero = never, or already alerted. Pruned with dispatched.
+	overrun map[types.UID]time.Time
 
 	// now is overridable for tests; nil means time.Now.
 	now func() time.Time
@@ -249,6 +264,7 @@ func (w *Watcher) tick(ctx context.Context) {
 		}(job)
 	}
 	wg.Wait()
+	w.checkOverruns(ctx, jobList)
 	// Prune dispatched UIDs that no longer correspond to a live Job.
 	// failedJobsHistoryLimit bounds Jobs IN THE CLUSTER, not entries in
 	// this map — without an explicit prune the map grows for the life of
@@ -264,7 +280,126 @@ func (w *Watcher) tick(ctx context.Context) {
 			delete(w.dispatched, uid)
 		}
 	}
+	for uid := range w.overrun {
+		if _, ok := live[uid]; !ok {
+			delete(w.overrun, uid)
+		}
+	}
 	w.mu.Unlock()
+}
+
+// checkOverruns alerts once per run when a cron Job is still going past
+// its next scheduled start. Under concurrencyPolicy Forbid (the default)
+// the CronJob controller then skips every start until the run ends, and
+// nothing fails, so cron.failed never fires: a hung */5 sync just stops
+// running. Allow and Replace don't block later runs and are skipped.
+func (w *Watcher) checkOverruns(ctx context.Context, jobs []*batchv1.Job) {
+	now := w.clock()
+	for _, job := range jobs {
+		if jobFinished(job) || job.Annotations[overrunAnnotation] != "" {
+			continue
+		}
+		cronName := job.Labels["kuso.sislelabs.com/cron"]
+		started := job.CreationTimestamp.Time
+		if cronName == "" || started.IsZero() || now.Sub(started) < overrunGrace {
+			continue
+		}
+		w.mu.Lock()
+		due, known := w.overrun[job.UID]
+		w.mu.Unlock()
+		if known && (due.IsZero() || now.Before(due)) {
+			continue
+		}
+		getCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
+		cron, err := w.Kube.GetKusoCron(getCtx, job.Namespace, cronName)
+		cancel()
+		if err != nil {
+			continue
+		}
+		if !known {
+			due = overrunDue(cron, started)
+			w.mu.Lock()
+			if w.overrun == nil {
+				w.overrun = map[types.UID]time.Time{}
+			}
+			w.overrun[job.UID] = due
+			w.mu.Unlock()
+			if due.IsZero() || now.Before(due) {
+				continue
+			}
+		}
+		w.mu.Lock()
+		w.overrun[job.UID] = time.Time{}
+		w.mu.Unlock()
+		w.Logger.Info("cronwatch run blocking its schedule",
+			"project", cron.Spec.Project, "cron", cronName, "job", job.Name, "running", now.Sub(started))
+		if emit := w.emitter(); emit != nil {
+			emit(cronOverrunEvent(cron, job, started, due.Add(-overrunGrace), now))
+		}
+		w.stamp(ctx, job, overrunAnnotation)
+	}
+}
+
+// overrunDue is when a run that started at started begins blocking its
+// cron's schedule, or zero when it never can: Allow and Replace don't
+// hold later runs back, and a suspended cron has no runs to hold.
+func overrunDue(cron *kube.KusoCron, started time.Time) time.Time {
+	if cron.Spec.Suspend || (cron.Spec.ConcurrencyPolicy != "" && cron.Spec.ConcurrencyPolicy != "Forbid") {
+		return time.Time{}
+	}
+	sched, err := cronsched.Parse(cron.Spec.Schedule)
+	if err != nil {
+		return time.Time{}
+	}
+	// kube-controller-manager evaluates schedules in its own zone, UTC
+	// on k3s.
+	next := sched.Next(started.UTC())
+	if next.IsZero() {
+		return time.Time{}
+	}
+	return next.Add(overrunGrace)
+}
+
+func jobFinished(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// cronOverrunEvent renders the card for a run that is holding up its
+// cron's schedule. It goes out as cron.failed so it reaches everyone who
+// already gets cron failures.
+func cronOverrunEvent(cron *kube.KusoCron, job *batchv1.Job, started, skipped, now time.Time) notify.Event {
+	project := cron.Spec.Project
+	short := strings.TrimPrefix(cron.Spec.Service, project+"-")
+	fields := []notify.EventField{
+		{Name: "Schedule", Value: "`" + cron.Spec.Schedule + "`", Inline: true},
+		{Name: "Running for", Value: shortDuration(now.Sub(started)), Inline: true},
+	}
+	var links []notify.EventLink
+	if short != "" {
+		links = append(links,
+			notify.EventLink{Label: "Crons", URL: cronURL(project, cron.Spec.Service)},
+			notify.EventLink{Label: "Logs", URL: notify.ServiceLink(project, short, "logs", "")},
+		)
+	}
+	return notify.Event{
+		Type:        notify.EventCronFailed,
+		Timestamp:   now.UTC(),
+		Project:     project,
+		Service:     short,
+		Title:       "✗ Cron run blocking its schedule · " + notify.Scope(project, cron.Name, ""),
+		Description: "Started " + notify.TimeToken(started) + ", still running past the run due " + notify.TimeToken(skipped),
+		Body: "Job " + job.Name + " is still running, so with concurrencyPolicy Forbid every scheduled run is skipped until it " +
+			"finishes or is deleted. Check it for a hang, or set activeDeadlineSeconds on the cron.",
+		URL:      cronURL(project, cron.Spec.Service),
+		Severity: "warn",
+		Fields:   fields,
+		Links:    links,
+	}
 }
 
 func (w *Watcher) clock() time.Time {
@@ -279,10 +414,14 @@ func (w *Watcher) clock() time.Time {
 // the in-memory set still dedupes for this process, and staleFailureAge
 // stops a restart from replaying it once it's old.
 func (w *Watcher) markNotified(ctx context.Context, job *batchv1.Job) {
+	w.stamp(ctx, job, notifiedAnnotation)
+}
+
+func (w *Watcher) stamp(ctx context.Context, job *batchv1.Job, annotation string) {
 	patch, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
-				notifiedAnnotation: w.clock().UTC().Format(time.RFC3339),
+				annotation: w.clock().UTC().Format(time.RFC3339),
 			},
 		},
 	})
@@ -356,14 +495,19 @@ func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) bool {
 }
 
 func (w *Watcher) emitNotify(ctx context.Context, cron *kube.KusoCron, job *batchv1.Job) {
-	emit := w.emit
-	if emit == nil {
-		if w.Notify == nil {
-			return
-		}
-		emit = w.Notify.Emit
+	if emit := w.emitter(); emit != nil {
+		emit(cronFailedEvent(cron, job, w.failedPod(ctx, job)))
 	}
-	emit(cronFailedEvent(cron, job, w.failedPod(ctx, job)))
+}
+
+func (w *Watcher) emitter() func(notify.Event) {
+	if w.emit != nil {
+		return w.emit
+	}
+	if w.Notify == nil {
+		return nil
+	}
+	return w.Notify.Emit
 }
 
 // podFailure is what the failed Job's newest pod says about the run.

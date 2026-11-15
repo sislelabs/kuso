@@ -259,3 +259,39 @@ func nullableFloat(p *float64) any {
 	}
 	return *p
 }
+
+// defaultRolloutFailingSeededKey marks that the default rollout_failing
+// rule was offered once, so a rule the operator deletes stays deleted.
+const defaultRolloutFailingSeededKey = "alerts.defaultRolloutFailingSeeded"
+
+// EnsureDefaultAlertRules seeds an instance-wide rollout_failing rule the
+// first time this runs on an instance. A surge pod that can't schedule,
+// a ProgressDeadlineExceeded rollout or a never-ready new version is
+// otherwise silent: the build reads green and the old version keeps
+// serving. Like 0013's cert_expiry seed it is skipped when a
+// rollout_failing rule already exists, and it never runs twice.
+func (d *DB) EnsureDefaultAlertRules(ctx context.Context) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: seed default alert rules: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
+INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
+VALUES ($1, 'true', $2, 'alerts-seed')
+ON CONFLICT (key) DO NOTHING`, defaultRolloutFailingSeededKey, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("db: seed default alert rules marker: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO "AlertRule"
+    ("id","name","enabled","kind","project","service","env","query","windowSeconds","severity","throttleSeconds")
+SELECT 'default-rollout-failing', 'Rollout failing', true, $1, '', '', '', '', 300, 'warn', 3600
+WHERE NOT EXISTS (SELECT 1 FROM "AlertRule" WHERE "kind" = $1)`, AlertKindRolloutFailing); err != nil {
+		return fmt.Errorf("db: seed rollout_failing rule: %w", err)
+	}
+	return tx.Commit()
+}
