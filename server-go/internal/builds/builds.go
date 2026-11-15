@@ -675,6 +675,8 @@ var (
 	// it because a retried delivery hitting an in-flight build is a
 	// success, not a failure.
 	ErrConflict = errors.New("builds: conflict")
+	// ErrForbidden is a request the caller's project role doesn't cover.
+	ErrForbidden = errors.New("builds: forbidden")
 )
 
 // CreateBuildRequest is the body of POST /api/projects/:p/services/:s/builds.
@@ -717,6 +719,11 @@ type CreateBuildRequest struct {
 	// "preview-pr-7"): the build uses that env's branch when Branch is
 	// empty and bakes that env's build-time vars instead of production's.
 	Env string `json:"env,omitempty"`
+	// TrackedBranchOnly refuses a branch no environment of the service
+	// deploys. Such a build bakes the production env's build-time secrets,
+	// so the handler sets this for callers who can't read those secrets
+	// (SEC-1). Never read from the JSON body.
+	TrackedBranchOnly bool `json:"-"`
 }
 
 // shaRE matches a full 40-char git SHA.
@@ -938,6 +945,15 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	}
 	if err := ValidateGitRef(branch); err != nil {
 		return nil, false, fmt.Errorf("%w: branch: %s", ErrInvalid, err.Error())
+	}
+	if req.TrackedBranchOnly && req.PreviewEnv == "" && branch != defaultBranch {
+		envs, lerr := s.serviceEnvs(ctx, ns, project, service)
+		if lerr != nil {
+			return nil, false, fmt.Errorf("list envs for branch check: %w", lerr)
+		}
+		if !branchTracked(envs, branch, defaultBranch) {
+			return nil, false, fmt.Errorf("%w: no environment of %s deploys branch %q, so its build would run with production's build-time secrets; that requires the project admin role. Open a pull request for a preview build, or ask an admin to add an environment for the branch", ErrForbidden, service, branch)
+		}
 	}
 
 	installationID := githubInstallationID(proj, svcCR)

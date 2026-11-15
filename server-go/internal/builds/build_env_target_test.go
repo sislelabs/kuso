@@ -90,3 +90,33 @@ func TestCreate_ExplicitEnvUsesItsBranchAndVars(t *testing.T) {
 		t.Errorf("unknown env: want ErrNotFound, got %v", err)
 	}
 }
+
+// SEC-1: an untracked branch would bake production's build-time secrets,
+// so a caller limited to tracked branches is refused; tracked branches and
+// the default branch still build.
+func TestCreate_TrackedBranchOnlyRefusesUntrackedBranch(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedServiceWithSecretEnv("alpha", "web", "alpha-db-conn", "url"),
+		seedProductionEnv("alpha", "web"),
+		seedStagingEnv("alpha", "web"),
+	)
+	ctx := context.Background()
+	mkSecret(t, s, "alpha-db-conn", "url", "postgres://PROD/db")
+	mkSecret(t, s, "alpha-db-staging-conn", "url", "postgres://STAGING/db")
+	_, err := s.Create(ctx, "alpha", "web", CreateBuildRequest{Branch: "evil", Ref: "2222220123456789abcdef0123456789abcdef01", TrackedBranchOnly: true})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("untracked branch: want ErrForbidden, got %v", err)
+	}
+	for i, br := range []string{"develop", "main"} {
+		ref := []string{"3333330123456789abcdef0123456789abcdef01", "4444440123456789abcdef0123456789abcdef01"}[i]
+		if _, err := s.Create(ctx, "alpha", "web", CreateBuildRequest{Branch: br, Ref: ref, TrackedBranchOnly: true}); err != nil {
+			t.Errorf("tracked branch %s: %v", br, err)
+		}
+	}
+	// Admins (flag unset) keep building any branch.
+	if _, err := s.Create(ctx, "alpha", "web", CreateBuildRequest{Branch: "evil", Ref: "5555550123456789abcdef0123456789abcdef01"}); err != nil {
+		t.Errorf("admin untracked branch: %v", err)
+	}
+}

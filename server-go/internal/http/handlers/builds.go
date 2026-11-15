@@ -357,6 +357,10 @@ func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
+	if req.Force && !callerCanReadSecrets(ctx, h.DB, project) {
+		writeErr(w, http.StatusForbidden, "forbidden: a forced rollback across branches requires the project admin role, because it runs another branch's code with the environment's secrets. Roll back to a build of the branch the environment deploys instead")
+		return
+	}
 	out, err := h.Svc.Rollback(ctx, project, service, req.Env, build, builds.RollbackOptions{
 		Force: req.Force,
 		Actor: actorName(ctx),
@@ -768,6 +772,7 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.TriggeredBy = "api"
 	}
+	req.TrackedBranchOnly = !callerCanReadSecrets(ctx, h.DB, chi.URLParam(r, "project"))
 	out, err := h.Svc.CreateWithOutcome(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "create build", err)
@@ -803,6 +808,8 @@ func (h *BuildsHandler) fail(w http.ResponseWriter, op string, err error) {
 		writeErr(w, http.StatusNotFound, notFoundMsg(err, builds.ErrNotFound, "build"))
 	case errors.Is(err, builds.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, builds.ErrForbidden):
+		writeErr(w, http.StatusForbidden, "forbidden: "+strings.TrimPrefix(err.Error(), builds.ErrForbidden.Error()+": "))
 	case errors.Is(err, builds.ErrConflict):
 		// Pass the conflict message through so the UI can show
 		// "build already in flight" instead of a bare 409.

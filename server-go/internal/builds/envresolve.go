@@ -198,3 +198,15 @@ func buildEnvSource(envs []kube.KusoEnvironment, branch, defaultBranch string, e
 	}
 	return pick
 }
+
+// branchTracked reports whether some env of the service deploys branch.
+// A branch none of them deploys falls back to the production vars in
+// buildEnvSource's caller.
+func branchTracked(envs []kube.KusoEnvironment, branch, defaultBranch string) bool {
+	for i := range envs {
+		if promotionBranchMatches(branch, envs[i].Spec.Branch, defaultBranch) {
+			return true
+		}
+	}
+	return false
+}
