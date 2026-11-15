@@ -39,7 +39,8 @@ func parseLiveImages(v string) liveImages {
 }
 
 // rolledOut: every desired replica runs the current template and is ready,
-// and the template runs ref.
+// and the template runs ref. ref is the image the chart renders
+// (KusoImage.Ref), which carries "@<digest>" for a digest-pinned env.
 func rolledOut(d *appsv1.Deployment, ref string) bool {
 	if d == nil || d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
 		return false
@@ -61,11 +62,10 @@ func (w *Watcher) recordLiveImage(ctx context.Context, ns string, e *kube.KusoEn
 	if e.Spec.Image == nil || e.Spec.Image.Repository == "" || e.Spec.Kind == "preview" {
 		return
 	}
-	tag := e.Spec.Image.Tag
-	if tag == "" {
-		tag = "latest"
-	}
-	ref := e.Spec.Image.Repository + ":" + tag
+	// The record keeps the bare "repo:tag" the UI matches builds and
+	// releases against; the Deployment runs the rendered ref, which is
+	// "repo:tag@sha256:…" for a digest-pinned env.
+	ref := e.Spec.Image.TagRef()
 	cur := parseLiveImages(e.Annotations[AnnLiveImages])
 	if slices.Contains(cur.Refs, ref) {
 		return
@@ -80,7 +80,7 @@ func (w *Watcher) recordLiveImage(ctx context.Context, ns string, e *kube.KusoEn
 		}
 		dep = d
 	}
-	if !rolledOut(dep, ref) {
+	if !rolledOut(dep, e.Spec.Image.Ref()) {
 		return
 	}
 	if err := addLiveImage(ctx, w.Kube, ns, e.Name, ref, time.Now()); err != nil {
