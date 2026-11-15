@@ -15,7 +15,8 @@
 # the catch-all route below), so a proxy bug must not hand out
 # kuso-server's token (cluster-wide Secret read, node delete, RBAC
 # writes). Its kube calls, from internal/activator + scaledown.Wake:
-#   kusoenvironments  list (resolve Host), get + update (wake, activity stamp)
+#   kusoenvironments  list + watch (resolve Host; without watch it LISTs
+#                     every 5s), get + update (wake, activity stamp)
 #   endpointslices    list (wake readiness); endpoints get (legacy fallback)
 #   deployments       patch spec.replicas (wake)
 #   pods              list (fail a held request fast when the woken pod
@@ -45,7 +46,7 @@ metadata:
 rules:
   - apiGroups: [application.kuso.sislelabs.com]
     resources: [kusoenvironments]
-    verbs: [get, list, update]
+    verbs: [get, list, watch, update]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [list]
