@@ -358,3 +358,23 @@ func TestSetEnvPending_RefusesRefAFutureProjectCouldOwn(t *testing.T) {
 		}
 	}
 }
+
+// SEC-3, dashed caller project: "acme-prod" saving ${{ db.X }} names
+// acme-prod-db-conn, which a shorter project "acme" owns through its
+// "prod-db" addon. The dash-free short name doesn't make that safe; the
+// existing CR's project label refuses it. (A "prod-db" that acme adds
+// later is refused at addon create, see addons.checkProjectNameOverlap.)
+func TestSetEnvPending_DashedProjectRefusesShorterProjectsAddon(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{}),
+		seedProject("acme-prod", kube.KusoProjectSpec{}),
+		seedService("acme-prod", "api", kube.KusoServiceSpec{Project: "acme-prod"}),
+		seedAddon("acme", "prod-db", "postgres"),
+	)
+	err := s.SetEnvWithOpts(context.Background(), "acme-prod", "api",
+		[]EnvVar{{Name: "DB", Value: "${{ db.DATABASE_URL }}"}}, SetEnvOpts{AllowPending: true})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("acme-prod pending ref to acme's acme-prod-db-conn: want ErrInvalid, got %v", err)
+	}
+}

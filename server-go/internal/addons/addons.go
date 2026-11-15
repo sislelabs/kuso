@@ -523,6 +523,9 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if err := s.checkReleaseName(ctx, ns, fqn, req.ExtraLabels[kube.LabelEnv] != ""); err != nil {
 		return nil, err
 	}
+	if err := s.checkProjectNameOverlap(ctx, project, fqn); err != nil {
+		return nil, err
+	}
 	// A deleted native addon keeps its data PVC; re-adding the name would
 	// silently mount that old data (and crash-loop a new engine version
 	// against an old data directory).
