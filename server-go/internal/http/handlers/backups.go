@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1754,15 +1752,6 @@ func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, pro
 	if c, ok := auth.ClaimsFromContext(r.Context()); ok && c != nil {
 		uid = c.UserID
 	}
-	// Truncate so a multi-MB user-pasted query doesn't blow up the audit row.
-	// 4 KiB is plenty for forensics. Append sha256(full) so "did this exact
-	// query run twice" stays answerable even after truncation.
-	q := query
-	sum := sha256.Sum256([]byte(q))
-	hash := hex.EncodeToString(sum[:])[:16]
-	if len(q) > 4096 {
-		q = q[:4096] + "…[truncated]"
-	}
 	h.Audit.Log(ctx, audit.Entry{
 		User:     uid,
 		Severity: "info",
@@ -1770,7 +1759,7 @@ func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, pro
 		Pipeline: project,
 		App:      addon,
 		Resource: "kusoaddon",
-		Message:  fmt.Sprintf("[sha256:%s] %s", hash, q),
+		Message:  sqlQueryAuditMessage(query),
 	})
 }
 

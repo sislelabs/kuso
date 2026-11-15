@@ -912,7 +912,6 @@ func (h *BackupsHandler) auditWrite(ctx context.Context, r *http.Request, op, sc
 	if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
 		uid = c.UserID
 	}
-	keyJSON, _ := json.Marshal(key)
 	h.Audit.Log(ctx, audit.Entry{
 		User:     uid,
 		Severity: "warn",
@@ -920,7 +919,7 @@ func (h *BackupsHandler) auditWrite(ctx context.Context, r *http.Request, op, sc
 		Pipeline: project,
 		App:      addon,
 		Resource: "kusoaddon",
-		Message:  fmt.Sprintf("%s %s.%s key=%s", op, schema, table, string(keyJSON)),
+		Message:  sqlWriteAuditMessage(op, schema, table, key),
 	})
 }
 
