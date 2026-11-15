@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -704,16 +705,141 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 }
 
 // projectSummaryItem is one dashboard card's worth of data in the
-// batched GET /api/projects/summary response. Project/Services/
-// Environments carry the exact same shape (and the same enrich + mask +
-// redact treatment) as GET /api/projects/{project}; Metrics is the same
-// rollup GET /api/projects/{project}/metrics returns, so clients can
-// swap N describe + N metrics requests for one array without new types.
+// batched GET /api/projects/summary response. Services and Environments
+// are slim views (summaryService/summaryEnvironment) carrying only what
+// the cards, health rollup, palette and top bar read; the full CRs stay
+// on GET /api/projects/{project}. Shipping full CRs here grew linearly
+// with the fleet on a 30s poll per tab (SCL-2). Keep web
+// KusoServiceSummary/KusoEnvironmentSummary in sync with these.
 type projectSummaryItem struct {
 	Project      *kube.KusoProject      `json:"project"`
-	Services     []kube.KusoService     `json:"services"`
-	Environments []kube.KusoEnvironment `json:"environments"`
+	Services     []summaryService       `json:"services"`
+	Environments []summaryEnvironment   `json:"environments"`
 	Metrics      projectMetricsResponse `json:"metrics"`
+}
+
+type summaryMeta struct {
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace,omitempty"`
+	UID               string            `json:"uid,omitempty"`
+	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
+}
+
+// summaryEnvVar is a name only: env values never ride the summary, so it
+// needs no secrets:read mask.
+type summaryEnvVar struct {
+	Name string `json:"name,omitempty"`
+}
+
+type summaryServiceSpec struct {
+	Project     string            `json:"project"`
+	DisplayName string            `json:"displayName,omitempty"`
+	Repo        *kube.KusoRepoRef `json:"repo,omitempty"`
+	Runtime     string            `json:"runtime,omitempty"`
+	Port        int32             `json:"port,omitempty"`
+	Domains     []kube.KusoDomain `json:"domains,omitempty"`
+	Stopped     bool              `json:"stopped,omitempty"`
+	Internal    bool              `json:"internal,omitempty"`
+	EnvVars     []summaryEnvVar   `json:"envVars,omitempty"`
+}
+
+type summaryService struct {
+	Metadata summaryMeta        `json:"metadata"`
+	Spec     summaryServiceSpec `json:"spec"`
+}
+
+type summaryImage struct {
+	Tag string `json:"tag,omitempty"`
+}
+
+type summaryEnvSpec struct {
+	Project         string        `json:"project"`
+	Service         string        `json:"service"`
+	Kind            string        `json:"kind,omitempty"`
+	Branch          string        `json:"branch,omitempty"`
+	Host            string        `json:"host,omitempty"`
+	AdditionalHosts []string      `json:"additionalHosts,omitempty"`
+	TLSEnabled      bool          `json:"tlsEnabled,omitempty"`
+	EnvFromSecrets  []string      `json:"envFromSecrets,omitempty"`
+	Image           *summaryImage `json:"image,omitempty"`
+}
+
+type summaryEnvironment struct {
+	Metadata summaryMeta    `json:"metadata"`
+	Spec     summaryEnvSpec `json:"spec"`
+	Status   map[string]any `json:"status,omitempty"`
+}
+
+func toSummaryMeta(m *metav1.ObjectMeta, keepAnnotations ...string) summaryMeta {
+	out := summaryMeta{Name: m.Name, Namespace: m.Namespace, UID: string(m.UID), Labels: m.Labels}
+	if !m.CreationTimestamp.IsZero() {
+		out.CreationTimestamp = m.CreationTimestamp.UTC().Format(time.RFC3339)
+	}
+	for _, k := range keepAnnotations {
+		if v, ok := m.Annotations[k]; ok {
+			if out.Annotations == nil {
+				out.Annotations = map[string]string{}
+			}
+			out.Annotations[k] = v
+		}
+	}
+	return out
+}
+
+func toSummaryServices(svcs []kube.KusoService) []summaryService {
+	out := make([]summaryService, len(svcs))
+	for i := range svcs {
+		s := &svcs[i]
+		var vars []summaryEnvVar
+		for _, v := range s.Spec.EnvVars {
+			vars = append(vars, summaryEnvVar{Name: v.Name})
+		}
+		out[i] = summaryService{
+			Metadata: toSummaryMeta(&s.ObjectMeta),
+			Spec: summaryServiceSpec{
+				Project: s.Spec.Project, DisplayName: s.Spec.DisplayName, Repo: s.Spec.Repo,
+				Runtime: s.Spec.Runtime, Port: s.Spec.Port, Domains: s.Spec.Domains,
+				Stopped: s.Spec.Stopped, Internal: s.Spec.Internal, EnvVars: vars,
+			},
+		}
+	}
+	return out
+}
+
+// summaryEnvStatusDropped are env status keys no summary consumer reads:
+// helm conditions and the deployed-release record.
+var summaryEnvStatusDropped = []string{"conditions", "deployedRelease"}
+
+func toSummaryEnvironments(envs []kube.KusoEnvironment) []summaryEnvironment {
+	out := make([]summaryEnvironment, len(envs))
+	for i := range envs {
+		e := &envs[i]
+		var st map[string]any
+		if len(e.Status) > 0 {
+			st = make(map[string]any, len(e.Status))
+			for k, v := range e.Status {
+				if !slices.Contains(summaryEnvStatusDropped, k) {
+					st[k] = v
+				}
+			}
+		}
+		var img *summaryImage
+		if e.Spec.Image != nil && e.Spec.Image.Tag != "" {
+			img = &summaryImage{Tag: e.Spec.Image.Tag}
+		}
+		out[i] = summaryEnvironment{
+			Metadata: toSummaryMeta(&e.ObjectMeta, kube.AnnPromotedAt),
+			Spec: summaryEnvSpec{
+				Project: e.Spec.Project, Service: e.Spec.Service, Kind: e.Spec.Kind, Branch: e.Spec.Branch,
+				Host: e.Spec.Host, AdditionalHosts: e.Spec.AdditionalHosts, TLSEnabled: e.Spec.TLSEnabled,
+				EnvFromSecrets: e.Spec.EnvFromSecrets, Image: img,
+			},
+			Status: st,
+		}
+	}
+	return out
 }
 
 // Summary is GET /api/projects/summary — the batched projects-dashboard
@@ -779,13 +905,10 @@ func (h *ProjectsHandler) summaryItem(ctx context.Context, proj *kube.KusoProjec
 			Metrics: projectMetricsResponse{Project: name},
 		}
 	}
-	// Same serialization treatment as the Describe handler: surface
-	// managed-secret keys BEFORE masking, then mask env values and
-	// strip repo credentials for callers without secrets:read.
+	// Managed-secret keys join the env-var names the palette searches.
+	// Values are never serialized here, so there is nothing to mask;
+	// repo URLs still lose their credentials.
 	enrichServicesWithManagedSecretKeys(ctx, h.Svc, name, d.Services)
-	enrichEnvsWithManagedSecretKeys(ctx, h.Svc, name, d.Environments)
-	maskServicesEnvIfNeeded(ctx, h.DB, name, d.Services)
-	maskEnvsIfNeeded(ctx, h.DB, name, d.Environments)
 	redactProjectRepoIfNeeded(ctx, h.DB, d.Project)
 	redactServicesRepoIfNeeded(ctx, h.DB, name, d.Services)
 	ns := proj.Spec.Namespace
@@ -794,8 +917,8 @@ func (h *ProjectsHandler) summaryItem(ctx context.Context, proj *kube.KusoProjec
 	}
 	return projectSummaryItem{
 		Project:      d.Project,
-		Services:     d.Services,
-		Environments: d.Environments,
+		Services:     toSummaryServices(d.Services),
+		Environments: toSummaryEnvironments(d.Environments),
 		Metrics:      h.summaryMetrics(ctx, name, ns, d.Environments, podMetrics),
 	}
 }

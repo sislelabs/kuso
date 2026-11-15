@@ -4,8 +4,10 @@ import { verifyCompleteGzip } from "@/lib/gzip-verify";
 import type {
   KusoAddon,
   KusoEnvironment,
+  KusoEnvironmentSummary,
   KusoProject,
   KusoService,
+  KusoServiceSummary,
 } from "@/types/projects";
 
 export async function listProjects(): Promise<KusoProject[]> {
@@ -28,8 +30,8 @@ export interface ProjectSummaryMetrics {
 // rollup, one item per project the caller can access.
 export interface ProjectSummaryItem {
   project: KusoProject;
-  services: KusoService[];
-  environments: KusoEnvironment[];
+  services: KusoServiceSummary[];
+  environments: KusoEnvironmentSummary[];
   metrics: ProjectSummaryMetrics;
 }
 

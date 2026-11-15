@@ -4,7 +4,7 @@
 // "Live" in one place and "Online" / "Healthy" / "ok" in another.
 
 import { isProductionGroup, isProductionResource } from "@/lib/env-group";
-import type { KusoEnvironment, KusoService } from "@/types/projects";
+import type { KusoEnvironmentSummary, KusoServiceSummary } from "@/types/projects";
 import { deriveServiceStatus, serviceBucketOf } from "@/features/services/nodeStatus";
 
 export type StatusTone = "success" | "progress" | "warning" | "danger" | "info" | "neutral";
@@ -286,7 +286,7 @@ export function addonStatusFromServer(addon: {
 // project filters). "attention" = failing, stuck or degraded.
 export type ServiceBucket = "running" | "in_flight" | "attention" | "sleeping" | "stopped" | "not_deployed" | "unknown";
 
-export function serviceBucket(stopped: boolean | undefined, env: KusoEnvironment | undefined): ServiceBucket {
+export function serviceBucket(stopped: boolean | undefined, env: KusoEnvironmentSummary | undefined): ServiceBucket {
   // The same derivation as every dot and pill (deriveServiceStatus), so
   // counts can't disagree with what the cards show.
   return serviceBucketOf(deriveServiceStatus({ stopped, env }));
@@ -297,8 +297,8 @@ export type ServiceTally = Record<ServiceBucket, number> & { total: number };
 // tallyServices counts the PRODUCTION env of each production service, the
 // scope project cards use, so the Health page and the cards sum the same.
 export function tallyServices(
-  services: ReadonlyArray<KusoService>,
-  envs: ReadonlyArray<KusoEnvironment>,
+  services: ReadonlyArray<KusoServiceSummary>,
+  envs: ReadonlyArray<KusoEnvironmentSummary>,
 ): ServiceTally {
   const out: ServiceTally = {
     total: 0,

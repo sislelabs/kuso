@@ -1,7 +1,7 @@
 import { stripRepoCredentials } from "@/lib/format";
 import { isProductionGroup, isProductionResource } from "@/lib/env-group";
 import { projectLastDeployedAt, projectPrimaryDomain, type ProjectDomain } from "@/features/projects/facts";
-import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
+import type { KusoEnvironmentSummary, KusoProject, KusoServiceSummary } from "@/types/projects";
 import type { ProjectSummaryItem, ProjectSummaryMetrics } from "@/features/projects";
 import { SERVICE_STATUS, type ServiceStatus, type StatusTone } from "@/lib/status";
 import { deriveServiceStatus } from "@/features/services/nodeStatus";
@@ -71,7 +71,7 @@ export interface ProjectCardModel {
 
 // envServiceStatus is the canvas node's status (deriveServiceStatus, the
 // one selector), bucketed into the shared vocabulary for counting.
-export function envServiceStatus(svc: KusoService, env: KusoEnvironment | undefined): ServiceStatus {
+export function envServiceStatus(svc: KusoServiceSummary, env: KusoEnvironmentSummary | undefined): ServiceStatus {
   return nodeServiceStatus(deriveServiceStatus({ stopped: svc.spec.stopped === true, env }));
 }
 
@@ -90,7 +90,7 @@ const STATUS_HEALTH: Record<ServiceStatus, ServiceHealth> = {
   unknown: "pending",
 };
 
-export function serviceHealth(svc: KusoService, env: KusoEnvironment | undefined): ServiceHealth {
+export function serviceHealth(svc: KusoServiceSummary, env: KusoEnvironmentSummary | undefined): ServiceHealth {
   return STATUS_HEALTH[envServiceStatus(svc, env)] ?? "pending";
 }
 
@@ -165,17 +165,17 @@ export function rollupStatus(health: ReadonlyArray<ServiceHealth>): ProjectStatu
   return "pending";
 }
 
-function prodEnvFor(svc: KusoService, envs: ReadonlyArray<KusoEnvironment>): KusoEnvironment | undefined {
+function prodEnvFor(svc: KusoServiceSummary, envs: ReadonlyArray<KusoEnvironmentSummary>): KusoEnvironmentSummary | undefined {
   return envs.find((e) => e.spec.service === svc.metadata.name && isProductionGroup(e));
 }
 
-export function serviceShortName(s: KusoService): string {
+export function serviceShortName(s: KusoServiceSummary): string {
   return s.metadata.labels?.[SERVICE_LABEL] ?? s.metadata.name;
 }
 
 // The single repo URL shared by all services that declare one; undefined
 // for multi-repo projects (the card shows none rather than guessing).
-export function distinctServiceRepo(services: ReadonlyArray<KusoService>): string | undefined {
+export function distinctServiceRepo(services: ReadonlyArray<KusoServiceSummary>): string | undefined {
   const urls = new Set<string>();
   for (const s of services) {
     const u = s.spec.repo?.url;

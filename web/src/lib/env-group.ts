@@ -9,12 +9,12 @@
 // Picking "the service's production env" by spec.kind==="production"
 // wrongly selects a staging clone → duplicate canvas node, wrong URLs,
 // wrong live counts. Select by the label instead.
-import type { KusoEnvironment } from "@/types/projects";
+import type { KusoEnvironmentSummary } from "@/types/projects";
 
 export const ENV_GROUP_LABEL = "kuso.sislelabs.com/env";
 
 /** The env-group this env belongs to (production / staging / preview-pr-N), or undefined for legacy CRs missing the label. */
-export function envGroupLabel(e: KusoEnvironment): string | undefined {
+export function envGroupLabel(e: KusoEnvironmentSummary): string | undefined {
   return e.metadata?.labels?.[ENV_GROUP_LABEL];
 }
 
@@ -23,7 +23,7 @@ export function envGroupLabel(e: KusoEnvironment): string | undefined {
  * kuso.sislelabs.com/env label; falls back to spec.kind==="production"
  * for hand-created / legacy envs that predate the label.
  */
-export function isProductionGroup(e: KusoEnvironment): boolean {
+export function isProductionGroup(e: KusoEnvironmentSummary): boolean {
   const label = envGroupLabel(e);
   if (label !== undefined) return label === "production";
   return e.spec.kind === "production";
@@ -34,7 +34,7 @@ export function isProductionGroup(e: KusoEnvironment): boolean {
  * group label; legacy CRs without it fall back to spec.kind. Never use
  * spec.kind alone for display: a staging clone has kind "production".
  */
-export function envGroupName(e: KusoEnvironment | undefined): string {
+export function envGroupName(e: KusoEnvironmentSummary | undefined): string {
   if (!e) return "production";
   return envGroupLabel(e) ?? e.spec?.kind ?? "production";
 }
@@ -50,7 +50,7 @@ export interface EnvOption {
  * filter on: the env-group label, else the CR name minus the
  * "<fqn>-" prefix.
  */
-export function serviceEnvOptions(envs: KusoEnvironment[], fqn: string): EnvOption[] {
+export function serviceEnvOptions(envs: KusoEnvironmentSummary[], fqn: string): EnvOption[] {
   return envs
     .filter((e) => e.spec.service === fqn)
     .map((e) => {
@@ -72,7 +72,7 @@ export function serviceEnvOptions(envs: KusoEnvironment[], fqn: string): EnvOpti
  * (the server default), else the CR name. A preview's CR is
  * "<fqn>-pr-N", which the server can't derive from "preview-pr-N".
  */
-export function wakeEnvParam(e: KusoEnvironment | undefined, group: string): string | undefined {
+export function wakeEnvParam(e: KusoEnvironmentSummary | undefined, group: string): string | undefined {
   if (e) return isProductionGroup(e) ? undefined : e.metadata.name;
   return group === "production" ? undefined : group;
 }

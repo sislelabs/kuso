@@ -155,9 +155,9 @@ func TestProjectsSummary_AdminShape(t *testing.T) {
 	if len(p1.Services) != 1 || len(p1.Environments) != 1 {
 		t.Fatalf("p1 shape: services=%d envs=%d, want 1/1", len(p1.Services), len(p1.Environments))
 	}
-	// Admin sees the plaintext value — same gate as Describe.
-	if v := p1.Services[0].Spec.EnvVars[0].Value; v != "super-secret" {
-		t.Errorf("admin env value = %q, want plaintext", v)
+	// Env-var names ride along for the palette search; values never do.
+	if vars := p1.Services[0].Spec.EnvVars; len(vars) != 1 || vars[0].Name != "API_KEY" {
+		t.Errorf("service env var names = %+v, want [API_KEY]", vars)
 	}
 	// Metrics mirror projectMetricsResponse: project echoed, production
 	// env-group counted even when metrics-server data is unavailable.
@@ -167,29 +167,57 @@ func TestProjectsSummary_AdminShape(t *testing.T) {
 	if p1.Metrics.Pods != 0 || p1.Metrics.CPUm != 0 {
 		t.Errorf("no kube wired: metrics should be zeros, got %+v", p1.Metrics)
 	}
-	if fake.enrichedSvcs == 0 || fake.enrichedEnvs == 0 {
+	if fake.enrichedSvcs == 0 {
 		t.Error("managed-secret enrichment not invoked before serialization")
 	}
 }
 
-// TestProjectsSummary_NonAdminMasked: a caller without secrets:read gets
-// the same items with env values masked — the batched endpoint must not
-// leak what per-project Describe masks. Nil DB + non-admin exercises the
-// fail-closed mask gate (callerCanReadSecrets → false).
-func TestProjectsSummary_NonAdminMasked(t *testing.T) {
+// TestProjectsSummary_NoEnvValuesOnTheWire: the summary carries env-var
+// names only, for every caller, so the batched endpoint can't leak what
+// per-project Describe masks. Checked on the raw body, not the decoded
+// DTO, so a re-added field would show up here.
+func TestProjectsSummary_NoEnvValuesOnTheWire(t *testing.T) {
 	fake := newSummaryFake()
 	h := &ProjectsHandler{Svc: fake, DB: nil, Logger: slog.Default(), Namespace: "kuso"}
-
-	got := summaryResponse(t, h, &auth.Claims{UserID: "viewer", Permissions: []string{}})
-
-	for _, it := range got {
-		for _, svc := range it.Services {
-			for _, ev := range svc.Spec.EnvVars {
-				if ev.Value != envMaskSentinel {
-					t.Errorf("project %s: env value %q not masked for non-admin", it.Project.Name, ev.Value)
-				}
-			}
+	for _, claims := range []*auth.Claims{
+		{UserID: "viewer", Permissions: []string{}},
+		{UserID: "admin", Permissions: []string{string(auth.PermSettingsAdmin)}},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/projects/summary", nil)
+		r = r.WithContext(auth.WithClaimsForTest(r.Context(), claims))
+		rr := httptest.NewRecorder()
+		h.Summary(rr, r)
+		if body := rr.Body.String(); strings.Contains(body, "super-secret") || !strings.Contains(body, "API_KEY") {
+			t.Errorf("%s: summary body must carry env names but no values: %s", claims.UserID, body)
 		}
+	}
+}
+
+// SCL-2: env status keeps what the cards read and drops the helm
+// conditions and release record; metadata keeps only the promoted-at
+// annotation.
+func TestProjectsSummary_SlimEnv(t *testing.T) {
+	envs := []kube.KusoEnvironment{{
+		ObjectMeta: metav1.ObjectMeta{Name: "e", Annotations: map[string]string{
+			kube.AnnPromotedAt: "2026-11-14T10:00:00Z", "kubectl.kubernetes.io/last-applied-configuration": "{...}",
+		}},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: "p", Service: "p-web", Host: "web.example.com",
+			EnvVars: []kube.KusoEnvVar{{Name: "K", Value: "v"}},
+			Image:   &kube.KusoImage{Repository: "reg/p/web", Tag: "abc"},
+		},
+		Status: map[string]any{"state": "running", "conditions": []any{"x"}, "deployedRelease": map[string]any{"name": "r"}},
+	}}
+	got := toSummaryEnvironments(envs)[0]
+	raw, _ := json.Marshal(got)
+	for _, gone := range []string{"conditions", "deployedRelease", "last-applied", `"K"`, "reg/p/web"} {
+		if strings.Contains(string(raw), gone) {
+			t.Errorf("slim env still carries %s: %s", gone, raw)
+		}
+	}
+	if got.Status["state"] != "running" || got.Metadata.Annotations[kube.AnnPromotedAt] == "" ||
+		got.Spec.Host != "web.example.com" || got.Spec.Image == nil || got.Spec.Image.Tag != "abc" {
+		t.Errorf("slim env dropped a field the cards read: %s", raw)
 	}
 }
 
@@ -256,9 +284,5 @@ func TestProjectsSummary_TenancyFilter(t *testing.T) {
 			names[i] = got[i].Project.Name
 		}
 		t.Fatalf("non-admin summary = %v, want exactly [p1]", names)
-	}
-	// Viewer without secrets:read: values masked even through the DB path.
-	if v := got[0].Services[0].Spec.EnvVars[0].Value; v != envMaskSentinel {
-		t.Errorf("viewer env value = %q, want masked", v)
 	}
 }

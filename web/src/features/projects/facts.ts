@@ -9,7 +9,7 @@ import { serviceUrl } from "@/features/services/serviceUrl";
 import { hostScheme } from "@/lib/host-scheme";
 import { rolloutFacts } from "@/lib/status";
 import { serviceShortName } from "@/lib/utils";
-import type { KusoEnvironment, KusoProject, KusoService } from "@/types/projects";
+import type { KusoEnvironmentSummary, KusoProject, KusoServiceSummary } from "@/types/projects";
 
 export const PROMOTED_AT_ANNOTATION = "kuso.sislelabs.com/promoted-at";
 
@@ -33,7 +33,7 @@ function newest(values: ReadonlyArray<string | undefined>): string | undefined {
 // current ReplicaSet finished rolling out, so config changes, image
 // changes and rollbacks count as deploys too. Build finish times are
 // deliberately ignored: a succeeded build isn't live until it's promoted.
-export function lastDeployedAt(env: KusoEnvironment | undefined): string | undefined {
+export function lastDeployedAt(env: KusoEnvironmentSummary | undefined): string | undefined {
   if (!env) return undefined;
   const best = newest([promotedIfLive(env), env.status?.lastDeployedAt, env.status?.rolloutCompletedAt]);
   // Mid failing rollout the completion stamp is gone; the serving
@@ -61,7 +61,7 @@ const settledDeploy = new Map<string, string>();
 // promotedIfLive drops a promotion stamp whose rollout never finished: an
 // image that can't be pulled or a version failing its health check was
 // promoted, but it isn't what's serving, so it isn't "deployed".
-export function promotedIfLive(env: KusoEnvironment): string | undefined {
+export function promotedIfLive(env: KusoEnvironmentSummary): string | undefined {
   const promoted = env.metadata?.annotations?.[PROMOTED_AT_ANNOTATION];
   const at = Date.parse(promoted ?? "");
   if (!promoted || !Number.isFinite(at)) return promoted;
@@ -84,7 +84,7 @@ export function promotedIfLive(env: KusoEnvironment): string | undefined {
 }
 
 // Newest lastDeployedAt across the production env-group.
-export function projectLastDeployedAt(envs: ReadonlyArray<KusoEnvironment>): string | undefined {
+export function projectLastDeployedAt(envs: ReadonlyArray<KusoEnvironmentSummary>): string | undefined {
   return newest(envs.filter(isProductionGroup).map(lastDeployedAt));
 }
 
@@ -97,18 +97,18 @@ export interface ProjectDomain {
   custom?: { service: string; fallback?: { host: string; href: string } };
 }
 
-function isProductionService(s: KusoService): boolean {
+function isProductionService(s: KusoServiceSummary): boolean {
   const g = s.metadata.labels?.[ENV_GROUP_LABEL];
   return !g || g === "production";
 }
 
-function prodEnvOf(s: KusoService, envs: ReadonlyArray<KusoEnvironment>): KusoEnvironment | undefined {
+function prodEnvOf(s: KusoServiceSummary, envs: ReadonlyArray<KusoEnvironmentSummary>): KusoEnvironmentSummary | undefined {
   return envs.find((e) => e.spec.service === s.metadata.name && isProductionGroup(e));
 }
 
 // Custom hosts a service answers on in production: the env's
 // additionalHosts (where custom domains live now), else spec.domains.
-function customHosts(s: KusoService, env: KusoEnvironment | undefined): string[] {
+function customHosts(s: KusoServiceSummary, env: KusoEnvironmentSummary | undefined): string[] {
   const fromEnv = (env?.spec.additionalHosts ?? []).filter((h): h is string => !!h);
   if (fromEnv.length) return fromEnv;
   return (s.spec.domains ?? []).map((d) => d?.host).filter((h): h is string => !!h);
@@ -122,7 +122,7 @@ export function isApexHost(host: string): boolean {
   return labels.length === 3 && TWO_PART_SUFFIX.test(labels[1]) && labels[2].length === 2;
 }
 
-function isLive(env: KusoEnvironment | undefined): boolean {
+function isLive(env: KusoEnvironmentSummary | undefined): boolean {
   return env?.status?.state === "running" || (!env?.status?.state && env?.status?.ready === true);
 }
 
@@ -139,8 +139,8 @@ const FRONT_NAMES = new Set(["web", "frontend", "app"]);
 // custom domain first, else the kuso auto host).
 export function projectPrimaryDomain(
   project: KusoProject,
-  services: ReadonlyArray<KusoService>,
-  environments: ReadonlyArray<KusoEnvironment>,
+  services: ReadonlyArray<KusoServiceSummary>,
+  environments: ReadonlyArray<KusoEnvironmentSummary>,
 ): ProjectDomain | undefined {
   const name = project.metadata.name;
   const base = project.spec.baseDomain?.toLowerCase();
@@ -359,7 +359,7 @@ export function projectHealthLine(
 // attached to a service cloned into that group.
 export function cronsForEnv<C extends { spec: { service?: string } }>(
   crons: ReadonlyArray<C>,
-  services: ReadonlyArray<KusoService>,
+  services: ReadonlyArray<KusoServiceSummary>,
   envGroup: string,
   project: string,
 ): C[] {

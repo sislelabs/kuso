@@ -280,6 +280,30 @@ export interface KusoEnvironment {
   };
 }
 
+// Slim shapes GET /api/projects/summary returns (summaryService /
+// summaryEnvironment in server-go handlers/projects.go): only what the
+// dashboard cards, health rollup, palette and top bar read. The full CRs
+// are on the describe endpoint. Helpers that serve both take these, so a
+// full CR fits too. annotations carries only promoted-at on envs.
+type SummaryMeta = KusoMeta;
+
+export interface KusoServiceSummary {
+  metadata: SummaryMeta;
+  spec: Pick<KusoServiceSpec, "project" | "displayName" | "repo" | "runtime" | "port" | "domains" | "stopped" | "internal"> & {
+    // Names only: values never leave the describe endpoint.
+    envVars?: { name?: string }[];
+  };
+}
+
+export interface KusoEnvironmentSummary {
+  metadata: SummaryMeta;
+  spec: Pick<
+    KusoEnvironmentSpec,
+    "project" | "service" | "kind" | "branch" | "host" | "additionalHosts" | "tlsEnabled" | "envFromSecrets"
+  > & { image?: { tag?: string } };
+  status?: KusoEnvironment["status"];
+}
+
 export interface KusoAddonSpec {
   project: string;
   kind: string;

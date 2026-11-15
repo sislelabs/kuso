@@ -14,7 +14,7 @@ import {
   tallyServices,
   type StatusMeta,
 } from "@/lib/status";
-import type { KusoAddon, KusoEnvironment } from "@/types/projects";
+import type { KusoAddon, KusoEnvironmentSummary } from "@/types/projects";
 import { deriveServiceStatus, NODE_TONE_TO_STATUS, serviceBucketOf } from "@/features/services/nodeStatus";
 
 // One project's probe results. null = that probe failed; "unsupported" =
@@ -197,7 +197,7 @@ function rollupServices(items: ProjectSummaryItem[]): AppRollup["services"] {
   return out;
 }
 
-function stateOf(env: KusoEnvironment): string | undefined {
+function stateOf(env: KusoEnvironmentSummary): string | undefined {
   const s = env.status?.state;
   return typeof s === "string" ? s : undefined;
 }
