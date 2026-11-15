@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/rollout"
@@ -764,6 +765,12 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				if sec.Annotations["helm.sh/resource-policy"] == "keep" && !opts.PurgeData {
 					continue
 				}
+				// Backup keys survive even a purge: --purge-data removes the
+				// cluster's copy of the data, not the dumps already in the
+				// bucket, and those are unreadable without their key.
+				if sec.Labels[backup.KeyRoleLabel] == backup.KeyRoleValue {
+					continue
+				}
 				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
 					Delete(ctx, sec.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 					return fmt.Errorf("delete project-scoped secret %s: %w", sec.Name, derr)
@@ -1022,6 +1029,16 @@ func (s *Service) cleanupProjectNamespace(ctx context.Context, project, ns strin
 	}
 	if !kube.NamespaceCreatedByKuso(nsObj) {
 		slog.Info("project delete: keeping namespace kuso did not create", "project", project, "ns", ns)
+		return
+	}
+	// Deleting the namespace would take the backup-key Secrets the sweep
+	// above kept, leaving the project's dumps in the bucket undecryptable.
+	if keys, kerr := secrets.List(ctx, metav1.ListOptions{LabelSelector: backup.KeyRoleSelector()}); kerr != nil {
+		fail("SecretList", backup.KeyRoleSelector(), kerr)
+		return
+	} else if len(keys.Items) > 0 {
+		slog.Warn("project delete: keeping namespace that holds backup encryption keys; export them (kuso backup keys export) before deleting it by hand",
+			"project", project, "ns", ns, "keys", len(keys.Items))
 		return
 	}
 	if derr := s.Kube.Clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
