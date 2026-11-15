@@ -6,7 +6,6 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
@@ -26,7 +25,7 @@ func TestComputeUsesCronJobLastSuccessAfterJobGC(t *testing.T) {
 	recent := metav1.NewTime(time.Now().Add(-90 * time.Minute))
 
 	cs := kubefake.NewSimpleClientset(
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns}},
+		cpBackupSecret(ns), cpKeySecret(ns),
 		&batchv1.CronJob{
 			ObjectMeta: metav1.ObjectMeta{Name: cronJobName, Namespace: ns},
 			Spec:       batchv1.CronJobSpec{Schedule: "0 23 * * *"},
@@ -58,7 +57,7 @@ func TestComputeStaleWhenCronJobSuccessIsOld(t *testing.T) {
 	old := metav1.NewTime(time.Now().Add(-(StaleAfter + time.Hour)))
 
 	cs := kubefake.NewSimpleClientset(
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns}},
+		cpBackupSecret(ns), cpKeySecret(ns),
 		&batchv1.CronJob{
 			ObjectMeta: metav1.ObjectMeta{Name: cronJobName, Namespace: ns},
 			Spec:       batchv1.CronJobSpec{Schedule: "0 23 * * *"},
@@ -82,7 +81,7 @@ func TestComputeStaleWhenCronJobSuccessIsOld(t *testing.T) {
 func TestComputeStaleWhenNeverSucceeded(t *testing.T) {
 	const ns = "kuso"
 	cs := kubefake.NewSimpleClientset(
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns}},
+		cpBackupSecret(ns), cpKeySecret(ns),
 		&batchv1.CronJob{
 			ObjectMeta: metav1.ObjectMeta{Name: cronJobName, Namespace: ns},
 			Spec:       batchv1.CronJobSpec{Schedule: "0 23 * * *"},

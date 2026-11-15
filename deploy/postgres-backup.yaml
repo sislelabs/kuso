@@ -9,13 +9,14 @@
 # cover user databases — the kuso DB itself was never being backed up
 # until this CronJob.
 #
-# Strategy: pg_dump every hour to S3-compatible object storage. Keeps
-# 24 hourly + 7 daily + 12 monthly snapshots. The schedule is opt-in
-# via the kuso-postgres-backup Secret — every secretKeyRef below is
-# optional:true, and the job exits 0 with a "not configured" log line
-# when the Secret is absent/incomplete rather than failing loudly.
-# The backup-health banner (internal/backuphealth) reads Secret
-# presence, so operators still get nagged to configure it.
+# Strategy: pg_dump daily to S3-compatible object storage into rotating
+# daily/weekly/monthly slots. The schedule is opt-in via the
+# kuso-postgres-backup Secret — every secretKeyRef below is optional:true,
+# and the job exits 0 with a "not configured" log line when NONE of the
+# S3 keys is set (no Secret). A Secret that is present but incomplete, or
+# a missing kuso-controlplane-backup-key, fails the Job: either would
+# otherwise succeed nightly while nothing (or only plaintext) reached S3.
+# The backup-health banner (internal/backuphealth) checks the same keys.
 #
 # Two containers so no tooling is installed at runtime (the pod runs
 # as uid 999 with all capabilities dropped — apt-get/installers can't
@@ -83,14 +84,29 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Opt-in gate: without a complete kuso-postgres-backup
-                  # Secret this is a documented no-op (exit 0), not a
-                  # failure. The backup-health banner keeps nagging the
-                  # operator until the Secret exists.
-                  if [ -z "${KUSO_BACKUP_BUCKET:-}" ] || [ -z "${KUSO_BACKUP_ENDPOINT:-}" ] \
-                     || [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-                    echo "backup not configured (kuso-postgres-backup Secret missing or incomplete) — skipping"
+                  # Opt-in gate: with no kuso-postgres-backup Secret (none
+                  # of its keys set) this is a documented no-op (exit 0).
+                  # A Secret missing SOME keys is a misconfiguration and
+                  # fails: exiting 0 there made every nightly run "succeed"
+                  # with nothing uploaded while backup health read green.
+                  MISSING=""
+                  for k in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY KUSO_BACKUP_BUCKET KUSO_BACKUP_ENDPOINT; do
+                    if [ -z "${!k:-}" ]; then MISSING="${MISSING} ${k}"; fi
+                  done
+                  if [ "${MISSING}" = " AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY KUSO_BACKUP_BUCKET KUSO_BACKUP_ENDPOINT" ]; then
+                    echo "backup not configured (no kuso-postgres-backup Secret) — skipping"
                     exit 0
+                  fi
+                  if [ -n "${MISSING}" ]; then
+                    echo "ERROR: kuso-postgres-backup Secret is missing:${MISSING}; nothing was backed up. For AWS S3 set KUSO_BACKUP_ENDPOINT=https://s3.<region>.amazonaws.com" >&2
+                    exit 1
+                  fi
+                  # The dump carries SSH keys, OAuth tokens and TOTP seeds;
+                  # refuse to ship it in plaintext. kuso-server creates this
+                  # Secret on boot, so its absence means something deleted it.
+                  if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+                    echo "ERROR: kuso-controlplane-backup-key Secret missing or empty; refusing to upload an unencrypted control-plane dump. Restart kuso-server to recreate it (then export it: kuso backup keys export)" >&2
+                    exit 1
                   fi
 
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -148,22 +164,15 @@ spec:
                   # end before we let it near a retention slot.
                   gzip -t "$DUMP"
 
-                  # The dump holds SSH keys, OAuth tokens and TOTP seeds, so
-                  # it leaves the cluster encrypted, in the same openssl
-                  # format as addon dumps. kuso-server creates the key
-                  # Secret; `kuso backup keys export` escrows it and
-                  # `kuso restore` decrypts with it. Without the Secret
-                  # (an older server) the dump goes up as before.
-                  ENC=""
-                  if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
-                    openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -salt \
-                      -pass env:BACKUP_ENCRYPTION_KEY -in "$DUMP" -out "$DUMP.enc"
-                    mv "$DUMP.enc" "$DUMP"
-                    SIZE=$(stat -c%s "$DUMP")
-                    ENC="openssl-aes-256-cbc-pbkdf2-sha256"
-                  else
-                    echo "WARNING: kuso-controlplane-backup-key Secret missing; uploading the dump UNENCRYPTED" >&2
-                  fi
+                  # The dump leaves the cluster encrypted, in the same
+                  # openssl format as addon dumps (the key was checked
+                  # above). `kuso backup keys export` escrows the key and
+                  # `kuso restore` decrypts with it.
+                  openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -salt \
+                    -pass env:BACKUP_ENCRYPTION_KEY -in "$DUMP" -out "$DUMP.enc"
+                  mv "$DUMP.enc" "$DUMP"
+                  SIZE=$(stat -c%s "$DUMP")
+                  ENC="openssl-aes-256-cbc-pbkdf2-sha256"
 
                   # Hand off to the upload container. Retention slot keys
                   # are computed HERE so dump + upload agree on the hour
@@ -291,7 +300,8 @@ spec:
                   value: when_required
                 # S3-compatible target. The kuso-postgres-backup Secret
                 # is operator-supplied; all refs optional so the CronJob
-                # no-ops (never errors) until it exists. Set up via:
+                # no-ops until it exists (the dump container fails on a
+                # partial one). Set up via:
                 #
                 #   kubectl create secret generic kuso-postgres-backup \
                 #     -n kuso \

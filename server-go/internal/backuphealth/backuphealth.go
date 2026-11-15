@@ -59,15 +59,22 @@ const (
 
 // Status is the verdict the UI banner + watcher consume.
 type Status struct {
-	Configured     bool   `json:"configured"`
-	CronJobPresent bool   `json:"cronJobPresent"`
-	Suspended      bool   `json:"suspended"`
-	Schedule       string `json:"schedule,omitempty"`
-	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
-	LastFailureAt  string `json:"lastFailureAt,omitempty"`
-	Stale          bool   `json:"stale"`
-	Healthy        bool   `json:"healthy"`
-	Detail         string `json:"detail"`
+	Configured bool `json:"configured"`
+	// MissingKeys: the kuso-postgres-backup Secret exists but lacks these
+	// required keys, so every run fails without uploading anything.
+	MissingKeys []string `json:"missingKeys,omitempty"`
+	// EncryptionKeyMissing: the kuso-controlplane-backup-key Secret is
+	// absent or empty, so the CronJob refuses to upload (it won't ship a
+	// plaintext dump of SSH keys and OAuth tokens).
+	EncryptionKeyMissing bool   `json:"encryptionKeyMissing,omitempty"`
+	CronJobPresent       bool   `json:"cronJobPresent"`
+	Suspended            bool   `json:"suspended"`
+	Schedule             string `json:"schedule,omitempty"`
+	LastSuccessAt        string `json:"lastSuccessAt,omitempty"`
+	LastFailureAt        string `json:"lastFailureAt,omitempty"`
+	Stale                bool   `json:"stale"`
+	Healthy              bool   `json:"healthy"`
+	Detail               string `json:"detail"`
 	// Indeterminate: a transient (non-NotFound) kube read failed while
 	// computing this status — Healthy may be wrong in either
 	// direction. The watcher carries its previous verdict across
@@ -85,9 +92,24 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		return s
 	}
 
-	if _, err := kc.Clientset.CoreV1().Secrets(namespace).
+	if sec, err := kc.Clientset.CoreV1().Secrets(namespace).
 		Get(ctx, secretName, metav1.GetOptions{}); err == nil {
 		s.Configured = true
+		for _, k := range requiredSecretKeys {
+			if len(sec.Data[k]) == 0 && sec.StringData[k] == "" {
+				s.MissingKeys = append(s.MissingKeys, k)
+			}
+		}
+		key, kerr := kc.Clientset.CoreV1().Secrets(namespace).
+			Get(ctx, kube.ControlPlaneBackupKeySecret, metav1.GetOptions{})
+		switch {
+		case kerr == nil:
+			s.EncryptionKeyMissing = len(key.Data["key"]) == 0
+		case apierrors.IsNotFound(kerr):
+			s.EncryptionKeyMissing = true
+		default:
+			s.Indeterminate = true
+		}
 	} else if !apierrors.IsNotFound(err) {
 		s.Indeterminate = true
 	}
@@ -138,10 +160,15 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		s.Indeterminate = true
 	}
 
-	s.Healthy = s.Configured && s.CronJobPresent && !s.Suspended && !s.Stale
+	s.Healthy = s.Configured && len(s.MissingKeys) == 0 && !s.EncryptionKeyMissing &&
+		s.CronJobPresent && !s.Suspended && !s.Stale
 	s.Detail = detail(s)
 	return s
 }
+
+// requiredSecretKeys mirrors the dump container's gate in
+// deploy/postgres-backup.yaml: all four must be set or the run fails.
+var requiredSecretKeys = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KUSO_BACKUP_BUCKET", "KUSO_BACKUP_ENDPOINT"}
 
 func newestTerminalTimes(jobs []batchv1.Job) (success, failure time.Time) {
 	for i := range jobs {
@@ -1195,6 +1222,11 @@ func detail(s Status) string {
 		return "Control-plane backup CronJob not found — the kuso DB is not being backed up off-cluster."
 	case !s.Configured:
 		return "Control-plane backups are not configured. Create the kuso-postgres-backup Secret with S3 credentials so the kuso DB is backed up off-cluster — without it a node/PVC loss orphans every project."
+	case len(s.MissingKeys) > 0:
+		return "The kuso-postgres-backup Secret is missing " + strings.Join(s.MissingKeys, ", ") +
+			" — every control-plane backup run fails and nothing reaches S3. Add the missing key(s) (for AWS S3, KUSO_BACKUP_ENDPOINT=https://s3.<region>.amazonaws.com)."
+	case s.EncryptionKeyMissing:
+		return "The " + kube.ControlPlaneBackupKeySecret + " Secret is missing, so control-plane backups refuse to upload an unencrypted dump. Restart kuso-server to recreate it, then export it with `kuso backup keys export`."
 	case s.Suspended:
 		return "Control-plane backup CronJob is suspended — no backups are being taken."
 	case s.LastSuccessAt == "":

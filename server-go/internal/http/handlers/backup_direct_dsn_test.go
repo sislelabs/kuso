@@ -56,7 +56,7 @@ func TestControlPlaneDump_BypassesPooler(t *testing.T) {
 		cmd.Env = append(os.Environ(),
 			"PATH="+stubs+":"+os.Getenv("PATH"),
 			"KUSO_DB_DSN="+pooled, "KUSO_BACKUP_BUCKET=b", "KUSO_BACKUP_ENDPOINT=http://s3",
-			"AWS_ACCESS_KEY_ID=a", "AWS_SECRET_ACCESS_KEY=s")
+			"AWS_ACCESS_KEY_ID=a", "AWS_SECRET_ACCESS_KEY=s", "BACKUP_ENCRYPTION_KEY=k")
 		_ = cmd.Run() // the stub fails pg_dump, which aborts the script
 		b, err := os.ReadFile(got)
 		if err != nil {
