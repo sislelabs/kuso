@@ -769,9 +769,12 @@ type VulnScanSettings struct {
 	AutoUpdateAddons bool `json:"autoUpdateAddons"`
 }
 
-// DefaultVulnScanSettings is a fresh install's config.
+// DefaultVulnScanSettings is a fresh install's config. NightlyHourUTC 22
+// opens the addon auto-update window at 22:00 and closes it (4h) at
+// 02:00, an hour before the default 03:00 addon backups, so a datastore
+// is never rolled mid-dump. A stored nightlyHourUTC still wins.
 func DefaultVulnScanSettings() VulnScanSettings {
-	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 3, NotifyMinSeverity: "high", AutoUpdateAddons: false}
+	return VulnScanSettings{Mode: "report", ScanAddons: true, ScanPlatform: true, NightlyHourUTC: 22, NotifyMinSeverity: "high", AutoUpdateAddons: false}
 }
 
 // GetVulnScanSettings reads vulnscan.* over the defaults.

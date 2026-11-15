@@ -11,7 +11,8 @@ func TestRenderBackupHealth(t *testing.T) {
 	body := `{"backup":{"healthy":false,"schedule":"0 3 * * *","detail":"CronJob suspended"},
 	"registryGC":{"healthy":true,"schedule":"0 4 * * 0","lastSuccessAt":"2026-09-27T04:00:00Z"},
 	"addonBackups":[{"addon":"shop-db","project":"shop","kind":"postgres","schedule":"0 2 * * *","covered":true,"healthy":true,"lastSuccessAt":"2026-09-28T02:00:00Z"},
-	{"addon":"shop-orders","project":"shop","kind":"mysql","covered":false,"healthy":true,"unprotected":true}],
+	{"addon":"shop-orders","project":"shop","kind":"mysql","covered":false,"healthy":true,"unprotected":true},
+	{"addon":"shop-events","project":"shop","kind":"redpanda","covered":false,"healthy":true,"unsupported":true}],
 	"addonBackupsComplete":true,
 	"serviceVolumes":[{"service":"shop-web","project":"shop","volumes":["data"],"covered":false}],
 	"serviceVolumesComplete":true}`
@@ -29,6 +30,7 @@ func TestRenderBackupHealth(t *testing.T) {
 		"shop/db", "postgres",
 		"shop/web", "data",
 		"UNPROTECTED",
+		"UNSUPPORTED",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
@@ -45,5 +47,20 @@ func TestRenderBackupSettingsHidesSecret(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "bucket:            b") || !strings.Contains(out, "set (not shown)") || !strings.Contains(out, "region:            -") {
 		t.Errorf("unexpected:\n%s", out)
+	}
+}
+
+func TestRenderBackupHealth_KeysFailing(t *testing.T) {
+	body := `{"backup":{"healthy":true},"registryGC":{"healthy":true},"addonBackupsComplete":true,"serviceVolumesComplete":true,
+	"backupKeysUnexported":["kuso/kuso-controlplane-backup-key"],
+	"backupKeys":{"healthy":false,"overdue":["kuso/kuso-controlplane-backup-key"],"detail":"1 backup encryption key(s) have never been exported. Run kuso backup keys export"}}`
+	var h backupHealthView
+	if err := json.Unmarshal([]byte(body), &h); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	renderBackupHealth(&buf, h)
+	if out := buf.String(); !strings.Contains(out, "backup keys: FAILING") || !strings.Contains(out, "kuso backup keys export") {
+		t.Errorf("unexported keys past the grace must read FAILING:\n%s", out)
 	}
 }

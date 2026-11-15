@@ -131,8 +131,16 @@ func (h *BackupHandler) Download(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
+	// Matched to the server's major: with several clients installed, the
+	// PATH pg_dump is the newest, whose dump a PG16 control plane can't
+	// restore.
+	pgDump, err := pgDumpFor(ctx, dsn)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "backup failed: "+err.Error())
+		return
+	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	cmd := exec.CommandContext(ctx, "pg_dump",
+	cmd := exec.CommandContext(ctx, pgDump,
 		"--format=plain", "--no-owner", "--no-acl", "--clean", "--if-exists",
 		dsn,
 	)

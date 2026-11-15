@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/kube"
 )
 
@@ -891,8 +892,8 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 					},
 					Containers: []corev1.Container{{
 						Name:            "seed",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullAlways,
+						Image:           backup.Image(),
+						ImagePullPolicy: backup.ImagePullPolicy(backup.Image()),
 						Command:         []string{"sh", "-c"},
 						// pg_dump from the source piped through psql
 						// into the clone. --no-owner avoids role

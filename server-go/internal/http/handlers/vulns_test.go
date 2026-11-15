@@ -270,7 +270,7 @@ func TestVulns_AdminSettings(t *testing.T) {
 		t.Errorf("non-admin settings: %d", rec.Code)
 	}
 	rec, body := rig.do(t, adminClaims, http.MethodGet, "/api/admin/settings/vulnscan", "")
-	if rec.Code != 200 || body["mode"] != "report" || body["nightlyHourUTC"] != 3.0 || body["notifyMinSeverity"] != "high" {
+	if rec.Code != 200 || body["mode"] != "report" || body["nightlyHourUTC"] != 22.0 || body["notifyMinSeverity"] != "high" {
 		t.Fatalf("defaults: %v", body)
 	}
 	if rec, _ := rig.do(t, adminClaims, http.MethodPut, "/api/admin/settings/vulnscan", `{"mode":"report","scanAddons":true,"scanPlatform":true,"nightlyHourUTC":24,"notifyMinSeverity":"high"}`); rec.Code != 400 {

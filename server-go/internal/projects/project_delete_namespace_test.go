@@ -15,6 +15,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"kuso/server/internal/backup"
 	"kuso/server/internal/kube"
 )
 
@@ -307,5 +308,27 @@ func TestDeleteProject_RemovesProjectJobs(t *testing.T) {
 	}
 	if _, err := jobs.Get(context.Background(), "e2e-api-db-snapshot-1", metav1.GetOptions{}); err != nil {
 		t.Errorf("sibling project's Job was deleted: %v", err)
+	}
+}
+
+// BLOB-11: --purge-data deleted the <addon>-backup-key Secrets (project
+// label + keep policy) and then the namespace, while the dumps stayed in the
+// bucket, now undecryptable. The key and the namespace holding it must stay.
+func TestDeleteProject_PurgeKeepsBackupKeys(t *testing.T) {
+	key := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "e2e-db-backup-key", Namespace: e2eNS,
+		Labels:      map[string]string{labelProject: "e2e", backup.KeyRoleLabel: backup.KeyRoleValue},
+		Annotations: map[string]string{"helm.sh/resource-policy": "keep"}}}
+	f := newDeleteNSFixture(t, e2eNS, kusoCreatedNS(e2eNS), key)
+	if err := f.s.DeleteWithOptions(context.Background(), "e2e", DeleteProjectOptions{PurgeData: true}); err != nil {
+		t.Fatalf("DeleteWithOptions: %v", err)
+	}
+	if !f.secretExists(t, e2eNS, "e2e-db-backup-key") {
+		t.Error("purge deleted the backup key; the project's dumps in the bucket are now unreadable")
+	}
+	if !f.namespaceExists(t, e2eNS) {
+		t.Error("purge deleted the namespace holding the backup key")
+	}
+	if f.secretExists(t, e2eNS, "e2e-db-conn") {
+		t.Error("conn Secret should still be purged")
 	}
 }

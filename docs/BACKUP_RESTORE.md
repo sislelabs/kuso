@@ -24,7 +24,7 @@ kuso backup --file /backups/kuso-$(date -u +%Y%m%d).sql.gz
 
 The backup and restore routes (`GET /api/admin/backup`, `POST /api/admin/restore`) are always mounted and require an admin. There is no switch to turn them off, so anyone holding an admin token can download a full `pg_dump`. If your compliance rules forbid a network-reachable dump endpoint, block `/api/admin/backup` and `/api/admin/restore` at your ingress or proxy and keep admin accounts to a minimum.
 
-For a scheduled off-cluster copy without a workstation cron, kuso also ships the `kuso-postgres-backup` CronJob (`deploy/postgres-backup.yaml`, 23:00 UTC daily). It is opt-in: create the `kuso-postgres-backup` Secret in `kuso` with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `KUSO_BACKUP_BUCKET`, `KUSO_BACKUP_ENDPOINT` (optional `KUSO_BACKUP_PREFIX`, `AWS_DEFAULT_REGION`). It writes rotating `daily/<DD>`, `weekly/<weekday>` and `monthly/<MM>` slots under the prefix. `kuso backup health` reports whether it is actually landing. This is a separate Secret from `kuso-backup-s3`, which only feeds addon backups. The dumps are `--clean --if-exists`, so `kuso restore` loads them over a live database, and they are encrypted with the key in the `kuso-controlplane-backup-key` Secret (kuso-server creates it). `kuso backup keys export` escrows that key with the addon keys: on a rebuilt cluster, pass it with `kuso restore <dump> --key-file <file holding the key>`.
+For a scheduled off-cluster copy without a workstation cron, kuso also ships the `kuso-postgres-backup` CronJob (`deploy/postgres-backup.yaml`, 23:00 UTC daily). It is opt-in: create the `kuso-postgres-backup` Secret in `kuso` with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `KUSO_BACKUP_BUCKET`, `KUSO_BACKUP_ENDPOINT` (optional `KUSO_BACKUP_PREFIX`, `AWS_DEFAULT_REGION`). It writes rotating `daily/<DD>`, `weekly/<weekday>` and `monthly/<MM>` slots under the prefix. With no Secret the Job does nothing; a Secret missing any of the four required keys fails the Job (and backup health), and so does a missing `kuso-controlplane-backup-key`, because the Job won't upload the dump unencrypted. `kuso backup health` reports whether it is actually landing. This is a separate Secret from `kuso-backup-s3`, which only feeds addon backups. The dumps are `--clean --if-exists`, so `kuso restore` loads them over a live database, and they are encrypted with the key in the `kuso-controlplane-backup-key` Secret (kuso-server creates it). `kuso backup keys export` escrows that key with the addon keys: on a rebuilt cluster, pass it with `kuso restore <dump> --key-file <file holding the key>`.
 
 Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Concrete cron example:
 
@@ -167,19 +167,56 @@ kubectl -n kuso rollout restart deployment kuso-server
 ```
 
 If the Cluster itself is broken (failed bootstrap, missing
-`kuso-postgres-app` Secret, primary stuck `Pending`):
+`kuso-postgres-app` Secret, primary stuck `Pending`), the fix is a fresh
+Cluster plus a restore. **Deleting the Cluster deletes its data.** CNPG
+sets an ownerReference from every `kuso-postgres-N` PVC to the
+`Cluster/kuso-postgres` object, so a plain `kubectl delete cluster`
+garbage-collects the PVCs with it. A new Cluster bootstraps with
+`initdb`, which always creates an **empty** database; it does not
+re-attach to old data.
+
+Check the ownership yourself before you start:
 
 ```bash
-# 1. Delete the Cluster (NOT the PVCs — those carry your data).
-kubectl -n kuso delete cluster kuso-postgres
-# 2. Delete the now-stale credentials Secrets.
-kubectl -n kuso delete secret kuso-postgres-conn kuso-postgres-app
-# 3. Re-run install.sh; it'll mint fresh credentials and let CNPG
-#    bootstrap a new Cluster against the existing PVCs.
+kubectl -n kuso get pvc -l cnpg.io/cluster=kuso-postgres \
+  -o custom-columns=PVC:.metadata.name,PV:.spec.volumeName,OWNER:.metadata.ownerReferences[0].kind
 ```
 
-This loses no data — CNPG's bootstrap re-attaches to existing PVCs.
-Verify by running `kuso backup` afterwards and inspecting row counts.
+Steps 1 and 2 are safe. Step 3 onwards is destructive.
+
+```bash
+# 1. Get a restorable dump BEFORE touching anything.
+#    a) If Postgres still answers: kuso backup --file kuso-pre-rebuild.sql.gz
+#       (or the "Manual fallback" pg_dump above).
+#    b) If it doesn't: take the newest kuso-postgres/daily/<DD>.sql.gz from
+#       the backup bucket, and make sure you hold the exported
+#       kuso-controlplane-backup-key (kuso backup keys export). Those dumps
+#       are encrypted; without the key they are useless.
+#    No dump and no key: STOP. Repair the Cluster in place instead.
+
+# 2. Keep the old volume as a last-resort copy: switch every PV behind the
+#    Cluster's PVCs to Retain, so deleting the PVC leaves the data on disk.
+for pv in $(kubectl -n kuso get pvc -l cnpg.io/cluster=kuso-postgres -o jsonpath='{.items[*].spec.volumeName}'); do
+  kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+done
+
+# 3. DESTRUCTIVE: delete the Cluster. Its PVCs go with it; the PVs from
+#    step 2 stay behind as Released.
+kubectl -n kuso delete cluster kuso-postgres
+# 4. DESTRUCTIVE: delete the now-stale credentials Secrets.
+kubectl -n kuso delete secret kuso-postgres-conn kuso-postgres-app
+# 5. Re-run install.sh. It mints fresh credentials and CNPG bootstraps a
+#    new, EMPTY Cluster.
+# 6. Load the dump from step 1 (add --key-file <file> for an S3 dump):
+kuso restore kuso-pre-rebuild.sql.gz
+```
+
+Check the restore (log in, `kuso get projects`, spot-check row counts)
+before you clean up. Only then delete the retained PVs from step 2 with
+`kubectl delete pv <name>` (on local-path, also remove the directory it
+names). Recovering straight from a retained PV without a dump needs a
+CNPG `bootstrap.recovery` or `pg_basebackup` setup that this runbook does
+not cover.
 
 ## What we don't do (and probably won't)
 

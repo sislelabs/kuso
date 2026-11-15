@@ -786,6 +786,60 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
+# ---- 4-pre. backup image + digest pin -------------------------------
+#
+# ghcr.io/sislelabs/kuso-backup runs every addon backup CronJob and every
+# restore, drill, snapshot and preview-seed Job, which follow the addon's
+# placement onto any node, so it must exist for arm64 as well as amd64.
+# Those Jobs get every addon's DB password, the S3 credentials and the
+# backup keys, so they must not follow a mutable tag: the image is built
+# here (before the server image, so the pin is compiled in), its digest is
+# resolved, and kuso-backup:${VERSION}@sha256 is baked into
+# server-go/internal/backup/image.go and the kusoaddon chart default. The
+# chart pin reaches clusters with the next operator image built from it.
+BACKUP_IMAGE="${KUSO_RELEASE_BACKUP_IMAGE:-ghcr.io/sislelabs/kuso-backup}"
+BACKUP_IMAGE_GO=server-go/internal/backup/image.go
+BACKUP_IMAGE_CHART=operator/helm-charts/kusoaddon/templates/_helpers.tpl
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "docker buildx linux/amd64,linux/arm64 → ${BACKUP_IMAGE}:${VERSION} (+ :latest)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64,linux/arm64 --push -t ${BACKUP_IMAGE}:${VERSION} -t ${BACKUP_IMAGE}:latest -f build/backup/Dockerfile build/backup"
+  else
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      --push \
+      -t "${BACKUP_IMAGE}:${VERSION}" \
+      -t "${BACKUP_IMAGE}:latest" \
+      -f build/backup/Dockerfile \
+      build/backup >/dev/null
+    # Capture first: grep -q exits on the first match, and under pipefail
+    # the SIGPIPE it sends imagetools failed the check on a good image.
+    backup_manifest="$(docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" 2>/dev/null)" \
+      || fail "cannot inspect ${BACKUP_IMAGE}:${VERSION}"
+    for arch in amd64 arm64; do
+      grep -q "linux/${arch}" <<<"$backup_manifest" \
+        || fail "${BACKUP_IMAGE}:${VERSION} has no linux/${arch} variant"
+    done
+    log "backup image pushed: ${BACKUP_IMAGE}:${VERSION} (amd64+arm64)"
+  fi
+fi
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "pin ${BACKUP_IMAGE}:${VERSION} to its registry digest in ${BACKUP_IMAGE_GO} + ${BACKUP_IMAGE_CHART}"
+else
+  BACKUP_IMAGE_DIGEST="$(docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" --format '{{json .Manifest}}' 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null || true)"
+  [[ "$BACKUP_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "could not resolve the registry digest of ${BACKUP_IMAGE}:${VERSION} (got '${BACKUP_IMAGE_DIGEST}')"
+  BACKUP_IMAGE_PINNED="${BACKUP_IMAGE}:${VERSION}@${BACKUP_IMAGE_DIGEST}"
+  sed -i.bak -E "s|^(const DefaultImage = )\"[^\"]+\"|\\1\"${BACKUP_IMAGE_PINNED}\"|" "$BACKUP_IMAGE_GO"
+  rm "${BACKUP_IMAGE_GO}.bak"
+  sed -i.bak -E "s|^ghcr\.io/sislelabs/kuso-backup:[^[:space:]]+$|${BACKUP_IMAGE_PINNED}|" "$BACKUP_IMAGE_CHART"
+  rm "${BACKUP_IMAGE_CHART}.bak"
+  grep -q "\"${BACKUP_IMAGE_PINNED}\"" "$BACKUP_IMAGE_GO" || fail "backup image pin did not land in ${BACKUP_IMAGE_GO}"
+  grep -qx "${BACKUP_IMAGE_PINNED}" "$BACKUP_IMAGE_CHART" || fail "backup image pin did not land in ${BACKUP_IMAGE_CHART}"
+  log "backup image pinned: ${BACKUP_IMAGE_PINNED}"
+fi
+
 # ---- 4-pre. pin build-Job images by digest -------------------------
 #
 # The build Job's buildkit client holds the registry-wide push
@@ -872,39 +926,6 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
       -f build/updater/Dockerfile \
       build/updater >/dev/null
     log "updater image pushed: ${UPDATER_IMAGE}:${VERSION}"
-  fi
-fi
-
-# ---- 4a2a. backup image ---------------------------------------------
-#
-# ghcr.io/sislelabs/kuso-backup runs every addon backup CronJob and every
-# restore, drill and preview-seed Job, which follow the addon's placement
-# onto any node, so it must exist for arm64 as well as amd64. Rebuilt on
-# every ship so a fix to build/backup reaches clusters with the release
-# instead of waiting for someone to run `make backup-image` by hand; the
-# CronJobs pull :latest with PullAlways.
-BACKUP_IMAGE="${KUSO_RELEASE_BACKUP_IMAGE:-ghcr.io/sislelabs/kuso-backup}"
-if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
-  log "docker buildx linux/amd64,linux/arm64 → ${BACKUP_IMAGE}:${VERSION} (+ :latest)"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    dry "docker buildx build --platform linux/amd64,linux/arm64 --push -t ${BACKUP_IMAGE}:${VERSION} -t ${BACKUP_IMAGE}:latest -f build/backup/Dockerfile build/backup"
-  else
-    docker buildx build \
-      --platform linux/amd64,linux/arm64 \
-      --push \
-      -t "${BACKUP_IMAGE}:${VERSION}" \
-      -t "${BACKUP_IMAGE}:latest" \
-      -f build/backup/Dockerfile \
-      build/backup >/dev/null
-    # Capture first: grep -q exits on the first match, and under pipefail
-    # the SIGPIPE it sends imagetools failed the check on a good image.
-    backup_manifest="$(docker buildx imagetools inspect "${BACKUP_IMAGE}:${VERSION}" 2>/dev/null)" \
-      || fail "cannot inspect ${BACKUP_IMAGE}:${VERSION}"
-    for arch in amd64 arm64; do
-      grep -q "linux/${arch}" <<<"$backup_manifest" \
-        || fail "${BACKUP_IMAGE}:${VERSION} has no linux/${arch} variant"
-    done
-    log "backup image pushed: ${BACKUP_IMAGE}:${VERSION} (amd64+arm64)"
   fi
 fi
 
@@ -1788,6 +1809,9 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     deploy/incident-agent-refresher.yaml
     # The build-image digest pins from step 4-pre.
     server-go/internal/buildcontroller/imagepins.go
+    # The backup-image digest pin from step 4-pre.
+    server-go/internal/backup/image.go
+    operator/helm-charts/kusoaddon/templates/_helpers.tpl
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)

@@ -211,8 +211,8 @@ func snapshotWaitContainer(s3Secret, bucketOverride, prefix string, since time.T
 	}
 	return corev1.Container{
 		Name:            "wait-snapshot",
-		Image:           backupJobImage,
-		ImagePullPolicy: corev1.PullAlways,
+		Image:           backup.Image(),
+		ImagePullPolicy: backup.ImagePullPolicy(backup.Image()),
 		Command:         []string{"sh", "-c"},
 		Args:            []string{snapshotWaitShell},
 		Env:             env,
@@ -221,9 +221,6 @@ func snapshotWaitContainer(s3Secret, bucketOverride, prefix string, since time.T
 
 // backupStampLayout is the YYYYMMDDTHHMMSSZ stamp every backup key starts with.
 const backupStampLayout = "20060102T150405Z"
-
-// backupJobImage runs every backup, restore and drill Job.
-const backupJobImage = "ghcr.io/sislelabs/kuso-backup:latest"
 
 // createRestoreKeyCopy writes the copied backup key Secret owned by the
 // restore Job from the start, so it is garbage-collected with the Job even

@@ -39,6 +39,7 @@ interface AddonBackupRow {
   covered: boolean;
   healthy: boolean;
   unprotected?: boolean;
+  unsupported?: boolean;
   lastSuccessAt?: string;
   lastScheduleAt?: string;
   detail?: string;
@@ -56,6 +57,7 @@ interface BackupHealthResp {
   addonBackupsComplete?: boolean;
   serviceVolumes?: ServiceVolumeRow[];
   backupKeysUnexported?: string[];
+  backupKeys?: { healthy: boolean; overdue: string[]; controlPlaneOverdue?: boolean; detail: string };
   bucket?: BucketSafety | null;
 }
 interface BucketSafety {
@@ -67,10 +69,11 @@ interface BucketSafety {
   warnings?: string[];
 }
 
-type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "via-instance" | "not-covered";
+type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "unsupported" | "via-instance" | "not-covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
   if (row.healthy && row.unprotected) return "unprotected";
+  if (row.healthy && row.unsupported) return "unsupported";
   if (!row.covered) return row.instanceShared ? "via-instance" : "not-covered";
   return row.healthy ? "on-schedule" : "overdue";
 }
@@ -83,6 +86,7 @@ const BADGE: Record<CoverageBadge, StatusMeta> = {
   "on-schedule": { ...RUN_STATUS.succeeded, label: "On schedule" },
   overdue: { ...RUN_STATUS.failed, label: "Overdue" },
   unprotected: { label: "Unprotected", tone: "warning" },
+  unsupported: { label: "No backup support", tone: "warning" },
   "via-instance": { label: "Via instance", tone: "neutral" },
   "not-covered": { label: "Not backed up", tone: "neutral" },
 };
@@ -121,7 +125,14 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { overdue: 0, unprotected: 1, "not-covered": 2, "on-schedule": 3, "via-instance": 4 };
+  const rank: Record<CoverageBadge, number> = {
+    overdue: 0,
+    unprotected: 1,
+    unsupported: 2,
+    "not-covered": 3,
+    "on-schedule": 4,
+    "via-instance": 5,
+  };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );
@@ -264,13 +275,19 @@ function MaintenanceHealthBanners({ s3 }: { s3: "yes" | "no" | "unknown" }) {
           </ul>
         </SettingsNotice>
       ) : null}
-      {(health.data.backupKeysUnexported?.length ?? 0) > 0 && (
-        <SettingsNotice tone="warning" title="Backup encryption keys exist only in this cluster">
-          {health.data.backupKeysUnexported?.length} addon key(s) have never been exported. If the cluster is lost, those
-          addons&apos; encrypted backups can&apos;t be read. Run <code>kuso backup keys export</code> and store the file
-          off-cluster.
+      {health.data.backupKeys && !health.data.backupKeys.healthy ? (
+        <SettingsNotice tone="error" title="Backup encryption keys exist only in this cluster">
+          {health.data.backupKeys.overdue.length} backup key(s)
+          {health.data.backupKeys.controlPlaneOverdue ? ", including the control-plane database key," : ""} have never been
+          exported. If the cluster is lost, every backup they encrypted is unreadable. Run{" "}
+          <code>kuso backup keys export --file &lt;path&gt;</code> and store the file off-cluster.
         </SettingsNotice>
-      )}
+      ) : (health.data.backupKeysUnexported?.length ?? 0) > 0 ? (
+        <SettingsNotice tone="warning" title="New backup keys not exported yet">
+          {health.data.backupKeysUnexported?.length} backup key(s) have never been exported. Run{" "}
+          <code>kuso backup keys export</code> and store the file off-cluster.
+        </SettingsNotice>
+      ) : null}
       <SettingsSection title="Maintenance jobs" description="Silent cluster jobs that break things when they stop running.">
         <HealthRow title="Control-plane database backup" h={backup} />
         <HealthRow title="Registry garbage collection" h={registryGC} />

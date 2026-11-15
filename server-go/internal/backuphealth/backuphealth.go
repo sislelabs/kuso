@@ -59,15 +59,22 @@ const (
 
 // Status is the verdict the UI banner + watcher consume.
 type Status struct {
-	Configured     bool   `json:"configured"`
-	CronJobPresent bool   `json:"cronJobPresent"`
-	Suspended      bool   `json:"suspended"`
-	Schedule       string `json:"schedule,omitempty"`
-	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
-	LastFailureAt  string `json:"lastFailureAt,omitempty"`
-	Stale          bool   `json:"stale"`
-	Healthy        bool   `json:"healthy"`
-	Detail         string `json:"detail"`
+	Configured bool `json:"configured"`
+	// MissingKeys: the kuso-postgres-backup Secret exists but lacks these
+	// required keys, so every run fails without uploading anything.
+	MissingKeys []string `json:"missingKeys,omitempty"`
+	// EncryptionKeyMissing: the kuso-controlplane-backup-key Secret is
+	// absent or empty, so the CronJob refuses to upload (it won't ship a
+	// plaintext dump of SSH keys and OAuth tokens).
+	EncryptionKeyMissing bool   `json:"encryptionKeyMissing,omitempty"`
+	CronJobPresent       bool   `json:"cronJobPresent"`
+	Suspended            bool   `json:"suspended"`
+	Schedule             string `json:"schedule,omitempty"`
+	LastSuccessAt        string `json:"lastSuccessAt,omitempty"`
+	LastFailureAt        string `json:"lastFailureAt,omitempty"`
+	Stale                bool   `json:"stale"`
+	Healthy              bool   `json:"healthy"`
+	Detail               string `json:"detail"`
 	// Indeterminate: a transient (non-NotFound) kube read failed while
 	// computing this status — Healthy may be wrong in either
 	// direction. The watcher carries its previous verdict across
@@ -85,9 +92,24 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		return s
 	}
 
-	if _, err := kc.Clientset.CoreV1().Secrets(namespace).
+	if sec, err := kc.Clientset.CoreV1().Secrets(namespace).
 		Get(ctx, secretName, metav1.GetOptions{}); err == nil {
 		s.Configured = true
+		for _, k := range requiredSecretKeys {
+			if len(sec.Data[k]) == 0 && sec.StringData[k] == "" {
+				s.MissingKeys = append(s.MissingKeys, k)
+			}
+		}
+		key, kerr := kc.Clientset.CoreV1().Secrets(namespace).
+			Get(ctx, kube.ControlPlaneBackupKeySecret, metav1.GetOptions{})
+		switch {
+		case kerr == nil:
+			s.EncryptionKeyMissing = len(key.Data["key"]) == 0
+		case apierrors.IsNotFound(kerr):
+			s.EncryptionKeyMissing = true
+		default:
+			s.Indeterminate = true
+		}
 	} else if !apierrors.IsNotFound(err) {
 		s.Indeterminate = true
 	}
@@ -138,10 +160,15 @@ func Compute(ctx context.Context, kc *kube.Client, namespace string) Status {
 		s.Indeterminate = true
 	}
 
-	s.Healthy = s.Configured && s.CronJobPresent && !s.Suspended && !s.Stale
+	s.Healthy = s.Configured && len(s.MissingKeys) == 0 && !s.EncryptionKeyMissing &&
+		s.CronJobPresent && !s.Suspended && !s.Stale
 	s.Detail = detail(s)
 	return s
 }
+
+// requiredSecretKeys mirrors the dump container's gate in
+// deploy/postgres-backup.yaml: all four must be set or the run fails.
+var requiredSecretKeys = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KUSO_BACKUP_BUCKET", "KUSO_BACKUP_ENDPOINT"}
 
 func newestTerminalTimes(jobs []batchv1.Job) (success, failure time.Time) {
 	for i := range jobs {
@@ -223,13 +250,27 @@ type AddonBackupStatus struct {
 	// schedule on a postgres/mysql/mongodb addon kuso can dump, or an
 	// instance tenant created after the instance's last good run. Healthy
 	// stays true (nothing to page on), but surfaces must not call it ok.
-	Unprotected bool   `json:"unprotected,omitempty"`
+	Unprotected bool `json:"unprotected,omitempty"`
+	// Unsupported: a stateful addon whose kind kuso has no backup producer
+	// for (clickhouse, redpanda, nats, …). Its data has no kuso backup at
+	// all and can't be given one. Healthy stays true so the rollup doesn't
+	// go red over something no setting can fix, but no surface may call it
+	// ok either.
+	Unsupported bool   `json:"unsupported,omitempty"`
 	Detail      string `json:"detail,omitempty"`
 }
 
 // unprotectedKinds are the datastores whose unscheduled state is a data
-// risk rather than a deliberate opt-out (mirrors the addons create default).
-var unprotectedKinds = map[string]bool{"postgres": true, "mysql": true, "mongodb": true}
+// risk rather than a deliberate opt-out. s3 holds user uploads; it is not
+// scheduled by default (a full-bucket copy per run), but unscheduled it is
+// unprotected all the same.
+var unprotectedKinds = map[string]bool{"postgres": true, "mysql": true, "mongodb": true, "s3": true}
+
+// unsupportedStatefulKinds hold durable data but have no backup producer.
+// redis/valkey (caches) and mailpit (dev inbox) are left out on purpose.
+var unsupportedStatefulKinds = map[string]bool{
+	"clickhouse": true, "redpanda": true, "nats": true, "rabbitmq": true, "meilisearch": true,
+}
 
 // addonBackupLateGrace: a scheduled run that hasn't succeeded within
 // this window after its schedule time counts as failing. Generous (6h)
@@ -330,6 +371,11 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			if unprotectedKinds[a.Spec.Kind] && a.Labels[kube.LabelEnv] == "" && dumpableShape(a) {
 				st.Unprotected = true
 				st.Detail = "UNPROTECTED: " + st.Detail
+			}
+			external := a.Spec.External != nil && (a.Spec.External.SecretName != "" || len(a.Spec.External.SecretKeys) > 0)
+			if unsupportedStatefulKinds[a.Spec.Kind] && a.Labels[kube.LabelEnv] == "" && !external {
+				st.Unsupported = true
+				st.Detail = "UNSUPPORTED: kuso can't back up " + a.Spec.Kind + " addons, so this data has no backup; back it up outside kuso"
 			}
 			out = append(out, st)
 			continue
@@ -793,26 +839,27 @@ func (w *Watcher) tick(ctx context.Context) {
 	s := Compute(cctx, w.Kube, w.Namespace)
 	gc := RegistryGC(cctx, w.Kube, w.Namespace)
 	addons, addonsComplete := ComputeAddons(cctx, w.Kube, w.Namespace)
+	keys := ComputeBackupKeys(cctx, w.Kube, time.Now(), s.Configured)
 	cancel()
 
 	// A failed read keeps the previous state: no transition, no event.
 	// Carrying verdicts per subsystem was not enough, because severity
 	// and (after a restart) the addon part still moved, so one flake sent
 	// two spurious alerts. The next complete tick decides.
-	incomplete := s.Indeterminate || gc.Indeterminate || !addonsComplete
+	incomplete := s.Indeterminate || gc.Indeterminate || !addonsComplete || !keys.Complete
 	if !incomplete {
 		w.incompleteTicks = 0
 	} else if w.incompleteTicks++; w.incompleteTicks < maxIncompleteTicks {
 		w.Logger.Warn("backup health: evaluation incomplete, keeping previous state",
-			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete)
+			"backup", !s.Indeterminate, "registryGC", !gc.Indeterminate, "addons", addonsComplete, "keys", keys.Complete)
 		return
 	}
-	backupOK, gcOK, addonsOK := s.Healthy, gc.Healthy, AddonsHealthy(addons)
+	backupOK, gcOK, addonsOK, keysOK := s.Healthy, gc.Healthy, AddonsHealthy(addons), keys.Healthy
 	var unreadable []string
 	if incomplete {
 		// Past the bound: the real verdict is unknown, so report which
 		// checks can't be read rather than a guess about their health.
-		backupOK, gcOK, addonsOK = true, true, true
+		backupOK, gcOK, addonsOK, keysOK = true, true, true, true
 		if s.Indeterminate {
 			unreadable = append(unreadable, "backup")
 		}
@@ -821,6 +868,9 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		if !addonsComplete {
 			unreadable = append(unreadable, "addon-backups")
+		}
+		if !keys.Complete {
+			unreadable = append(unreadable, "backup-keys")
 		}
 	}
 
@@ -848,6 +898,12 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		parts = append(parts, "addon-backups("+strings.Join(names, "+")+")")
 	}
+	if !keysOK {
+		// The key names are part of the state, so a key that newly goes
+		// overdue re-alerts even while older ones are still unexported.
+		parts = append(parts, "backup-keys("+strings.Join(keys.Overdue, "+")+")")
+		details = append(details, keys.Detail)
+	}
 	if len(unreadable) > 0 {
 		parts = append(parts, "unreadable("+strings.Join(unreadable, "+")+")")
 		details = append(details, fmt.Sprintf(
@@ -857,6 +913,11 @@ func (w *Watcher) tick(ctx context.Context) {
 	severity := alertSeverity(s, gc)
 	if len(unreadable) > 0 {
 		severity = "warn"
+	}
+	if !keysOK && keys.ControlPlaneOverdue {
+		// The control-plane key seals the dump a rebuilt cluster restores
+		// from first; losing it makes the whole DR path dead on arrival.
+		severity = "error"
 	}
 	if !addonsOK {
 		// A missing backup Secret is a config-level "you have no
@@ -905,6 +966,7 @@ func (w *Watcher) tick(ctx context.Context) {
 			backup: s, backupOK: backupOK,
 			gc: gc, gcOK: gcOK,
 			failingAddons:   failing,
+			keys:            keysForReport(keys, keysOK),
 			unreadable:      unreadable,
 			incompleteTicks: w.incompleteTicks,
 			severity:        severity,
@@ -917,6 +979,14 @@ func (w *Watcher) tick(ctx context.Context) {
 	}
 }
 
+// keysForReport keeps the key verdict out of a card unless it failed.
+func keysForReport(k BackupKeysStatus, ok bool) BackupKeysStatus {
+	if ok {
+		return BackupKeysStatus{}
+	}
+	return k
+}
+
 // backupsURL is the in-app backups settings page (web/src/app/(app)/settings/backups).
 const backupsURL = "/settings/backups"
 
@@ -926,11 +996,13 @@ const maxAddonLines = 10
 
 // unhealthyReport is everything one backup.failed card describes.
 type unhealthyReport struct {
-	backup          Status
-	backupOK        bool
-	gc              RegistryGCStatus
-	gcOK            bool
-	failingAddons   []AddonBackupStatus
+	backup        Status
+	backupOK      bool
+	gc            RegistryGCStatus
+	gcOK          bool
+	failingAddons []AddonBackupStatus
+	// keys is set only when unexported keys fail health (Overdue non-empty).
+	keys            BackupKeysStatus
 	unreadable      []string
 	incompleteTicks int
 	severity        string
@@ -949,6 +1021,8 @@ func failedEvent(r unhealthyReport) notify.Event {
 		// control-plane backup outranks the rest; keep the default
 	case !r.gcOK:
 		what = "Registry garbage-collection unhealthy"
+	case len(r.failingAddons) == 0 && len(r.keys.Overdue) > 0:
+		what = "Backup keys never exported off-cluster"
 	default:
 		what = "Addon backups failing"
 	}
@@ -980,6 +1054,9 @@ func failedEvent(r unhealthyReport) notify.Event {
 		}
 		lines = append(lines, "• **"+name+"** — "+a.Detail+lastSuccess(a.LastSuccessAt))
 	}
+	if len(r.keys.Overdue) > 0 {
+		lines = append(lines, "• **Backup keys** — "+r.keys.Detail)
+	}
 	if len(r.unreadable) > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"• Can't read **%s** (%d failed checks in a row) — failures there aren't being detected. Check kuso-server logs and RBAC.",
@@ -1008,7 +1085,7 @@ func failedEvent(r unhealthyReport) notify.Event {
 
 // recoveredEvent is the backup.succeeded card closing a failed episode.
 func recoveredEvent() notify.Event {
-	msg := "Control-plane backups, registry GC and addon backups are all healthy."
+	msg := "Control-plane backups, registry GC and addon backups are all healthy, and every backup key is exported."
 	return notify.Event{
 		Type:        notify.EventBackupOK,
 		Timestamp:   time.Now().UTC(),
@@ -1164,6 +1241,11 @@ func detail(s Status) string {
 		return "Control-plane backup CronJob not found — the kuso DB is not being backed up off-cluster."
 	case !s.Configured:
 		return "Control-plane backups are not configured. Create the kuso-postgres-backup Secret with S3 credentials so the kuso DB is backed up off-cluster — without it a node/PVC loss orphans every project."
+	case len(s.MissingKeys) > 0:
+		return "The kuso-postgres-backup Secret is missing " + strings.Join(s.MissingKeys, ", ") +
+			" — every control-plane backup run fails and nothing reaches S3. Add the missing key(s) (for AWS S3, KUSO_BACKUP_ENDPOINT=https://s3.<region>.amazonaws.com)."
+	case s.EncryptionKeyMissing:
+		return "The " + kube.ControlPlaneBackupKeySecret + " Secret is missing, so control-plane backups refuse to upload an unencrypted dump. Restart kuso-server to recreate it, then export it with `kuso backup keys export`."
 	case s.Suspended:
 		return "Control-plane backup CronJob is suspended — no backups are being taken."
 	case s.LastSuccessAt == "":

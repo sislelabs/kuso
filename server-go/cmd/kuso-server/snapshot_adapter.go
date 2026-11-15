@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
@@ -234,8 +235,8 @@ echo "==> snapshot done (sha256=${SHA})"
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:            "snapshot",
-						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						Image:           backup.Image(),
+						ImagePullPolicy: backup.ImagePullPolicy(backup.Image()),
 						Command:         []string{"sh", "-c"},
 						Args:            []string{script},
 						Env: append(append([]corev1.EnvVar{{Name: "KEY", Value: key}}, snapshotConnEnv(release, external)...),
