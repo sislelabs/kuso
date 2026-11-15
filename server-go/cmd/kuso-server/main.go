@@ -695,7 +695,27 @@ func main() {
 		buildSvc.Images = builds.NewInClusterImageDeleter(builds.RegistryHost)
 		buildSvc.RegistryAuth = registryAuth
 		buildkitTLS := &buildkittls.Store{Kube: kc, Namespace: *namespace}
-		go buildkitTLS.EnsureLoop(ctx, 30*time.Second, logger.Warn)
+		go func() {
+			buildkitTLS.EnsureLoop(ctx, 30*time.Second, logger.Warn)
+			// Upgraded installs run the daemon without client auth until
+			// this turns it on (review ISO-1). It waits for an idle build
+			// queue so the daemon restart interrupts nothing.
+			buildkitTLS.AutoEnableLoop(ctx, 2*time.Minute, func(ctx context.Context) (bool, error) {
+				inFlight, err := kc.ListKusoBuildsFiltered(ctx, "", builds.LabelBuildState+"!="+builds.BuildStateDone, nil)
+				if err != nil {
+					return false, err
+				}
+				// A build Job is capped at 1h, so a non-done CR older than
+				// 3h is a stray that would otherwise hold this off forever.
+				cutoff := time.Now().Add(-3 * time.Hour)
+				for i := range inFlight {
+					if !inFlight[i].Spec.Done && inFlight[i].CreationTimestamp.After(cutoff) {
+						return true, nil
+					}
+				}
+				return false, nil
+			}, logger)
+		}()
 		buildSvc.BuildkitTLS = buildkitTLS
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
 		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)

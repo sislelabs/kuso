@@ -15,12 +15,15 @@
 // private key is never stored; rotating means deleting the Secret (Ensure
 // mints a fresh set) and restarting the daemon.
 //
-// Rollout mirrors registryauth: Ensure mints with enabled=false on
-// installs that predate this, so nothing changes until an operator flips
-// it; fresh installs create the Secret with enabled=true and Ensure fills
-// in the certificates while the daemon waits for them. Build Jobs try TLS
-// first and fall back to plaintext, so they work against either daemon
-// mode and the flip needs no coordination with in-flight builds.
+// Rollout: Ensure mints with enabled=false on installs that predate this;
+// fresh installs create the Secret with enabled=true and Ensure fills in
+// the certificates while the daemon waits for them. On an upgraded install
+// AutoEnable then turns it on by itself (review ISO-1: without it any
+// Dockerfile RUN step can drive the daemon over 127.0.0.1), but only once
+// the daemon mounts the Secret and no build is in flight, so the restart
+// interrupts nothing. Build Jobs try TLS first and fall back to plaintext,
+// so they work against either daemon mode. An operator's explicit choice
+// through SetEnabled is recorded and never overridden.
 package buildkittls
 
 import (
@@ -33,6 +36,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strconv"
 	"time"
@@ -62,6 +66,9 @@ const (
 	KeyClientCert = "client.crt"
 	KeyClientKey  = "client.key"
 	keyEnabled    = "enabled"
+	// keyOperatorSet marks an "enabled" value chosen through SetEnabled
+	// (POST system/buildkit-tls). AutoEnable leaves such a Secret alone.
+	keyOperatorSet = "operator-set"
 
 	validity = 10 * 365 * 24 * time.Hour
 )
@@ -231,44 +238,128 @@ func (s *Store) Enabled(ctx context.Context) (bool, error) {
 // start.sh picks it up. Build Jobs try TLS first and fall back to
 // plaintext, so queued builds survive either direction; builds running
 // at the moment of the restart are interrupted, as on any daemon restart.
+// The choice is recorded as the operator's, so AutoEnable won't undo an
+// explicit "off".
 func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
-	apps := s.Kube.Clientset.AppsV1()
-	dep, err := apps.Deployments(s.ns()).Get(ctx, daemonDeployment, metav1.GetOptions{})
+	_, err := s.set(ctx, enabled, true)
+	return err
+}
+
+func (s *Store) daemonMountsSecret(ctx context.Context) error {
+	dep, err := s.Kube.Clientset.AppsV1().Deployments(s.ns()).Get(ctx, daemonDeployment, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("buildkit tls: read deployment %s: %w", daemonDeployment, err)
 	}
-	mounts := false
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.Secret != nil && v.Secret.SecretName == SecretName {
-			mounts = true
+			return nil
 		}
 	}
-	if !mounts {
-		return ErrDaemonPredatesTLS
+	return ErrDaemonPredatesTLS
+}
+
+// set writes the switch and restarts the daemons. For an automatic
+// (non-operator) enable it is a no-op when the switch is already on or an
+// operator has chosen, and a lost update race reports changed=false: the
+// replica that won restarts the daemon, so it restarts once.
+func (s *Store) set(ctx context.Context, enabled, operator bool) (changed bool, err error) {
+	if err := s.daemonMountsSecret(ctx); err != nil {
+		return false, err
 	}
 	if err := s.Ensure(ctx); err != nil {
-		return err
+		return false, err
 	}
 	secrets := s.Kube.Clientset.CoreV1().Secrets(s.ns())
 	sec, err := secrets.Get(ctx, SecretName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("buildkit tls: read secret: %w", err)
+		return false, fmt.Errorf("buildkit tls: read secret: %w", err)
+	}
+	if !operator && (string(sec.Data[keyEnabled]) == "true" || string(sec.Data[keyOperatorSet]) == "true") {
+		return false, nil
 	}
 	if sec.Data == nil {
 		sec.Data = map[string][]byte{}
 	}
 	sec.Data[keyEnabled] = []byte(strconv.FormatBool(enabled))
-	if _, err := secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("buildkit tls: update secret: %w", err)
+	if operator {
+		sec.Data[keyOperatorSet] = []byte("true")
 	}
+	if _, err := secrets.Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+		if !operator && apierrors.IsConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("buildkit tls: update secret: %w", err)
+	}
+	apps := s.Kube.Clientset.AppsV1()
 	patch := fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{"kuso.sislelabs.com/restartedAt":%q}}}}}`, time.Now().UTC().Format(time.RFC3339))
 	if _, err := apps.Deployments(s.ns()).Patch(ctx, daemonDeployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("buildkit tls: restart %s: %w", daemonDeployment, err)
+		return true, fmt.Errorf("buildkit tls: restart %s: %w", daemonDeployment, err)
 	}
 	if _, err := apps.StatefulSets(s.ns()).Patch(ctx, shardStatefulSet, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("buildkit tls: restart %s: %w", shardStatefulSet, err)
+		return true, fmt.Errorf("buildkit tls: restart %s: %w", shardStatefulSet, err)
 	}
-	return nil
+	return true, nil
+}
+
+// AutoEnable turns client auth on for an install that predates it, once
+// that is safe: the certificates exist, the running daemon mounts them
+// (ErrDaemonPredatesTLS otherwise; that needs deploy/buildkitd.yaml
+// applied by hand, the updater doesn't roll it) and busy reports no build
+// in flight, so the restart cuts no build short and every later build Job
+// is rendered with the client certificate. done is true once there is
+// nothing left to do: TLS is on, or an operator chose a value. flipped is
+// true when this call turned it on and restarted the daemon.
+func (s *Store) AutoEnable(ctx context.Context, busy func(context.Context) (bool, error)) (done, flipped bool, err error) {
+	if err := s.Ensure(ctx); err != nil {
+		return false, false, err
+	}
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.ns()).Get(ctx, SecretName, metav1.GetOptions{})
+	if err != nil {
+		return false, false, fmt.Errorf("buildkit tls: read secret: %w", err)
+	}
+	if string(sec.Data[keyEnabled]) == "true" || string(sec.Data[keyOperatorSet]) == "true" {
+		return true, false, nil
+	}
+	if err := s.daemonMountsSecret(ctx); err != nil {
+		return false, false, err
+	}
+	inFlight, err := busy(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("buildkit tls: list in-flight builds: %w", err)
+	}
+	if inFlight {
+		return false, false, nil
+	}
+	// changed is false when another replica's write won the race; the
+	// next call sees its result.
+	changed, err := s.set(ctx, true, false)
+	return changed, changed, err
+}
+
+// AutoEnableLoop retries AutoEnable every interval until it is done.
+func (s *Store) AutoEnableLoop(ctx context.Context, interval time.Duration, busy func(context.Context) (bool, error), logger *slog.Logger) {
+	var lastErr string
+	for {
+		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		done, flipped, err := s.AutoEnable(actx, busy)
+		cancel()
+		if flipped {
+			logger.Info("buildkit tls: turned on client auth for kuso-buildkitd; daemon restarting",
+				"revert", "kuso api POST system/buildkit-tls -f enabled=false")
+		}
+		if err != nil && err.Error() != lastErr {
+			lastErr = err.Error()
+			logger.Warn("buildkit tls: turning on client auth for kuso-buildkitd", "err", err, "done", done)
+		}
+		if done {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
 }
 
 // Mint returns a fresh CA certificate plus server and client pairs signed
