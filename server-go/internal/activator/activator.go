@@ -202,6 +202,14 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 	return a
 }
 
+// WatchEnvs switches host resolution from a live env LIST per refresh to
+// a watch-fed informer (SCL-1). Call it before serving; it does not
+// block on the informer's sync.
+func (a *Activator) WatchEnvs(ctx context.Context) {
+	src := startEnvSource(ctx, a.kc.Dynamic, a.hosts.list, a.logger)
+	a.hosts.list = src.list
+}
+
 // envInt returns the positive integer in env var name, else def.
 func envInt(name string, def int) int {
 	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v >= 1 {

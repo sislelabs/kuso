@@ -1,4 +1,4 @@
-import type { KusoEnvironment, KusoService } from "@/types/projects";
+import type { KusoEnvironmentSummary, KusoServiceSummary } from "@/types/projects";
 import { hostScheme } from "@/lib/host-scheme";
 import { isProductionGroup } from "@/lib/env-group";
 
@@ -9,7 +9,7 @@ import { isProductionGroup } from "@/lib/env-group";
 // the project-level custom domain → the operator's status.url.
 // No env in the viewed group means nothing serves there: no URL, rather
 // than production's service-level domain.
-export function serviceUrl(service: KusoService, env?: KusoEnvironment): string | undefined {
+export function serviceUrl(service: KusoServiceSummary, env?: KusoEnvironmentSummary): string | undefined {
   if (service.spec?.internal || !env) return undefined;
   const envTLS = env?.spec?.tlsEnabled ?? true;
   const envCustomHost = env?.spec?.additionalHosts?.find((h) => !!h);

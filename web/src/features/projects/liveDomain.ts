@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { ENV_GROUP_LABEL } from "@/lib/env-group";
 import { hostScheme } from "@/lib/host-scheme";
-import type { KusoEnvironment } from "@/types/projects";
+import type { KusoEnvironmentSummary } from "@/types/projects";
 import type { ProjectDomain } from "./facts";
 
 // The slice of GET .../envs/{env}/domains/status the card needs.
@@ -67,7 +67,7 @@ export interface LiveUrlFallback {
   envSegment: string;
 }
 
-export function liveUrlFallback(env: KusoEnvironment | undefined, url: string | undefined): LiveUrlFallback | undefined {
+export function liveUrlFallback(env: KusoEnvironmentSummary | undefined, url: string | undefined): LiveUrlFallback | undefined {
   const custom = env?.spec.additionalHosts?.find((h) => !!h);
   const auto = env?.spec.host;
   if (!url || !custom || !auto) return undefined;
@@ -102,7 +102,7 @@ export function useLiveUrl(
 export function useLiveServiceUrl(
   project: string,
   serviceShort: string,
-  env: KusoEnvironment | undefined,
+  env: KusoEnvironmentSummary | undefined,
   url: string | undefined,
 ): string | undefined {
   return useLiveUrl(project, serviceShort, url, liveUrlFallback(env, url));

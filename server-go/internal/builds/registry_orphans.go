@@ -53,6 +53,12 @@ func ParseOrphanSweepMode(v string) OrphanSweepMode {
 // sweep leaves the repo alone.
 const OrphanSweepGrace = 7 * 24 * time.Hour
 
+// reproducibleDateCutoff: buildpacks and other reproducible builds stamp
+// config.created with a fixed epoch (1980-01-01), so an image pushed an
+// hour ago reads as decades old and the grace never applies (BLOB-13).
+// A date before this is "unknown", and an unknown age keeps the repo.
+var reproducibleDateCutoff = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // OrphanSweepResult is the sweep's summary. Manifests counts deletions,
 // or would-be deletions in dry-run.
 type OrphanSweepResult struct {
@@ -178,6 +184,10 @@ func sweepOrphanRepo(ctx context.Context, reg RegistryInventory, repo string, pr
 		}
 		if created.After(cutoff) {
 			logger.Info("registry orphan-sweep: repo has a recent image, skipped", "repo", repo, "created", created)
+			return 0, 0, true, nil
+		}
+		if !created.IsZero() && created.Before(reproducibleDateCutoff) {
+			logger.Info("registry orphan-sweep: repo has an image with no real build date, skipped", "repo", repo, "digest", dg, "created", created)
 			return 0, 0, true, nil
 		}
 	}

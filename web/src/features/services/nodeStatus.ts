@@ -3,7 +3,7 @@
 // visual signal on a node (dot, border, label) is driven from the
 // NodeStatus returned here, so they can't disagree with each other.
 
-import type { KusoAddon, KusoEnvironment } from "@/types/projects";
+import type { KusoAddon, KusoEnvironmentSummary } from "@/types/projects";
 import type { BuildSummary } from "./api";
 import {
   addonStatusFromServer,
@@ -88,7 +88,7 @@ function serverState(state: string | undefined, detail?: string): NodeStatus | n
 
 export interface ServiceStatusInput {
   stopped?: boolean;
-  env?: KusoEnvironment;
+  env?: KusoEnvironmentSummary;
   latestBuild?: BuildSummary;
 }
 
@@ -178,7 +178,7 @@ export interface PodSplitInput {
 
 // rolloutInFlight: the server says a rollout is under way (or failing)
 // while the previous version still serves.
-export function rolloutInFlight(env: KusoEnvironment | undefined): RolloutFacts | undefined {
+export function rolloutInFlight(env: KusoEnvironmentSummary | undefined): RolloutFacts | undefined {
   const state = env?.status?.state;
   if (state !== "deploying" && state !== "rollout_failing") return undefined;
   const r = rolloutFacts(env?.status);
@@ -231,7 +231,7 @@ export function deriveCronStatus(spec: { suspend?: boolean }): NodeStatus {
 // Takes the newest of the promotion stamp (written on every image
 // promotion and survives build-CR retention), the operator's
 // lastDeployedAt, and the latest build if it succeeded.
-export function lastDeployAt(env: KusoEnvironment | undefined, latestBuild?: BuildSummary): string | undefined {
+export function lastDeployAt(env: KusoEnvironmentSummary | undefined, latestBuild?: BuildSummary): string | undefined {
   const candidates: string[] = [];
   const promoted = env ? promotedIfLive(env) : undefined;
   if (promoted) candidates.push(promoted);
