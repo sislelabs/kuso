@@ -39,6 +39,7 @@ type backupHealthView struct {
 		LastSuccessAt string `json:"lastSuccessAt"`
 		Healthy       bool   `json:"healthy"`
 		Unprotected   bool   `json:"unprotected"`
+		Unsupported   bool   `json:"unsupported"`
 		Detail        string `json:"detail"`
 	} `json:"addonBackups"`
 	AddonBackupsComplete bool `json:"addonBackupsComplete"`
@@ -119,6 +120,9 @@ func renderBackupHealth(w io.Writer, h backupHealthView) {
 			health := healthWord(a.Healthy)
 			if a.Healthy && a.Unprotected {
 				health = "UNPROTECTED"
+			}
+			if a.Healthy && a.Unsupported {
+				health = "UNSUPPORTED"
 			}
 			t.Append([]string{name, a.Kind, orDash(a.Schedule), boolText(a.Covered), orDash(a.LastSuccessAt), health, a.Detail})
 		}

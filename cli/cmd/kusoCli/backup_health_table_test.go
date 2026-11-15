@@ -11,7 +11,8 @@ func TestRenderBackupHealth(t *testing.T) {
 	body := `{"backup":{"healthy":false,"schedule":"0 3 * * *","detail":"CronJob suspended"},
 	"registryGC":{"healthy":true,"schedule":"0 4 * * 0","lastSuccessAt":"2026-09-27T04:00:00Z"},
 	"addonBackups":[{"addon":"shop-db","project":"shop","kind":"postgres","schedule":"0 2 * * *","covered":true,"healthy":true,"lastSuccessAt":"2026-09-28T02:00:00Z"},
-	{"addon":"shop-orders","project":"shop","kind":"mysql","covered":false,"healthy":true,"unprotected":true}],
+	{"addon":"shop-orders","project":"shop","kind":"mysql","covered":false,"healthy":true,"unprotected":true},
+	{"addon":"shop-events","project":"shop","kind":"redpanda","covered":false,"healthy":true,"unsupported":true}],
 	"addonBackupsComplete":true,
 	"serviceVolumes":[{"service":"shop-web","project":"shop","volumes":["data"],"covered":false}],
 	"serviceVolumesComplete":true}`
@@ -29,6 +30,7 @@ func TestRenderBackupHealth(t *testing.T) {
 		"shop/db", "postgres",
 		"shop/web", "data",
 		"UNPROTECTED",
+		"UNSUPPORTED",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)

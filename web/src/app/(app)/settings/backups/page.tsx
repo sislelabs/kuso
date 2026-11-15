@@ -39,6 +39,7 @@ interface AddonBackupRow {
   covered: boolean;
   healthy: boolean;
   unprotected?: boolean;
+  unsupported?: boolean;
   lastSuccessAt?: string;
   lastScheduleAt?: string;
   detail?: string;
@@ -68,10 +69,11 @@ interface BucketSafety {
   warnings?: string[];
 }
 
-type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "via-instance" | "not-covered";
+type CoverageBadge = "on-schedule" | "overdue" | "unprotected" | "unsupported" | "via-instance" | "not-covered";
 
 function badgeFor(row: AddonBackupRow): CoverageBadge {
   if (row.healthy && row.unprotected) return "unprotected";
+  if (row.healthy && row.unsupported) return "unsupported";
   if (!row.covered) return row.instanceShared ? "via-instance" : "not-covered";
   return row.healthy ? "on-schedule" : "overdue";
 }
@@ -84,6 +86,7 @@ const BADGE: Record<CoverageBadge, StatusMeta> = {
   "on-schedule": { ...RUN_STATUS.succeeded, label: "On schedule" },
   overdue: { ...RUN_STATUS.failed, label: "Overdue" },
   unprotected: { label: "Unprotected", tone: "warning" },
+  unsupported: { label: "No backup support", tone: "warning" },
   "via-instance": { label: "Via instance", tone: "neutral" },
   "not-covered": { label: "Not backed up", tone: "neutral" },
 };
@@ -122,7 +125,14 @@ function AddonBackupList({
   complete: boolean;
 }) {
   if (addons.length === 0 && volumes.length === 0) return null;
-  const rank: Record<CoverageBadge, number> = { overdue: 0, unprotected: 1, "not-covered": 2, "on-schedule": 3, "via-instance": 4 };
+  const rank: Record<CoverageBadge, number> = {
+    overdue: 0,
+    unprotected: 1,
+    unsupported: 2,
+    "not-covered": 3,
+    "on-schedule": 4,
+    "via-instance": 5,
+  };
   const sorted = [...addons].sort(
     (a, b) => rank[badgeFor(a)] - rank[badgeFor(b)] || a.addon.localeCompare(b.addon),
   );

@@ -250,13 +250,27 @@ type AddonBackupStatus struct {
 	// schedule on a postgres/mysql/mongodb addon kuso can dump, or an
 	// instance tenant created after the instance's last good run. Healthy
 	// stays true (nothing to page on), but surfaces must not call it ok.
-	Unprotected bool   `json:"unprotected,omitempty"`
+	Unprotected bool `json:"unprotected,omitempty"`
+	// Unsupported: a stateful addon whose kind kuso has no backup producer
+	// for (clickhouse, redpanda, nats, …). Its data has no kuso backup at
+	// all and can't be given one. Healthy stays true so the rollup doesn't
+	// go red over something no setting can fix, but no surface may call it
+	// ok either.
+	Unsupported bool   `json:"unsupported,omitempty"`
 	Detail      string `json:"detail,omitempty"`
 }
 
 // unprotectedKinds are the datastores whose unscheduled state is a data
-// risk rather than a deliberate opt-out (mirrors the addons create default).
-var unprotectedKinds = map[string]bool{"postgres": true, "mysql": true, "mongodb": true}
+// risk rather than a deliberate opt-out. s3 holds user uploads; it is not
+// scheduled by default (a full-bucket copy per run), but unscheduled it is
+// unprotected all the same.
+var unprotectedKinds = map[string]bool{"postgres": true, "mysql": true, "mongodb": true, "s3": true}
+
+// unsupportedStatefulKinds hold durable data but have no backup producer.
+// redis/valkey (caches) and mailpit (dev inbox) are left out on purpose.
+var unsupportedStatefulKinds = map[string]bool{
+	"clickhouse": true, "redpanda": true, "nats": true, "rabbitmq": true, "meilisearch": true,
+}
 
 // addonBackupLateGrace: a scheduled run that hasn't succeeded within
 // this window after its schedule time counts as failing. Generous (6h)
@@ -357,6 +371,11 @@ func ComputeAddons(ctx context.Context, kc *kube.Client, namespace string) ([]Ad
 			if unprotectedKinds[a.Spec.Kind] && a.Labels[kube.LabelEnv] == "" && dumpableShape(a) {
 				st.Unprotected = true
 				st.Detail = "UNPROTECTED: " + st.Detail
+			}
+			external := a.Spec.External != nil && (a.Spec.External.SecretName != "" || len(a.Spec.External.SecretKeys) > 0)
+			if unsupportedStatefulKinds[a.Spec.Kind] && a.Labels[kube.LabelEnv] == "" && !external {
+				st.Unsupported = true
+				st.Detail = "UNSUPPORTED: kuso can't back up " + a.Spec.Kind + " addons, so this data has no backup; back it up outside kuso"
 			}
 			out = append(out, st)
 			continue

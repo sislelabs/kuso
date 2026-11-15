@@ -65,3 +65,40 @@ func TestComputeAddons_UnscheduledDatabaseUnprotected(t *testing.T) {
 		}
 	}
 }
+
+// OPS-9 / BLOB-4: an unscheduled s3 addon and a stateful kind with no
+// backup producer read "ok" alongside addons that really were backed up.
+// They must be flagged without failing the rollup.
+func TestComputeAddons_UnscheduledS3AndUnsupportedKinds(t *testing.T) {
+	t.Parallel()
+	clone := addonCR(t, "acme-ch-staging", "acme", kube.KusoAddonSpec{Kind: "clickhouse"})
+	clone.SetLabels(map[string]string{"kuso.sislelabs.com/project": "acme", kube.LabelEnv: "staging"})
+	kc := instanceKube(t, []*unstructured.Unstructured{
+		addonCR(t, "acme-files", "acme", kube.KusoAddonSpec{Kind: "s3"}),
+		addonCR(t, "acme-ch", "acme", kube.KusoAddonSpec{Kind: "clickhouse"}),
+		addonCR(t, "acme-events", "acme", kube.KusoAddonSpec{Kind: "redpanda"}),
+		addonCR(t, "acme-queue", "acme", kube.KusoAddonSpec{Kind: "nats"}),
+		addonCR(t, "acme-kv", "acme", kube.KusoAddonSpec{Kind: "valkey"}),
+		addonCR(t, "acme-mail", "acme", kube.KusoAddonSpec{Kind: "mailpit"}),
+		clone,
+	})
+	rows, _ := ComputeAddons(context.Background(), kc, "kuso")
+	for name, want := range map[string][2]bool{ // {unprotected, unsupported}
+		"acme-files":      {true, false},
+		"acme-ch":         {false, true},
+		"acme-events":     {false, true},
+		"acme-queue":      {false, true},
+		"acme-kv":         {false, false},
+		"acme-mail":       {false, false},
+		"acme-ch-staging": {false, false},
+	} {
+		r := rowFor(t, rows, name)
+		if r.Unprotected != want[0] || r.Unsupported != want[1] || !r.Healthy {
+			t.Errorf("%s: unprotected=%v unsupported=%v healthy=%v, want %v/%v/true (%s)",
+				name, r.Unprotected, r.Unsupported, r.Healthy, want[0], want[1], r.Detail)
+		}
+	}
+	if !AddonsHealthy(rows) {
+		t.Error("coverage gaps must not turn the addon rollup red")
+	}
+}
