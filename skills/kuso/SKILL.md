@@ -1016,6 +1016,7 @@ kuso logs search <project> [service] --q "<query>" [--since 1h] [--limit 100]
 kuso build list <project> <service>             # newest first; status = pending|running|succeeded|failed|release-failed|cancelled
 kuso build why <project> <service> [id]         # classified failure cause + suggested fix
 kuso build trigger <project> <service>          # manual rebuild of the default branch
+kuso build wait <project> <service> [id]        # block on an in-flight build (e.g. from a push); non-zero on failure (--timeout)
 #   --dry-run prints what would build and creates NOTHING; --compile-only runs a
 #   real build on the shared builder but skips push + promotion.
 kuso redeploy <project> <service>               # alias; --branch <name>, or --ref <full 40-char sha> for one commit
@@ -1141,6 +1142,7 @@ kuso doctor                                     # pre-flight checks (incl. webho
 kuso version
 kuso upgrade --check                            # see if a newer kuso-server is available
 kuso upgrade --version vX.Y.Z                   # upgrades the SERVER, not the CLI; asks first (--yes)
+kuso upgrade status --wait                      # block on a running update (started anywhere); non-zero on failure
 kuso revision list <project> <kind> <name>      # kind ∈ {service, environment, addon, cron}
 kuso revision revert <project> <id>             # replay an old snapshot
 kuso token create --name ci --expires 90d       # long-lived API token (printed ONCE)
@@ -1479,6 +1481,7 @@ health [fix <r>]              reconcile health + one-click remediation
 doctor                        pre-flight checks
 backup --file <file>          control-plane pg_dump; backup settings/health for addon S3
 upgrade --check / --version vX.Y.Z   upgrades the SERVER (asks; --yes)
+upgrade status [--wait]       show / block on the running server update
 version
 ```
 

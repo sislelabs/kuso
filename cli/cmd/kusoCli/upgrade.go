@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -26,6 +27,7 @@ var (
 	// asset sha256s / updater digest (releases from before those existed).
 	upgradeAllowUnverified bool
 	upgradeAllowDowngrade  bool
+	upgradeTimeout         time.Duration
 )
 
 // versionRe matches vX.Y.Z, optionally with a dash-suffix. Used to
@@ -160,53 +162,87 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 			fmt.Printf("Job: %s\n", startBody.Job)
 		}
 
-		// Step 3: poll. The status ConfigMap is updated by the
-		// in-cluster updater; we just print phase transitions and
-		// quit when we hit a terminal state.
-		var lastPhase string
-		// Bound the poll loop generously — image pulls + rollouts
-		// regularly take a couple minutes on slow links.
-		deadline := time.Now().Add(15 * time.Minute)
-		failures := 0
-		for time.Now().Before(deadline) {
-			time.Sleep(3 * time.Second)
-			sResp, err := api.RawGet("/api/system/update/status")
-			retry, perr := upgradePollVerdict(sResp, err)
-			if perr != nil {
-				if !retry {
-					return perr
-				}
-				// The API pod is replaced during rolling-server, so a reset
-				// or a 5xx from the ingress is expected for a few polls.
-				failures++
-				if failures >= maxUpgradePollFailures {
-					return fmt.Errorf("update status: %d polls in a row failed; the upgrade may still be running, check 'kuso status' or the Update page: %w", failures, perr)
-				}
-				continue
-			}
-			failures = 0
-			var s struct {
-				Phase   string `json:"phase"`
-				Message string `json:"message"`
-			}
-			_ = json.Unmarshal(sResp.Body(), &s)
-			if s.Phase != "" && s.Phase != lastPhase {
-				if s.Message != "" {
-					fmt.Printf("==> %s — %s\n", s.Phase, s.Message)
-				} else {
-					fmt.Printf("==> %s\n", s.Phase)
-				}
-				lastPhase = s.Phase
-			}
-			if terminal, err := classifyUpgradePhase(s.Phase, s.Message); terminal {
-				if err != nil {
-					return err
-				}
-				fmt.Println("Upgrade finished.")
-				return nil
-			}
+		// Step 3: wait for the in-cluster updater to reach a terminal phase.
+		return waitForUpgrade(upgradeTimeout)
+	},
+}
+
+// waitForUpgrade polls /api/system/update/status, printing each phase
+// change, until the updater reports a terminal phase. Shared by
+// `kuso upgrade` and `kuso upgrade status --wait`.
+func waitForUpgrade(timeout time.Duration) error {
+	var lastPhase string
+	p := newPoller(3*time.Second, timeout, maxUpgradePollFailures)
+	err := p.run("update status", func() (*resty.Response, error) {
+		return api.RawGet("/api/system/update/status")
+	}, func(body []byte) (bool, error) {
+		var s struct {
+			Phase   string `json:"phase"`
+			Message string `json:"message"`
 		}
-		return fmt.Errorf("upgrade timed out after 15m; check 'kuso status' or the Update page")
+		_ = json.Unmarshal(body, &s)
+		if s.Phase != "" && s.Phase != lastPhase {
+			if s.Message != "" {
+				fmt.Printf("==> %s — %s\n", s.Phase, s.Message)
+			} else {
+				fmt.Printf("==> %s\n", s.Phase)
+			}
+			lastPhase = s.Phase
+		}
+		terminal, err := classifyUpgradePhase(s.Phase, s.Message)
+		return terminal, err
+	})
+	if errors.Is(err, errPollTimeout) {
+		return fmt.Errorf("%w; the upgrade may still be running, re-attach with 'kuso upgrade status --wait'", err)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Println("Upgrade finished.")
+	return nil
+}
+
+var upgradeStatusWait bool
+
+var upgradeStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show the server's update job state; --wait blocks until it finishes",
+	Long: `Print the phase of the most recent server update (started by
+'kuso upgrade', the web UI's Update button, or POST /api/system/update).
+
+With --wait, block until that update reaches a terminal phase: exit 0 on
+"done", non-zero on "failed" / "rolled-back" / "rollback-failed" or on
+timeout. Brief API outages while the server pod is replaced are
+tolerated.`,
+	Example: `  kuso upgrade status           # one-shot
+  kuso upgrade status --wait    # block until the running update finishes`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if upgradeStatusWait {
+			return waitForUpgrade(upgradeTimeout)
+		}
+		resp, err := api.RawGet("/api/system/update/status")
+		if _, verr := pollVerdict("update status", resp, err); verr != nil {
+			return verr
+		}
+		var s struct {
+			Phase   string `json:"phase"`
+			Message string `json:"message"`
+			Started string `json:"started"`
+			Updated string `json:"updated"`
+		}
+		if err := json.Unmarshal(resp.Body(), &s); err != nil {
+			return fmt.Errorf("decode update status: %w", err)
+		}
+		if s.Phase == "" {
+			fmt.Println("No update has run on this server.")
+			return nil
+		}
+		fmt.Printf("Phase:   %s\nMessage: %s\nStarted: %s\nUpdated: %s\n", s.Phase, s.Message, s.Started, s.Updated)
+		return nil
 	},
 }
 
@@ -215,23 +251,9 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 // pod to be replaced.
 const maxUpgradePollFailures = 20
 
-// upgradePollVerdict classifies one status poll. A nil error means the
-// response is usable. Transport errors and 5xx are transient (retry=true);
-// 4xx and a 2xx HTML page (wrong URL, ingress error page) are fatal.
+// upgradePollVerdict classifies one update-status poll; see pollVerdict.
 func upgradePollVerdict(resp *resty.Response, err error) (retry bool, verdict error) {
-	if err != nil {
-		return true, err
-	}
-	if code := resp.StatusCode(); code >= 500 {
-		return true, fmt.Errorf("update status: HTTP %d", code)
-	}
-	if resp.StatusCode() >= 300 {
-		return false, fmt.Errorf("update status: %w", checkRespErr(resp, nil))
-	}
-	if ct := resp.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
-		return false, fmt.Errorf("update status: server returned HTML (Content-Type=%s) — bailing", ct)
-	}
-	return false, nil
+	return pollVerdict("update status", resp, err)
 }
 
 // classifyUpgradePhase decides whether an update-status phase is terminal.
@@ -260,11 +282,15 @@ func classifyUpgradePhase(phase, message string) (terminal bool, err error) {
 
 func init() {
 	rootCmd.AddCommand(upgradeCmd)
+	upgradeCmd.AddCommand(upgradeStatusCmd)
+	upgradeStatusCmd.Flags().BoolVar(&upgradeStatusWait, "wait", false, "block until the update reaches a terminal phase; non-zero exit on failure")
+	upgradeStatusCmd.Flags().DurationVar(&upgradeTimeout, "timeout", 20*time.Minute, "how long --wait waits")
 	upgradeCmd.Flags().BoolVar(&upgradeCheck, "check", false, "only print version info, don't upgrade")
 	upgradeCmd.Flags().BoolVar(&upgradeRefresh, "refresh", false, "force a synchronous GitHub poll instead of using the 6h-cached value")
 	upgradeCmd.Flags().BoolVar(&upgradeForce, "force", false, "trigger update even if already current")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
 	upgradeCmd.Flags().BoolVarP(&upgradeYes, "yes", "y", false, "skip the confirmation prompt")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowUnverified, "allow-unverified", false, "accept a release whose release.json can't pin its assets or updater image by hash (older releases); the server refuses them otherwise")
+	upgradeCmd.Flags().DurationVar(&upgradeTimeout, "timeout", 20*time.Minute, "how long to wait for the update to finish")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowDowngrade, "allow-downgrade", false, "allow --version to roll back to a release older than the running one (admin only)")
 }

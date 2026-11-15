@@ -16,6 +16,7 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | Env vars on a service            | `kuso env list <project> <service>`                                      |
 | Connect to addon DB              | `kuso get addons <project> -o json` then read DATABASE_URL               |
 | Trigger a build                  | `kuso build trigger <project> <service>`                                 |
+| Block until a build/update ends  | `kuso build trigger … --follow` · `kuso build wait <p> <svc> [id]` · `kuso upgrade status --wait` — never hand-roll a poll loop |
 | Open a shell in a pod            | `kuso shell <project> <service>`                                         |
 | Kube events / project usage     | `kuso get events [--namespace <ns>]` · `kuso project metrics <project>`  |
 | Pods for a service               | `kuso service pods <project> <service>` (or `kuso get pods …`)           |

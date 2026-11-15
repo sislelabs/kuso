@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
@@ -45,61 +47,141 @@ var (
 	buildTriggerCompileOnly bool
 	buildTriggerFollow      bool
 	buildTriggerEnv         string
+	buildWaitTimeout        time.Duration
 )
 
-// pollBuildToTerminal polls ListBuilds until the build with id buildID
-// reaches a terminal status (succeeded/failed/cancelled), printing a
-// status line on each change. Returns the terminal status. Mirrors the
-// restore/migrate streaming UX so `build trigger --follow` gives a real
-// "did it work" signal instead of fire-and-forget.
-func pollBuildToTerminal(project, service, buildID string) (string, error) {
+// buildSummaryRow is the slice of the builds list a wait needs.
+type buildSummaryRow struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+}
+
+// classifyBuildStatus decides whether a build summary status is terminal.
+// Unknown or empty statuses keep the wait going.
+func classifyBuildStatus(id string, b buildSummaryRow) (terminal bool, err error) {
+	switch b.Status {
+	case "succeeded":
+		return true, nil
+	case "release-failed":
+		// The image built but the release hook (migration) failed, so the
+		// env was not promoted and the last green build stays live.
+		if b.ErrorMessage != "" {
+			return true, fmt.Errorf("build %s %s: %s", id, b.Status, b.ErrorMessage)
+		}
+		return true, fmt.Errorf("build %s %s (release hook failed; image not promoted)", id, b.Status)
+	case "failed", "error", "cancelled", "superseded", "timeout":
+		if b.ErrorMessage != "" {
+			return true, fmt.Errorf("build %s %s: %s", id, b.Status, b.ErrorMessage)
+		}
+		return true, fmt.Errorf("build %s %s", id, b.Status)
+	}
+	return false, nil
+}
+
+// buildMissingGrace is how long a wait tolerates the build being absent
+// from the list (pruned, wrong id) before failing instead of polling to
+// the deadline.
+const buildMissingGrace = time.Minute
+
+// pollBuildToTerminal polls the builds list until build buildID reaches a
+// terminal status, printing each status change, and returns that status.
+// Transport errors and 5xx (the server restarting mid-deploy) are retried
+// for about two minutes.
+func pollBuildToTerminal(project, service, buildID string, timeout time.Duration) (string, error) {
 	last := ""
-	deadline := time.Now().Add(20 * time.Minute)
-	for time.Now().Before(deadline) {
-		resp, err := api.ListBuilds(project, service)
-		if err := checkRespErr(resp, err); err != nil {
-			return "", fmt.Errorf("poll builds: %w", err)
-		}
-		var items []struct {
-			ID           string `json:"id"`
-			Status       string `json:"status"`
-			ErrorMessage string `json:"errorMessage,omitempty"`
-		}
-		if err := json.Unmarshal(resp.Body(), &items); err != nil {
-			return "", fmt.Errorf("decode builds: %w", err)
+	var missingSince time.Time
+	p := newPoller(5*time.Second, timeout, 24)
+	err := p.run("poll builds", func() (*resty.Response, error) {
+		return api.ListBuilds(project, service)
+	}, func(body []byte) (bool, error) {
+		var items []buildSummaryRow
+		if err := json.Unmarshal(body, &items); err != nil {
+			return false, fmt.Errorf("decode builds: %w", err)
 		}
 		for _, b := range items {
 			if b.ID != buildID {
 				continue
 			}
+			missingSince = time.Time{}
 			if b.Status != last {
 				fmt.Printf("  build %s: %s\n", buildID, b.Status)
 				last = b.Status
 			}
-			switch b.Status {
-			case "succeeded":
-				return b.Status, nil
-			case "failed", "error", "cancelled":
-				if b.ErrorMessage != "" {
-					return b.Status, fmt.Errorf("build %s: %s", b.Status, b.ErrorMessage)
-				}
-				return b.Status, fmt.Errorf("build %s", b.Status)
-			case "release-failed":
-				// The image built + pushed fine, but the release hook
-				// (migration) failed, so the env was NOT promoted — the
-				// last GREEN build stays live. This IS terminal: without
-				// this arm --follow polled the full 20m deadline waiting
-				// for a status that never changes. Return non-zero so CI
-				// catches the failed migration.
-				if b.ErrorMessage != "" {
-					return b.Status, fmt.Errorf("build %s: %s", b.Status, b.ErrorMessage)
-				}
-				return b.Status, fmt.Errorf("build %s (release hook failed; image not promoted)", b.Status)
-			}
+			return classifyBuildStatus(buildID, b)
 		}
-		time.Sleep(5 * time.Second)
+		if missingSince.IsZero() {
+			missingSince = p.now()
+		} else if p.now().Sub(missingSince) >= buildMissingGrace {
+			return false, fmt.Errorf("build %s not found in %s/%s — check `kuso build list %s %s`", buildID, project, service, project, service)
+		}
+		return false, nil
+	})
+	if errors.Is(err, errPollTimeout) {
+		return "", fmt.Errorf("build %s did not finish within %s (last status %q); re-attach with `kuso build wait %s %s %s`", buildID, timeout, last, project, service, buildID)
 	}
-	return "", fmt.Errorf("build %s did not finish within 20m — check `kuso build list %s %s`", buildID, project, service)
+	if err != nil {
+		return last, err
+	}
+	return last, nil
+}
+
+// pickBuildToWait returns the build `kuso build wait` attaches to when no
+// id is given: the newest build that hasn't finished, else the newest.
+func pickBuildToWait(items []buildSummaryRow) (buildSummaryRow, bool) {
+	for _, b := range items {
+		if terminal, _ := classifyBuildStatus(b.ID, b); !terminal && b.Status != "skipped" {
+			return b, true
+		}
+	}
+	if len(items) > 0 {
+		return items[0], true
+	}
+	return buildSummaryRow{}, false
+}
+
+var buildWaitCmd = &cobra.Command{
+	Use:   "wait <project> <service> [build-id]",
+	Short: "Block until a build finishes (default: the service's in-flight build)",
+	Long: `Attach to a build that is already running, e.g. one started by a git
+push, and block until it reaches a terminal status. Exits 0 on
+"succeeded" and non-zero on failed / cancelled / release-failed or on
+timeout. Without a build id it waits on the newest unfinished build, or
+reports the newest build when none is running.`,
+	Example: `  kuso build wait shop web
+  kuso build wait shop web shop-web-1a2b3c4d5e6f-x7k2 --timeout 30m`,
+	Args: cobra.RangeArgs(2, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, service := args[0], args[1]
+		id := ""
+		if len(args) == 3 {
+			id = args[2]
+		} else {
+			resp, err := api.ListBuilds(project, service)
+			if _, verr := pollVerdict("list builds", resp, err); verr != nil {
+				return verr
+			}
+			var items []buildSummaryRow
+			if err := json.Unmarshal(resp.Body(), &items); err != nil {
+				return fmt.Errorf("decode builds: %w", err)
+			}
+			b, ok := pickBuildToWait(items)
+			if !ok {
+				return fmt.Errorf("%s/%s has no builds", project, service)
+			}
+			id = b.ID
+		}
+		fmt.Printf("waiting on build %s\n", id)
+		status, err := pollBuildToTerminal(project, service, id, buildWaitTimeout)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("build %s %s\n", id, status)
+		return nil
+	},
 }
 
 var buildTriggerCmd = &cobra.Command{
@@ -140,7 +222,7 @@ var buildTriggerCmd = &cobra.Command{
 		}
 		fmt.Println(line)
 		if buildTriggerFollow && !buildTriggerCompileOnly && id != "" {
-			status, ferr := pollBuildToTerminal(args[0], args[1], id)
+			status, ferr := pollBuildToTerminal(args[0], args[1], id, buildWaitTimeout)
 			if ferr != nil {
 				return ferr // non-zero exit on failed/timeout so CI/scripts catch it
 			}
@@ -461,11 +543,14 @@ func init() {
 	rootCmd.AddCommand(buildCmd)
 
 	buildCmd.AddCommand(buildTriggerCmd)
+	buildCmd.AddCommand(buildWaitCmd)
+	buildWaitCmd.Flags().DurationVar(&buildWaitTimeout, "timeout", 20*time.Minute, "how long to wait for the build to finish")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to build (default: project default branch)")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "full 40-character commit SHA to build (use --branch for a branch head)")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	buildTriggerCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
+	buildTriggerCmd.Flags().DurationVar(&buildWaitTimeout, "timeout", 20*time.Minute, "with --follow, how long to wait for the build to finish")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 
 	buildCmd.AddCommand(buildListCmd)
@@ -680,6 +765,7 @@ as a fresh green build would be. Follow the outcome with
 	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "print what would build without creating a build")
 	redeployCmd.Flags().BoolVar(&buildTriggerCompileOnly, "compile-only", false, "run a real build on the shared builder (compile + assemble image) but skip push and env promotion")
 	redeployCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
+	redeployCmd.Flags().DurationVar(&buildWaitTimeout, "timeout", 20*time.Minute, "with --follow, how long to wait for the build to finish")
 	redeployCmd.Flags().StringVar(&buildTriggerEnv, "env", "", "build for this environment (staging, preview-pr-N): uses its branch and its build-time env vars")
 	rootCmd.AddCommand(redeployCmd)
 }
