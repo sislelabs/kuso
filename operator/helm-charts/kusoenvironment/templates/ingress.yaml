@@ -130,7 +130,7 @@ spec:
        render fails rather than publishing a preview the user asked to
        keep private. */ -}}
 {{- $authRef := "" -}}
-{{- if and $hosts .Values.basicAuthSecret }}
+{{- if and (or $hosts .Values.wildcardDomains) .Values.basicAuthSecret }}
 {{- if not (include "kusoenvironment.limitsOn" .) }}
 {{- fail "basicAuthSecret needs Traefik Middlewares (ingressLimitsEnabled + traefik ingress class)" }}
 {{- end }}
@@ -271,10 +271,17 @@ metadata:
          without this a wildcard could win over an exact host it covers
          (another env's, or the dashboard's). Priority 1 sorts below any
          default-priority router, so exact hosts always win. */}}
+  {{- /* Same auth and limit middlewares as the per-host Ingress: a
+         wildcard host must not be a way around preview basic auth or
+         the request limits (SEC-5). */ -}}
+  {{- $wmw := list -}}
+  {{- if $redirectWild }}{{- $wmw = append $wmw $redirectRef -}}{{- end -}}
+  {{- if $authRef }}{{- $wmw = append $wmw $authRef -}}{{- end -}}
+  {{- with include "kusoenvironment.limitMiddlewares" . }}{{- $wmw = append $wmw . -}}{{- end }}
   annotations:
     traefik.ingress.kubernetes.io/router.priority: "1"
-    {{- if $redirectWild }}
-    traefik.ingress.kubernetes.io/router.middlewares: {{ $redirectRef | quote }}
+    {{- if $wmw }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ join "," $wmw | quote }}
     {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}

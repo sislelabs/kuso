@@ -10,7 +10,7 @@
 {{- if and
       (not (eq (default "" .Values.runtime) "worker"))
       (not .Values.internal)
-      (or .Values.host .Values.additionalHosts)
+      (or .Values.host .Values.additionalHosts .Values.wildcardDomains)
       (include "kusoenvironment.limitsOn" .) -}}
 {{- $l := .Values.requestLimits | default dict -}}
 {{- $base := include "kusoenvironment.limitsBase" . -}}
