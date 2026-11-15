@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.10] — 2026-09-28
+
+### Other
+- Wait for addons before kuso run and cron commands start ([c33bb25](https://github.com/sislelabs/kuso/commit/c33bb254fbe31bb61a476a81106fbffd19c5ac15))
+- Put a plain one-line summary in the Discord message content ([7299a57](https://github.com/sislelabs/kuso/commit/7299a57015ba7c51ac7ec0dcc283dd7232e589c9))
+
+### 🐛 Bug Fixes
+- Fix server-side addon access for custom-namespace projects ([80e0988](https://github.com/sislelabs/kuso/commit/80e0988a1f381c2513973700ed328fc3d8d8ec4b))
+- Fix env isolation, seed networking and multi-repo service add ([e2ebf54](https://github.com/sislelabs/kuso/commit/e2ebf54cc3fb01aed168bfb58c024907ee502525))
+
 ## [0.26.9] — 2026-09-28
 
 ### Other

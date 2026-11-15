@@ -19,6 +19,43 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.45.0] — 2026-11-15
+
+### Other
+- Show the latest build's status as a dot on the service card ([ceb830f](https://github.com/sislelabs/kuso/commit/ceb830f279186f55ba23b4d7d236d15a647f3adf))
+- Pin the auto-update window test to its 03:00 hour ([97302f0](https://github.com/sislelabs/kuso/commit/97302f0dbff81c748c3b1cdaa1677266cb1715bb))
+- Trim the projects summary to what the dashboard reads ([9c75612](https://github.com/sislelabs/kuso/commit/9c75612bd937b6973ed587f7daabb77548eeb0c4))
+- Keep orphan repos whose images have no real build date ([f300bfd](https://github.com/sislelabs/kuso/commit/f300bfd3aa66af2b30983ccb0e0c862e07bc76d9))
+- Protect digests of every tag the image sweep keeps ([cc64302](https://github.com/sislelabs/kuso/commit/cc64302193aa0cfc490c4ed5bb6c5ef0596f533c))
+- Bind ClickHouse metadata lookups as query parameters ([0cab602](https://github.com/sislelabs/kuso/commit/0cab602efebcec5b66d921007ce21040b50b265d))
+- Retry and report addon-delete unsubscribe writes ([902dbe4](https://github.com/sislelabs/kuso/commit/902dbe4ffc8dac69543340d8674a71b9ad3366d5))
+- Serve the activator's host index from an env watch instead of a LIST ([9d787db](https://github.com/sislelabs/kuso/commit/9d787db12795ce10290e938083fcd67426051c60))
+- Don't reboot a patched node past a PDB-blocked eviction ([cee5d51](https://github.com/sislelabs/kuso/commit/cee5d51af9fdce07d2453504fa2f58d62562b78a))
+- Throttle the activator's re-wake after a refused dial ([6a143dd](https://github.com/sislelabs/kuso/commit/6a143dde0636cb84df27e1e5dd7ab8d510c818bb))
+- Alert when a cron run blocks its schedule and bound new crons' runs ([4f78e96](https://github.com/sislelabs/kuso/commit/4f78e96e5b64bedc8944fd206655da276a29352e))
+- Seed a default rollout_failing alert rule once at boot ([094b71e](https://github.com/sislelabs/kuso/commit/094b71e5f69c2f3ae546e29bcd9498830bc4b784))
+- Record live images for digest-pinned envs ([ed11433](https://github.com/sislelabs/kuso/commit/ed11433e177d723e1d03d3290f64c4411a859e61))
+- Move the default addon auto-update window off the backup hour ([db4c9d9](https://github.com/sislelabs/kuso/commit/db4c9d9dd6cc59a97da8464c5bfd9f1696165f1d))
+- Pin the kuso-backup image to the release digest ([5edf3cb](https://github.com/sislelabs/kuso/commit/5edf3cbe23b98bc4c95c4bbc946a00f1283354d8))
+- Keep backup keys when a project is deleted with --purge-data ([a0b79de](https://github.com/sislelabs/kuso/commit/a0b79de537b448c598caeae231093e5dedb9684a))
+- Ship pg clients 16-18 in kuso-server and match the server's major ([f7e4ff2](https://github.com/sislelabs/kuso/commit/f7e4ff245c6fd7a568f387e62b55431b71fff4dd))
+- Flag unbacked s3 and no-producer addons instead of reporting ok ([14ab4e3](https://github.com/sislelabs/kuso/commit/14ab4e3e47e44408938c97d6e816a78566b0ac19))
+- Fail the control-plane backup on a partial Secret or missing key ([e7e0103](https://github.com/sislelabs/kuso/commit/e7e0103e90e4a385b296de84b4fea2f255bb2ef0))
+- Fail backup health on backup keys that were never exported ([232640f](https://github.com/sislelabs/kuso/commit/232640fc5c450ba0c1563f7e546e673c1e54d555))
+- Turn on buildkitd mTLS automatically on upgraded installs ([c267d96](https://github.com/sislelabs/kuso/commit/c267d96fe502646cec0177ba94f564620bd97685))
+- Redact values from SQL console audit rows ([ae3f1dd](https://github.com/sislelabs/kuso/commit/ae3f1dd6a885dc2deefa94096cc2ac1b07dfa27d))
+- Scope the addon name-overlap check to a shared namespace ([4fb4671](https://github.com/sislelabs/kuso/commit/4fb467181f3411651e3127b39b6b95bc386e93ca))
+- Keep preview builds out of production build reuse ([85738a9](https://github.com/sislelabs/kuso/commit/85738a95867a428831a8e25a49b9c6fda1af1c81))
+- Refuse an addon name another project's pending refs could bind ([68aea63](https://github.com/sislelabs/kuso/commit/68aea631316a04dedc468d47c74bbbb02f891340))
+- Carry preview auth and request limits onto the wildcard Ingress ([4c9531e](https://github.com/sislelabs/kuso/commit/4c9531ee285804c5689a8413aadec7c1937d8e35))
+- Refuse pending refs to a dashed addon name that doesn't exist yet ([a22d573](https://github.com/sislelabs/kuso/commit/a22d573abecf8d336a5bd96c7055377c7778f478))
+- Gate repo, branch, path and Dockerfile on service create ([fbac4b9](https://github.com/sislelabs/kuso/commit/fbac4b9cd8085b52707bdfa8438fafe65ece3c8f))
+- Require project admin to build an untracked branch or force a rollback ([f3874e4](https://github.com/sislelabs/kuso/commit/f3874e415fcfa582be0e3f34e11b6f61e83edd16))
+- Stop paging "traffic stopped" on a bursty, idle cluster ([4081838](https://github.com/sislelabs/kuso/commit/408183834148a5add3b8a03c84153211c31a907b))
+
+### 🐛 Bug Fixes
+- Fix the CNPG rebuild runbook that deleted the control-plane data ([4987854](https://github.com/sislelabs/kuso/commit/49878543aed289dd90f2cbaffcc98b819728708f))
+
 ## [0.44.0] — 2026-11-12
 
 ### Other
@@ -1238,16 +1275,6 @@ messages on every release. The format is loosely based on
 - Isolate PR previews from production addons and shared secrets ([2956754](https://github.com/sislelabs/kuso/commit/2956754a98f723f956002fcd24ac7a0be151f12c))
 - Delete env-group clone services through DeleteService ([f22deb6](https://github.com/sislelabs/kuso/commit/f22deb6b49e5644e9d796f597b2a3c7c47d23a58))
 - Seed env DB clones with a version-matched pg_dump ([ba38d83](https://github.com/sislelabs/kuso/commit/ba38d834a96b23f95de09d088b974c988cffda0b))
-
-## [0.26.10] — 2026-09-28
-
-### Other
-- Wait for addons before kuso run and cron commands start ([c33bb25](https://github.com/sislelabs/kuso/commit/c33bb254fbe31bb61a476a81106fbffd19c5ac15))
-- Put a plain one-line summary in the Discord message content ([7299a57](https://github.com/sislelabs/kuso/commit/7299a57015ba7c51ac7ec0dcc283dd7232e589c9))
-
-### 🐛 Bug Fixes
-- Fix server-side addon access for custom-namespace projects ([80e0988](https://github.com/sislelabs/kuso/commit/80e0988a1f381c2513973700ed328fc3d8d8ec4b))
-- Fix env isolation, seed networking and multi-repo service add ([e2ebf54](https://github.com/sislelabs/kuso/commit/e2ebf54cc3fb01aed168bfb58c024907ee502525))
 
 
 ---

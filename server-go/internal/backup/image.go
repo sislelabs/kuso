@@ -13,7 +13,7 @@ import (
 // hack/release.sh rewrites this line to the release's tag@digest on every
 // ship (and the kusoaddon chart's default to match). The moving :latest
 // tag is only the value in an unreleased tree.
-const DefaultImage = "ghcr.io/sislelabs/kuso-backup:latest"
+const DefaultImage = "ghcr.io/sislelabs/kuso-backup:v0.45.0@sha256:fce3effc0ba4132838a0c6690ea8dae062637590648da3b7befc29f31a11c278"
 
 // Image is DefaultImage unless KUSO_BACKUP_IMAGE overrides it (dev
 // clusters testing an unreleased build/backup).
