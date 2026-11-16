@@ -1,6 +1,7 @@
 export {
   useProjects,
   useProjectsSummary,
+  useProjectsPulse,
   useProject,
   useServices,
   useEnvironments,
@@ -8,6 +9,7 @@ export {
   useAddons,
   projectsQueryKey,
   projectsSummaryQueryKey,
+  projectsPulseQueryKey,
   projectQueryKey,
   servicesQueryKey,
   envsQueryKey,
@@ -17,6 +19,7 @@ export {
 export {
   listProjects,
   getProjectsSummary,
+  getProjectsPulse,
   getProject,
   listServices,
   listEnvironments,
@@ -63,6 +66,7 @@ export {
 export type {
   ProjectSummaryItem,
   ProjectSummaryMetrics,
+  ProjectsPulse,
   ProjectNotificationMute,
   BackupObject,
   SQLTable,

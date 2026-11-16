@@ -43,6 +43,21 @@ export async function getProjectsSummary(): Promise<ProjectSummaryItem[]> {
   return api<ProjectSummaryItem[]>("/api/projects/summary");
 }
 
+// ProjectsPulse mirrors the server's projectsPulseResponse: the last
+// 24h of traffic and deploys across the caller's projects.
+export interface ProjectsPulse {
+  since: string;
+  stepSeconds: number;
+  /** [unixSeconds, requests per minute] */
+  requests: [number, number][];
+  requestsAvailable: boolean;
+  deploys: { project: string; service: string; at: string }[];
+}
+
+export async function getProjectsPulse(): Promise<ProjectsPulse> {
+  return api<ProjectsPulse>("/api/projects/pulse");
+}
+
 export async function getProject(name: string): Promise<{
   project: KusoProject;
   services: KusoService[];

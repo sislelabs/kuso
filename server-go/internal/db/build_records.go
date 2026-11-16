@@ -151,6 +151,42 @@ func (d *DB) ListProjectBuildRecords(ctx context.Context, project string, limit 
 	return out, rows.Err()
 }
 
+// fleetBuildRecordCap bounds ListSucceededBuildRecordsSince. A day of
+// deploys across every project is a few hundred rows at most; the cap
+// only stops a pathological range from reading the whole archive.
+const fleetBuildRecordCap = 2000
+
+// ListSucceededBuildRecordsSince returns successful builds archived at
+// or after since, across every project, newest-first. createdAt is the
+// insert at the build's terminal transition, so it is the deploy time.
+// Callers filter by project visibility.
+func (d *DB) ListSucceededBuildRecordsSince(ctx context.Context, since time.Time) ([]BuildRecord, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT "buildName","project","service","branch","commitSha","commitMessage",
+		       "imageTag","status","startedAt","finishedAt","triggeredBy",
+		       "triggeredByUser","errorMessage","createdAt"
+		  FROM "BuildRecord"
+		 WHERE "createdAt" >= $1 AND "status" = 'succeeded'
+		 ORDER BY "createdAt" DESC
+		 LIMIT $2`, since, fleetBuildRecordCap)
+	if err != nil {
+		return nil, fmt.Errorf("ListSucceededBuildRecordsSince: %w", err)
+	}
+	defer rows.Close()
+	var out []BuildRecord
+	for rows.Next() {
+		var r BuildRecord
+		if err := rows.Scan(&r.BuildName, &r.Project, &r.Service, &r.Branch,
+			&r.CommitSha, &r.CommitMessage, &r.ImageTag, &r.Status, &r.StartedAt,
+			&r.FinishedAt, &r.TriggeredBy, &r.TriggeredByUser, &r.ErrorMessage,
+			&r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("ListSucceededBuildRecordsSince scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetBuildImage returns the archived service short-name + image tag +
 // status for one build, for the rollback fallback when the live CR is
 // gone. ok=false when no record exists. The caller reconstructs the

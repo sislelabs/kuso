@@ -290,6 +290,7 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// project). Static segment, so chi resolves it ahead of {project};
 	// "summary" is a reserved project name (see projects.reservedRouteNames).
 	r.Get("/api/projects/summary", h.Summary)
+	r.Get("/api/projects/pulse", h.Pulse)
 	r.Get("/api/projects/{project}", h.Describe)
 	r.Patch("/api/projects/{project}", h.Update)
 	r.Delete("/api/projects/{project}", h.Delete)

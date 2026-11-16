@@ -3,6 +3,7 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import {
   getProject,
+  getProjectsPulse,
   getProjectsSummary,
   listAddons,
   listEnvironments,
@@ -13,6 +14,7 @@ import {
 
 export const projectsQueryKey = ["projects"] as const;
 export const projectsSummaryQueryKey = ["projects", "summary"] as const;
+export const projectsPulseQueryKey = ["projects", "pulse"] as const;
 export const projectQueryKey = (name: string) => ["projects", name] as const;
 export const servicesQueryKey = (project: string) =>
   ["projects", project, "services"] as const;
@@ -125,5 +127,17 @@ export function useAddons(project: string) {
     queryKey: addonsQueryKey(project),
     queryFn: () => listAddons(project),
     enabled: !!project,
+  });
+}
+
+// useProjectsPulse feeds the home page's fleet strip. The server caches
+// the Prometheus side for a minute, so polling faster buys nothing.
+export function useProjectsPulse() {
+  return useQuery({
+    queryKey: projectsPulseQueryKey,
+    queryFn: getProjectsPulse,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    staleTime: 30_000,
   });
 }

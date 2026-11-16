@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // TestBuildRecord_SaveListUpsert covers the archive round-trip + the
@@ -158,5 +159,42 @@ func TestBuildRecord_BranchAndProjectDelete(t *testing.T) {
 	}
 	if other, _ := d.ListProjectBuildRecords(ctx, "q", 0); len(other) != 1 {
 		t.Errorf("project q has %d records, want 1", len(other))
+	}
+}
+
+// TestBuildRecord_SucceededSince: only successful builds inside the
+// window come back, across projects, newest first.
+func TestBuildRecord_SucceededSince(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	for _, r := range []BuildRecord{
+		{BuildName: "p1-web-old", Project: "p1", Service: "web", Status: "succeeded"},
+		{BuildName: "p1-web-new", Project: "p1", Service: "web", Status: "succeeded"},
+		{BuildName: "p2-api-new", Project: "p2", Service: "api", Status: "succeeded"},
+		{BuildName: "p2-api-bad", Project: "p2", Service: "api", Status: "failed"},
+	} {
+		if err := d.SaveBuildRecord(ctx, r); err != nil {
+			t.Fatalf("save %s: %v", r.BuildName, err)
+		}
+	}
+	if _, err := d.ExecContext(ctx, `UPDATE "BuildRecord" SET "createdAt" = now() - interval '2 days' WHERE "buildName" = 'p1-web-old'`); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	if _, err := d.ExecContext(ctx, `UPDATE "BuildRecord" SET "createdAt" = now() - interval '1 hour' WHERE "buildName" = 'p1-web-new'`); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+
+	got, err := d.ListSucceededBuildRecordsSince(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	names := make([]string, 0, len(got))
+	for _, r := range got {
+		names = append(names, r.BuildName)
+	}
+	want := []string{"p2-api-new", "p1-web-new"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("got %v, want %v", names, want)
 	}
 }

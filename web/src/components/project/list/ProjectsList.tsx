@@ -4,7 +4,11 @@ import { useRovingGrid } from "@/lib/use-roving-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Box, ChevronDown, ExternalLink, Folder, Pause, Power, SearchX, Settings, Star } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api-client";
+import type { NodeSummary } from "@/components/layout/ServersPopover";
 import {
+  useProjectsPulse,
   useProjectsSummary,
   useStartProject,
   useStopProject,
@@ -20,7 +24,7 @@ import { cn } from "@/lib/utils";
 import type { KusoProject } from "@/types/projects";
 import { attentionItems, lastDeployedProject, projectErrorTotal, wallTitle } from "./fleetModel";
 import { ProjectTile } from "./ProjectTile";
-import { ProblemList, WallSummary } from "./WallSummary";
+import { FleetStrip, ProblemList, type FleetStripCapacity } from "./WallSummary";
 import type { ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectsToolbar } from "./ProjectsToolbar";
 import {
@@ -157,6 +161,31 @@ export function ProjectsList({
     };
   }, [entries, fleetErrors.byProject]);
 
+  const pulse = useProjectsPulse();
+  // Node usage is admin-only; it shares ServersPopover's query so the
+  // top bar and the strip make one request between them.
+  const nodes = useQuery({
+    queryKey: ["kubernetes", "nodes"],
+    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    enabled: canManage,
+  });
+  const capacity = useMemo((): FleetStripCapacity | undefined => {
+    const list = nodes.data;
+    if (list && list.some((n) => (n.memUsageBytes ?? 0) > 0)) {
+      return {
+        label: list.length === 1 ? "1 server" : `${list.length} servers`,
+        memUsed: list.reduce((s, n) => s + (n.memUsageBytes ?? 0), 0),
+        memTotal: list.reduce((s, n) => s + (n.memCapacityBytes ?? 0), 0),
+        cpuUsedMilli: list.reduce((s, n) => s + (n.cpuUsageMilli ?? 0), 0),
+        cpuTotalMilli: list.reduce((s, n) => s + (n.cpuCapacityMilli ?? 0), 0),
+      };
+    }
+    if (fleet.memBytes <= 0) return undefined;
+    return { label: "used by apps", memUsed: fleet.memBytes, cpuUsedMilli: fleet.cpuMillicores };
+  }, [nodes.data, fleet.memBytes, fleet.cpuMillicores]);
+
   const counts = useMemo(() => {
     if (!summaryQuery.data) return null;
     const c = { ...EMPTY_COUNTS, all: entries.length };
@@ -271,17 +300,21 @@ export function ProjectsList({
             <span className="block pb-1 font-display text-[28px] font-semibold leading-[1.1] tracking-[-0.01em] [font-stretch:108%] sm:text-[34px]">
               {fleet.title}
             </span>,
-            <WallSummary
-              running={fleet.running}
-              stopped={fleet.stopped}
-              errors={fleet.errors}
-              topErrorProject={fleet.top}
-              memBytes={fleet.memBytes}
-              cpuMillicores={fleet.cpuMillicores}
-              lastDeploy={fleet.lastDeploy}
-            />,
+            null,
           )
         : header("Projects", `${projects.length} project${projects.length === 1 ? "" : "s"}`)}
+      {summaryQuery.data && (
+        <FleetStrip
+          running={fleet.running}
+          stopped={fleet.stopped}
+          broken={fleet.attention.some((a) => a.tone === "danger" || a.tone === "warning")}
+          errors={fleet.errors}
+          topErrorProject={fleet.top}
+          pulse={pulse.data}
+          capacity={capacity}
+          fallbackLastDeploy={fleet.lastDeploy}
+        />
+      )}
       {summaryQuery.data && <ProblemList items={fleet.attention} />}
       <ProjectsToolbar
         query={query}
