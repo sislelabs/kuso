@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.46.0] — 2026-11-16
+
+### Other
+- Replace the home summary sentence with a fleet strip ([f587116](https://github.com/sislelabs/kuso/commit/f5871168b265567b26c8c69eca7cb94f7430750f))
+- Make CLI build and upgrade waits survive restarts and attach to running work ([5694526](https://github.com/sislelabs/kuso/commit/56945261b788ee84406cd6645a629f3d5d827bb2))
+
 ## [0.45.0] — 2026-11-15
 
 ### Other
@@ -1266,15 +1272,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Stop Discord cards repeating themselves; fix env-group release race ([5879267](https://github.com/sislelabs/kuso/commit/58792675a20c1abcce5587a35cb22d80f70df7c6))
-
-## [0.26.11] — 2026-09-28
-
-### Other
-- Report shared-secret subscribers and correct the skill's defaults ([8ff382b](https://github.com/sislelabs/kuso/commit/8ff382b1691d68bff677e8b301892cf567f0bcee))
-- Explain release-hook failures and drop clone tokens on every exit ([543ca48](https://github.com/sislelabs/kuso/commit/543ca483fca13a737872ac3441893bc1733eacbd))
-- Isolate PR previews from production addons and shared secrets ([2956754](https://github.com/sislelabs/kuso/commit/2956754a98f723f956002fcd24ac7a0be151f12c))
-- Delete env-group clone services through DeleteService ([f22deb6](https://github.com/sislelabs/kuso/commit/f22deb6b49e5644e9d796f597b2a3c7c47d23a58))
-- Seed env DB clones with a version-matched pg_dump ([ba38d83](https://github.com/sislelabs/kuso/commit/ba38d834a96b23f95de09d088b974c988cffda0b))
 
 
 ---
