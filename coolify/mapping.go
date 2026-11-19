@@ -187,9 +187,72 @@ func RuntimeForBuildPack(bp string) string {
 		return "nixpacks"
 	case "static":
 		return "static"
+	case "dockerimage":
+		return "image"
 	default:
 		return "dockerfile"
 	}
+}
+
+// ServicePlan is the kuso service an Application maps to. The CLI and
+// the server importer both build their create request from it, so the
+// two can't drift on which Coolify settings carry over.
+type ServicePlan struct {
+	Runtime  string
+	Port     int
+	RepoURL  string
+	RepoPath string
+	// Branch pins the service's branch, so apps on different branches of
+	// one repo don't all build the project default.
+	Branch string
+	// Dockerfile is relative to RepoPath; "" means "Dockerfile".
+	Dockerfile      string
+	ImageRepository string
+	ImageTag        string
+	StaticOutputDir string
+	// Dropped has one report line per non-empty Coolify setting that
+	// kuso's service create has no field for.
+	Dropped []string
+}
+
+// PlanService maps an Application onto a kuso service.
+func PlanService(a *Application) ServicePlan {
+	p := ServicePlan{
+		Runtime:  RuntimeForBuildPack(a.BuildPack),
+		Port:     ParseFirstPort(a.PortsExposes),
+		RepoURL:  NormalizeRepoURL(a.GitRepository),
+		RepoPath: NormalizeBaseDir(a.BaseDirectory),
+		Branch:   strings.TrimSpace(a.GitBranch),
+	}
+	drop := func(field, val, why string) {
+		if v := strings.TrimSpace(val); v != "" {
+			p.Dropped = append(p.Dropped, fmt.Sprintf("%s=%q not carried over — %s", field, v, why))
+		}
+	}
+	switch p.Runtime {
+	case "image":
+		p.ImageRepository = strings.TrimSpace(a.DockerRegistryImageName)
+		p.ImageTag = strings.TrimSpace(a.DockerRegistryImageTag)
+		p.RepoURL, p.RepoPath, p.Branch = "", "", ""
+	case "dockerfile":
+		if df := strings.TrimPrefix(strings.TrimSpace(a.DockerfileLocation), "/"); df != "Dockerfile" {
+			p.Dockerfile = df
+		}
+		drop("dockerfile_target_build", a.DockerfileTarget, "kuso builds the Dockerfile's final stage")
+	case "static":
+		p.StaticOutputDir = NormalizeBaseDir(a.PublishDirectory)
+	}
+	drop("install_command", a.InstallCommand, "kuso has no install-command field; put it in the Dockerfile or nixpacks.toml")
+	drop("build_command", a.BuildCommand, "kuso has no build-command field; put it in the Dockerfile or nixpacks.toml")
+	drop("start_command", a.StartCommand, "set the service command in kuso after import")
+	if a.HealthCheckEnabled {
+		drop("health_check_path", a.HealthCheckPath, "kuso probes the service port by runtime; configure a health check after import")
+		drop("health_check_port", a.HealthCheckPort, "kuso probes the service port by runtime")
+	}
+	if p.Runtime != "static" {
+		drop("publish_directory", a.PublishDirectory, "only static apps serve a publish directory")
+	}
+	return p
 }
 
 // ParseFirstPort takes a comma-separated Coolify port list and returns
