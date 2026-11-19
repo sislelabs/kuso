@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
 
@@ -32,7 +34,7 @@ func (s *Service) attachServiceSecretToEnvs(ctx context.Context, ns, project, se
 	}
 	for i := range envs {
 		env := &envs[i]
-		if env.Spec.Kind == "preview" {
+		if addons.IsPreviewEnv(env) {
 			continue
 		}
 		if hasEnvFromSecret(env.Spec.EnvFromSecrets, secretName) {
@@ -59,6 +61,14 @@ func (s *Service) attachServiceSecretToEnvs(ctx context.Context, ns, project, se
 			"project", project, "service", service, "err", err)
 	}
 	return nil
+}
+
+// envServesServiceSecret reports whether env gets the managed service Secret:
+// it already mounts it, or it is a non-preview env attachServiceSecretToEnvs
+// mounts it on. Only on such an env can an env-CR literal "shadow" the
+// Secret; on a preview the literal is the env's only copy of the value.
+func envServesServiceSecret(env *kube.KusoEnvironment, secretName string) bool {
+	return hasEnvFromSecret(env.Spec.EnvFromSecrets, secretName) || !addons.IsPreviewEnv(env)
 }
 
 func hasEnvFromSecret(list []string, name string) bool {
@@ -169,10 +179,13 @@ func (s *Service) clearShadowedEnvLiterals(ctx context.Context, ns, project, ser
 	}
 	cleared := 0
 	for i := range envs {
+		if !envServesServiceSecret(&envs[i], secretName) {
+			continue
+		}
 		var shadowed []string
 		for _, ev := range envs[i].Spec.EnvVars {
-			if ev.ValueFrom != nil {
-				continue // explicit wiring — leave alone
+			if ev.ValueFrom != nil || slices.Contains(envs[i].Spec.EnvOverrides, ev.Name) {
+				continue // explicit wiring or a deliberate per-env pin
 			}
 			if _, inSecret := sec.Data[ev.Name]; inSecret {
 				shadowed = append(shadowed, ev.Name)

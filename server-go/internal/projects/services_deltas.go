@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -526,8 +527,9 @@ func (s *Service) clearCREnvVarIfPresent(ctx context.Context, ns, project, servi
 
 // clearEnvCREnvVar drops a literal/ref named `name` from every owned
 // KusoEnvironment of a service, so an envFrom-mounted managed-secret value
-// of the same name is the only source left. Best-effort per env: one env
-// failing must not strand the others.
+// of the same name is the only source left. Envs that never get the service
+// Secret (previews) and envs that pinned `name` via EnvOverrides keep
+// theirs: there the CR value is the intended one, not a stale shadow.
 func (s *Service) clearEnvCREnvVar(ctx context.Context, ns, project, service, name string) error {
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		labelProject: project,
@@ -536,7 +538,12 @@ func (s *Service) clearEnvCREnvVar(ctx context.Context, ns, project, service, na
 	if err != nil {
 		return fmt.Errorf("list envs to clear %s: %w", name, err)
 	}
-	for _, e := range envs {
+	secretName := kube.ServiceSecretName(project, service)
+	clearable := func(env *kube.KusoEnvironment) bool {
+		return envServesServiceSecret(env, secretName) && !slices.Contains(env.Spec.EnvOverrides, name)
+	}
+	for i := range envs {
+		e := &envs[i]
 		has := false
 		for _, ev := range e.Spec.EnvVars {
 			if ev.Name == name {
@@ -544,10 +551,13 @@ func (s *Service) clearEnvCREnvVar(ctx context.Context, ns, project, service, na
 				break
 			}
 		}
-		if !has {
+		if !has || !clearable(e) {
 			continue
 		}
 		if _, err := s.updateOwnedEnvWithRetry(ctx, ns, project, e.Name, func(env *kube.KusoEnvironment) error {
+			if !clearable(env) {
+				return nil
+			}
 			out := env.Spec.EnvVars[:0]
 			for _, ev := range env.Spec.EnvVars {
 				if ev.Name != name {
