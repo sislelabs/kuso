@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.48.0] — 2026-11-19
+
+### ✨ Features
+- Add home strip panels and keep CPU and memory history across restarts ([b18bf8f](https://github.com/sislelabs/kuso/commit/b18bf8fd2e53ba41ff5d39baed57b42ab0e107d5))
+
 ## [0.47.0] — 2026-11-19
 
 ### ✨ Features
@@ -1262,16 +1267,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Route user /healthz to the app and read readiness from EndpointSlices ([8dc86ac](https://github.com/sislelabs/kuso/commit/8dc86acee2c8159f1088dbe661613ffb53c5e1b7))
-
-## [0.26.13] — 2026-09-28
-
-### Other
-- Give new services a default pod size ([3ce96a1](https://github.com/sislelabs/kuso/commit/3ce96a18563aaf412992a8b01e78768634ee3386))
-- Sleep non-production envs by default and allow sleep with autoscaling ([1a8e917](https://github.com/sislelabs/kuso/commit/1a8e917e0d561001c4ab3c6bd0e11bb051c3c854))
-- Drop a native env clone's conn Secret and data PVCs on delete ([76b7935](https://github.com/sislelabs/kuso/commit/76b7935f13d003a14bc087237b34305b9fb8e716))
-
-### 🐛 Bug Fixes
-- Fix the remaining e2e findings and record revisions for all edits ([fc982f2](https://github.com/sislelabs/kuso/commit/fc982f2c735b96a760db1408fce11aab07ec590d))
 
 
 ---

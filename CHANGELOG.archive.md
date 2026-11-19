@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.13] — 2026-09-28
+
+### Other
+- Give new services a default pod size ([3ce96a1](https://github.com/sislelabs/kuso/commit/3ce96a18563aaf412992a8b01e78768634ee3386))
+- Sleep non-production envs by default and allow sleep with autoscaling ([1a8e917](https://github.com/sislelabs/kuso/commit/1a8e917e0d561001c4ab3c6bd0e11bb051c3c854))
+- Drop a native env clone's conn Secret and data PVCs on delete ([76b7935](https://github.com/sislelabs/kuso/commit/76b7935f13d003a14bc087237b34305b9fb8e716))
+
+### 🐛 Bug Fixes
+- Fix the remaining e2e findings and record revisions for all edits ([fc982f2](https://github.com/sislelabs/kuso/commit/fc982f2c735b96a760db1408fce11aab07ec590d))
+
 ## [0.26.12] — 2026-09-28
 
 ### Other
