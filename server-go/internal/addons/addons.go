@@ -200,6 +200,9 @@ type CreateAddonRequest struct {
 	// Pooler enables the opt-in PgBouncer pooler at create time.
 	// Nil = no pooler.
 	Pooler *kube.KusoAddonPooler `json:"pooler,omitempty"`
+	// Placement pins the new addon's pods. Internal only: the env-addon
+	// cloner carries the source's (already validated) placement.
+	Placement *kube.KusoPlacement `json:"-"`
 	// TLS opts a native kind=postgres addon into in-cluster wire TLS.
 	// "" / "disable" (default) = plaintext + sslmode=disable. "require"
 	// = serve TLS + sslmode=require, for apps that mandate encrypted
@@ -638,6 +641,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			External:         req.External,
 			UseInstanceAddon: req.UseInstanceAddon,
 			Pooler:           req.Pooler,
+			Placement:        req.Placement,
 			TLS:              req.TLS,
 			Backup:           s.createBackup(ctx, req),
 			AppRole:          newAddonGetsAppRole(req, isExternal),

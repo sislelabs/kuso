@@ -23,7 +23,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -279,7 +281,12 @@ func (c *Cloner) EnsureEnvAddonsMapped(ctx context.Context, project, envScope st
 				// encrypted DB connections in production crashloop in
 				// previews (previews inherit ENVIRONMENT via shared
 				// secrets).
-				TLS:              cloneTLS,
+				TLS: cloneTLS,
+				// The native chart always emits POOLER_URL (empty when off),
+				// and the clone's conn replaces the source's, so a dropped
+				// pooler hands the app POOLER_URL="".
+				Pooler:           clonePooler(s.Spec.Pooler),
+				Placement:        clonePlacement(s.Spec.Placement),
 				ExtraLabels:      extraLabels,
 				ExtraAnnotations: extraAnnotations,
 			}); err != nil {
@@ -1015,4 +1022,24 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 	e := envFromSecret(name, secretName, key)
 	e.ValueFrom.SecretKeyRef.Optional = &opt
 	return e
+}
+
+// clonePooler copies a source's pooler for its in-cluster clone. The clone
+// is never the instance pooler nor an external backend.
+func clonePooler(p *kube.KusoAddonPooler) *kube.KusoAddonPooler {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	out.InstancePooler = false
+	out.ExternalBackend = false
+	out.Host, out.Port = "", 0
+	return &out
+}
+
+func clonePlacement(p *kube.KusoPlacement) *kube.KusoPlacement {
+	if p == nil {
+		return nil
+	}
+	return &kube.KusoPlacement{Labels: maps.Clone(p.Labels), Nodes: slices.Clone(p.Nodes)}
 }
