@@ -142,7 +142,8 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 //
 // A problem whose episode has since closed — a crash followed by its
 // recovery, an alert followed by its resolution, an uptime failure
-// followed by its recovery, a node back online — is no longer attention,
+// followed by its recovery, a node back online, a platform component,
+// ingress path or the alert engine recovered — is no longer attention,
 // and neither is the closing row itself (an alert's all-clear keeps the
 // alert.fired type for channel delivery). A rule firing for several
 // targets closes a fire row once every target it named ("targets") has
@@ -174,8 +175,28 @@ const attentionPredicate = `(("severity" IN ('warn','error') OR "type" = 'alert.
 		      AND (("NotificationEvent"."type" = 'pod.crashed' AND r."type" = 'pod.recovered')
 		        OR ("NotificationEvent"."type" = 'uptime.down' AND r."type" = 'uptime.recovered')
 		        OR ("NotificationEvent"."type" = 'node.unreachable' AND r."type" = 'node.recovered'
-		          AND NULLIF(r."extra", '')::jsonb->>'node' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'node')))
+		          AND NULLIF(r."extra", '')::jsonb->>'node' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'node')
+		        OR ("NotificationEvent"."type" IN ('platform.unhealthy', 'ingress.down', 'alert.engine_degraded')
+		          AND r."type" = 'platform.recovered'
+		          AND NULLIF(r."extra", '')::jsonb->>'component' = ` + platformRecoveryComponent + `)))
 		  )))`
+
+// platformRecoveryComponent is the platform.recovered component that
+// closes a platform.unhealthy, ingress.down or alert.engine_degraded row.
+// platform.unhealthy recovers under its own component; the ingress and
+// alert-engine emitters recover under fixed names (alerts/platform.go,
+// uptime/ingress.go, uptime/external.go), keyed here by the down event's
+// source.
+const platformRecoveryComponent = `CASE "NotificationEvent"."type"
+		  WHEN 'platform.unhealthy' THEN NULLIF("NotificationEvent"."extra", '')::jsonb->>'component'
+		  WHEN 'alert.engine_degraded' THEN 'alert engine (Prometheus)'
+		  ELSE CASE NULLIF("NotificationEvent"."extra", '')::jsonb->>'source'
+		    WHEN 'traffic stopped' THEN 'ingress traffic'
+		    WHEN '5xx on every host' THEN 'ingress (5xx on every host)'
+		    WHEN 'probe through Traefik' THEN 'ingress (Traefik)'
+		    WHEN 'external path' THEN 'ingress (external path)'
+		  END
+		END`
 
 // ListNotificationEvents returns the newest `limit` events (clamped
 // to the table cap). When unreadOnly is true, only events with
