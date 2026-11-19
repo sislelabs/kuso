@@ -66,15 +66,42 @@ func TestSweepDue(t *testing.T) {
 		last time.Time
 		want bool
 	}{
-		{at(2), time.Time{}, false},               // before the hour
-		{at(3), time.Time{}, true},                // first tick at/after the hour
-		{at(15), time.Time{}, true},               // server came up late: still today's sweep
-		{at(3), at(3).Add(-4 * time.Hour), false}, // swept 4h ago
+		{at(2), time.Time{}, false},                 // before the hour
+		{at(3), time.Time{}, true},                  // first tick at/after the hour
+		{at(15), time.Time{}, true},                 // server came up late: still today's sweep
+		{at(3), at(3).Add(-2 * time.Minute), false}, // already swept since 03:00
+		{at(15), at(3), false},                      // today's sweep done
 		{at(3), at(3).Add(-21 * time.Hour), true},
+		{at(15), at(3).Add(-24 * time.Hour), true}, // down at 03:00: catch up
+		{at(2), at(15).Add(-48 * time.Hour), true}, // missed yesterday's entirely
 	}
 	for i, c := range cases {
 		if got := sweepDue(c.now, 3, c.last); got != c.want {
 			t.Errorf("case %d: sweepDue(%v, 3, %v) = %v", i, c.now, c.last, got)
+		}
+	}
+}
+
+// BLD-3: after a late first sweep the schedule must settle on the
+// configured hour the next day and stay there, for early hours too.
+func TestSweepDue_SettlesOnTheHour(t *testing.T) {
+	for _, hour := range []int{0, 2, 3, 4, 22} {
+		start := time.Date(2026, 11, 1, 22, 0, 0, 0, time.UTC)
+		last := start
+		var hours []int
+		for now := start; now.Before(start.Add(7 * 24 * time.Hour)); now = now.Add(SweepInterval) {
+			if sweepDue(now, hour, last) {
+				last = now
+				hours = append(hours, now.Hour())
+			}
+		}
+		if len(hours) < 6 {
+			t.Fatalf("hour=%d: only %d sweeps in 7 days: %v", hour, len(hours), hours)
+		}
+		for _, h := range hours[1:] {
+			if h != hour {
+				t.Fatalf("hour=%d: sweeps ran at %v, want every one after the first at %02d:00", hour, hours, hour)
+			}
 		}
 	}
 }

@@ -25,7 +25,6 @@ const (
 	// GoneAfter: inventory rows unseen this long no longer count as live.
 	GoneAfter = 7 * 24 * time.Hour
 
-	sweepEvery     = 20 * time.Hour
 	retainPerImage = 5
 	pruneGoneAfter = 30 * 24 * time.Hour
 	tickBudget     = 5 * time.Minute
@@ -130,12 +129,20 @@ func (s *Sweeper) Tick(ctx context.Context) {
 	}
 }
 
-// sweepDue: the first tick at/after hourUTC with no sweep in 20h.
+// sweepDue: no sweep since the latest hourUTC boundary. Anchoring on the
+// boundary, not on the gap since the last sweep, keeps the sweep at its
+// hour: a late catch-up sweep is followed by one at hourUTC the next day
+// instead of drifting by the spacing every cycle.
 func sweepDue(now time.Time, hourUTC int, last time.Time) bool {
-	if now.UTC().Hour() < hourUTC {
-		return false
+	now = now.UTC()
+	if last.IsZero() {
+		return now.Hour() >= hourUTC
 	}
-	return last.IsZero() || now.Sub(last) >= sweepEvery
+	boundary := time.Date(now.Year(), now.Month(), now.Day(), hourUTC, 0, 0, 0, time.UTC)
+	if boundary.After(now) {
+		boundary = boundary.AddDate(0, 0, -1)
+	}
+	return last.Before(boundary)
 }
 
 func (s *Sweeper) lastSweep(ctx context.Context) (time.Time, error) {
