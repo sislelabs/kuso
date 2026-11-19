@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
+	"kuso/server/internal/backup"
 )
 
 // The restore pod must be inside the project netpol (project label) to
@@ -25,13 +25,15 @@ func TestBuildRestoreJob_PodTemplateLabels(t *testing.T) {
 		t.Errorf("job meta = ns %q labels %v", job.Namespace, job.Labels)
 	}
 	// :latest under IfNotPresent restored with whatever stale image the node
-	// cached (pg16-only psql, no openssl); the backup CronJob pulls Always.
-	if p := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != corev1.PullAlways {
-		t.Errorf("restore image pull policy = %q, want Always", p)
+	// cached (pg16-only psql, no openssl). Releases pin a digest, which may
+	// stay IfNotPresent; a bare tag must pull Always.
+	want := backup.ImagePullPolicy(backup.Image())
+	if p := job.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != want {
+		t.Errorf("restore image pull policy = %q, want %q", p, want)
 	}
 	s3 := (&BackupHandler{Namespace: "kuso"}).s3RestoreJob("kuso-restore-x", "k", "abc")
-	if p := s3.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != corev1.PullAlways {
-		t.Errorf("control-plane S3 restore image pull policy = %q, want Always", p)
+	if p := s3.Spec.Template.Spec.Containers[0].ImagePullPolicy; p != want {
+		t.Errorf("control-plane S3 restore image pull policy = %q, want %q", p, want)
 	}
 }
 
