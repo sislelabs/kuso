@@ -186,6 +186,12 @@ type Shipper struct {
 	// cadence, and a skipped burst-flush is picked up either by the
 	// next append or by that ticker.
 	flushing atomic.Bool
+
+	// sideLoopsExited counts flusher/pruner/budget/rate-reset goroutines
+	// that have returned. Run stops heartbeating once any has, so a
+	// panicked flusher or budget loop fails liveness instead of hiding
+	// behind the still-ticking pod reconcile.
+	sideLoopsExited atomic.Int32
 	// flushMu serialises every flush (timed, out-of-band, final). Two
 	// concurrent inserts can commit out of id order, and the error
 	// scanner's `id > watermark` cursor then skips the lower-id batch
@@ -349,17 +355,17 @@ func (s *Shipper) Run(ctx context.Context) {
 	// Periodic flusher — drain the buffer every flushInterval so
 	// lines hit SQLite without us waiting for a 500-line batch from
 	// a quiet service.
-	safego.Go(s.Logger, "logship-flusher", func() { s.runFlusher(ctx) })
+	safego.Go(s.Logger, "logship-flusher", s.sideLoop(func() { s.runFlusher(ctx) }))
 	// Periodic pruner — drop rows past retention. 30 min ticker
 	// keeps the table bounded without hammering DELETE.
-	safego.Go(s.Logger, "logship-pruner", func() { s.runPruner(ctx) })
+	safego.Go(s.Logger, "logship-pruner", s.sideLoop(func() { s.runPruner(ctx) }))
 	// Byte budget: oldest-first prune when LogLine outgrows its share of
 	// the control-plane volume, and the ingest pause when the disk is
 	// nearly full (budget.go).
-	safego.Go(s.Logger, "logship-budget", func() { s.runBudget(ctx) })
+	safego.Go(s.Logger, "logship-budget", s.sideLoop(func() { s.runBudget(ctx) }))
 	// Per-service rate-cap counter reset — every rateWindow, zero the
 	// counters and warn about any service that got throttled.
-	safego.Go(s.Logger, "logship-rate-reset", func() { s.resetRateCounters(ctx) })
+	safego.Go(s.Logger, "logship-rate-reset", s.sideLoop(func() { s.resetRateCounters(ctx) }))
 
 	// Pod watcher — list pods on a slow ticker, start follow
 	// streams for new ones, drop streams for vanished pods.
@@ -377,14 +383,22 @@ func (s *Shipper) Run(ctx context.Context) {
 		case <-t.C:
 			s.reconcilePods(ctx)
 			// Heartbeat off the pod-reconcile ticker (pollInterval, ~30s).
-			// The buffer flusher / pruner / rate-reset run as separate
-			// goroutines with their own cadences; this main loop's tick is
-			// the representative "logship is alive" signal. Register logship
-			// at pollInterval to match.
-			serverstate.LoopHeartbeat(serverstate.LoopLogship)
+			// Register logship at pollInterval to match.
+			if s.sideLoopsAlive() {
+				serverstate.LoopHeartbeat(serverstate.LoopLogship)
+			}
 		}
 	}
 }
+
+func (s *Shipper) sideLoop(fn func()) func() {
+	return func() {
+		defer s.sideLoopsExited.Add(1)
+		fn()
+	}
+}
+
+func (s *Shipper) sideLoopsAlive() bool { return s.sideLoopsExited.Load() == 0 }
 
 func (s *Shipper) reconcilePods(ctx context.Context) {
 	nss := s.scanNamespaces(ctx)
@@ -1019,26 +1033,3 @@ func (s *Shipper) prune(ctx context.Context) {
 		s.Logger.Debug("logship pruned", "rows", n)
 	}
 }
-
-// PodMetaForPod is a small helper exposing the label conventions to
-// other packages so they don't reimplement the lookup. Trim path —
-// not used inside this package but useful for logs handler future
-// extensions.
-func PodMetaForPod(p *corev1.Pod) (project, service, env string) {
-	if p == nil {
-		return "", "", ""
-	}
-	return p.Labels["kuso.sislelabs.com/project"],
-		p.Labels["kuso.sislelabs.com/service"],
-		p.Labels["kuso.sislelabs.com/env"]
-}
-
-// formatTs is a no-op kept for forward compat — the search endpoint
-// formats timestamps client-side now. Kept exported so the alerts
-// package can pin to the same RFC3339 pattern when expanding.
-func formatTs(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
-
-// Verify the package can resolve strings.HasPrefix usage from helpers
-// the alert engine adds later.
-var _ = strings.HasPrefix
-var _ = formatTs
