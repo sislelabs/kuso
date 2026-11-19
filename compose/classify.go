@@ -33,13 +33,6 @@ var datastoreImages = map[string]string{
 	"bitnami/rabbitmq":             "rabbitmq",
 }
 
-// reservedDatastores are kinds that look like datastores but the kuso
-// addon chart doesn't implement yet. We detect them only to flag
-// them, never to create a (broken) addon.
-var reservedDatastores = map[string]bool{
-	"mariadb": true, "kafka": true, "memcached": true,
-}
-
 // maybeReservedDatastore returns the reserved kind name when an image
 // is a recognizable-but-unimplemented datastore, else "".
 func maybeReservedDatastore(image string) string {
@@ -53,6 +46,18 @@ func maybeReservedDatastore(image string) string {
 		return "memcached"
 	}
 	return ""
+}
+
+// datastoreLookalikes are datastore builds that bundle extensions or
+// modules the stock managed addon lacks, and whose tags aren't engine
+// versions. They stay plain image services so they keep working, and
+// are flagged so the user knows no addon was made.
+var datastoreLookalikes = map[string]struct{ kind, what string }{
+	"pgvector/pgvector":        {"postgres", "the pgvector extension"},
+	"timescale/timescaledb":    {"postgres", "the TimescaleDB extension"},
+	"timescale/timescaledb-ha": {"postgres", "the TimescaleDB extension"},
+	"redis/redis-stack":        {"redis", "the Redis Stack modules (search, JSON, …)"},
+	"redis/redis-stack-server": {"redis", "the Redis Stack modules (search, JSON, …)"},
 }
 
 // imageParts splits a compose image reference into its repository
@@ -104,6 +109,8 @@ func baseImageName(repo string) string {
 		first := repo[:i]
 		if strings.ContainsAny(first, ".:") {
 			rest := repo[i+1:]
+			// Docker Hub mirrors (public.ecr.aws/docker/library/…).
+			rest = strings.TrimPrefix(rest, "docker/library/")
 			rest = strings.TrimPrefix(rest, "library/")
 			return rest
 		}

@@ -117,3 +117,26 @@ services:
 		t.Fatalf("want 3 services, got %+v", doc.Services)
 	}
 }
+
+func TestConvert_DatastoreMirrorsAndVariants(t *testing.T) {
+	if kind, version := classifyDatastore("public.ecr.aws/docker/library/postgres:15"); kind != "postgres" || version != "15" {
+		t.Errorf("ECR mirror = (%q,%q), want (postgres,15)", kind, version)
+	}
+	doc, rep := convertString(t, `
+services:
+  vec:
+    image: pgvector/pgvector:pg16
+  ts:
+    image: timescale/timescaledb:2.14.2-pg16
+  stack:
+    image: redis/redis-stack-server:7.2.0-v10
+`)
+	if len(doc.Addons) != 0 || len(doc.Services) != 3 {
+		t.Fatalf("variants must stay image services: addons=%+v services=%d", doc.Addons, len(doc.Services))
+	}
+	for _, svc := range []string{"vec", "ts", "stack"} {
+		if !hasFlag(rep, svc, "addon doesn't ship") {
+			t.Errorf("%s: no flag saying the managed addon lacks the variant: %+v", svc, rep.Notes)
+		}
+	}
+}

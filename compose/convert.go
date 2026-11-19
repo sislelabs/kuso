@@ -274,6 +274,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		if reserved := maybeReservedDatastore(svc.Image); reserved != "" {
 			rep.flag(svc.Name, "%q looks like a %s datastore, but kuso has no managed %s addon yet — kept as a plain image service (no conn-secret / backups)", svc.Image, reserved, reserved)
 		}
+		if l, ok := datastoreLookalikes[baseImageName(repo)]; ok {
+			rep.flag(svc.Name, "%q is a %s build with %s, which the managed %s addon doesn't ship — kept as a plain image service (no conn-secret / backups)", svc.Image, l.kind, l.what, l.kind)
+		}
 		applyImageCapabilities(svc, &out, rep)
 	default:
 		out.Runtime = "dockerfile"
