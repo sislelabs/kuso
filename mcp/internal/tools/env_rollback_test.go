@@ -70,10 +70,11 @@ func newRecordingSession(t *testing.T, handler func(r *http.Request) (int, strin
 
 // set_env must touch only the keys it names. The old whole-list POST to
 // /env wiped every omitted key, including addon secretKeyRef entries the
-// tool couldn't even represent.
+// tool couldn't even represent. Service-level writes go in one /changes
+// batch so the pods roll once, not once per key.
 func TestSetEnv_PerKeyNeverReplacesWholeList(t *testing.T) {
 	sess, reqs := newRecordingSession(t, func(r *http.Request) (int, string) {
-		return http.StatusOK, "{}"
+		return http.StatusOK, `{"results":[{"kind":"env-set","name":"LOG_LEVEL","ok":true},{"kind":"env-unset","name":"OLD_FLAG","ok":true}],"rolledOut":true}`
 	})
 	text, isErr, err := callText(t, sess, "set_env", map[string]any{
 		"project": "shop", "service": "api", "confirm": true,
@@ -84,28 +85,58 @@ func TestSetEnv_PerKeyNeverReplacesWholeList(t *testing.T) {
 		t.Fatalf("set_env failed: err=%v text=%s", err, text)
 	}
 	got := reqs()
-	if len(got) != 2 {
-		t.Fatalf("want 2 per-key requests, got %d: %+v", len(got), got)
+	if len(got) != 1 || got[0].Method != http.MethodPost || got[0].Path != "/api/projects/shop/services/api/changes" {
+		t.Fatalf("want one /changes batch, got %+v", got)
 	}
-	for _, r := range got {
-		if strings.HasSuffix(r.Path, "/env") {
-			t.Fatalf("set_env hit the whole-list replace route: %+v", r)
-		}
+	var body struct {
+		EnvSet   []map[string]string `json:"envSet"`
+		EnvUnset []string            `json:"envUnset"`
 	}
-	if got[0].Method != http.MethodPut || got[0].Path != "/api/projects/shop/services/api/env-vars/LOG_LEVEL" {
-		t.Fatalf("unexpected upsert request: %+v", got[0])
+	if err := json.Unmarshal([]byte(got[0].Body), &body); err != nil {
+		t.Fatalf("bad body %q: %v", got[0].Body, err)
 	}
-	var body map[string]any
-	if err := json.Unmarshal([]byte(got[0].Body), &body); err != nil || body["value"] != "debug" {
-		t.Fatalf("unexpected upsert body %q", got[0].Body)
+	if len(body.EnvSet) != 1 || body.EnvSet[0]["name"] != "LOG_LEVEL" || body.EnvSet[0]["value"] != "debug" ||
+		len(body.EnvUnset) != 1 || body.EnvUnset[0] != "OLD_FLAG" {
+		t.Fatalf("batch must carry only the named keys, got %q", got[0].Body)
 	}
-	// Without auto the server takes the legacy literal path, which stores a
-	// ${{ addon.KEY }} ref verbatim and writes secrets as CR literals.
-	if body["auto"] != true {
-		t.Fatalf("upsert must use the unified auto write, got body %q", got[0].Body)
+	if !strings.Contains(text, "set 1 and removed 1") {
+		t.Fatalf("summary %q", text)
 	}
-	if got[1].Method != http.MethodDelete || got[1].Path != "/api/projects/shop/services/api/env-vars/OLD_FLAG" {
-		t.Fatalf("unexpected unset request: %+v", got[1])
+}
+
+// A failed item in the batch must not read as success.
+func TestSetEnv_BatchItemFailureIsError(t *testing.T) {
+	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
+		return http.StatusOK, `{"results":[{"kind":"env-set","name":"BASH_ENV","ok":false,"error":"forbidden"}]}`
+	})
+	text, isErr, _ := callText(t, sess, "set_env", map[string]any{
+		"project": "shop", "service": "api", "confirm": true,
+		"envVars": []map[string]string{{"name": "BASH_ENV", "value": "x"}},
+	})
+	if !isErr || !strings.Contains(text, "forbidden") {
+		t.Fatalf("want an error result naming the failure, got isErr=%v text=%s", isErr, text)
+	}
+}
+
+// get_env reads one env's overrides with env=staging; set_env without an
+// env scope wrote service-level vars that hit production too.
+func TestSetEnv_EnvScopeUsesOverrideRoutes(t *testing.T) {
+	sess, reqs := newRecordingSession(t, func(r *http.Request) (int, string) {
+		return http.StatusNoContent, ""
+	})
+	text, isErr, err := callText(t, sess, "set_env", map[string]any{
+		"project": "shop", "service": "api", "confirm": true, "env": "staging",
+		"envVars": []map[string]string{{"name": "LOG_LEVEL", "value": "debug"}},
+		"unset":   []string{"OLD_FLAG"},
+	})
+	if err != nil || isErr {
+		t.Fatalf("set_env failed: err=%v text=%s", err, text)
+	}
+	got := reqs()
+	if len(got) != 2 ||
+		got[0].Method != http.MethodPut || got[0].Path != "/api/projects/shop/services/api/envs/staging/env-vars/LOG_LEVEL" ||
+		got[1].Method != http.MethodDelete || got[1].Path != "/api/projects/shop/services/api/envs/staging/env-vars/OLD_FLAG" {
+		t.Fatalf("want env-scoped PUT + DELETE, got %+v", got)
 	}
 }
 
