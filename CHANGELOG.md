@@ -19,6 +19,17 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.49.0] — 2026-11-19
+
+### Other
+- Run one build daemon per build node with project-sticky routing ([8247bd6](https://github.com/sislelabs/kuso/commit/8247bd6d9ca4cb42fbf47574ea389fc8139a54e0))
+
+### ✨ Features
+- Add a cluster overview to Insights and load it without waiting on Prometheus ([ff0aa83](https://github.com/sislelabs/kuso/commit/ff0aa83c2111253b10e1d712705c8eccb8533a5e))
+
+### 🐛 Bug Fixes
+- Fix the Insights warm-up panic and a shared fetch dying with one viewer ([60483f5](https://github.com/sislelabs/kuso/commit/60483f5f1b29ef25fe36098b9575bef4805ab334))
+
 ## [0.48.0] — 2026-11-19
 
 ### ✨ Features
@@ -1262,11 +1273,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Fall back to v1 Endpoints when EndpointSlices are forbidden ([ec83980](https://github.com/sislelabs/kuso/commit/ec839807030a74904de14ceed8d0b403fb842cb1))
-
-## [0.26.14] — 2026-09-28
-
-### Other
-- Route user /healthz to the app and read readiness from EndpointSlices ([8dc86ac](https://github.com/sislelabs/kuso/commit/8dc86acee2c8159f1088dbe661613ffb53c5e1b7))
 
 
 ---

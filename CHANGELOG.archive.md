@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.14] — 2026-09-28
+
+### Other
+- Route user /healthz to the app and read readiness from EndpointSlices ([8dc86ac](https://github.com/sislelabs/kuso/commit/8dc86acee2c8159f1088dbe661613ffb53c5e1b7))
+
 ## [0.26.13] — 2026-09-28
 
 ### Other
