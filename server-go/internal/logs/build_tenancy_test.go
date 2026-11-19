@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	kubefake "k8s.io/client-go/kubernetes/fake"
 
@@ -130,7 +131,7 @@ func TestTail_BuildEnv_DeniesForeignProject(t *testing.T) {
 		logs:  map[string]string{"victim-api-abc123": "SECRET build output\n"},
 	}}
 
-	_, _, err := s.Tail(context.Background(), "attacker", "api", "build:victim-api-abc123", 100)
+	_, _, err := s.TailSince(context.Background(), "attacker", "api", "build:victim-api-abc123", 100, time.Time{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Tail(project=attacker, env=build:victim-...) err = %v, want ErrNotFound "+
 			"— a foreign build's logs must not be readable cross-project", err)
@@ -150,7 +151,7 @@ func TestTail_BuildEnv_AllowsOwningProject(t *testing.T) {
 		},
 	}
 
-	out, _, err := s.Tail(context.Background(), "victim", "api", "build:victim-api-abc123", 100)
+	out, _, err := s.TailSince(context.Background(), "victim", "api", "build:victim-api-abc123", 100, time.Time{})
 	if err != nil {
 		t.Fatalf("Tail for the OWNING project err = %v, want nil (the fix must not break the legitimate read)", err)
 	}
@@ -168,7 +169,7 @@ func TestTail_BuildEnv_AllowsOwningProject(t *testing.T) {
 func TestTail_RunEnv_FailsClosedWithoutOwnershipProof(t *testing.T) {
 	s := &Service{}
 
-	_, _, err := s.Tail(context.Background(), "attacker", "api", "run:victim-api-migrate", 100)
+	_, _, err := s.TailSince(context.Background(), "attacker", "api", "run:victim-api-migrate", 100, time.Time{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Tail(env=run:...) err = %v, want ErrNotFound when ownership can't be proven", err)
 	}

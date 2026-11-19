@@ -91,16 +91,12 @@ type Line struct {
 	ts time.Time
 }
 
-// Tail returns the newest lines log lines across all pods, merged in
-// time order. env="" defaults to "production". env may be either the short name
-// ("production", "preview-pr-7") or the fully-qualified env CR name.
-func (s *Service) Tail(ctx context.Context, project, service, env string, lines int) ([]Line, string, error) {
-	return s.TailSince(ctx, project, service, env, lines, time.Time{})
-}
-
-// TailSince is Tail with an optional cursor for env=run:<name>: when since
-// is non-zero it returns the OLDEST lines lines at or after since instead of
-// the newest ones. Other envs ignore since (the handler rejects it).
+// TailSince returns the newest lines log lines across all pods, merged in
+// time order. env="" defaults to "production". env may be either the short
+// name ("production", "preview-pr-7") or the fully-qualified env CR name.
+// For env=run:<name> a non-zero since returns the OLDEST lines lines at or
+// after since instead of the newest ones. Other envs ignore since (the
+// handler rejects it).
 func (s *Service) TailSince(ctx context.Context, project, service, env string, lines int, since time.Time) ([]Line, string, error) {
 	if lines <= 0 {
 		lines = 200
