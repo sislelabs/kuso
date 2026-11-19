@@ -78,8 +78,12 @@ function ProfilePage() {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInput = useRef<HTMLInputElement>(null);
 
+  // Seed once per user: a refetch (the avatar upload invalidates this
+  // query) must not overwrite name/email edits that aren't saved yet.
+  const seededFor = useRef<string | null>(null);
   useEffect(() => {
-    if (profile.data) {
+    if (profile.data && seededFor.current !== profile.data.id) {
+      seededFor.current = profile.data.id;
       setFirstName(profile.data.firstName ?? "");
       setLastName(profile.data.lastName ?? "");
       setEmail(profile.data.email ?? "");
