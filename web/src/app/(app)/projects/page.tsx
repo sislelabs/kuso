@@ -22,7 +22,7 @@ const secondaryLink =
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const { data, isPending, isError, error, refetch } = useProjects();
+  const { data, isPending, isSuccess, isError, error, refetch } = useProjects();
   // Instance editors carry projects:create alongside admins; the server
   // filters /api/projects to each caller's grants.
   const canCreate = useCan("projects:create");
@@ -36,8 +36,8 @@ export default function ProjectsPage() {
   // "skip to dashboard" sticks. An unknown repos state never redirects.
   // The way back afterwards is the empty state / Getting started card.
   useEffect(() => {
-    if (!canCreate || isPending || !githubRepos.isSuccess) return;
-    if ((data?.length ?? 0) > 0) return;
+    if (!canCreate || !isSuccess || !githubRepos.isSuccess) return;
+    if (data.length > 0) return;
     if (githubRepos.data.length > 0) return;
     try {
       if (localStorage.getItem("kuso.welcome.redirected") === "1") return;
@@ -46,7 +46,7 @@ export default function ProjectsPage() {
       // Storage may throw in private-browsing modes; redirect anyway.
     }
     router.replace("/welcome");
-  }, [isPending, githubRepos.isSuccess, githubRepos.data, canCreate, data, router]);
+  }, [isSuccess, githubRepos.isSuccess, githubRepos.data, canCreate, data, router]);
 
   const count = data?.length ?? 0;
   const showGettingStarted = canCreate && !isPending && !isError && count > 0 && count <= 2 && !gettingStartedDismissed;
