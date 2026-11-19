@@ -6,7 +6,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,9 +34,12 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 		if bytes.Contains(ct.Bytes(), plain) && n > 16 {
 			t.Fatalf("n=%d ciphertext contains plaintext", n)
 		}
-		r, enc, err := MaybeDecrypt(bytes.NewReader(ct.Bytes()), "k3y")
-		if err != nil || !enc {
-			t.Fatalf("n=%d decrypt: enc=%v err=%v", n, enc, err)
+		if !IsEncrypted(ct.Bytes()) {
+			t.Fatalf("n=%d ciphertext lacks the salted header", n)
+		}
+		r, err := NewDecryptReader(bytes.NewReader(ct.Bytes()), "k3y")
+		if err != nil {
+			t.Fatalf("n=%d decrypt: %v", n, err)
 		}
 		got, err := io.ReadAll(iotest1(r))
 		if err != nil {
@@ -61,34 +63,24 @@ func (o oneByte) Read(p []byte) (int, error) {
 	return o.r.Read(p[:1])
 }
 
-// Every dump written before encryption shipped is a bare gzip stream and
-// must still come back unchanged, with or without a key configured.
-func TestMaybeDecryptLegacyPlaintextPassesThrough(t *testing.T) {
+// Every dump written before encryption shipped is a bare gzip stream; the
+// download handler must not mistake it for ciphertext.
+func TestIsEncryptedLegacyGzipIsPlaintext(t *testing.T) {
 	var gz bytes.Buffer
 	w := gzip.NewWriter(&gz)
 	_, _ = w.Write([]byte("CREATE TABLE t (id int);\n"))
 	_ = w.Close()
-	for _, key := range []string{"", "some-key"} {
-		r, enc, err := MaybeDecrypt(bytes.NewReader(gz.Bytes()), key)
-		if err != nil || enc {
-			t.Fatalf("key=%q: enc=%v err=%v", key, enc, err)
-		}
-		got, _ := io.ReadAll(r)
-		if !bytes.Equal(got, gz.Bytes()) {
-			t.Fatalf("key=%q: legacy dump altered", key)
-		}
+	if IsEncrypted(gz.Bytes()) {
+		t.Fatal("legacy gzip dump detected as encrypted")
 	}
 }
 
-func TestMaybeDecryptRefusesWithoutOrWithWrongKey(t *testing.T) {
+func TestDecryptWithWrongKeyDoesNotYieldPlaintext(t *testing.T) {
 	var ct bytes.Buffer
 	if err := Encrypt(&ct, strings.NewReader(strings.Repeat("row\n", 1000)), "right"); err != nil {
 		t.Fatal(err)
 	}
-	if _, enc, err := MaybeDecrypt(bytes.NewReader(ct.Bytes()), ""); !enc || !errors.Is(err, ErrEncryptedNoKey) {
-		t.Fatalf("no key: enc=%v err=%v", enc, err)
-	}
-	r, _, err := MaybeDecrypt(bytes.NewReader(ct.Bytes()), "wrong")
+	r, err := NewDecryptReader(bytes.NewReader(ct.Bytes()), "wrong")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +118,12 @@ func TestOpenSSLCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openssl encrypt: %v", err)
 	}
-	r, isEnc, err := MaybeDecrypt(bytes.NewReader(ct), "s3cret")
-	if err != nil || !isEnc {
-		t.Fatalf("decrypt openssl output: enc=%v err=%v", isEnc, err)
+	if !IsEncrypted(ct) {
+		t.Fatal("openssl output lacks the salted header")
+	}
+	r, err := NewDecryptReader(bytes.NewReader(ct), "s3cret")
+	if err != nil {
+		t.Fatalf("decrypt openssl output: %v", err)
 	}
 	got, err := io.ReadAll(r)
 	if err != nil || !bytes.Equal(got, plain) {

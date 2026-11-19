@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,12 +30,12 @@ func TestTail_EnvGroupResolvesToClone(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tc := range []struct{ service, env string }{{"web", "staging"}, {"web-staging", "production"}} {
-		_, envName, err := s.Tail(ctx, "puncho", tc.service, tc.env, 10)
+		_, envName, err := s.TailSince(ctx, "puncho", tc.service, tc.env, 10, time.Time{})
 		if err != nil || envName != "puncho-web-staging-production" {
 			t.Errorf("%s --env %s: env=%q err=%v", tc.service, tc.env, envName, err)
 		}
 	}
-	if _, envName, err := s.Tail(ctx, "puncho", "web", "qa", 10); !errors.Is(err, ErrNotFound) || envName != "puncho-web-qa" {
+	if _, envName, err := s.TailSince(ctx, "puncho", "web", "qa", 10, time.Time{}); !errors.Is(err, ErrNotFound) || envName != "puncho-web-qa" {
 		t.Errorf("missing env: env=%q err=%v, want puncho-web-qa + ErrNotFound", envName, err)
 	}
 }

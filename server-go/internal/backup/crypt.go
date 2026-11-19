@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
@@ -61,25 +60,6 @@ func deriveKeyIV(passphrase string, salt []byte) (key, iv []byte, err error) {
 		return nil, nil, fmt.Errorf("derive backup key: %w", err)
 	}
 	return kiv[:32], kiv[32:], nil
-}
-
-// MaybeDecrypt returns a reader over the plaintext of an artifact. A
-// legacy plaintext artifact passes through unchanged; an encrypted one
-// needs passphrase, else ErrEncryptedNoKey.
-func MaybeDecrypt(r io.Reader, passphrase string) (io.Reader, bool, error) {
-	br := bufio.NewReaderSize(r, 64*1024)
-	head, err := br.Peek(len(saltMagic))
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
-		return nil, false, err
-	}
-	if !IsEncrypted(head) {
-		return br, false, nil
-	}
-	if passphrase == "" {
-		return nil, true, ErrEncryptedNoKey
-	}
-	dr, err := NewDecryptReader(br, passphrase)
-	return dr, true, err
 }
 
 type decryptReader struct {
