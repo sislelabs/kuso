@@ -7,6 +7,7 @@ export {
   discardService,
   getStagedState,
   recordHealthcheckTest,
+  resetStaged,
   setStagedErrors,
   stageEnv,
   stageSettings,

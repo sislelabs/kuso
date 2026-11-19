@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { clearJwt, onApiWarning } from "./api-client";
 import { kt } from "./toast";
 import { toastError } from "./errors";
+import { resetStaged } from "@/features/staged/store";
 
 // onAuthError centralises the "session expired" handling. Triggered
 // from BOTH the QueryCache and MutationCache so a 401 from any path
@@ -72,6 +73,8 @@ function onAuthError(err: unknown) {
   // matching name/id; consumers don't have to opt in unless they want
   // the better UX.
   snapshotFormDrafts();
+  // Whoever signs in next may not be this user: staged edits go too.
+  resetStaged();
   // Clear the bad token and bounce to login. The AuthGate would
   // eventually do this on the next session refetch, but doing it
   // here is faster and stops cascading failures from re-firing

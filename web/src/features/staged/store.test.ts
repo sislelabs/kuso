@@ -7,6 +7,8 @@ import {
   hasUnpersistedStaged,
   persistable,
   recordHealthcheckTest,
+  resetStaged,
+  setStagedErrors,
   stageEnv,
   stageSettings,
 } from "./store";
@@ -34,6 +36,22 @@ describe("staged store", () => {
     const svc = getStagedState().p?.api;
     expect(svc?.env?.set.map((e) => e.name)).toEqual(["B"]);
     expect(svc?.settings).toBeUndefined();
+  });
+
+  it("keeps a rollout error after every change applied", () => {
+    stageEnv("p", "api", { set: [{ name: "A", value: "1", before: null, sensitive: false }], unset: [] });
+    clearApplied("p", "api", { env: ["A"], settings: false });
+    setStagedErrors("p", "api", { rollout: "Saved, but the rollout didn't start" });
+    expect(getStagedState().p?.api?.errors?.rollout).toBeDefined();
+    expect(countServiceChanges(getStagedState().p?.api)).toBe(0);
+    setStagedErrors("p", "api", undefined);
+    expect(getStagedState().p).toBeUndefined();
+  });
+
+  it("resetStaged drops everything, secret values included", () => {
+    stageEnv("p", "api", { set: [{ name: "TOKEN", value: "s", before: null, sensitive: true }], unset: [] });
+    resetStaged();
+    expect(getStagedState()).toEqual({});
   });
 
   it("never persists secret values or the repo token", () => {
