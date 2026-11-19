@@ -415,6 +415,9 @@ func NewRouter(d Deps) http.Handler {
 			Audit:  d.Audit,
 			Logger: d.Logger,
 		}
+		if d.Config != nil {
+			termH.ConsoleEnabled = func() bool { return d.Config.Features().ConsoleEnabled }
+		}
 		termH.Mount(r)
 	}
 
