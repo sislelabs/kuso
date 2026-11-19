@@ -32,6 +32,8 @@ var (
 	runSetEnvFlags    []string
 	runEnvFlags       []string // deprecated --env KEY=VALUE, kept for one release
 	runFollow         bool
+	runMemory         string
+	runCPU            string
 )
 
 var runCmd = &cobra.Command{
@@ -56,6 +58,16 @@ var runCmd = &cobra.Command{
 			Command:        command,
 			Env:            envVars,
 			TimeoutSeconds: runTimeoutSeconds,
+		}
+		if runMemory != "" || runCPU != "" {
+			limits := map[string]string{}
+			if runMemory != "" {
+				limits["memory"] = runMemory
+			}
+			if runCPU != "" {
+				limits["cpu"] = runCPU
+			}
+			req.Resources = &kusoApi.RunResources{Limits: limits}
 		}
 		resp, err := api.CreateRun(project, service, req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -394,6 +406,8 @@ var runDeleteCmd = &cobra.Command{
 
 func init() {
 	runCmd.Flags().IntVar(&runTimeoutSeconds, "timeout-seconds", 0, "max run duration in seconds (default 1800 / 30 min)")
+	runCmd.Flags().StringVar(&runMemory, "memory", "", "memory limit for the run container, e.g. 2Gi (requests default to the limit)")
+	runCmd.Flags().StringVar(&runCPU, "cpu", "", "CPU limit for the run container, e.g. 1 or 500m (requests default to the limit)")
 	runCmd.Flags().StringArrayVarP(&runSetEnvFlags, "set-env", "e", nil, "extra env var as `KEY=VALUE`, repeatable")
 	// Separate slice: two pflag string arrays sharing one pointer reset
 	// each other on first Set, dropping values.

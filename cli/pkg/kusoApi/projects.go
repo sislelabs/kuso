@@ -240,6 +240,8 @@ type PatchServiceRequest struct {
 	// Healthcheck replaces the HTTP health check wholesale; an empty path
 	// drops it (the pods fall back to a TCP port check).
 	Healthcheck *Healthcheck `json:"healthcheck,omitempty"`
+	// TCPLiveness turns the default TCP liveness probe on or off.
+	TCPLiveness *bool `json:"tcpLiveness,omitempty"`
 }
 
 // Healthcheck mirrors the server's kube.KusoHealthcheck. Zero fields take
