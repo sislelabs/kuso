@@ -784,17 +784,6 @@ func eventMatches(event string, whitelist []string) bool {
 	return false
 }
 
-// sendDiscord posts a Discord-formatted embed to the webhook URL.
-// Discord rejects non-2xx silently from the sender's perspective, so
-// we log on any non-2xx for debugging.
-//
-// mention is rendered as the message content (not the embed), so
-// Discord renders @here / @everyone / <@&roleID> as actual pings
-// at the top of the card.
-func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event, mention string) {
-	d.post(ctx, url, discordPayload(e, mention), nil)
-}
-
 // mentionFor reads the per-event mention rule out of Config.mentions.
 // Falls back to a "*" default if set, otherwise an opinionated
 // default: any error-severity event without an explicit rule gets
@@ -938,7 +927,6 @@ const discordEmbedMaxChars = 6000
 const blankFieldName = "\u200b"
 
 // discordPayload assembles the full Discord webhook body for an Event.
-// Shared by sendDiscord + sendDiscordSync so the two paths can't drift.
 //
 // Card grammar:
 //
@@ -1204,26 +1192,6 @@ func SetVersion(v string) {
 	currentVersion = strings.TrimSpace(v)
 }
 
-// sendWebhook POSTs the raw event JSON to a generic URL. When secret
-// is set we sign the body and include the signature in three headers
-// receivers expect:
-//
-//	X-Hub-Signature-256: sha256=<hex>   — GitHub-shaped, the most
-//	                                       widely-supported format.
-//	X-Kuso-Signature:    <hex>           — kuso-native, easier to
-//	                                       parse for hand-rolled
-//	                                       consumers.
-//	X-Kuso-Timestamp:    <unix-seconds>  — replay-window enforcement
-//	                                       for receivers that care.
-//
-// Pre-v0.9.4 the secret was read from the DB and immediately
-// `_ = secret`'d — receivers configured a secret expecting
-// X-Hub-Signature-256 and got nothing. This was a real functional
-// gap, flagged in the v0.9.3 audit.
-func (d *Dispatcher) sendWebhook(ctx context.Context, url, secret string, e Event) {
-	d.post(ctx, url, e, signatureHeaders(secret, e))
-}
-
 // signatureHeaders computes the X-Hub-Signature-256 / X-Kuso-* HMAC
 // headers for a webhook. Returns an empty Header when secret is
 // empty (skips signing entirely — receivers without a configured
@@ -1250,15 +1218,7 @@ func signatureHeaders(secret string, body any) http.Header {
 	return out
 }
 
-func (d *Dispatcher) post(ctx context.Context, url string, body any, extra http.Header) {
-	if err := d.postSync(ctx, url, body, extra); err != nil {
-		// Swallow + log: the async fire-and-forget path doesn't
-		// have a caller to surface the error to.
-		d.logger.Warn("notify: post", "url", redact(url), "err", err)
-	}
-}
-
-// postSync is post with the error returned to the caller. Used by
+// postSync POSTs body as JSON and returns any upstream error. Used by
 // SendDirect so the Test endpoint can show "401 from Discord" or
 // similar in the UI instead of a misleading 204.
 //
@@ -1291,17 +1251,61 @@ func (d *Dispatcher) postSync(ctx context.Context, target string, body any, extr
 		// sees the actual upstream error (Discord returns useful
 		// JSON: {"message":"Invalid Webhook Token","code":50027}).
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
+		return &upstreamError{
+			Status:     resp.StatusCode,
+			Body:       strings.TrimSpace(string(buf)),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 	return nil
 }
 
-// sendDiscordSync mirrors sendDiscord but returns the upstream error.
+// upstreamError is a non-2xx reply from a channel endpoint. The outbox
+// reads Status to dead-letter permanent failures at once and RetryAfter
+// to schedule a throttled retry when the receiver asked for it.
+type upstreamError struct {
+	Status     int
+	Body       string
+	RetryAfter time.Duration
+}
+
+func (e *upstreamError) Error() string {
+	return fmt.Sprintf("upstream %d: %s", e.Status, e.Body)
+}
+
+// permanent reports a 4xx that retrying cannot fix: a deleted webhook
+// (404), a revoked token (401/403), a rejected body (400). 408 and 429
+// are the client errors that do clear on their own.
+func (e *upstreamError) permanent() bool {
+	return e.Status >= 400 && e.Status < 500 &&
+		e.Status != http.StatusRequestTimeout && e.Status != http.StatusTooManyRequests
+}
+
+// parseRetryAfter reads a Retry-After header in either form RFC 9110
+// allows: delay seconds (Discord sends fractional ones) or an HTTP date.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseFloat(v, 64); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs * float64(time.Second))
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
+}
+
 func (d *Dispatcher) sendDiscordSync(ctx context.Context, url string, e Event, mention string) error {
 	return d.postSync(ctx, url, discordPayload(e, mention), nil)
 }
 
-// sendWebhookSync mirrors sendWebhook with error propagation.
+// sendWebhookSync POSTs the raw event JSON, HMAC-signed when secret is
+// set (see signatureHeaders).
 func (d *Dispatcher) sendWebhookSync(ctx context.Context, url, secret string, e Event) error {
 	return d.postSync(ctx, url, e, signatureHeaders(secret, e))
 }

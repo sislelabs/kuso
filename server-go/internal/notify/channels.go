@@ -14,6 +14,7 @@ package notify
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"mime"
 	"net"
@@ -224,6 +225,12 @@ func (d *Dispatcher) sendTelegramSync(ctx context.Context, botToken, chatID stri
 	// leak the token into logs AND the outbox lastError column. Scrub the
 	// token from any error before it escapes this function.
 	if err := d.postSync(ctx, api, body, nil); err != nil {
+		var ue *upstreamError
+		if errors.As(err, &ue) {
+			scrubbed := *ue
+			scrubbed.Body = redact(ue.Body)
+			return &scrubbed
+		}
 		return fmt.Errorf("%s", redact(err.Error()))
 	}
 	return nil

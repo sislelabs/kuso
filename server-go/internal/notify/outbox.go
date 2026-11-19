@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"runtime/debug"
 	"time"
 
 	"kuso/server/internal/db"
@@ -116,7 +117,12 @@ func (d *Dispatcher) outboxWorker(ctx context.Context, id int) {
 // (true, nil) when a row was claimed (success or scheduled retry);
 // (false, nil) when the queue was empty; (false, err) on a real DB
 // or transaction error.
-func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
+//
+// A panic while processing the row is recovered here and recorded as a
+// failed attempt. Left to unwind, it would end the worker goroutine and
+// leave the row's attempts untouched, so the next worker re-claims it
+// after the lease and dies the same way until none are left.
+func (d *Dispatcher) drainOne(ctx context.Context) (processed bool, err error) {
 	row, err := d.db.ClaimOutboxRow(ctx)
 	if err != nil {
 		if errors.Is(err, db.ErrNoOutboxRow) {
@@ -124,6 +130,17 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 		}
 		return false, err
 	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		d.logger.Error("notify: outbox row panicked during delivery",
+			"row", row.ID, "channelId", row.NotificationID, "attempt", row.Attempts+1,
+			"panic", r, "stack", string(debug.Stack()))
+		processed = true
+		err = d.recordFailedAttempt(ctx, row, fmt.Sprintf("panic: %v", r), 0)
+	}()
 	// The claim already committed (with a lease pushing nextAttemptAt
 	// into the future), so NO DB connection is held past this point.
 	// Delivery happens outside any transaction; the outcome is recorded
@@ -173,24 +190,57 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 		metricsDelivered.WithLabelValues(string(ev.Type)).Inc()
 		return true, nil
 	}
-	// Failed — advance the schedule. backoff = base * 2^attempts,
-	// capped at the max. Add ±20% jitter so synchronised retries
-	// across many rows don't reconverge on the same instant.
+	var ue *upstreamError
+	if errors.As(derr, &ue) {
+		if ue.permanent() {
+			if merr := d.deadLetterOutboxRow(ctx, row.ID, derr.Error()); merr != nil {
+				return true, merr
+			}
+			d.logger.Error("notify: channel rejected delivery permanently — dead-letter",
+				"row", row.ID, "channelId", notif.ID, "type", string(ev.Type),
+				"lastError", derr.Error())
+			return true, nil
+		}
+		return true, d.recordFailedAttempt(ctx, row, derr.Error(), ue.RetryAfter)
+	}
+	return true, d.recordFailedAttempt(ctx, row, derr.Error(), 0)
+}
+
+// recordFailedAttempt advances the row's retry schedule: the receiver's
+// Retry-After when it sent one, else backoff = base * 2^attempts with
+// ±20% jitter so synchronised retries don't reconverge on one instant.
+func (d *Dispatcher) recordFailedAttempt(ctx context.Context, row *db.OutboxRow, reason string, retryAfter time.Duration) error {
 	nextAttempts := row.Attempts + 1
 	wait := outboxBackoff(nextAttempts)
-	nextAttemptAt := time.Now().Add(wait)
-	if merr := d.db.MarkOutboxAttempt(ctx, row.ID, derr.Error(), nextAttemptAt); merr != nil {
-		return true, merr
+	if retryAfter > 0 {
+		wait = min(retryAfter, outboxBackoffMax)
+	}
+	if merr := d.db.MarkOutboxAttempt(ctx, row.ID, reason, time.Now().Add(wait)); merr != nil {
+		return merr
 	}
 	if nextAttempts >= db.MaxOutboxAttempts {
 		// Crossed the cap with this attempt → permanent dead-letter.
 		// Log loud enough that operators see it in `kubectl logs`
 		// without grepping; metrics also expose the count.
 		d.logger.Error("notify: outbox row exhausted retries — dead-letter",
-			"row", row.ID, "channelId", notif.ID, "type", string(ev.Type),
-			"lastError", derr.Error())
+			"row", row.ID, "channelId", row.NotificationID, "type", row.EventType,
+			"lastError", reason)
 	}
-	return true, nil
+	return nil
+}
+
+// deadLetterOutboxRow moves a row straight to dead-letter (attempts at
+// the cap, which ClaimOutboxRow and the pending count both exclude).
+func (d *Dispatcher) deadLetterOutboxRow(ctx context.Context, id int64, reason string) error {
+	if _, err := d.db.ExecContext(ctx, `
+		UPDATE "NotificationOutbox"
+		SET "attempts" = GREATEST("attempts" + 1, $1),
+		    "lastError" = $2
+		WHERE "id" = $3
+	`, db.MaxOutboxAttempts, reason, id); err != nil {
+		return fmt.Errorf("dead-letter outbox row: %w", err)
+	}
+	return nil
 }
 
 // outboxBackoff returns the sleep window for the Nth attempt
