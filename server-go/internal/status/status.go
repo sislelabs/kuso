@@ -8,7 +8,6 @@ package status
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ type Service struct {
 	Kube *kube.Client
 
 	mu        sync.RWMutex
+	refreshMu sync.Mutex
 	kubeVer   string
 	opVer     string
 	loadedAt  time.Time
@@ -38,29 +38,46 @@ func New(k *kube.Client, staleness time.Duration) *Service {
 }
 
 // Versions returns the cached pair, refreshing if older than staleness.
-// Errors are swallowed — versions are best-effort cosmetic data.
+// Errors are swallowed — versions are best-effort cosmetic data. One caller
+// refreshes at a time; the others get the stale pair meanwhile (or wait, on
+// the very first load).
 func (s *Service) Versions(ctx context.Context) (kubeVersion, operatorVersion string) {
-	s.mu.RLock()
-	if time.Since(s.loadedAt) < s.staleness && s.loadedAt != (time.Time{}) {
-		k, o := s.kubeVer, s.opVer
-		s.mu.RUnlock()
+	k, o, fresh, loaded := s.cached()
+	if fresh {
 		return k, o
 	}
-	s.mu.RUnlock()
-
+	if !s.refreshMu.TryLock() {
+		if loaded {
+			return k, o
+		}
+		s.refreshMu.Lock()
+	}
+	defer s.refreshMu.Unlock()
+	if k, o, fresh, _ = s.cached(); fresh {
+		return k, o
+	}
 	s.refresh(ctx)
+	k, o, _, _ = s.cached()
+	return k, o
+}
+
+func (s *Service) cached() (kubeVer, opVer string, fresh, loaded bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.kubeVer, s.opVer
+	loaded = !s.loadedAt.IsZero()
+	return s.kubeVer, s.opVer, loaded && time.Since(s.loadedAt) < s.staleness, loaded
 }
 
 func (s *Service) refresh(ctx context.Context) {
-	kv := s.fetchKubeVersion(ctx)
+	kv, kerr := s.fetchKubeVersion(ctx)
 	ov := s.fetchOperatorVersion(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if kv != "" {
+	switch {
+	case kv != "":
 		s.kubeVer = kv
+	case kerr && s.kubeVer == "":
+		s.kubeVer = "unknown"
 	}
 	if ov != "" {
 		s.opVer = ov
@@ -68,15 +85,17 @@ func (s *Service) refresh(ctx context.Context) {
 	s.loadedAt = time.Now()
 }
 
-func (s *Service) fetchKubeVersion(_ context.Context) string {
+// fetchKubeVersion reports failed=true on a discovery error so a blip keeps
+// the cached version instead of overwriting it with "unknown".
+func (s *Service) fetchKubeVersion(_ context.Context) (version string, failed bool) {
 	if s.Kube == nil || s.Kube.Clientset == nil {
-		return ""
+		return "", false
 	}
 	v, err := s.Kube.Clientset.Discovery().ServerVersion()
 	if err != nil || v == nil {
-		return "unknown"
+		return "", true
 	}
-	return v.GitVersion
+	return v.GitVersion, false
 }
 
 func (s *Service) fetchOperatorVersion(ctx context.Context) string {
@@ -122,11 +141,4 @@ type HealthzBody struct {
 func (s *Service) Health(ctx context.Context, kusoVersion string) HealthzBody {
 	kv, ov := s.Versions(ctx)
 	return HealthzBody{Status: "ok", Version: kusoVersion, Kube: kv, Operator: ov}
-}
-
-// String returns a human one-liner for log lines / smoke output.
-func (s *Service) String() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return fmt.Sprintf("kube=%s operator=%s loaded=%s", s.kubeVer, s.opVer, s.loadedAt.Format(time.RFC3339))
 }
