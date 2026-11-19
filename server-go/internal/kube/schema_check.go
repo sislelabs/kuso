@@ -100,6 +100,7 @@ func DefaultSchemaKinds() []SchemaKind {
 		{CRDName: "kusoaddons." + GroupName, Sample: KusoAddon{}},
 		{CRDName: "kusobuilds." + GroupName, Sample: KusoBuild{}},
 		{CRDName: "kusocrons." + GroupName, Sample: KusoCron{}},
+		{CRDName: "kusoruns." + GroupName, Sample: KusoRun{}},
 	}
 }
 

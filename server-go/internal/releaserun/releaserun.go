@@ -474,7 +474,7 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 					Containers: []corev1.Container{
 						{
 							Name:            "release",
-							Image:           fmt.Sprintf("%s:%s", image.Repository, image.Tag),
+							Image:           image.Ref(),
 							Command:         env.Spec.Release.Command,
 							Env:             envVars,
 							EnvFrom:         envFrom,

@@ -133,7 +133,9 @@ func (s *Syncer) SyncAll(ctx context.Context) {
 	}
 	for i := range projects {
 		p := &projects[i]
-		if p.Spec.NetworkPolicy != nil && p.Spec.NetworkPolicy.Enabled != nil && !*p.Spec.NetworkPolicy.Enabled {
+		disabled := p.Spec.NetworkPolicy != nil && p.Spec.NetworkPolicy.Enabled != nil && !*p.Spec.NetworkPolicy.Enabled
+		s.syncAddonNetworkPolicy(ctx, p, disabled)
+		if disabled {
 			continue
 		}
 		var scopes []string
@@ -176,6 +178,50 @@ func (s *Syncer) SyncAll(ctx context.Context) {
 		s.Logger.Info("envisolation sync: project re-rendered", "project", p.Name,
 			"knownEnvScopes", scopes, "scopesChanged", scopesChanged, "nodeBlockCIDRs", nodeCIDRs, "nodesChanged", nodesChanged)
 	}
+}
+
+// syncAddonNetworkPolicy mirrors a project's networkPolicy opt-out onto
+// its addons: an explicit false skips the addon NetworkPolicies, which
+// without the project policies beside them cut the addon off from
+// kuso-server, jobs and DNS. Enabled projects get the field cleared, so
+// their addons render exactly as before.
+func (s *Syncer) syncAddonNetworkPolicy(ctx context.Context, p *kube.KusoProject, disabled bool) {
+	ns := p.Spec.Namespace
+	if ns == "" {
+		ns = s.HomeNS
+	}
+	addons, err := s.Kube.ListKusoAddons(ctx, ns)
+	if err != nil {
+		s.Logger.Warn("envisolation sync: list addons", "project", p.Name, "err", err)
+		return
+	}
+	for i := range addons {
+		a := &addons[i]
+		if a.Spec.Project != p.Name || a.DeletionTimestamp != nil || addonNetpolInStep(a.Spec.ProjectNetworkPolicy, disabled) {
+			continue
+		}
+		_, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, a.Name, func(live *kube.KusoAddon) error {
+			if disabled {
+				off := false
+				live.Spec.ProjectNetworkPolicy = &off
+			} else {
+				live.Spec.ProjectNetworkPolicy = nil
+			}
+			return nil
+		})
+		if err != nil {
+			s.Logger.Warn("envisolation sync: update addon", "project", p.Name, "addon", a.Name, "err", err)
+			continue
+		}
+		s.Logger.Info("envisolation sync: addon network policy mirrored", "project", p.Name, "addon", a.Name, "projectNetworkPolicy", !disabled)
+	}
+}
+
+func addonNetpolInStep(cur *bool, disabled bool) bool {
+	if disabled {
+		return cur != nil && !*cur
+	}
+	return cur == nil
 }
 
 func curNodeCIDRs(np *kube.KusoProjectNetworkPolicy) []string {

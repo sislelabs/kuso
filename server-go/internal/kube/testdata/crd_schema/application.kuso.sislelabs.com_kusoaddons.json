@@ -24,11 +24,20 @@
                 "pattern": "^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
                 "type": "string"
               },
+              "image": {
+                "description": "Overrides the kuso-backup image the release pins. The backup Jobs hold DB passwords, S3 credentials and the backup key, so pin it by digest.",
+                "type": "string"
+              },
               "retentionDays": {
                 "default": 14,
                 "type": "integer"
               },
               "schedule": {
+                "type": "string"
+              },
+              "scratchSizeLimit": {
+                "description": "Size cap on the dump scratch emptyDir. Unset = 3x storageSize; external addons stay uncapped.",
+                "pattern": "^$|^[0-9]+(\\.[0-9]+)?(E|P|T|G|M|K|Ei|Pi|Ti|Gi|Mi|Ki)?$",
                 "type": "string"
               }
             },
@@ -185,12 +194,26 @@
                 "description": "External provider port. Defaults to 5432 when unset. Ignored for in-cluster backends.",
                 "format": "int32",
                 "type": "integer"
+              },
+              "serverTLSSslmode": {
+                "description": "PgBouncer's TLS mode toward an external backend. Unset = require. Ignored for in-cluster backends.",
+                "enum": [
+                  "",
+                  "require",
+                  "verify-ca",
+                  "verify-full"
+                ],
+                "type": "string"
               }
             },
             "type": "object"
           },
           "project": {
             "type": "string"
+          },
+          "projectNetworkPolicy": {
+            "description": "Mirror of the project's networkPolicy.enabled, set by kuso-server. false skips the addon's NetworkPolicies, which would otherwise isolate pods of a project that renders no policies of its own. Unset renders them.",
+            "type": "boolean"
           },
           "publicTCP": {
             "description": "Opt-in public TCP endpoint. When enabled and the cluster's Traefik install has a configured TCP entrypoint pool, kuso allocates one port from the pool, renders a Traefik IngressRouteTCP, and the addon becomes reachable on the cluster's public IP at that port. Admin-only — a public database is a real attack surface. The allocated port lives in spec.publicTCP.port (server-stamped).",

@@ -41,7 +41,7 @@ func TestSyncAll_WritesScopesAndNodeCIDRs(t *testing.T) {
 	t.Parallel()
 	on, off := true, false
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		kube.GVRProjects: "KusoProjectList", kube.GVREnvironments: "KusoEnvironmentList",
+		kube.GVRProjects: "KusoProjectList", kube.GVREnvironments: "KusoEnvironmentList", kube.GVRAddons: "KusoAddonList",
 	})
 	add := func(gvr schema.GroupVersionResource, kind string, v any) {
 		_, u := obj(t, gvr, kind, v)
@@ -87,6 +87,61 @@ func TestSyncAll_WritesScopesAndNodeCIDRs(t *testing.T) {
 	}
 	if np := get("nonp"); len(np.NodeBlockCIDRs) != 0 {
 		t.Errorf("netpol-disabled project touched: %+v", np)
+	}
+
+	before := len(dyn.Actions())
+	s.SyncAll(context.Background())
+	for _, a := range dyn.Actions()[before:] {
+		if a.GetVerb() == "update" {
+			t.Fatalf("second pass wrote %v", a)
+		}
+	}
+}
+
+// OPS-2: an explicit networkPolicy.enabled=false is mirrored onto the
+// project's addons; an enabled project's addons are cleared back to
+// unset, and other projects' addons are left alone.
+func TestSyncAll_MirrorsNetpolOptOutOntoAddons(t *testing.T) {
+	t.Parallel()
+	off := false
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		kube.GVRProjects: "KusoProjectList", kube.GVREnvironments: "KusoEnvironmentList", kube.GVRAddons: "KusoAddonList",
+	})
+	add := func(gvr schema.GroupVersionResource, kind string, v any) {
+		_, u := obj(t, gvr, kind, v)
+		if err := dyn.Tracker().Create(gvr, u, "kuso"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(kube.GVRProjects, "KusoProject", &kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "nonp", Namespace: "kuso"},
+		Spec: kube.KusoProjectSpec{NetworkPolicy: &kube.KusoProjectNetworkPolicy{Enabled: &off}}})
+	add(kube.GVRProjects, "KusoProject", &kube.KusoProject{ObjectMeta: metav1.ObjectMeta{Name: "on", Namespace: "kuso"}})
+	addon := func(name, project string, pnp *bool) *kube.KusoAddon {
+		return &kube.KusoAddon{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+			Spec: kube.KusoAddonSpec{Project: project, Kind: "postgres", ProjectNetworkPolicy: pnp}}
+	}
+	add(kube.GVRAddons, "KusoAddon", addon("nonp-db", "nonp", nil))
+	add(kube.GVRAddons, "KusoAddon", addon("on-db", "on", &off))
+	add(kube.GVRAddons, "KusoAddon", addon("on-cache", "on", nil))
+	s := &Syncer{Kube: &kube.Client{Clientset: fake.NewSimpleClientset(), Dynamic: dyn}, HomeNS: "kuso",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	s.SyncAll(context.Background())
+	get := func(name string) *bool {
+		a, err := s.Kube.GetKusoAddon(context.Background(), "kuso", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Spec.ProjectNetworkPolicy
+	}
+	if v := get("nonp-db"); v == nil || *v {
+		t.Errorf("nonp-db: projectNetworkPolicy = %v, want false", v)
+	}
+	if v := get("on-db"); v != nil {
+		t.Errorf("on-db: projectNetworkPolicy = %v, want unset", *v)
+	}
+	if v := get("on-cache"); v != nil {
+		t.Errorf("on-cache: projectNetworkPolicy = %v, want unset", *v)
 	}
 
 	before := len(dyn.Actions())

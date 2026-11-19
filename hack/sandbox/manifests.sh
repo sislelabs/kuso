@@ -23,5 +23,4 @@ SANDBOX_SKIPPED=(
   incident-agent-refresher
   incident-bot
   review-ingress            # not applied by install.sh either
-  hello-world               # sample CRs, not platform
 )

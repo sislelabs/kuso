@@ -94,6 +94,12 @@
           },
           "image": {
             "properties": {
+              "digest": {
+                "type": "string"
+              },
+              "digestRef": {
+                "type": "string"
+              },
               "pullPolicy": {
                 "type": "string"
               },

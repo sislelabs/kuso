@@ -948,6 +948,10 @@ type KusoEnvironmentSpec struct {
 	// SnapshotBeforeDeploy mirrors KusoServiceSpec.SnapshotBeforeDeploy so
 	// the build poller can read it off the env CR. Server-managed.
 	SnapshotBeforeDeploy bool `json:"snapshotBeforeDeploy,omitempty"`
+	// MinReadySeconds and RevisionHistoryLimit are hand-set chart
+	// overrides; nil leaves the chart defaults (10 and 3).
+	MinReadySeconds      *int32 `json:"minReadySeconds,omitempty"`
+	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
 }
 
 // ReplicaCountValue returns spec.ReplicaCount as an int, falling back
@@ -1138,6 +1142,10 @@ type KusoAddonSpec struct {
 	// tag, so a version change drops a stale pin by itself. Stamped by
 	// the addon image updater (vulnscan.AddonUpdater).
 	ImagePin *KusoAddonImagePin `json:"imagePin,omitempty"`
+	// ProjectNetworkPolicy mirrors the project's networkPolicy.enabled.
+	// Only an explicit false skips the addon NetworkPolicies; the
+	// envisolation syncer keeps it in step.
+	ProjectNetworkPolicy *bool `json:"projectNetworkPolicy,omitempty"`
 }
 
 // KusoAddonImagePin is spec.imagePin: Image is the tag reference the
@@ -1184,8 +1192,9 @@ type KusoAddonPooler struct {
 	// MaxUserConnections / MaxDbConnections are PgBouncer's global backend
 	// caps per user / per database across all pools. 0 = no cap. Changing
 	// either restarts the pooler.
-	MaxUserConnections int32 `json:"maxUserConnections,omitempty"`
-	MaxDbConnections   int32 `json:"maxDbConnections,omitempty"`
+	MaxUserConnections int32  `json:"maxUserConnections,omitempty"`
+	MaxDbConnections   int32  `json:"maxDbConnections,omitempty"`
+	ServerTLSSslmode   string `json:"serverTLSSslmode,omitempty"`
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.
@@ -1241,6 +1250,10 @@ type KusoBackup struct {
 	// resolves through BackupBucket() so a dump written here is never
 	// listed or restored from the instance bucket.
 	Bucket string `json:"bucket,omitempty"`
+	// Image and ScratchSizeLimit are hand-set overrides the chart reads;
+	// declared so a server read-modify-write keeps them.
+	Image            string `json:"image,omitempty"`
+	ScratchSizeLimit string `json:"scratchSizeLimit,omitempty"`
 }
 
 // BackupBucket returns the effective bucket for an addon: its own

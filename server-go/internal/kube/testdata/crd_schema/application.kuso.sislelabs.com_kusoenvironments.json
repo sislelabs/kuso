@@ -234,6 +234,11 @@
             ],
             "type": "string"
           },
+          "minReadySeconds": {
+            "description": "Seconds a new pod must stay Ready before the rollout counts it available. Unset = 10. Changing it does not restart pods.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "pendingImage": {
             "description": "A runtime=image target withheld until the service's release hook (migration) succeeds. Promoted to image by the imagerelease watcher.",
             "properties": {
@@ -352,6 +357,11 @@
           "resources": {
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
+          },
+          "revisionHistoryLimit": {
+            "description": "Old ReplicaSets kept for rollback. Unset = 3.",
+            "minimum": 1,
+            "type": "integer"
           },
           "runtime": {
             "description": "Mirrors KusoService.spec.runtime so the env helm chart can specialise (e.g. workers skip Service/Ingress/probes).",

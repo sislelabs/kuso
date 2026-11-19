@@ -71,6 +71,18 @@
           },
           "image": {
             "properties": {
+              "digest": {
+                "type": "string"
+              },
+              "digestRef": {
+                "type": "string"
+              },
+              "pullPolicy": {
+                "type": "string"
+              },
+              "pullSecret": {
+                "type": "string"
+              },
               "repository": {
                 "type": "string"
               },
