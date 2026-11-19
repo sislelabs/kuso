@@ -27,6 +27,7 @@ type Service struct {
 	Repo      string            `yaml:"repo,omitempty"`
 	Path      string            `yaml:"path,omitempty"`
 	Port      int32             `yaml:"port,omitempty"`
+	Internal  bool              `yaml:"internal,omitempty"`
 	Command   []string          `yaml:"command,omitempty"`
 	Domains   []Domain          `yaml:"domains,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
@@ -281,6 +282,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 
 	// Ports: first published port → service port + a domain entry.
 	out.Port, out.Domains = convertPorts(svc, slug, rep)
+	if out.Port == 0 {
+		out.Port, out.Internal = convertInternal(svc, slug, rep)
+	}
 
 	// Environment + env_file → env map, with depends_on-driven addon
 	// rewrite where a value names a datastore service.
@@ -348,6 +352,20 @@ func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []D
 		rep.skip(svc.Name, "extra ports %s not imported — kuso exposes one port per service", strings.Join(extra, ", "))
 	}
 	return port, domains
+}
+
+// convertInternal handles a service that publishes no port: compose
+// keeps it off the host, so kuso must not give it a public domain.
+// The first `expose` port becomes the service port.
+func convertInternal(svc types.ServiceConfig, slug string, rep *Report) (int32, bool) {
+	for _, e := range svc.Expose {
+		if p, err := strconv.ParseUint(strings.TrimSuffix(e, "/tcp"), 10, 16); err == nil && p > 0 {
+			rep.service(svc.Name, "no published ports → internal service `%s` (no public domain), port=%d from expose", slug, p)
+			return int32(p), true
+		}
+	}
+	rep.service(svc.Name, "no published ports → internal service `%s` (no public domain)", slug)
+	return 0, true
 }
 
 func portString(p types.ServicePortConfig) string {
@@ -574,7 +592,7 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 		rep.skip(svc.Name, "init not imported — kuso does not inject an init process; ensure your entrypoint reaps zombies if needed")
 	}
 	if len(svc.Expose) > 0 {
-		rep.skip(svc.Name, "expose %s not imported — kuso exposes the single service port; cluster peers reach any port via ${{ svc.URL }}", strings.Join(svc.Expose, ", "))
+		rep.skip(svc.Name, "expose %s not imported as extra ports — kuso has one service port (the first expose port when nothing is published); cluster peers reach any port via ${{ svc.URL }}", strings.Join(svc.Expose, ", "))
 	}
 	if svc.ContainerName != "" {
 		rep.skip(svc.Name, "container_name=%q not imported — kuso names pods from the service", svc.ContainerName)

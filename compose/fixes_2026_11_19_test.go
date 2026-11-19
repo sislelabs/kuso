@@ -46,3 +46,33 @@ volumes:
 		t.Errorf("${PWD} volume source not recorded as unresolved: %v", rep.UnresolvedVars)
 	}
 }
+
+func TestConvert_UnpublishedServiceIsInternal(t *testing.T) {
+	doc, _ := convertString(t, `
+services:
+  web:
+    image: nginx:1.27
+    ports: ["8080:80"]
+  admin:
+    image: myorg/admin:1
+    expose: ["3000"]
+  worker:
+    image: myorg/worker:1
+`)
+	if web := findService(doc, "web"); web == nil || web.Internal || web.Port != 80 {
+		t.Errorf("web = %+v, want public on 80", web)
+	}
+	if admin := findService(doc, "admin"); admin == nil || !admin.Internal || admin.Port != 3000 {
+		t.Errorf("admin = %+v, want internal on 3000", admin)
+	}
+	if worker := findService(doc, "worker"); worker == nil || !worker.Internal {
+		t.Errorf("worker = %+v, want internal", worker)
+	}
+	out, err := doc.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "internal: true") {
+		t.Errorf("marshaled kuso.yaml has no internal key:\n%s", out)
+	}
+}
