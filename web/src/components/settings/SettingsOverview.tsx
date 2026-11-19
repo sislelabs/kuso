@@ -7,6 +7,7 @@ import { AlertTriangle, ChevronRight, HardDrive, Package, Plug, Server, Users } 
 import { StatusDot } from "@/components/ui/status-pill";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
+import { useNodes } from "@/features/cluster";
 import { useDrains } from "@/features/drains";
 import { useSetupStatus } from "@/features/github";
 import { addonBackupCoverageText, addonBackupFailingText, summarizeAddonBackups } from "@/components/health/backupCoverage";
@@ -20,11 +21,6 @@ import type { StatusMeta, StatusTone } from "@/lib/status";
 // to the page that fixes it. Tiles the viewer can't read aren't shown
 // (and their requests never fire).
 
-interface NodeRow {
-  ready: boolean;
-  schedulable: boolean;
-  unreachable?: boolean;
-}
 interface HealthEntry {
   healthy: boolean;
   detail: string;
@@ -115,11 +111,7 @@ function Tile({
 }
 
 function NodesTile() {
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeRow[]>("/api/kubernetes/nodes"),
-    staleTime: 15_000,
-  });
+  const nodes = useNodes();
   return (
     <Tile
       href="/settings/nodes"

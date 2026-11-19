@@ -177,6 +177,7 @@ function EditableTitle({
   }, [editing, displayName]);
 
   const commit = useCallback(async () => {
+    if (patch.isPending) return;
     const trimmed = value.trim();
     // No change → just close.
     if (trimmed === displayName) {
@@ -958,6 +959,7 @@ export function ServiceWorkspace({
                   {tab === "variables" &&
                     section(
                       <ServiceVariablesPanel
+                        key={`${project}/${service ?? ""}`}
                         project={project}
                         service={service ?? ""}
                         env={env?.metadata?.labels?.["kuso.sislelabs.com/env"] ?? env?.spec?.kind ?? "production"}
@@ -1018,6 +1020,7 @@ export function ServiceWorkspace({
                   {tab === "crons" &&
                     section(
                       <ServiceCronsPanel
+                        key={`${project}/${service ?? ""}`}
                         project={project}
                         service={service ?? ""}
                         // Deep link (canvas "Add cron…") into an empty
@@ -1025,7 +1028,7 @@ export function ServiceWorkspace({
                         defaultAdding={defaultTab === "crons" && crons.data?.length === 0}
                       />,
                     )}
-                  {tab === "runs" && section(<ServiceRunsPanel project={project} service={service ?? ""} />)}
+                  {tab === "runs" && section(<ServiceRunsPanel key={`${project}/${service ?? ""}`} project={project} service={service ?? ""} />)}
                   {tab === "settings" && (
                     // The settings panel pads itself (sticky section nav +
                     // sectioned form). Keyed on identity so switching to

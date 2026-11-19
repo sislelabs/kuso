@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCanOnProject, Perms } from "@/features/auth";
 import { useProject } from "@/features/projects";
+import { discardService } from "@/features/staged";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { Section, Field, FieldGrid, Code, monoInputClass, textareaClass, type SectionProps } from "./_primitives";
@@ -325,6 +326,8 @@ function RenameRow({ project, service }: { project: string; service: string }) {
     try {
       const { renameService } = await import("@/features/services/api");
       await renameService(project, service, trimmed);
+      // Staged edits were keyed on the old name and would deploy to nothing.
+      discardService(project, service);
       toast.success(`Renamed to ${trimmed}`);
       // Invalidate every cache the old service name is keyed on.
       // Easiest: blow away the entire project query subtree.

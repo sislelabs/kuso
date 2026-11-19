@@ -393,16 +393,19 @@ export function CommandPalette() {
 
   // Re-read on open: another tab may have added recents since.
   useEffect(() => {
-    setRecents(loadRecents());
-  }, [open]);
+    setRecents(loadRecents(userId));
+  }, [open, userId]);
 
   // Storage is the source of truth, so a write before the first load (or
   // from another tab) never clobbers the list.
-  const remember = useCallback((item: RecentItem) => {
-    const next = pushRecent(loadRecents(), item);
-    saveRecents(next);
-    setRecents(next);
-  }, []);
+  const remember = useCallback(
+    (item: RecentItem) => {
+      const next = pushRecent(loadRecents(userId), item);
+      saveRecents(next, userId);
+      setRecents(next);
+    },
+    [userId],
+  );
 
   // Opening a project any way (sidebar, link, URL) counts as recent.
   useEffect(() => {
@@ -463,7 +466,7 @@ export function CommandPalette() {
           const s = (servicesByProject.get(r.project) ?? []).find((x) => x.name === r.name && x.group === r.group);
           return s ? { r, service: s } : null;
         }
-        return { r, addon: r.name };
+        return projectByName.has(r.project) ? { r, addon: r.name } : null;
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
       .slice(0, 6);

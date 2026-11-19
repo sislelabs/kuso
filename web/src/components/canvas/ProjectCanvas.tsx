@@ -874,7 +874,9 @@ export function ProjectCanvas({
       // negligible for a graph of this size.
       const positionChanged = changes.some((c) => c.type === "position");
       if (positionChanged) {
-        const layout: Record<string, { x: number; y: number }> = {};
+        // Merged over what's stored: an env filter hides some nodes, and
+        // their saved positions must survive a drag in that view.
+        const layout = loadStoredLayout(project);
         next.forEach((n) => {
           layout[n.id] = n.position;
         });

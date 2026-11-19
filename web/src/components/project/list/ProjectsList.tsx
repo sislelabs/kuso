@@ -4,9 +4,7 @@ import { useRovingGrid } from "@/lib/use-roving-grid";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Box, ChevronDown, ExternalLink, Folder, Pause, Power, SearchX, Settings, Star } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api-client";
-import type { NodeSummary } from "@/components/layout/ServersPopover";
+import { useNodes } from "@/features/cluster";
 import {
   useProjectsPulse,
   useProjectsSummary,
@@ -169,13 +167,7 @@ export function ProjectsList({
   const pulse = useProjectsPulse();
   // Node usage is admin-only; it shares ServersPopover's query so the
   // top bar and the strip make one request between them.
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-    enabled: canManage,
-  });
+  const nodes = useNodes({ poll: true });
   const capacity = useMemo((): FleetStripCapacity | undefined => {
     const list = nodes.data;
     if (list && list.some((n) => (n.memUsageBytes ?? 0) > 0)) {

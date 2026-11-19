@@ -97,7 +97,7 @@ export function ServiceErrorsPanel({ project, service, onViewLogs, defaultEnv = 
   const groupCount = count.data?.groups ?? openGroups.length;
   const builds = useBuilds(project, service);
   const windowStart = Date.now() - (timeRangeMs(range) ?? 0);
-  const announcement = useNewErrorAnnouncement(errors.isSuccess ? total : null, `${range}/${env}`);
+  const announcement = useNewErrorAnnouncement(errors.isSuccess && !count.isPending ? total : null, `${range}/${env}`);
 
   // ±30s around the occurrence: tight enough that the error's own lines
   // are on screen, wide enough for the request that caused it.

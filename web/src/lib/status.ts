@@ -48,43 +48,6 @@ export const SERVICE_STATUS: Record<ServiceStatus, StatusMeta> = {
   unknown: { label: "Unknown", tone: "neutral" },
 };
 
-// serviceStatusFromServerState maps env.status.state (the server rollup in
-// server-go/internal/projects/state.go) onto the vocabulary. The specific
-// cause ("Crashlooping", "Build failed") belongs in the detail line, not
-// the label. null = absent/unrecognised (old server).
-export function serviceStatusFromServerState(state: string | undefined): ServiceStatus | null {
-  switch (state) {
-    case "running":
-      return "live";
-    case "deploying":
-      return "deploying";
-    case "building":
-      return "building";
-    // release_failed: the new image wasn't promoted; the last green build
-    // keeps serving.
-    case "degraded":
-    case "release_failed":
-      return "degraded";
-    case "crashlooping":
-    case "build_failed":
-      return "failing";
-    case "stuck":
-      return "stuck";
-    case "rollout_failing":
-      return "rollout_failing";
-    case "sleeping":
-      return "sleeping";
-    case "stopped":
-      return "stopped";
-    case "no_image":
-      return "not_deployed";
-    case "unknown":
-      return "unknown";
-    default:
-      return null;
-  }
-}
-
 // serverStateCause is the human cause shown next to a status when the
 // label alone hides it (both crashloops and failed builds are "Failing").
 export function serverStateCause(state: string | undefined): string | undefined {
@@ -286,7 +249,7 @@ export function addonStatusFromServer(addon: {
 // project filters). "attention" = failing, stuck or degraded.
 export type ServiceBucket = "running" | "in_flight" | "attention" | "sleeping" | "stopped" | "not_deployed" | "unknown";
 
-export function serviceBucket(stopped: boolean | undefined, env: KusoEnvironmentSummary | undefined): ServiceBucket {
+function serviceBucket(stopped: boolean | undefined, env: KusoEnvironmentSummary | undefined): ServiceBucket {
   // The same derivation as every dot and pill (deriveServiceStatus), so
   // counts can't disagree with what the cards show.
   return serviceBucketOf(deriveServiceStatus({ stopped, env }));

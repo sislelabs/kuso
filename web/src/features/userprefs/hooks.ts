@@ -2,10 +2,9 @@
 
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toastError } from "@/lib/errors";
 import {
-  clearProjectPref,
   listProjectPrefs,
-  renameFolder,
   setProjectPref,
   type ProjectPref,
 } from "./api";
@@ -57,42 +56,10 @@ export function useSetProjectPref() {
       qc.setQueryData(projectPrefsQueryKey, next);
       return { prev };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(projectPrefsQueryKey, ctx.prev);
+      toastError(err, "Couldn't save project preference");
     },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: projectPrefsQueryKey });
-    },
-  });
-}
-
-export function useClearProjectPref() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (project: string) => clearProjectPref(project),
-    onMutate: async (project) => {
-      await qc.cancelQueries({ queryKey: projectPrefsQueryKey });
-      const prev = qc.getQueryData<ProjectPref[]>(projectPrefsQueryKey);
-      qc.setQueryData(
-        projectPrefsQueryKey,
-        (prev ?? []).filter((p) => p.project !== project)
-      );
-      return { prev };
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(projectPrefsQueryKey, ctx.prev);
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: projectPrefsQueryKey });
-    },
-  });
-}
-
-export function useRenameFolder() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ from, to }: { from: string; to: string }) =>
-      renameFolder(from, to),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: projectPrefsQueryKey });
     },

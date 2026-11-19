@@ -68,7 +68,10 @@ function persist() {
 function isEmptyService(s: StagedService): boolean {
   const env = s.env && (s.env.set.length > 0 || s.env.unset.length > 0);
   const settings = s.settings && Object.keys(s.settings.fields).length > 0;
-  return !env && !settings;
+  // An error with nothing left staged (a rollout that didn't start) still
+  // has to reach the review dialog.
+  const errors = s.errors && Object.keys(s.errors).length > 0;
+  return !env && !settings && !errors;
 }
 
 function commit(project: string, service: string, fn: (prev: StagedService) => StagedService) {
@@ -155,6 +158,22 @@ export function discardProject(project: string) {
   delete next[project];
   state = next;
   persist();
+  for (const l of listeners) l();
+}
+
+// resetStaged drops every staged edit, in memory and in storage. Called
+// when the signed-in identity changes so one user's edits can't be
+// applied under the next user's session.
+export function resetStaged() {
+  state = EMPTY;
+  hydrated = true;
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Storage blocked: nothing was persisted either.
+    }
+  }
   for (const l of listeners) l();
 }
 

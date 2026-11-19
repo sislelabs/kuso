@@ -25,3 +25,11 @@ type WireReviewerView = Omit<ReviewerView, "services"> & {
 export function normalizeReviewerView(data: WireReviewerView): ReviewerView {
   return { ...data, services: data.services ?? [] };
 }
+
+// shouldPollReview: keep refetching only while the seed can still change
+// and nobody has decided. "" means the preview has no seed at all.
+export function shouldPollReview(v: ReviewerView | null): boolean {
+  if (!v) return true;
+  if (v.closed || v.decision !== "") return false;
+  return v.seedPhase !== "" && v.seedPhase !== "succeeded" && v.seedPhase !== "failed";
+}

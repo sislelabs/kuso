@@ -6,6 +6,7 @@ import { ApiError, clearJwt } from "@/lib/api-client";
 import { getAuthMethods, getProfile, getSession, login as loginApi } from "./api";
 import type { LoginInput } from "./schemas";
 import { safeRedirectTarget } from "./redirect";
+import { resetStaged } from "@/features/staged/store";
 
 export const sessionQueryKey = ["auth", "session"] as const;
 
@@ -108,6 +109,7 @@ export function useSignOut() {
       // results) readable by the next user of this browser until its
       // own refetch.
       qc.clear();
+      resetStaged();
       router.replace("/login");
     });
   };

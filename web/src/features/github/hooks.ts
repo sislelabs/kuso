@@ -7,7 +7,6 @@ import {
   detectRuntime,
   getInstallURL,
   getSetupStatus,
-  listInstallationRepos,
   listInstallations,
   listRepos,
   scanAddons,
@@ -63,15 +62,6 @@ export function useGithubRepos(opts: { enabled?: boolean } = {}) {
     enabled: opts.enabled ?? true,
     staleTime: 60_000,
     refetchOnWindowFocus: "always",
-  });
-}
-
-export function useInstallationRepos(installationId: number | null) {
-  return useQuery({
-    queryKey: ["github", "installations", installationId, "repos"] as const,
-    queryFn: () => listInstallationRepos(installationId!),
-    enabled: !!installationId,
-    staleTime: 60_000,
   });
 }
 

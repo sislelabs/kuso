@@ -37,7 +37,6 @@ export {
   deleteAddon,
   updateAddon,
   setAddonPlacement,
-  addonSecret,
   listBackups,
   restoreBackup,
   downloadAddonBackup,
@@ -50,7 +49,6 @@ export {
   updateSQLRow,
   deleteSQLRow,
   listEnvGroups,
-  getEnvGroup,
   createEnvGroup,
   deleteEnvGroup,
   setEnvGroupServiceBranch,
@@ -59,7 +57,6 @@ export {
   getProjectNotificationMute,
   muteProjectNotifications,
   unmuteProjectNotifications,
-  listMutedProjects,
   exportProjectArchive,
   importProjectArchive,
 } from "./api";

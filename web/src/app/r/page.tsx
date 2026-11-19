@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { normalizeReviewerView, type ReviewerView } from "./reviewerView";
+import { normalizeReviewerView, shouldPollReview, type ReviewerView } from "./reviewerView";
 import { toastError } from "@/lib/errors";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
@@ -32,7 +32,6 @@ export default function ReviewerPage() {
   const viewRef = useRef(view);
   viewRef.current = view;
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [reviewerEmail, setReviewerEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -52,14 +51,11 @@ export default function ReviewerPage() {
       return;
     }
     void fetchReview();
-    // Re-fetch every 10s while seedPhase != succeeded so the reviewer
-    // sees "seeding…" flip to "ready" automatically. Once the
-    // decision is recorded the page stops polling.
+    // Re-fetch every 10s while the seed runs so the reviewer sees
+    // "seeding…" flip to "ready" automatically.
     const id = setInterval(() => {
-      const v = viewRef.current;
-      if (!v || (v.seedPhase !== "succeeded" && v.decision === "")) {
-        void fetchReview();
-      }
+      if (document.hidden) return;
+      if (shouldPollReview(viewRef.current)) void fetchReview();
     }, 10000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -71,9 +67,9 @@ export default function ReviewerPage() {
       const res = await fetch(`/api/reviews/${encodeURIComponent(token)}`, { credentials: "omit" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setView(normalizeReviewerView(await res.json()));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "load failed");
+    } catch {
+      // Keep whatever is on screen; with nothing loaded the page shows
+      // "link not found".
     } finally {
       setLoading(false);
     }
@@ -109,7 +105,8 @@ export default function ReviewerPage() {
       </div>
     );
   }
-  if (!token || error || !view) {
+  // A failed poll keeps the review already on screen.
+  if (!token || !view) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)] text-[var(--text-secondary)]">
         <div className="max-w-md text-center">

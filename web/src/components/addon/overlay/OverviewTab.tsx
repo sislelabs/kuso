@@ -66,8 +66,10 @@ export function OverviewTab({
     queryKey: ["addons", project, addon, "connection"],
     queryFn: () => getAddonConnection(project, addon),
     enabled: canReadSecrets,
-    // An empty {values:{}} is "not generated yet" too: keep polling.
-    refetchInterval: (q) => (Object.keys(q.state.data?.values ?? {}).length > 0 ? false : 5_000),
+    // An empty {values:{}} is "not generated yet" too: keep polling, but
+    // not after a failure.
+    refetchInterval: (q) =>
+      q.state.status === "error" || Object.keys(q.state.data?.values ?? {}).length > 0 ? false : 5_000,
   });
   const storageSize = storageSizeFromSpec(cr?.spec);
   const tier = cr?.spec.size ?? "small";
@@ -159,7 +161,9 @@ function UsedBy({ project, addon, group }: { project: string; addon: string; gro
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <div className="flex items-start justify-between gap-3 px-3 py-2">
         <span className="pt-1 text-sm font-medium text-[var(--text-primary)]">Used by</span>
-        {services.isPending || group === undefined ? (
+        {services.isError ? (
+          <span className="text-xs text-[var(--error)]">Couldn&apos;t load services</span>
+        ) : services.isPending || group === undefined ? (
           <LoadingState kind="inline" />
         ) : names.length === 0 ? (
           <span className="text-xs text-[var(--text-secondary)]">No services in this environment yet</span>

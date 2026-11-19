@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { formatCpu, relativeTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useCan, Perms } from "@/features/auth";
-import type { NodeSummary } from "@/components/layout/ServersPopover";
+import { nodesQueryKey, useNodes, type NodeSummary } from "@/features/cluster";
 import { nodePressures, roleLabels } from "@/components/layout/nodeHealth";
 
 interface Label {
@@ -76,11 +76,7 @@ export function NodesView() {
   // raw "Failed to load nodes: forbidden" — we render a friendly notice
   // instead. The settings landing card is also perm-gated to match.
   const isAdmin = useCan(Perms.SettingsAdmin);
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    enabled: isAdmin,
-  });
+  const nodes = useNodes();
   // Host package-update advisory per node (from the pkg-probe DaemonSet
   // annotations). Separate query so a slow/absent probe never blocks the
   // node list. Keyed by node name for per-card lookup.
@@ -115,7 +111,7 @@ export function NodesView() {
       } else {
         toast.success(summary);
       }
-      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+      qc.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (e) => toastError(e, "Cleanup failed"),
   });
@@ -171,7 +167,7 @@ export function NodesView() {
         );
       }
       setEdits({});
-      await qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+      await qc.invalidateQueries({ queryKey: nodesQueryKey });
     } catch (e) {
       toastError(e, "Failed to save");
     } finally {
@@ -258,7 +254,7 @@ export function NodesView() {
             // Don't auto-close here — bootstrap flow shows a Done
             // button so the operator can confirm the install scrolled
             // on the VM. Just refresh the node list in the background.
-            qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+            qc.invalidateQueries({ queryKey: nodesQueryKey });
             qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
           }}
         />
@@ -986,7 +982,7 @@ function UncordonButton({ node }: { node: string }) {
       api(`/api/kubernetes/nodes/${encodeURIComponent(node)}/uncordon`, { method: "POST" }),
     onSuccess: () => {
       toast.success(`${node} is schedulable again`);
-      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+      qc.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (e) => toastError(e, "Uncordon failed"),
   });
@@ -1022,7 +1018,7 @@ function RemoveNodeButton({ node }: { node: NodeSummary }) {
     onSuccess: () => {
       toast.success(`Removed ${node.name}`);
       setOpen(false);
-      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+      qc.invalidateQueries({ queryKey: nodesQueryKey });
     },
     onError: (err) => {
       toastError(err, "Remove failed");
@@ -1771,10 +1767,7 @@ function BootstrapBody({
   );
 }
 
-// Local types for the bootstrap response shape. Mirrors the server's
-// JSON. We re-declare here rather than importing to keep this file
-// self-contained for the existing-code edit; the canonical types live
-// in features/node-bootstrap/api.ts.
+// The bootstrap response shape. Mirrors the server's JSON.
 type MintedTokenLite = {
   jti: string;
   jtiPrefix: string;

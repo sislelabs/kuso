@@ -148,15 +148,6 @@ export async function listEnvGroups(project: string): Promise<EnvGroupSummary[]>
   return api(`/api/projects/${encodeURIComponent(project)}/env-groups`);
 }
 
-export async function getEnvGroup(
-  project: string,
-  name: string,
-): Promise<EnvGroupSummary> {
-  return api(
-    `/api/projects/${encodeURIComponent(project)}/env-groups/${encodeURIComponent(name)}`,
-  );
-}
-
 export async function createEnvGroup(
   project: string,
   body: {
@@ -349,19 +340,6 @@ export async function setAddonPlacement(
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/placement`,
     { method: "PUT", body }
-  );
-}
-
-// addonSecret returns the addon's connection secret as plaintext
-// key→value pairs. Used by the overview panel so the user can copy
-// DATABASE_URL / POSTGRES_PASSWORD / etc. and connect from local
-// tools. Server gates this behind secrets:read.
-export async function addonSecret(
-  project: string,
-  addon: string
-): Promise<{ values: Record<string, string> }> {
-  return api(
-    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret`
   );
 }
 
@@ -751,13 +729,6 @@ export async function unmuteProjectNotifications(project: string): Promise<void>
   return api(`/api/projects/${encodeURIComponent(project)}/notifications/mute`, {
     method: "DELETE",
   });
-}
-
-// listMutedProjects — admin-only roster for the settings page.
-export async function listMutedProjects(): Promise<
-  { project: string; createdAt: string; createdBy?: string }[]
-> {
-  return api(`/api/notifications/muted-projects`);
 }
 
 // ---- Project archive (spec + secrets tarball) ----

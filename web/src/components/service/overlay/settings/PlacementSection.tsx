@@ -1,11 +1,10 @@
 "use client";
 
 import { Select } from "@/components/ui/select";
-import { useQuery } from "@tanstack/react-query";
 import { Check, MapPin, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api-client";
+import { useNodes } from "@/features/cluster";
 import { cn } from "@/lib/utils";
 import {
   Section,
@@ -13,20 +12,16 @@ import {
   Callout,
   Code,
   monoInputClass,
-  type NodeSummary,
   type PlacementRow,
   type SectionProps,
 } from "./_primitives";
 
 export function PlacementSection({ state, setState }: SectionProps) {
-  // Pull live nodes so the user can pick from real labels + hostnames
-  // instead of guessing. We don't gate the section on the response —
-  // empty cluster means a friendlier "no nodes labeled yet" hint.
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    staleTime: 30_000,
-  });
+  // Live nodes let the user pick real labels + hostnames instead of
+  // guessing. Only instance admins can read them; for anyone else the
+  // list is unknown, so no match preview is shown.
+  const nodes = useNodes();
+  const nodesKnown = nodes.isSuccess;
   const allLabels = new Map<string, Set<string>>();
   for (const n of nodes.data ?? []) {
     for (const [k, v] of Object.entries(n.kusoLabels ?? {})) {
@@ -90,7 +85,9 @@ export function PlacementSection({ state, setState }: SectionProps) {
     ? "Any node"
     : incompleteRules > 0
       ? `${incompleteRules} incomplete rule${incompleteRules === 1 ? "" : "s"}`
-      : `${matching.length} of ${totalNodes} nodes match`;
+      : nodesKnown
+        ? `${matching.length} of ${totalNodes} nodes match`
+        : "Custom placement";
   const haveAnyLabels = allLabels.size > 0;
 
   return (
@@ -200,8 +197,10 @@ export function PlacementSection({ state, setState }: SectionProps) {
             : `${state.placementNodes.length} pinned. Pods only run on these nodes.`
         }
       >
-        {allHostnames.length === 0 ? (
-          <p className="text-xs text-[var(--text-tertiary)]">No nodes visible.</p>
+        {!nodes.canRead ? (
+          <p className="text-xs text-[var(--text-tertiary)]">The node list needs instance admin.</p>
+        ) : allHostnames.length === 0 ? (
+          nodesKnown && <p className="text-xs text-[var(--text-tertiary)]">No nodes visible.</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {allHostnames.map((h) => {
@@ -235,7 +234,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
           <Callout>
             Fill in or remove the {incompleteRules === 1 ? "empty rule" : "empty rules"} to see which nodes match.
           </Callout>
-        ) : matching.length === 0 ? (
+        ) : !nodesKnown ? null : matching.length === 0 ? (
           <Callout tone="warning">No node matches these rules, so pods would stay Pending.</Callout>
         ) : (
           <Callout>

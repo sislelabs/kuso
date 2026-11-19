@@ -148,6 +148,7 @@ export function StagedReviewDialog({
     setBusy(true);
     let ok = 0;
     let failed = 0;
+    let notRolledOut = 0;
     // Services go one at a time so a failure is attributed cleanly; each
     // service is a single request and a single rollout.
     for (const service of services) {
@@ -178,8 +179,10 @@ export function StagedReviewDialog({
         }
         const errCount = Object.keys(out.errors).length;
         setStagedErrors(project, service, errCount ? out.errors : undefined);
-        if (errCount) failed++;
-        else {
+        if (errCount) {
+          failed++;
+          if (Object.keys(out.errors).every((k) => k === "rollout")) notRolledOut++;
+        } else {
           ok++;
           // "Deployed" waits for the new pods, not the request.
           if (snap) trackRollout(snap, { label: service, qc });
@@ -197,6 +200,8 @@ export function StagedReviewDialog({
       setMessage("");
       setPhase({});
       onOpenChange(false);
+    } else if (notRolledOut === failed) {
+      toast.error(`${failed} ${failed === 1 ? "service" : "services"} saved, but the rollout didn't start. Redeploy to apply.`);
     } else {
       toast.error(`${failed} ${failed === 1 ? "service" : "services"} had changes that didn't apply. They're still staged.`);
     }

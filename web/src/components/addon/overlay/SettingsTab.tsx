@@ -2,7 +2,7 @@
 
 import { Select } from "@/components/ui/select";
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   deleteAddon,
   disableAddonPublicTCP,
@@ -29,7 +29,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { NodeSummary } from "@/components/layout/ServersPopover";
+import { useNodes } from "@/features/cluster";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { toastError } from "@/lib/errors";
@@ -698,11 +698,7 @@ function PlacementSection({
   const initialNodes: string[] =
     (cr?.spec as { placement?: { nodes?: string[] } })?.placement?.nodes ?? [];
 
-  const nodesQuery = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    staleTime: 30_000,
-  });
+  const nodesQuery = useNodes();
 
   const [labels, setLabels] = useState<{ key: string; value: string }[]>(
     Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })),
@@ -892,10 +888,16 @@ function PlacementSection({
               : `${pickedNodes.length} pinned`}
           </span>
         </div>
-        {allHostnames.length === 0 ? (
+        {!nodesQuery.canRead ? (
           <p className="text-xs text-[var(--text-tertiary)]">
-            No nodes visible yet.
+            The node list needs instance admin.
           </p>
+        ) : allHostnames.length === 0 ? (
+          nodesQuery.isSuccess && (
+            <p className="text-xs text-[var(--text-tertiary)]">
+              No nodes visible yet.
+            </p>
+          )
         ) : (
           <div className="flex flex-wrap gap-1">
             {allHostnames.map((h) => {
@@ -920,7 +922,7 @@ function PlacementSection({
         )}
       </div>
 
-      {hasEffectiveRules && (
+      {hasEffectiveRules && nodesQuery.isSuccess && (
         <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
           {incompleteRules > 0 ? (
             <span>

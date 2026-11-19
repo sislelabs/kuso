@@ -148,7 +148,8 @@ export function buildPaletteIndex(items: ProjectSummaryItem[]): PaletteIndex {
 }
 
 // Recents: what the user last jumped to, newest first. Kept small and
-// local — it's a per-browser convenience, not state anyone else needs.
+// local, and stamped with the user like the index snapshot so a shared
+// browser never shows one account's recents to another.
 export type RecentItem =
   | { kind: "project"; project: string }
   | { kind: "service"; project: string; name: string; group: string }
@@ -176,27 +177,31 @@ function isRecent(v: unknown): v is RecentItem {
   return false;
 }
 
-export function parseRecents(raw: string | null): RecentItem[] {
-  if (!raw) return [];
+export function parseRecents(raw: string | null, user: string): RecentItem[] {
+  if (!raw || !user) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isRecent).slice(0, RECENTS_MAX) : [];
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const o = parsed as Record<string, unknown>;
+    if (o.user !== user || !Array.isArray(o.list)) return [];
+    return o.list.filter(isRecent).slice(0, RECENTS_MAX);
   } catch {
     return [];
   }
 }
 
-export function loadRecents(): RecentItem[] {
+export function loadRecents(user: string): RecentItem[] {
   try {
-    return parseRecents(window.localStorage.getItem(RECENTS_KEY));
+    return parseRecents(window.localStorage.getItem(RECENTS_KEY), user);
   } catch {
     return [];
   }
 }
 
-export function saveRecents(list: RecentItem[]): void {
+export function saveRecents(list: RecentItem[], user: string): void {
+  if (!user) return;
   try {
-    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(list));
+    window.localStorage.setItem(RECENTS_KEY, JSON.stringify({ user, list }));
   } catch {
     // Private mode / blocked storage: recents just don't persist.
   }

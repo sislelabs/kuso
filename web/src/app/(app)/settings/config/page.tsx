@@ -17,6 +17,7 @@ import { toastError } from "@/lib/errors";
 import { Save } from "lucide-react";
 import { SettingsPage, SettingsPageLoading } from "@/components/settings/SettingsPage";
 import { SettingsField, SettingsNotice, SettingsSection } from "@/components/settings/SettingsSection";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 
 interface SettingsResp {
   settings: Record<string, unknown>;
@@ -69,6 +70,9 @@ export default function ClusterConfigPage() {
   if (settings.isPending) {
     return <SettingsPageLoading title="Cluster config" rows={3} />;
   }
+  // Saving without the loaded spec would write the form over settings
+  // the page never saw.
+  const loaded = settings.isSuccess;
 
   const setField = (key: string, val: string) => {
     setDraft((cur) => {
@@ -120,13 +124,16 @@ export default function ClusterConfigPage() {
       <SettingsSection
         title="Certificates"
         footer={
-          <Button size="sm" onClick={onSaveFriendly} disabled={!canEdit || save.isPending}>
+          <Button size="sm" onClick={onSaveFriendly} disabled={!canEdit || !loaded || save.isPending}>
             <Save className="h-3 w-3" />
             {save.isPending ? "Saving…" : "Save"}
           </Button>
         }
       >
-        {FIELDS.map((f) => (
+        {settings.isError && (
+          <QueryErrorState what="cluster config" error={settings.error} onRetry={() => void settings.refetch()} />
+        )}
+        {loaded && FIELDS.map((f) => (
           <SettingsField key={f.key} label={f.label} hint={f.hint} htmlFor={`cfg-${f.key}`}>
             <Input
               id={`cfg-${f.key}`}
@@ -166,7 +173,7 @@ export default function ClusterConfigPage() {
               >
                 Sync from form
               </Button>
-              <Button size="sm" onClick={onSaveRaw} disabled={!canEdit || save.isPending}>
+              <Button size="sm" onClick={onSaveRaw} disabled={!canEdit || !loaded || save.isPending}>
                 <Save className="h-3 w-3" />
                 {save.isPending ? "Saving…" : "Save raw"}
               </Button>
