@@ -34,10 +34,6 @@ var platformVolumes = []platformVolume{
 		PVC: "kuso-registry-data", Selector: "app.kubernetes.io/name=kuso-registry", Label: "Image registry",
 		Hint: "Pushes start failing once it is full. Lower KUSO_BUILD_IMAGE_RETENTION on kuso-server (default 5 images per service), run the kuso-registry-gc CronJob now (kubectl -n kuso create job --from=cronjob/kuso-registry-gc gc-now), or grow the PVC.",
 	},
-	{
-		PVC: "kuso-buildkitd-state", Selector: "app.kubernetes.io/name=kuso-buildkitd", Label: "Build cache",
-		Hint: "buildkitd garbage-collects to maxUsedSpace in kuso-buildkitd-config; if that is above the PVC size, lower it.",
-	},
 }
 
 const (
@@ -239,8 +235,8 @@ func (w *Watcher) checkBuildBacklog(ctx context.Context) {
 		w.send(notify.AlertFired(
 			fmt.Sprintf("Build queue backlog: %d builds waiting", n),
 			fmt.Sprintf("The oldest queued build has waited %s. Builds are capped by buildkitd capacity "+
-				"(daemons × max-parallelism × 2). Add daemons with deploy/optional/buildkitd-shards.yaml "+
-				"and KUSO_BUILDKITD_SHARDS, or raise KUSO_BUILD_MAX_CONCURRENT if the daemon has headroom.",
+				"(daemons × max-parallelism × 2, one daemon per build node). Add a build node, or raise "+
+				"KUSO_BUILD_MAX_CONCURRENT if the daemons have headroom.",
 				wait.Round(time.Minute)),
 			"warn",
 			map[string]string{"queued": fmt.Sprint(n)},

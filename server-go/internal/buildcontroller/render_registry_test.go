@@ -19,7 +19,7 @@ func TestRenderBuildkit_PreviewBuildNeverExportsCache(t *testing.T) {
 	if got := buildkitEnv(b)["CACHE_EXPORT"]; got != "0" {
 		t.Errorf("preview CACHE_EXPORT = %q, want 0", got)
 	}
-	script := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	script := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Args[0]
 	if strings.Count(script, "--export-cache") != 1 || !strings.Contains(script, `if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]`) {
 		t.Error("export-cache must only be emitted behind the CACHE_EXPORT gate")
 	}
@@ -27,7 +27,7 @@ func TestRenderBuildkit_PreviewBuildNeverExportsCache(t *testing.T) {
 
 func buildkitEnv(b *kube.KusoBuild) map[string]string {
 	out := map[string]string{}
-	for _, e := range renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Env {
+	for _, e := range renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Env {
 		out[e.Name] = e.Value
 	}
 	return out
@@ -57,7 +57,7 @@ func TestRenderBuildkit_RegistryTransport(t *testing.T) {
 			t.Errorf("%s: REGISTRY_INSECURE = %q, want %q", c.name, got, c.want)
 		}
 	}
-	script := renderBuildkitContainer(baseBuild(), "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	script := renderBuildkitContainer(baseBuild(), "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Args[0]
 	if strings.Contains(script, "registry.insecure=true") {
 		t.Error("buildkit script still hardcodes registry.insecure=true")
 	}

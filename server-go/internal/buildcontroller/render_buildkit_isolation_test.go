@@ -97,7 +97,7 @@ func TestBuildkitScript_TLSCacheNamespaceAndDigest(t *testing.T) {
 			if tc.preview != "" {
 				b.Annotations = map[string]string{builds.AnnPreviewEnv: tc.preview}
 			}
-			argv := runBuildkitScript(t, renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}), dir, tc.mounted)
+			argv := runBuildkitScript(t, renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost), dir, tc.mounted)
 			joined := strings.Join(argv, " ")
 			if got := strings.Contains(joined, "--tlscert"); got != tc.wantTLS {
 				t.Fatalf("TLS flags on build = %v, want %v: %s", got, tc.wantTLS, joined)
@@ -124,7 +124,7 @@ func TestBuildkitScript_TLSCacheNamespaceAndDigest(t *testing.T) {
 func TestBuildkitClientCertOnlyInBuildkitContainer(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Strategy = "static"
-	spec := renderPodSpec("b1", b, "static", corev1.ResourceRequirements{})
+	spec := renderPodSpec("b1", b, "static", corev1.ResourceRequirements{}, testBuildkitHost)
 	for _, c := range append(spec.InitContainers, spec.Containers...) {
 		has := false
 		for _, m := range c.VolumeMounts {

@@ -831,10 +831,15 @@ if [[ "${K3S_FRESH:-0}" == "1" && "${KUSO_BUILDKIT_TLS:-1}" != "0" ]] \
   kubectl -n kuso label secret kuso-buildkitd-tls app.kubernetes.io/name=kuso-buildkitd --overwrite >/dev/null
   BK_TLS_MINT=1
 fi
+# Build daemons run on non-control-plane nodes. With no worker yet, let
+# the server build (take the label off once a worker joins).
+if [[ -z "$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o name 2>/dev/null)" ]]; then
+  kubectl label nodes -l node-role.kubernetes.io/control-plane kuso.sislelabs.com/build-daemon=on --overwrite >/dev/null
+fi
 kuso_manifest "deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
 if [[ "$BK_TLS_MINT" != "1" ]]; then
-  kubectl wait --for=condition=Available --timeout=180s \
-    deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
+  kubectl -n kuso rollout status daemonset/kuso-buildkitd --timeout=180s \
+    || warn "kuso-buildkitd not yet ready"
 fi
 
 # -------- 8b. prometheus --------
@@ -1617,10 +1622,10 @@ kubectl wait --for=condition=Available --timeout=180s \
 # The registry and buildkitd wait for kuso-server to finish their freshly
 # minted credentials (htpasswd, buildkitd mTLS certs); the kubelet resyncs
 # the Secret volumes within a couple of minutes.
-for d in kuso-registry kuso-buildkitd; do
-  kubectl wait --for=condition=Available --timeout=300s \
-    deployment/$d -n kuso >/dev/null || warn "$d not yet ready (kubectl -n kuso logs deploy/$d)"
-done
+kubectl wait --for=condition=Available --timeout=300s \
+  deployment/kuso-registry -n kuso >/dev/null || warn "kuso-registry not yet ready (kubectl -n kuso logs deploy/kuso-registry)"
+kubectl -n kuso rollout status daemonset/kuso-buildkitd --timeout=300s >/dev/null \
+  || warn "kuso-buildkitd not yet ready (kubectl -n kuso logs ds/kuso-buildkitd)"
 
 # -------- 11b. auto-flip to LE prod --------
 #

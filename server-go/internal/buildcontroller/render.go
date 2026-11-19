@@ -2,7 +2,6 @@ package buildcontroller
 
 import (
 	"fmt"
-	"kuso/server/internal/buildkit"
 	"kuso/server/internal/buildkittls"
 	"regexp"
 	"slices"
@@ -43,7 +42,8 @@ func renderServiceAccount(buildName, ns string, owner metav1.OwnerReference) *co
 // strategy is buildpacks. errors from resourceRequirements bubble up
 // — but kuso-server already validates resource shapes before stamping
 // the CR, so a parse failure here implies an external apply.
-func renderJob(buildName, ns string, b *kube.KusoBuild, owner metav1.OwnerReference) *batchv1.Job {
+// buildkitHost is the daemon this build runs on (buildkit.HostFor).
+func renderJob(buildName, ns string, b *kube.KusoBuild, owner metav1.OwnerReference, buildkitHost string) *batchv1.Job {
 	strategy := strategyOf(b)
 	labels := kusoBuildLabels(b, buildName)
 	res, _ := resourceRequirements(b) // error already vetted server-side
@@ -67,7 +67,7 @@ func renderJob(buildName, ns string, b *kube.KusoBuild, owner metav1.OwnerRefere
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
 				},
-				Spec: renderPodSpec(buildName, b, strategy, res),
+				Spec: renderPodSpec(buildName, b, strategy, res, buildkitHost),
 			},
 		},
 	}
@@ -76,7 +76,7 @@ func renderJob(buildName, ns string, b *kube.KusoBuild, owner metav1.OwnerRefere
 
 // renderPodSpec assembles the pod spec — init containers + primary
 // container, volumes, tolerations, affinity, security context.
-func renderPodSpec(buildName string, b *kube.KusoBuild, strategy string, res corev1.ResourceRequirements) corev1.PodSpec {
+func renderPodSpec(buildName string, b *kube.KusoBuild, strategy string, res corev1.ResourceRequirements, buildkitHost string) corev1.PodSpec {
 	spec := corev1.PodSpec{
 		RestartPolicy: corev1.RestartPolicyNever,
 		// Pod-level fsGroup=1000 makes the cache PVC's mount point
@@ -151,7 +151,7 @@ func renderPodSpec(buildName string, b *kube.KusoBuild, strategy string, res cor
 	if strategy == "buildpacks" {
 		spec.Containers = []corev1.Container{renderBuildpacksContainer(buildName, b, res)}
 	} else {
-		spec.Containers = []corev1.Container{renderBuildkitContainer(b, strategy, res)}
+		spec.Containers = []corev1.Container{renderBuildkitContainer(b, strategy, res, buildkitHost)}
 	}
 
 	return spec
@@ -1263,10 +1263,10 @@ func cacheMountNamespace(b *kube.KusoBuild) string {
 }
 
 // renderBuildkitContainer is the buildkit thin-client. Talks to the
-// long-lived kuso-buildkitd Deployment over TCP. The actual build
+// project's kuso-buildkitd daemon (buildkitHost) over TCP. The actual build
 // happens in the daemon; this container just uploads the workspace
 // context and streams progress back.
-func renderBuildkitContainer(b *kube.KusoBuild, strategy string, res corev1.ResourceRequirements) corev1.Container {
+func renderBuildkitContainer(b *kube.KusoBuild, strategy string, res corev1.ResourceRequirements, buildkitHost string) corev1.Container {
 	path := repoPath(b)
 	// dockerfile strategy honors the per-service override (monorepo
 	// services building from e.g. "Dockerfile.dev"); nixpacks/static use
@@ -1500,7 +1500,7 @@ exit "$RC"
 		{Name: "IMAGE_REF", Value: image},
 		{Name: "CACHE_REF", Value: cache},
 		{Name: "REGISTRY_INSECURE", Value: registryInsecure(b)},
-		{Name: "BUILDKIT_ADDR", Value: buildkit.HostFor(b.Spec.Project)},
+		{Name: "BUILDKIT_ADDR", Value: buildkitHost},
 		{Name: "DRY_RUN", Value: dryRun},
 		{Name: "CACHE_EXPORT", Value: cacheExport(b)},
 		{Name: "CACHE_MOUNT_NS", Value: cacheMountNamespace(b)},

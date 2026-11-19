@@ -31,7 +31,7 @@ func TestCredentialLiteralLegacyDockerfileBuildArg(t *testing.T) {
 		"APP_NAME":       "shop",
 		"OPENAI_API_KEY": "sk-live", // old name rule: still withheld entirely
 	}, Image: &kube.KusoImage{Repository: "registry.local/a/b", Tag: "sha"}}}
-	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost)
 	env := envMap(c.Env)
 	if env["KUSO_BUILDENV_KEYS"] != "APP_NAME DATABASE_URL" {
 		t.Errorf("KUSO_BUILDENV_KEYS = %q, want DATABASE_URL kept on the build-arg path", env["KUSO_BUILDENV_KEYS"])
@@ -74,7 +74,7 @@ func TestCredentialLiteralRoutedAsBuildSecret(t *testing.T) {
 	}, Image: &kube.KusoImage{Repository: "registry.local/a/b", Tag: "sha"}, StrictBuildSecrets: true}}
 
 	for _, strategy := range []string{"dockerfile", "nixpacks"} {
-		env := envMap(renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}).Env)
+		env := envMap(renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}, testBuildkitHost).Env)
 		if strategy == "dockerfile" && env["KUSO_BUILDENV_NOARG_SECRET_KEYS"] != "DATABASE_URL" {
 			t.Errorf("strict dockerfile must warn that ARG DATABASE_URL is now empty, got %q", env["KUSO_BUILDENV_NOARG_SECRET_KEYS"])
 		}

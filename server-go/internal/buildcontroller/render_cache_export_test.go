@@ -15,7 +15,7 @@ import (
 // failure after the manifest push is a success only when the registry
 // serves the digest buildkit logged as pushed.
 func TestBuildScript_CacheExportFailureAfterPush(t *testing.T) {
-	script := renderBuildkitContainer(baseBuild(), "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	script := renderBuildkitContainer(baseBuild(), "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Args[0]
 	i := strings.Index(script, "{ buildctl \\")
 	if i < 0 {
 		t.Fatal("push leg not found in build script")

@@ -26,9 +26,9 @@
 //   - Cancel path (builds.Service.Cancel) still stamps done=true
 //     and deletes the Job. The reaper still sweeps helm-release
 //     secrets for any stragglers from the pre-controller path.
-//   - kuso-buildkitd Deployment + buildkit Service stay in
+//   - the kuso-buildkitd daemons + Service stay in
 //     deploy/buildkitd.yaml; this controller just renders the
-//     client Job pointing at it.
+//     client Job pointing at the project's daemon (buildkitHost).
 //
 // What's different:
 //   - operator/watches.yaml no longer lists KusoBuild. The
@@ -62,6 +62,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	"kuso/server/internal/buildkit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 )
@@ -741,11 +742,47 @@ func (s *Service) ensureJob(ctx context.Context, u *unstructured.Unstructured, b
 	if _, err := s.Kube.Clientset.CoreV1().ServiceAccounts(ns).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create sa: %w", err)
 	}
-	job := renderJob(name, ns, b, ownerRef)
+	job := renderJob(name, ns, b, ownerRef, s.buildkitHost(ctx, b.Spec.Project))
 	if _, err := s.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create job: %w", err)
 	}
 	return nil
+}
+
+// buildkitHost picks the daemon for a project's build from the Ready
+// kuso-buildkitd pods in the home namespace (pod cache, else a live
+// list). Unknown → the daemons' Service.
+func (s *Service) buildkitHost(ctx context.Context, project string) string {
+	home := s.Namespace
+	if home == "" {
+		home = "kuso"
+	}
+	sel, err := labels.Parse(buildkit.PodLabel)
+	if err != nil {
+		return buildkit.DefaultHost
+	}
+	var pods []*corev1.Pod
+	if cached, ok := s.Cache.ListPodsByLabel(sel); ok {
+		for _, p := range cached {
+			if p.Namespace == home {
+				pods = append(pods, p)
+			}
+		}
+	} else {
+		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		list, err := s.Kube.Clientset.CoreV1().Pods(home).List(lctx, metav1.ListOptions{LabelSelector: buildkit.PodLabel})
+		cancel()
+		if err != nil {
+			if s.Logger != nil {
+				s.Logger.Warn("buildcontroller: list build daemons; using the Service", "err", err)
+			}
+			return buildkit.DefaultHost
+		}
+		for i := range list.Items {
+			pods = append(pods, &list.Items[i])
+		}
+	}
+	return buildkit.HostFor(project, buildkit.ReadyDaemons(pods))
 }
 
 // decodeBuild turns an unstructured CR into our typed KusoBuild.

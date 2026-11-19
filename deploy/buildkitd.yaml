@@ -1,8 +1,20 @@
-# Long-lived BuildKit daemon. One per kuso install — every
-# kusobuild Job is a thin `buildctl` client that connects here via
-# TCP. This is the Coolify-style architecture: the daemon survives
-# across builds, keeps a hot in-memory + on-disk cache, and reuses
-# overlay snapshots between unrelated builds.
+# Long-lived BuildKit daemons, one per build node. Every kusobuild Job is
+# a thin `buildctl` client that connects to ONE of them over TCP: kuso-
+# server picks it per project (rendezvous hash over the Ready daemons'
+# node names, internal/buildkit), so a project's builds always land on the
+# same node and keep that node's layer cache warm, and builds of projects
+# homed on different nodes never compete for the same CPU.
+#
+# Build nodes: every node WITHOUT the control-plane role, unless labelled
+#   kubectl label node <n> kuso.sislelabs.com/build-daemon=off
+# (e.g. to keep builds away from a node that carries a busy production
+# app). A control-plane node builds only when labelled
+# kuso.sislelabs.com/build-daemon=on, which install.sh does on a single-node
+# install. Once a worker joins, take it off again:
+#   kubectl label node <server> kuso.sislelabs.com/build-daemon-
+# Changing the build-node set moves only the projects homed on the node
+# that joined or left; their next build is cache-cold (the registry cache
+# import covers most of it).
 #
 # Why this beats per-Job rootless buildkit:
 #   - First build is no longer cold. Subsequent builds get
@@ -36,27 +48,25 @@
 # the first time no build is in flight (review ISO-1: RUN steps share this
 # pod's netns and reach 127.0.0.1:1234, so only mTLS keeps them off the
 # daemon). Build Jobs try TLS first and fall back to plaintext.
-# The updater does not roll this Deployment: a daemon older than the tls
+# The updater does not roll this DaemonSet: a daemon older than the tls
 # volume below stays unauthenticated until this file is applied by hand
 #   kubectl apply -f deploy/buildkitd.yaml
 # Opt out / revert: kuso api POST system/buildkit-tls -f enabled=false
 # (recorded as the operator's choice; kuso-server won't turn it back on).
 # While it is off, `kuso health` lists it.
 #
-# State: persistent /var/lib/buildkit so a daemon restart doesn't
-# nuke every cache. 20Gi is generous for a 4-project install;
-# tune via KUSO_BUILDKITD_STATE_SIZE if needed.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: kuso-buildkitd-state
-  namespace: kuso
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 20Gi
----
+# State: /var/lib/kuso/buildkit on each node's own disk (hostPath), so
+# nothing pins a daemon to a node the way the old RWO PVC did and a
+# daemon restart keeps its cache. GC in kuso-buildkitd-config bounds it.
+#
+# Migrating from the single Deployment (one time, over ssh; the updater
+# doesn't apply this file):
+#   kubectl apply -f deploy/buildkitd.yaml
+#   kubectl -n kuso rollout status daemonset/kuso-buildkitd
+#   kubectl -n kuso delete deployment kuso-buildkitd   # once no build is on it
+#   kubectl -n kuso delete pvc kuso-buildkitd-state    # its cache, now unused
+# Until the Deployment is gone its pod is just one more daemon to
+# kuso-server (same labels), so builds keep working throughout.
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,6 +75,8 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-buildkitd
 spec:
+  # Fallback only: build Jobs dial their project's daemon pod directly.
+  # A build sent here (pod cache not synced yet) still works, on any daemon.
   type: ClusterIP
   selector:
     app.kubernetes.io/name: kuso-buildkitd
@@ -74,61 +86,55 @@ spec:
       targetPort: 1234
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: kuso-buildkitd
   namespace: kuso
   labels:
     app.kubernetes.io/name: kuso-buildkitd
 spec:
-  replicas: 1
-  # Recreate (not RollingUpdate) because the daemon owns a PVC
-  # with overlayfs mounts. A second instance trying to mount the
-  # same store mid-handover would fight the existing one. The
-  # daemon is the only writer; a brief gap during upgrades is
-  # cheaper than a corrupted snapshot store.
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: kuso-buildkitd
+  # maxSurge 0 (the default): the old pod is gone before the new one
+  # starts on the same node, so two daemons never share the hostPath
+  # snapshot store.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
   template:
     metadata:
       labels:
         app.kubernetes.io/name: kuso-buildkitd
     spec:
-      # buildkitd is platform infrastructure, not a tenant workload,
-      # but it is the single greediest process on the cluster. Both
-      # halves of that matter:
-      #
-      # priorityClassName gives it the same standing as the other
-      # kuso-* control-plane pods so a tenant scale-up cannot evict
-      # the build daemon mid-build. Every other platform manifest
-      # (postgres, server-go, activator) already sets this; buildkitd
-      # was the lone omission.
-      #
-      # The anti-affinity steers it OFF the control-plane node. A build
-      # is a CPU and IO storm, and on k3s the control-plane node also
-      # holds the SQLite datastore (state.db) on local disk — so a
-      # build sharing that node starves the API server and every
-      # tenant's health probes along with it, not just its own project.
-      #
-      # NOTE: kuso-buildkitd-state is RWO on local-path, so the PV
-      # carries a hard nodeAffinity to whichever node first bound it.
-      # This rule only takes effect on a volume bound to a non-control-
-      # plane node; if you are moving an existing install, the PVC must
-      # be recreated or the pod will go Pending against the old PV.
-      # Preferred, not required: on a single-node install the control
-      # plane is the only node and a hard rule leaves builds Pending.
+      # priorityClassName gives the daemons the same standing as the
+      # other kuso-* control-plane pods so a tenant scale-up cannot evict
+      # one mid-build.
       priorityClassName: kuso-platform
+      # A dedicated build node (docs/BUILD_NODE_POOL.md) is tainted so
+      # tenant apps stay off it; its daemon must still run there.
+      tolerations:
+        - key: kuso.sislelabs.com/build
+          operator: Exists
+          effect: NoSchedule
+      # Off the control plane by default: a build is a CPU and IO storm,
+      # and on k3s the control-plane node also holds the datastore, so a
+      # build there starves the API server and every tenant's probes.
       affinity:
         nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
                   - key: node-role.kubernetes.io/control-plane
                     operator: DoesNotExist
+                  - key: kuso.sislelabs.com/build-daemon
+                    operator: NotIn
+                    values: ["off"]
+              - matchExpressions:
+                  - key: kuso.sislelabs.com/build-daemon
+                    operator: In
+                    values: ["on"]
       containers:
         - name: buildkitd
           image: moby/buildkit:v0.34.2
@@ -168,8 +174,9 @@ spec:
               memory: 6Gi
       volumes:
         - name: state
-          persistentVolumeClaim:
-            claimName: kuso-buildkitd-state
+          hostPath:
+            path: /var/lib/kuso/buildkit
+            type: DirectoryOrCreate
         - name: config
           configMap:
             name: kuso-buildkitd-config
@@ -205,10 +212,9 @@ data:
     # the cgroup permits and spend the difference in CFS throttling.
     [worker.oci]
       max-parallelism = 3
-      # Size GC to the 20Gi state PVC (SCL-3). Without these the
-      # defaults are computed from the HOST filesystem the local-path PV
-      # lives on, so the cache could grow past the PVC's nominal size and
-      # fill the node disk. Raise both with the PVC.
+      # Bound the cache on each node's disk (SCL-3). Without these the
+      # defaults are a share of the whole host filesystem, so the cache
+      # could crowd out the node's images and logs.
       gc = true
       reservedSpace = "2GB"
       maxUsedSpace = "16GB"

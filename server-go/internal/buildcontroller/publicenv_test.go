@@ -44,7 +44,7 @@ func TestPublicEnvOnlyStillReachesEveryStrategy(t *testing.T) {
 	}}
 	const want = "__KUSO_RUNTIME_VITE_API_URL__"
 	for name, envs := range map[string][]corev1.EnvVar{
-		"dockerfile buildkit": renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Env,
+		"dockerfile buildkit": renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Env,
 		"nixpacks-plan":       renderNixpacksPlanContainer(b).Env,
 		"static-plan":         renderStaticPlanContainer(b).Env,
 	} {

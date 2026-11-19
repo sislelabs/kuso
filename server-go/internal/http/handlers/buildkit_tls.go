@@ -59,7 +59,7 @@ func (h *BuildkitTLSHandler) Set(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if err := h.Store.SetEnabled(ctx, *body.Enabled); err != nil {
-		if errors.Is(err, buildkittls.ErrDaemonPredatesTLS) {
+		if errors.Is(err, buildkittls.ErrDaemonPredatesTLS) || errors.Is(err, buildkittls.ErrNoDaemon) {
 			writeErr(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -76,6 +76,6 @@ func (h *BuildkitTLSHandler) Set(w http.ResponseWriter, r *http.Request) {
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": *body.Enabled,
-		"note":    "kuso-buildkitd is restarting; builds running right now are interrupted and can be re-triggered",
+		"note":    "the kuso-buildkitd daemons are restarting; builds running right now are interrupted and can be re-triggered",
 	})
 }

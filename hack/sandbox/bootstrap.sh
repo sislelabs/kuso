@@ -25,7 +25,8 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # an operator would look at next instead of a bare timeout.
 wait_rollout() {
   local ns="$1" name="$2" timeout="$3"
-  if kubectl -n "$ns" rollout status "deployment/${name}" --timeout="$timeout" >/dev/null 2>&1; then
+  [[ "$name" == */* ]] || name="deployment/${name}"
+  if kubectl -n "$ns" rollout status "$name" --timeout="$timeout" >/dev/null 2>&1; then
     return 0
   fi
   echo "---- ${ns}/${name} did not become ready within ${timeout} ----" >&2
@@ -97,13 +98,10 @@ manifest registry | kubectl apply -f - >/dev/null
 manifest vulnscan-egress | kubectl apply -f - >/dev/null
 
 log "buildkitd"
+# Build daemons skip control-plane nodes unless labelled =on; the sandbox
+# has only the one node.
+kubectl label nodes --all kuso.sislelabs.com/build-daemon=on --overwrite >/dev/null
 manifest buildkitd | kubectl apply -f - >/dev/null
-# The manifest keeps buildkitd off control-plane nodes; the sandbox has
-# only the one node.
-if [[ -n "$(kubectl -n kuso get deployment kuso-buildkitd -o jsonpath='{.spec.template.spec.affinity}')" ]]; then
-  kubectl -n kuso patch deployment kuso-buildkitd --type=json \
-    -p '[{"op":"remove","path":"/spec/template/spec/affinity"}]' >/dev/null
-fi
 
 log "postgres"
 kubectl apply -f "${REPO}/hack/sandbox/postgres.yaml" >/dev/null
@@ -235,7 +233,7 @@ EOF
 fi
 
 wait_rollout kuso kuso-registry 180s
-wait_rollout kuso kuso-buildkitd 300s
+wait_rollout kuso daemonset/kuso-buildkitd 300s
 wait_rollout kuso kuso-server 300s
 wait_rollout kuso kuso-activator 180s
 

@@ -161,7 +161,7 @@ func TestPlatformUndeliveredPageRetries(t *testing.T) {
 }
 
 // A core component scaled to zero is down unless annotated as deliberate;
-// a non-core one (buildkitd, replaced by shards) is skipped.
+// a non-core target with no pods (an old buildkitd Deployment at 0) is skipped.
 func TestPlatformCoreScaledToZero(t *testing.T) {
 	ctx := context.Background()
 	for _, annotated := range []bool{false, true} {

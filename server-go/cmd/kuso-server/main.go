@@ -736,7 +736,7 @@ func main() {
 		// changes what a fresh install sees on first boot.
 		//
 		// Sized to buildkitd capacity, see adaptiveBuildCap.
-		defaultBuildCap := adaptiveBuildCap(ctx, kc, logger)
+		defaultBuildCap := adaptiveBuildCap(ctx, kc, *namespace, logger)
 		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", defaultBuildCap)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
 		buildSvc.Settings = buildsSettingsAdapter{db: database}
@@ -2246,8 +2246,8 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 // that are days/hours/seconds with a sane default.
 // adaptiveBuildCap returns the automatic cluster-wide concurrent-build
 // cap: buildkit.DefaultBuildCap over the Ready nodes' allocatable CPU
-// and the configured buildkitd topology. Every build runs inside the
-// shared daemon(s), so daemon capacity (daemons × max-parallelism × 2)
+// and the Ready build daemons (one per eligible node). Every build runs
+// inside a daemon, so daemon capacity (daemons × max-parallelism × 2)
 // is the ceiling; cluster CPU only lowers it on small boxes. The old
 // CPU-only formula admitted up to 8 (unclamped: 40 on 20 nodes) builds
 // into one 4-CPU daemon with 3 vertex slots.
@@ -2255,10 +2255,24 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 // Best-effort: a node list error falls back to the daemon-capacity cap.
 // An admin's explicit build.maxConcurrent / KUSO_BUILD_MAX_CONCURRENT
 // still wins.
-func adaptiveBuildCap(ctx context.Context, kc *kube.Client, logger *slog.Logger) int {
-	daemons, par := buildkit.Daemons(), buildkit.MaxParallelism()
+func adaptiveBuildCap(ctx context.Context, kc *kube.Client, home string, logger *slog.Logger) int {
+	daemons, par := 1, buildkit.MaxParallelism()
 	totalMilli := int64(0)
 	readyCount := 0
+	if kc != nil && kc.Clientset != nil {
+		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pods, err := kc.Clientset.CoreV1().Pods(home).List(lctx, metav1.ListOptions{LabelSelector: buildkit.PodLabel})
+		cancel()
+		if err != nil {
+			logger.Warn("adaptive build cap: list build daemons", "err", err)
+		} else {
+			ptrs := make([]*corev1.Pod, len(pods.Items))
+			for i := range pods.Items {
+				ptrs[i] = &pods.Items[i]
+			}
+			daemons = max(1, len(buildkit.ReadyDaemons(ptrs)))
+		}
+	}
 	if kc != nil && kc.Clientset != nil {
 		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})

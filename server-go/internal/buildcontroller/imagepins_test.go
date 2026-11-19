@@ -38,7 +38,7 @@ func TestPinnedImageReachesBuildPod(t *testing.T) {
 	if got := renderStaticPlanContainer(b); envValue(got.Env, "RUNTIME_IMAGE") != "example.com/my-nginx:1" {
 		t.Errorf("user runtime image rewritten: %q", envValue(got.Env, "RUNTIME_IMAGE"))
 	}
-	if got := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Image; got != defaultBuildkitImage+"@"+d {
+	if got := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Image; got != defaultBuildkitImage+"@"+d {
 		t.Errorf("buildkit container image = %q", got)
 	}
 }

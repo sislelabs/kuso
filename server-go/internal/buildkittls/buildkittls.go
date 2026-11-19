@@ -44,8 +44,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/buildkit"
 	"kuso/server/internal/kube"
 )
 
@@ -211,15 +211,12 @@ func (s *Store) EnsureClientSecret(ctx context.Context, ns string) (string, erro
 	return ClientSecretName, nil
 }
 
-// ErrDaemonPredatesTLS: the live kuso-buildkitd Deployment doesn't mount
+// ErrDaemonPredatesTLS: a running kuso-buildkitd pod doesn't mount
 // kuso-buildkitd-tls, so its start.sh can't turn client auth on.
 var ErrDaemonPredatesTLS = errors.New("the running kuso-buildkitd predates mutual TLS; apply deploy/buildkitd.yaml from this release first")
 
-// daemonDeployment and shardStatefulSet are the daemons start.sh runs in.
-const (
-	daemonDeployment = "kuso-buildkitd"
-	shardStatefulSet = "kuso-buildkitd-shard"
-)
+// ErrNoDaemon: no kuso-buildkitd pod is running to switch.
+var ErrNoDaemon = errors.New("no kuso-buildkitd pod is running")
 
 // Enabled reports whether the daemon is set to require client
 // certificates. A missing Secret reads as false.
@@ -245,17 +242,47 @@ func (s *Store) SetEnabled(ctx context.Context, enabled bool) error {
 	return err
 }
 
-func (s *Store) daemonMountsSecret(ctx context.Context) error {
-	dep, err := s.Kube.Clientset.AppsV1().Deployments(s.ns()).Get(ctx, daemonDeployment, metav1.GetOptions{})
+// daemonPods lists the live build daemons (one per build node, or the
+// single Deployment's pod on an install that predates the DaemonSet).
+// Reading pods rather than the workload keeps this inside RBAC kuso-server
+// already holds on every install.
+func (s *Store) daemonPods(ctx context.Context) ([]corev1.Pod, error) {
+	list, err := s.Kube.Clientset.CoreV1().Pods(s.ns()).List(ctx, metav1.ListOptions{LabelSelector: buildkit.PodLabel})
 	if err != nil {
-		return fmt.Errorf("buildkit tls: read deployment %s: %w", daemonDeployment, err)
+		return nil, fmt.Errorf("buildkit tls: list daemon pods: %w", err)
 	}
-	for _, v := range dep.Spec.Template.Spec.Volumes {
-		if v.Secret != nil && v.Secret.SecretName == SecretName {
-			return nil
+	var out []corev1.Pod
+	for _, p := range list.Items {
+		if p.DeletionTimestamp == nil {
+			out = append(out, p)
 		}
 	}
-	return ErrDaemonPredatesTLS
+	return out, nil
+}
+
+func (s *Store) daemonMountsSecret(ctx context.Context) error {
+	pods, err := s.daemonPods(ctx)
+	if err != nil {
+		return err
+	}
+	if len(pods) == 0 {
+		return ErrNoDaemon
+	}
+	for _, p := range pods {
+		if !mountsSecret(p.Spec.Volumes) {
+			return fmt.Errorf("%w (pod %s)", ErrDaemonPredatesTLS, p.Name)
+		}
+	}
+	return nil
+}
+
+func mountsSecret(vols []corev1.Volume) bool {
+	for _, v := range vols {
+		if v.Secret != nil && v.Secret.SecretName == SecretName {
+			return true
+		}
+	}
+	return false
 }
 
 // set writes the switch and restarts the daemons. For an automatic
@@ -290,13 +317,17 @@ func (s *Store) set(ctx context.Context, enabled, operator bool) (changed bool, 
 		}
 		return false, fmt.Errorf("buildkit tls: update secret: %w", err)
 	}
-	apps := s.Kube.Clientset.AppsV1()
-	patch := fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{"kuso.sislelabs.com/restartedAt":%q}}}}}`, time.Now().UTC().Format(time.RFC3339))
-	if _, err := apps.Deployments(s.ns()).Patch(ctx, daemonDeployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return true, fmt.Errorf("buildkit tls: restart %s: %w", daemonDeployment, err)
+	// Deleting the pods restarts every daemon; their controller
+	// (DaemonSet, or the older single Deployment) recreates them and
+	// start.sh reads the new switch.
+	pods, err := s.daemonPods(ctx)
+	if err != nil {
+		return true, err
 	}
-	if _, err := apps.StatefulSets(s.ns()).Patch(ctx, shardStatefulSet, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return true, fmt.Errorf("buildkit tls: restart %s: %w", shardStatefulSet, err)
+	for _, p := range pods {
+		if err := s.Kube.Clientset.CoreV1().Pods(s.ns()).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return true, fmt.Errorf("buildkit tls: restart daemon %s: %w", p.Name, err)
+		}
 	}
 	return true, nil
 }

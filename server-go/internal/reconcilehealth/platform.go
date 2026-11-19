@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/buildkit"
 	"kuso/server/internal/buildkittls"
 	"kuso/server/internal/nodejoin"
 )
@@ -48,7 +49,7 @@ func (s *Scanner) platformIssues(ctx context.Context, ns string) []Issue {
 }
 
 func (s *Scanner) buildkitTLSIssue(ctx context.Context, ns string) (Issue, bool) {
-	if _, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, buildkitdDeploymentName, metav1.GetOptions{}); err != nil {
+	if pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: buildkit.PodLabel, Limit: 1}); err != nil || len(pods.Items) == 0 {
 		return Issue{}, false
 	}
 	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, buildkittls.SecretName, metav1.GetOptions{})
@@ -66,7 +67,7 @@ func (s *Scanner) buildkitTLSIssue(ctx context.Context, ns string) (Issue, bool)
 			"switched it off or the running daemon predates the tls volume. Until then user build code, " +
 			"such as a static buildCmd or a fork-PR preview build, can open its own buildkit session and write cache " +
 			"another project's build later reads.",
-		Fix:        "Turn on client certificates for kuso-buildkitd (restarts the daemon; running builds are interrupted)",
+		Fix:        "Turn on client certificates for kuso-buildkitd (restarts the daemons; running builds are interrupted)",
 		RunbookCmd: "kuso api POST system/buildkit-tls -f enabled=true",
 	}, true
 }

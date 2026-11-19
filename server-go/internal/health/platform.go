@@ -28,8 +28,7 @@ type PlatformTarget struct {
 	Selector   string
 	// Core: the cluster can't serve or recover without it, so a
 	// Deployment scaled to zero counts as down unless it carries
-	// IntentionallyOffAnnotation. Non-core targets at zero are skipped
-	// (buildkitd is scaled to 0 on purpose when shards replace it).
+	// IntentionallyOffAnnotation. Non-core targets at zero are skipped.
 	Core bool
 	// CNPGCluster names the CNPG Cluster that owns a selector-only
 	// target's pods: while that Cluster exists, zero pods means down
@@ -49,7 +48,11 @@ var platformTargets = []PlatformTarget{
 	{Component: "Traefik", Namespace: "traefik", Deployment: "traefik", Core: true},
 	{Component: "Traefik", Namespace: "kube-system", Deployment: "traefik", Core: true},
 	{Component: "kuso-server", Deployment: "kuso-server", Core: true},
-	{Component: "buildkitd", Deployment: "kuso-buildkitd"},
+	// One daemon per build node (DaemonSet). Builds route around a
+	// daemon that isn't Ready, so this pages when none is Ready or one
+	// crashloops; an install with every node opted out has no pods and
+	// is skipped.
+	{Component: "buildkitd", Selector: "app.kubernetes.io/name=kuso-buildkitd"},
 	{Component: "registry", Deployment: "kuso-registry", Core: true},
 	{Component: "activator", Deployment: "kuso-activator"},
 	{Component: "Prometheus", Deployment: "kuso-prometheus"},

@@ -10,15 +10,15 @@ build Jobs a node of their own.
 
 > **Where the compile actually runs.** For `dockerfile`, `nixpacks` and
 > `static` builds the build Job is a thin `buildctl` client; the compile
-> runs inside the shared `kuso-buildkitd` daemon (`deploy/buildkitd.yaml`).
-> A build node pool moves the Jobs, which matters for `buildpacks` builds
-> (they compile in-pod) and for clone/cache steps. It does not move the
-> buildkitd load. buildkitd has its own placement: a preferred node
-> affinity steers it off the control-plane node (preferred, so a
-> single-node install still runs it), and its
-> `kuso-buildkitd-state` PVC is RWO on local-path, so it stays on
-> whichever node first bound that volume. Moving it means recreating the
-> PVC.
+> runs inside a `kuso-buildkitd` daemon (`deploy/buildkitd.yaml`), one per
+> build node: every non-control-plane node unless labelled
+> `kuso.sislelabs.com/build-daemon=off` (a control-plane node only with
+> `=on`). Each project's builds stick to one daemon, so the compile load of
+> projects homed on different nodes is isolated. A build node pool moves
+> the Jobs, which matters for `buildpacks` builds (they compile in-pod) and
+> for clone/cache steps. To also keep the compile load off app nodes, label
+> those nodes `build-daemon=off` so only the pool's nodes run daemons (the
+> daemons tolerate the `kuso.sislelabs.com/build` taint).
 
 ## How it works
 

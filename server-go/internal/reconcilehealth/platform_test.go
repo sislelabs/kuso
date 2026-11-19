@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -23,7 +22,8 @@ func platformKinds(s *Scanner) map[Kind]Severity {
 // OPS-4/5/8: settings an upgrade leaves unsafe are reported (not paged)
 // until the operator switches them, and drop out once they are.
 func TestPlatformPosture(t *testing.T) {
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: buildkitdDeploymentName, Namespace: "kuso"}}
+	dep := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "kuso-buildkitd-x7k2p", Namespace: "kuso",
+		Labels: map[string]string{"app.kubernetes.io/name": "kuso-buildkitd"}}}
 	tlsOff := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kuso-buildkitd-tls", Namespace: "kuso"},
 		Data: map[string][]byte{"enabled": []byte("false")}}
 

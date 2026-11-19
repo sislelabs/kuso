@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -131,9 +130,14 @@ func TestEnsureClientSecret_MirrorsClientPairOnly(t *testing.T) {
 func TestSetEnabled(t *testing.T) {
 	ctx := context.Background()
 	s, cs := newStore()
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: daemonDeployment, Namespace: "kuso"}}
-	if _, err := cs.AppsV1().Deployments("kuso").Create(ctx, dep, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
+	if err := s.SetEnabled(ctx, true); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("no daemon: err = %v", err)
+	}
+	pods := []*corev1.Pod{daemonPod("kuso-buildkitd-a"), daemonPod("kuso-buildkitd-b")}
+	for _, p := range pods {
+		if _, err := cs.CoreV1().Pods("kuso").Create(ctx, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.SetEnabled(ctx, true); !errors.Is(err, ErrDaemonPredatesTLS) {
 		t.Fatalf("old daemon: err = %v", err)
@@ -142,12 +146,7 @@ func TestSetEnabled(t *testing.T) {
 		t.Fatal("enabled on a daemon that can't serve TLS")
 	}
 
-	dep.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{
-		Secret: &corev1.SecretVolumeSource{SecretName: SecretName},
-	}}}
-	if _, err := cs.AppsV1().Deployments("kuso").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
+	mountTLS(t, cs, pods)
 	if err := s.SetEnabled(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -158,9 +157,8 @@ func TestSetEnabled(t *testing.T) {
 	if !complete(sec.Data) {
 		t.Fatal("enabled without a full certificate set")
 	}
-	live, _ := cs.AppsV1().Deployments("kuso").Get(ctx, daemonDeployment, metav1.GetOptions{})
-	if live.Spec.Template.Annotations["kuso.sislelabs.com/restartedAt"] == "" {
-		t.Fatal("daemon not restarted")
+	if left, _ := cs.CoreV1().Pods("kuso").List(ctx, metav1.ListOptions{}); len(left.Items) != 0 {
+		t.Fatalf("daemons not restarted: %d pods left", len(left.Items))
 	}
 }
 
@@ -171,22 +169,23 @@ func TestSetEnabled(t *testing.T) {
 func TestAutoEnable(t *testing.T) {
 	ctx := context.Background()
 	s, cs := newStore()
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: daemonDeployment, Namespace: "kuso"}}
-	if _, err := cs.AppsV1().Deployments("kuso").Create(ctx, dep, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
+	pods := []*corev1.Pod{daemonPod("kuso-buildkitd-a"), daemonPod("kuso-buildkitd-b")}
+	for _, p := range pods {
+		if _, err := cs.CoreV1().Pods("kuso").Create(ctx, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	idle := func(context.Context) (bool, error) { return false, nil }
 	busy := func(context.Context) (bool, error) { return true, nil }
-	// Counted from the client's actions: the restartedAt annotation has
-	// one-second granularity, so a second restart could leave it unchanged.
+	// A restart deletes every daemon pod: count restarts as delete rounds.
 	restarts := func() int {
 		n := 0
 		for _, a := range cs.Actions() {
-			if a.GetVerb() == "patch" && a.GetResource().Resource == "deployments" {
+			if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
 				n++
 			}
 		}
-		return n
+		return n / len(pods)
 	}
 
 	if done, _, err := s.AutoEnable(ctx, idle); done || !errors.Is(err, ErrDaemonPredatesTLS) {
@@ -196,12 +195,7 @@ func TestAutoEnable(t *testing.T) {
 		t.Fatal("enabled on a daemon that can't serve TLS")
 	}
 
-	dep.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{
-		Secret: &corev1.SecretVolumeSource{SecretName: SecretName},
-	}}}
-	if _, err := cs.AppsV1().Deployments("kuso").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
+	mountTLS(t, cs, pods)
 	if done, flipped, err := s.AutoEnable(ctx, busy); done || flipped || err != nil {
 		t.Fatalf("builds in flight: done=%v flipped=%v err=%v", done, flipped, err)
 	}
@@ -218,6 +212,12 @@ func TestAutoEnable(t *testing.T) {
 	if n := restarts(); n != 1 {
 		t.Fatalf("daemon restarts = %d, want 1", n)
 	}
+	for _, p := range pods { // the DaemonSet recreates them
+		p.ResourceVersion = ""
+		if _, err := cs.CoreV1().Pods("kuso").Create(ctx, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if done, flipped, err := s.AutoEnable(ctx, idle); !done || flipped || err != nil || restarts() != 1 {
 		t.Fatalf("second call: done=%v flipped=%v err=%v restarts=%d", done, flipped, err, restarts())
 	}
@@ -233,4 +233,33 @@ func TestAutoEnable(t *testing.T) {
 	if on, _ := s.Enabled(ctx); on || called {
 		t.Fatalf("operator's off overridden: on=%v busy consulted=%v", on, called)
 	}
+}
+
+func daemonPod(name string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso",
+		Labels: map[string]string{"app.kubernetes.io/name": "kuso-buildkitd"}}}
+}
+
+// mountTLS gives every daemon pod the tls volume, as a current
+// deploy/buildkitd.yaml does. Until the LAST one has it, enabling is refused.
+func mountTLS(t *testing.T, cs *fake.Clientset, pods []*corev1.Pod) {
+	t.Helper()
+	ctx := context.Background()
+	for i, p := range pods {
+		p.Spec.Volumes = []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: SecretName},
+		}}}
+		if _, err := cs.CoreV1().Pods("kuso").Update(ctx, p, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if i < len(pods)-1 {
+			if err := daemonsReady(ctx, cs); !errors.Is(err, ErrDaemonPredatesTLS) {
+				t.Fatalf("one daemon still without the tls volume: err = %v", err)
+			}
+		}
+	}
+}
+
+func daemonsReady(ctx context.Context, cs *fake.Clientset) error {
+	return (&Store{Kube: &kube.Client{Clientset: cs}, Namespace: "kuso"}).daemonMountsSecret(ctx)
 }

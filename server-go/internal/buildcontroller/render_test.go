@@ -76,7 +76,7 @@ func TestRenderServiceAccount(t *testing.T) {
 func TestRenderJobBasic(t *testing.T) {
 	b := baseBuild()
 	owner := metav1.OwnerReference{Name: "b1", UID: "uid-1"}
-	job := renderJob("b1", "kuso-alpha", b, owner)
+	job := renderJob("b1", "kuso-alpha", b, owner, testBuildkitHost)
 
 	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 0 {
 		t.Error("backoffLimit must be 0 (no retry)")
@@ -121,7 +121,7 @@ func TestRenderJobNixpacksWithCache(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Strategy = "nixpacks"
 	b.Spec.Cache = &kube.KusoBuildCache{PVCName: "alpha-cache"}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	pod := job.Spec.Template.Spec
 	inits := initContainerNames(pod)
 	want := []string{"cache-init", "clone", "env-detect", "nixpacks-plan"}
@@ -140,7 +140,7 @@ func TestRenderJobStatic(t *testing.T) {
 		BuildCmd:  "npm run build",
 		OutputDir: "dist",
 	}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	pod := job.Spec.Template.Spec
 	inits := initContainerNames(pod)
 	want := []string{"clone", "env-detect", "static-plan"}
@@ -163,7 +163,7 @@ func TestRenderJobStatic(t *testing.T) {
 func TestRenderJobBuildpacks(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Strategy = "buildpacks"
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	pod := job.Spec.Template.Spec
 	// Primary container should be `buildpacks` (CNB lifecycle creator).
 	if len(pod.Containers) != 1 || pod.Containers[0].Name != "buildpacks" {
@@ -181,7 +181,7 @@ func TestRenderJobBuildpacks(t *testing.T) {
 func TestRenderJobAuthSecretMount(t *testing.T) {
 	b := baseBuild()
 	b.Spec.Auth = &kube.KusoBuildAuth{SecretName: "ghcr-pull", Registry: "ghcr.io"}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	if !volumeExists(job.Spec.Template.Spec, "docker-config") {
 		t.Error("docker-config volume missing under non-buildpacks strategy")
 	}
@@ -202,7 +202,7 @@ func TestRenderJobBuildpacksHoldsNoCredentials(t *testing.T) {
 	b.Spec.Strategy = "buildpacks"
 	b.Spec.Auth = &kube.KusoBuildAuth{SecretName: "ghcr-pull"}
 	b.Spec.Repo.URL = "https://gitlab.com/owner/private.git"
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	if volumeExists(job.Spec.Template.Spec, "docker-config") {
 		t.Error("buildpacks strategy must not mount docker-config")
 	}
@@ -222,7 +222,7 @@ func TestRenderJobBuildpacksHoldsNoCredentials(t *testing.T) {
 
 func TestRenderJobLabelsRoundTrip(t *testing.T) {
 	b := baseBuild()
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 	want := map[string]string{
 		"app.kubernetes.io/name":       "kusobuild",
 		"app.kubernetes.io/component":  "kusobuild",
@@ -488,7 +488,7 @@ func TestBuildkitContainerSecretsNeverBuildArgs(t *testing.T) {
 		},
 		Image: &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost)
 
 	var keys, secretKeys string
 	for _, e := range c.Env {
@@ -537,7 +537,7 @@ func TestBuildkitNonDockerfileStrategiesWithholdSecrets(t *testing.T) {
 			},
 			Image: &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 		}}
-		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}, testBuildkitHost)
 		for _, e := range c.Env {
 			if e.Name == "KUSO_BE_DATABASE_URL" || e.Name == "KUSO_BUILDENV_SECRET_KEYS" {
 				t.Errorf("%s: secret env %s must not be mounted", strategy, e.Name)
@@ -568,7 +568,7 @@ func TestBuildkitWarnsOnWithheldSecrets(t *testing.T) {
 			BuildEnv: secretEnv,
 			Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 		}}
-		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+		c := renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}, testBuildkitHost)
 		var withheld string
 		for _, e := range c.Env {
 			if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
@@ -591,7 +591,7 @@ func TestBuildkitWarnsOnWithheldSecrets(t *testing.T) {
 		BuildEnv: secretEnv,
 		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	for _, e := range renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}).Env {
+	for _, e := range renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Env {
 		if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
 			t.Errorf("dockerfile: KUSO_BUILDENV_WITHHELD_KEYS present (%q) — dockerfile secrets are forwarded, not withheld", e.Value)
 		}
@@ -604,7 +604,7 @@ func TestBuildkitWarnsOnWithheldSecrets(t *testing.T) {
 		BuildEnv: map[string]string{"NEXT_PUBLIC_APP_URL": "https://x.example.com"},
 		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	for _, e := range renderBuildkitContainer(bNone, "nixpacks", corev1.ResourceRequirements{}).Env {
+	for _, e := range renderBuildkitContainer(bNone, "nixpacks", corev1.ResourceRequirements{}, testBuildkitHost).Env {
 		if e.Name == "KUSO_BUILDENV_WITHHELD_KEYS" {
 			t.Errorf("no-secret build: KUSO_BUILDENV_WITHHELD_KEYS present (%q), want absent", e.Value)
 		}
@@ -613,7 +613,7 @@ func TestBuildkitWarnsOnWithheldSecrets(t *testing.T) {
 	// The script itself must carry both warning blocks: the build-arg→
 	// secret-mount migration hint (dockerfile) and the withheld-at-build-
 	// time explanation (nixpacks/static).
-	script := renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	script := renderBuildkitContainer(bDf, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Args[0]
 	for _, want := range []string{
 		"KUSO_BUILDENV_SECRET_KEYS:-",
 		"KUSO_BUILDENV_WITHHELD_KEYS:-",
@@ -668,7 +668,7 @@ func TestBuildkitContainerInjectsBuildArgs(t *testing.T) {
 		BuildEnv: map[string]string{"DATABASE_URL": "postgres://x", "STRIPE_SECRET_KEY": "sk_test_x"},
 		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost)
 
 	// The KUSO_BE_* values must be present as container env (kubelet
 	// escapes them; the script reads them via printenv).
@@ -800,7 +800,7 @@ func TestBuildkitContainerInjectsBuildArgsChannel(t *testing.T) {
 		BuildArgs: map[string]string{"APP_VERSION": "1.4.2"},
 		Image:     &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost)
 	var saw bool
 	for _, e := range c.Env {
 		if e.Name == "KUSO_BA_APP_VERSION" && e.Value == "1.4.2" {
@@ -864,7 +864,7 @@ func TestBuildArgsReservedKeyGuarded(t *testing.T) {
 		BuildArgs: map[string]string{"NODE_ENV": "production", "APP_VERSION": "1.0"},
 		Image:     &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
 	}}
-	dfScript := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}).Args[0]
+	dfScript := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{}, testBuildkitHost).Args[0]
 	// Locate the KUSO_BUILDARG loop and confirm a RESERVED guard precedes the
 	// build-arg emission within it.
 	idx := strings.Index(dfScript, "for k in $KUSO_BUILDARG_KEYS")
@@ -906,7 +906,7 @@ func TestBuildArgsRoundTrip(t *testing.T) {
 		if strategy == "nixpacks" {
 			c = renderNixpacksPlanContainer(b)
 		} else {
-			c = renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{})
+			c = renderBuildkitContainer(b, strategy, corev1.ResourceRequirements{}, testBuildkitHost)
 		}
 		var val string
 		var keys string
@@ -979,7 +979,7 @@ func TestRenderJobPrivateRepoCloneAuth(t *testing.T) {
 			if tc.repo != nil {
 				b.Spec.Repo = tc.repo
 			}
-			job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"})
+			job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
 			clone := findInit(job.Spec.Template.Spec, "clone")
 			if clone == nil {
 				t.Fatal("clone missing")
@@ -1014,3 +1014,5 @@ func TestRenderJobPrivateRepoCloneAuth(t *testing.T) {
 		})
 	}
 }
+
+const testBuildkitHost = "tcp://10.42.0.9:1234"
