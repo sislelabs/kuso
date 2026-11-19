@@ -70,7 +70,6 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   // would vanish before anyone reads it.
   const [warned, setWarned] = useState<EnvGroupSummary | null>(null);
 
-  // Default the addon-policy map whenever the addon list loads.
   const addonShorts = useMemo(() => {
     const list = addons.data ?? [];
     const out: { short: string; kind: string }[] = [];
@@ -85,24 +84,38 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     return out;
   }, [addons.data, project]);
 
+  // The form resets only when the dialog opens; an addon refetch while
+  // it's open only fills in defaults for addons it hasn't seen.
   useEffect(() => {
     if (!open) return;
     setName("");
     setScope("project");
     setInheritShared(true);
     setWarned(null);
-    // Seed defaults on each open. Stateful kinds default to fresh,
-    // others to shared. Users can flip any of them inline.
-    const def: Record<string, AddonPolicy> = {};
-    for (const a of addonShorts) {
-      def[a.short] = defaultPolicyForKind(a.kind);
-    }
-    setPolicy(def);
+    setPolicy({});
+  }, [open]);
+
+  // Stateful kinds default to fresh, others to shared. Users can flip any
+  // of them inline.
+  useEffect(() => {
+    if (!open) return;
+    setPolicy((prev) => {
+      const missing = addonShorts.filter((a) => !(a.short in prev));
+      if (missing.length === 0) return prev;
+      const next = { ...prev };
+      for (const a of missing) next[a.short] = defaultPolicyForKind(a.kind);
+      return next;
+    });
   }, [open, addonShorts]);
 
   const create = useMutation({
     mutationFn: () =>
-      createEnvGroup(project, { name, addonPolicy: policy, sharedKeys: inheritShared ? "inherit" : "none" }),
+      createEnvGroup(project, {
+        name,
+        // Drop addons deleted since the dialog opened.
+        addonPolicy: Object.fromEntries(addonShorts.filter((a) => a.short in policy).map((a) => [a.short, policy[a.short]])),
+        sharedKeys: inheritShared ? "inherit" : "none",
+      }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
