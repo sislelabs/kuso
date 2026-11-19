@@ -45,7 +45,6 @@ type Features struct {
 	ConsoleEnabled   bool
 	AuditEnabled     bool
 	AdminDisabled    bool
-	LocalAuth        bool
 	GithubAuth       bool
 	OAuth2Auth       bool
 }
@@ -89,7 +88,6 @@ func featuresFromEnv() Features {
 		ConsoleEnabled:   os.Getenv("KUSO_CONSOLE_ENABLED") == "true",
 		AuditEnabled:     os.Getenv("KUSO_AUDIT_ENABLED") != "false",
 		AdminDisabled:    os.Getenv("KUSO_ADMIN_DISABLED") == "true",
-		LocalAuth:        true,
 		GithubAuth:       githubID != "" && githubSecret != "" && githubCallback != "",
 		OAuth2Auth: os.Getenv("OAUTH2_CLIENT_AUTH_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_TOKEN_URL") != "" &&

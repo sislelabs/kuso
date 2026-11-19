@@ -101,9 +101,6 @@ func TestFeaturesFromEnv(t *testing.T) {
 	t.Setenv("GITHUB_CLIENT_ORG", "org")
 	t.Setenv("KUSO_BUILD_REGISTRY", "registry.example.com")
 	feats := featuresFromEnv()
-	if !feats.LocalAuth {
-		t.Error("LocalAuth should be true (always-on for single-tenant)")
-	}
 	if !feats.GithubAuth {
 		t.Error("GithubAuth should be true when all GitHub envs are set")
 	}
