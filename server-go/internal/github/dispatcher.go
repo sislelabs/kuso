@@ -423,7 +423,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 				}
 				apply := func(ctx context.Context, parsed *spec.File) error {
 					if err := checkConfigRepoBinding(parsed, configBoundRepos(&proj, svcItems, repoFullName)); err != nil {
-						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warning")
+						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warn")
 						return err
 					}
 					note := ""
@@ -438,7 +438,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 						return err
 					}
 					if err := checkConfigExecChanges(plan, parsed, &proj, svcItems, repoFullName); err != nil {
-						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warning")
+						d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, "refused: "+err.Error(), "warn")
 						return err
 					}
 					// GitHub-driven applies never rotate generated
@@ -452,7 +452,11 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 					case res != nil && len(res.Errors) > 0:
 						msg += fmt.Sprintf("; %d step errors", len(res.Errors))
 					}
-					d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, msg, "info")
+					severity := "info"
+					if parsed.Prune {
+						severity = "warn" // a prune-capable push can delete services, addons and crons
+					}
+					d.auditConfigApply(ctx, proj.Name, p.Pusher.Name, headSHA, msg, severity)
 					return err
 				}
 				if err := applyConfigFromRepo(ctx, fetch, apply, owner, repoName, headSHA, proj.Name); err != nil {
