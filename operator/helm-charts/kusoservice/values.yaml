@@ -19,21 +19,6 @@ runtime: ""
 # user-overridable. Empty means "ask".
 port: 0
 
-# domains: optional per-service overrides. When empty, the server emits a
-# default `<service>.<project>.<baseDomain>` hostname to KusoEnvironment.
-domains: []
-# - host: api.example.com
-#   tls: true
-
-envVars: []
-# - name: LOG_LEVEL
-#   value: info
-# - name: STRIPE_SECRET_KEY
-#   valueFrom:
-#     secretKeyRef:
-#       name: my-secret
-#       key: stripe
-
 scale:
   min: 1
   max: 5

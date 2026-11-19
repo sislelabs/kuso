@@ -259,7 +259,7 @@ spec:
                 # was wrong and caused all backups to fail with DNS
                 # resolution errors.
                 - { name: POSTGRES_HOST, value: {{ printf "%s%s" (include "kusoaddon.fullname" .) (ternary "-rw" "" (eq (toString .Values.ha) "true")) | quote }} }
-                - { name: POSTGRES_USER, value: {{ default "kuso" .Values.username | quote }} }
+                - { name: POSTGRES_USER, value: "kuso" }
                 # Database name MUST match what postgres.yaml created
                 # (which falls back to .Values.project, not "kuso"),
                 # otherwise pg_dump fails with `database "kuso" does
@@ -863,7 +863,7 @@ spec:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
                 - { name: ADDON,   value: {{ .Release.Name | quote }} }
                 - { name: MYSQL_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
-                - { name: MYSQL_USER, value: {{ default "kuso" .Values.username | quote }} }
+                - { name: MYSQL_USER, value: "kuso" }
                 - { name: MYSQL_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
                 - { name: RETENTION_DAYS, value: {{ include "kusoaddon.backupRetentionDays" . | quote }} }
                 - name: MYSQL_PASSWORD

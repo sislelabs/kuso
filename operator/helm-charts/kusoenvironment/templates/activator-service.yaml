@@ -1,4 +1,4 @@
-{{- $activatorNs := default "kuso" .Values.activatorNamespace -}}
+{{- $activatorNs := "kuso" -}}
 {{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.autoSleep .Values.stopped -}}
 {{- if and $useActivator
       (ne .Release.Namespace $activatorNs)

@@ -17,10 +17,10 @@
 {{/* Drift guard: a StatefulSet whose data PVC already seeded a root user
      must NOT get a fresh random password (it wouldn't match on-disk auth). */}}
 {{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
-{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+{{- if and $existingSts (not $existingPw) -}}
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
-{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $existingPw | default (randAlphaNum 24) -}}
 
 apiVersion: apps/v1
 kind: StatefulSet

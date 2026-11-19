@@ -40,7 +40,7 @@
 {{- if and $existing $existing.data (index $existing.data "REDIS_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
 {{- end -}}
-{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $existingPw | default (randAlphaNum 24) -}}
 ---
 # Per-replica config rendered at pod start. Each pod runs the same
 # script — pod 0 starts as the seed primary; pods 1+ start as

@@ -128,7 +128,8 @@ spec:
               memory: 64Mi
       containers:
         - name: run
-          image: "{{ (.Values.image).repository }}:{{ (.Values.image).tag }}"
+          {{- $tagRef := printf "%s:%s" (.Values.image).repository (.Values.image).tag }}
+          image: "{{ $tagRef }}{{ if and (.Values.image).digest (eq ((.Values.image).digestRef | default "") $tagRef) }}@{{ (.Values.image).digest }}{{ end }}"
           imagePullPolicy: {{ (.Values.image).pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}

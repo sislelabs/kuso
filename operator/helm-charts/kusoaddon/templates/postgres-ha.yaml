@@ -57,10 +57,10 @@ Limitations the user should know about:
   {{- end -}}
 {{- end -}}
 {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace $name -}}
-{{- if and $existingCluster (not $existingPw) (not $providedPw) (not .Values.password) -}}
+{{- if and $existingCluster (not $existingPw) (not $providedPw) -}}
   {{- fail (printf "kusoaddon %s/%s: HA Cluster exists but app Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
-{{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $providedPw | default $existingPw | default (randAlphaNum 24) -}}
 
 {{- /* CNPG-format app Secret. Keys: username, password, database,
        host, port, uri — the shape CNPG expects from a "basicAuth"

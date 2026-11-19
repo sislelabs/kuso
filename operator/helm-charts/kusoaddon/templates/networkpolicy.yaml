@@ -10,12 +10,19 @@
   addon's conn Secret (stamped by the kusoenvironment chart from
   envFromSecrets / secretKeyRef). Pods without any env label (legacy pods,
   Jobs) are admitted by the project chart's allow-addon-legacy rule.
+
+  All of the above assumes the project chart renders its policies. A
+  project with networkPolicy.enabled=false has none, so these allow-only
+  policies would be the only ones selecting its pods and would isolate
+  them. kuso-server mirrors that opt-out into projectNetworkPolicy; only an
+  explicit false skips the file, so CRs that predate the field render as
+  before.
 */ -}}
+{{- if ne (toString .Values.projectNetworkPolicy) "false" }}
 {{- $project := .Values.project | default "unknown" }}
 {{- $conn := include "kusoaddon.connSecretName" . }}
 {{- $subKey := include "kusoaddon.subscriberKey" $conn }}
 {{- $base := include "kusoaddon.fullname" . | trunc 40 | trimSuffix "-" }}
-{{- $platformNS := .Values.platformNamespace | default "kuso" }}
 {{- /* The shared instance server (project kuso-instance) is reached by
        tenants of every project, so it must not get a project-scoped
        ingress allow-list: any ingress policy selecting its pods denies
@@ -80,7 +87,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $platformNS | quote }}
+              kubernetes.io/metadata.name: "kuso"
           podSelector:
             matchLabels:
               kuso.sislelabs.com/project: kuso-instance
@@ -90,5 +97,6 @@ spec:
       ports:
         - { port: 5432, protocol: TCP }
         - { port: 6432, protocol: TCP }
+{{- end }}
 {{- end }}
 {{- end }}

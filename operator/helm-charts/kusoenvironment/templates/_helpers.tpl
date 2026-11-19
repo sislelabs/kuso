@@ -1,9 +1,5 @@
 {{- define "kusoenvironment.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
 {{- end -}}
 
 {{- define "kusoenvironment.labels" -}}
@@ -100,7 +96,7 @@ namespace that's kuso-activator itself; elsewhere it's the per-env
 ExternalName mirror rendered by activator-service.yaml.
 */}}
 {{- define "kusoenvironment.activatorService" -}}
-{{- if eq .Release.Namespace (default "kuso" .Values.activatorNamespace) -}}
+{{- if eq .Release.Namespace "kuso" -}}
 kuso-activator
 {{- else -}}
 {{- printf "%s-activator" (include "kusoenvironment.fullname" . | trunc 53 | trimSuffix "-") -}}

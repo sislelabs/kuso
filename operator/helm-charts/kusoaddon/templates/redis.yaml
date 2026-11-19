@@ -12,7 +12,7 @@
 {{- if and $existing $existing.data (index $existing.data "REDIS_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
 {{- end -}}
-{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $existingPw | default (randAlphaNum 24) -}}
 
 apiVersion: apps/v1
 kind: StatefulSet
