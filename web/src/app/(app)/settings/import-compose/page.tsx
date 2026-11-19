@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { CheckCircle2, AlertTriangle, Database, Package, Ban } from "lucide-react";
 import { useCan, Perms } from "@/features/auth";
 import { toastError } from "@/lib/errors";
+import { composeApplyBlocked } from "./gates";
 
 // docker-compose import wizard — convert-preview, then apply.
 //
@@ -48,6 +49,10 @@ interface ComposeResponse {
   // env_file paths whose values were never read. Services would deploy
   // without them, so Apply is blocked until the user opts in.
   unresolvedEnvFiles?: string[];
+  // "<service>: <what>" values that depend on the compose host's
+  // environment (${VAR} with no default, bare `- KEY`). They'd deploy as
+  // literal text or empty.
+  unresolvedVars?: string[];
 }
 
 const ACTION_META: Record<NoteAction, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -236,8 +241,14 @@ function ResultView({
   const addonCount = data.notes.filter((n) => n.action === "addon" && n.detail.includes("→ addon")).length;
   const grouped = groupByService(data.notes);
   const missingEnvFiles = data.unresolvedEnvFiles ?? [];
+  const unresolvedVars = data.unresolvedVars ?? [];
   const [allowMissing, setAllowMissing] = useState(false);
-  const applyBlocked = missingEnvFiles.length > 0 && !allowMissing;
+  const [allowUnresolved, setAllowUnresolved] = useState(false);
+  const [allowEmptyAddons, setAllowEmptyAddons] = useState(false);
+  const applyBlocked = composeApplyBlocked(
+    { missingEnvFiles: missingEnvFiles.length, unresolvedVars: unresolvedVars.length, emptyAddons: addonCount },
+    { allowMissingEnvFiles: allowMissing, allowUnresolvedVars: allowUnresolved, allowEmptyAddons },
+  );
 
   return (
     <section className="mt-6 space-y-4">
@@ -285,6 +296,49 @@ function ResultView({
               onChange={(e) => setAllowMissing(e.target.checked)}
             />
             Apply without these env files
+          </label>
+        </div>
+      )}
+
+      {unresolvedVars.length > 0 && (
+        <div
+          role="alert"
+          className="space-y-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-xs text-[var(--warning)]"
+        >
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              These values come from the compose host&apos;s environment, so they&apos;d deploy as literal{" "}
+              <code className="font-mono">{"${VAR}"}</code> text or empty. Set them as env vars after importing.
+            </span>
+          </p>
+          <ul className="ml-5 list-disc font-mono text-xs">
+            {unresolvedVars.map((v) => (
+              <li key={v}>{v}</li>
+            ))}
+          </ul>
+          <label className="ml-5 flex items-center gap-2 text-[var(--text-secondary)]">
+            <input type="checkbox" checked={allowUnresolved} onChange={(e) => setAllowUnresolved(e.target.checked)} />
+            Apply with these values unset
+          </label>
+        </div>
+      )}
+
+      {addonCount > 0 && (
+        <div
+          role="alert"
+          className="space-y-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2 text-xs text-[var(--warning)]"
+        >
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              The {addonCount === 1 ? "addon starts" : `${addonCount} addons start`} empty. Volumes, data, users and
+              init scripts aren&apos;t migrated: plan a dump and restore.
+            </span>
+          </p>
+          <label className="ml-5 flex items-center gap-2 text-[var(--text-secondary)]">
+            <input type="checkbox" checked={allowEmptyAddons} onChange={(e) => setAllowEmptyAddons(e.target.checked)} />
+            Create {addonCount === 1 ? "it" : "them"} empty
           </label>
         </div>
       )}
