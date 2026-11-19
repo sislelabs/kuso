@@ -17,7 +17,10 @@ import "github.com/go-resty/resty/v2"
 // canonical action itself — the caller only has to name the resource.
 type RemediateRequest struct {
 	Resource string `json:"resource"`
-	Action   string `json:"action,omitempty"`
+	// Namespace disambiguates a resource name that is flagged in more
+	// than one namespace.
+	Namespace string `json:"namespace,omitempty"`
+	Action    string `json:"action,omitempty"`
 }
 
 // ReconcileHealth runs the platform-trust reconcile scan and returns the
@@ -36,7 +39,7 @@ func (k *KusoClient) ReconcileHealth() (*resty.Response, error) {
 // action. Mutates live infra. Response:
 //
 //	{resource, action, applied, message}
-func (k *KusoClient) Remediate(resource, action string) (*resty.Response, error) {
-	k.client.SetBody(RemediateRequest{Resource: resource, Action: action})
+func (k *KusoClient) Remediate(resource, namespace, action string) (*resty.Response, error) {
+	k.client.SetBody(RemediateRequest{Resource: resource, Namespace: namespace, Action: action})
 	return k.client.Post("/api/health/reconcile/remediate")
 }
