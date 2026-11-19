@@ -118,6 +118,11 @@ podHardening: false
 # in. Empty (every project addon, and clones created before this field)
 # keeps production pods admitted.
 envScope: ""
+# projectNetworkPolicy: mirrors the project's networkPolicy.enabled (set by
+# kuso-server). false skips every NetworkPolicy this chart renders: without
+# the project's default-deny stack, allow-only addon policies would isolate
+# the pods they select.
+projectNetworkPolicy: true
 # appRole: native postgres/mysql only. Apps connect as a non-superuser that
 # owns the app database; the superuser password lives in <name>-admin. Set
 # by kuso-server on addons it creates; it only takes effect at first init,

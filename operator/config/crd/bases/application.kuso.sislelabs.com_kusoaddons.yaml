@@ -321,6 +321,13 @@ spec:
                     addon is a clone for; empty for a project's own addon.
                     Set by kuso-server at create. Production pods reach the
                     addon only when it is empty.
+                projectNetworkPolicy:
+                  type: boolean
+                  description: >-
+                    Mirror of the project's networkPolicy.enabled, set by
+                    kuso-server. false skips the addon's NetworkPolicies, which
+                    would otherwise isolate pods of a project that renders no
+                    policies of its own. Unset renders them.
                 podHardening:
                   type: boolean
                   description: >-
