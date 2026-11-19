@@ -50,6 +50,7 @@ func newRecordingSession(t *testing.T, handler func(r *http.Request) (int, strin
 	registerVulns(server, client)
 	registerPlan(server, client)
 	registerApply(server, client)
+	registerAddService(server, client)
 	serverT, clientT := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := server.Connect(ctx, serverT, nil); err != nil {

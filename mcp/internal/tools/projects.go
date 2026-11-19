@@ -297,15 +297,26 @@ type addServiceArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Name    string `json:"name" jsonschema:"service name (e.g. web, api, worker)"`
 	Path    string `json:"path,omitempty" jsonschema:"monorepo subpath (default '.')"`
-	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|buildpacks|static (default: dockerfile)"`
+	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|static|worker|image (default: dockerfile)"`
 	Port    int    `json:"port,omitempty" jsonschema:"container port (default: 8080)"`
-	Confirm bool   `json:"confirm" jsonschema:"must be true to actually add"`
+	// SkipFirstBuild maps to the server's skipFirstBuild.
+	SkipFirstBuild bool `json:"skipFirstBuild,omitempty" jsonschema:"create the service without starting its first build (it is otherwise built and deployed right away)"`
+	Confirm        bool `json:"confirm" jsonschema:"must be true to actually add"`
 }
 
 type addServiceResult struct {
-	Project string `json:"project"`
-	Service string `json:"service"`
-	Status  string `json:"status"`
+	Project    string           `json:"project"`
+	Service    string           `json:"service"`
+	Status     string           `json:"status"`
+	FirstBuild *firstBuildState `json:"firstBuild,omitempty"`
+}
+
+// firstBuildState mirrors the server's firstBuild block on the
+// create-service response.
+type firstBuildState struct {
+	Triggered bool   `json:"triggered"`
+	Skipped   bool   `json:"skipped,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func runAddService(ctx context.Context, client *kusoclient.Client, args addServiceArgs) (addServiceResult, error) {
@@ -324,16 +335,36 @@ func runAddService(ctx context.Context, client *kusoclient.Client, args addServi
 		"runtime": fallback(args.Runtime, "dockerfile"),
 		"port":    fallbackInt(args.Port, 8080),
 	}
-	if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "services"), body, nil); err != nil {
+	if args.SkipFirstBuild {
+		body["skipFirstBuild"] = true
+	}
+	var resp struct {
+		FirstBuild *firstBuildState `json:"firstBuild"`
+	}
+	if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "services"), body, &resp); err != nil {
 		return addServiceResult{}, fmt.Errorf("add service: %w", err)
 	}
-	return addServiceResult{Project: args.Project, Service: args.Name, Status: "added"}, nil
+	return addServiceResult{Project: args.Project, Service: args.Name, Status: "added", FirstBuild: resp.FirstBuild}, nil
+}
+
+func (r addServiceResult) text() string {
+	s := fmt.Sprintf("%s/%s %s", r.Project, r.Service, r.Status)
+	switch fb := r.FirstBuild; {
+	case fb == nil:
+	case fb.Error != "":
+		s += "; its first build did NOT start: " + fb.Error + " — fix that, then call build"
+	case fb.Skipped:
+		s += "; first build skipped (call build to deploy it)"
+	case fb.Triggered:
+		s += "; first build started (follow it with build_status)"
+	}
+	return s
 }
 
 func registerAddService(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "add_service",
-		Description: "Add a service to a project. Auto-creates a production environment with default-branch tracking. " +
+		Description: "Add a service to a project. Auto-creates a production environment with default-branch tracking, and starts the first build right away, so adding a service deploys it (pass skipFirstBuild=true to only create it). " +
 			"REQUIRES confirm=true. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addServiceArgs) (*mcp.CallToolResult, addServiceResult, error) {
 		out, err := runAddService(ctx, client, args)
@@ -341,7 +372,7 @@ func registerAddService(server *mcp.Server, client *kusoclient.Client) {
 			return nil, addServiceResult{}, err
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s/%s %s", out.Project, out.Service, out.Status)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: out.text()}},
 		}, out, nil
 	})
 }
