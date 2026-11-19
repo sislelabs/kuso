@@ -178,3 +178,13 @@ services:
 		}
 	}
 }
+
+func TestReportMarkdown_EscapesPipes(t *testing.T) {
+	rep := &Report{}
+	rep.flag("web", "command %q", "sh -c 'a || b'")
+	for _, line := range strings.Split(rep.Markdown(), "\n") {
+		if strings.Contains(line, "sh -c") && strings.Count(strings.ReplaceAll(line, `\|`, ""), "|") != 3 {
+			t.Errorf("row splits on an unescaped pipe: %s", line)
+		}
+	}
+}
