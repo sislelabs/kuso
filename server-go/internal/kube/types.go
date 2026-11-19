@@ -1495,6 +1495,9 @@ type KusoCronSpec struct {
 	// leave both false: public egress, no platform API.
 	PrivateEgress     bool `json:"privateEgress,omitempty"`
 	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
+	// SecurityContext is the owning env's opt-in relaxation, so a cron of
+	// a setpriv/gosu image runs the way its pods do. kind=service only.
+	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
 }
 
 // KusoCronOnFailure is the wire shape for the cron failure webhook.
@@ -1556,6 +1559,8 @@ type KusoRunSpec struct {
 	// service so the run pod gets the same NetworkPolicy egress labels.
 	PrivateEgress     bool `json:"privateEgress,omitempty"`
 	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
+	// SecurityContext: see KusoCronSpec.SecurityContext.
+	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
 	// EnvScope: see KusoCronSpec.EnvScope.
 	EnvScope string `json:"envScope,omitempty"`
 	// Resources overrides the run container's requests/limits

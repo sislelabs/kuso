@@ -154,8 +154,10 @@ func (p *Poller) failIfJobLost(ctx context.Context, ns string, r *kube.KusoRun, 
 		return
 	}
 	const msg = "run job not found: it never started, or was removed before kuso saw it finish"
-	if err := p.markFailed(ctx, ns, r.Name, msg); err != nil {
-		p.logger().Warn("runs poller: fail lost run", "run", r.Name, "ns", ns, "err", err)
+	if err := p.markFailed(ctx, ns, r, msg); err != nil {
+		if !apierrors.IsConflict(err) {
+			p.logger().Warn("runs poller: fail lost run", "run", r.Name, "ns", ns, "err", err)
+		}
 		return
 	}
 	p.emitTerminal(r, "failed", msg)
@@ -184,8 +186,8 @@ func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error 
 	}
 	if cond := jobTerminalCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {
-			if err := p.markSucceeded(ctx, ns, r.Name); err != nil {
-				return err
+			if err := p.markSucceeded(ctx, ns, r); err != nil {
+				return ignoreConflict(err)
 			}
 			p.emitTerminal(r, "succeeded", "")
 			return nil
@@ -194,8 +196,8 @@ func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error 
 		if msg == "" {
 			msg = "job failed"
 		}
-		if err := p.markFailed(ctx, ns, r.Name, msg); err != nil {
-			return err
+		if err := p.markFailed(ctx, ns, r, msg); err != nil {
+			return ignoreConflict(err)
 		}
 		p.emitTerminal(r, "failed", msg)
 		return nil
@@ -206,7 +208,7 @@ func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error 
 	// executing." Idempotent: if we already wrote running, the
 	// merge-patch is a no-op.
 	if job.Status.Active > 0 && r.Annotations[annRunPhase] != "running" {
-		return p.markRunning(ctx, ns, r.Name)
+		return ignoreConflict(p.markRunning(ctx, ns, r))
 	}
 	return nil
 }
@@ -306,33 +308,45 @@ func isTerminal(phase string) bool {
 // spec.done, an operator restart's initial cache sync would
 // re-install the helm release and resurrect the (already-finished)
 // Job. Idempotent.
-func (p *Poller) markSucceeded(ctx context.Context, ns, name string) error {
+func (p *Poller) markSucceeded(ctx context.Context, ns string, r *kube.KusoRun) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
-		`{"metadata":{"labels":{%q:"succeeded"},"annotations":{%q:"succeeded",%q:%q}},"spec":{"done":true}}`,
-		labelRunPhase, annRunPhase, annRunCompletedAt, now,
+		`{"metadata":{"resourceVersion":%q,"labels":{%q:"succeeded"},"annotations":{%q:"succeeded",%q:%q}},"spec":{"done":true}}`,
+		r.ResourceVersion, labelRunPhase, annRunPhase, annRunCompletedAt, now,
 	)
-	return p.patch(ctx, ns, name, patch)
+	return p.patch(ctx, ns, r.Name, patch)
 }
 
 // markFailed stamps phase=failed + message + completedAt + spec.done.
 // The message comes from the Job's terminal condition; user-facing
 // surfaces (UI run list, CLI `kuso run get`) render it verbatim.
-func (p *Poller) markFailed(ctx context.Context, ns, name, msg string) error {
+func (p *Poller) markFailed(ctx context.Context, ns string, r *kube.KusoRun, msg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
-		`{"metadata":{"labels":{%q:"failed"},"annotations":{%q:"failed",%q:%q,%q:%q}},"spec":{"done":true}}`,
-		labelRunPhase, annRunPhase, annRunCompletedAt, now, annRunMessage, msg,
+		`{"metadata":{"resourceVersion":%q,"labels":{%q:"failed"},"annotations":{%q:"failed",%q:%q,%q:%q}},"spec":{"done":true}}`,
+		r.ResourceVersion, labelRunPhase, annRunPhase, annRunCompletedAt, now, annRunMessage, msg,
 	)
-	return p.patch(ctx, ns, name, patch)
+	return p.patch(ctx, ns, r.Name, patch)
 }
 
 // markRunning is the only non-terminal write the poller does — it
 // flips phase=pending → phase=running once the Job has an active
 // pod. Skipped on re-observations of an already-running CR.
-func (p *Poller) markRunning(ctx context.Context, ns, name string) error {
-	patch := fmt.Sprintf(`{"metadata":{"labels":{%q:"running"},"annotations":{%q:"running"}}}`, labelRunPhase, annRunPhase)
-	return p.patch(ctx, ns, name, patch)
+func (p *Poller) markRunning(ctx context.Context, ns string, r *kube.KusoRun) error {
+	patch := fmt.Sprintf(`{"metadata":{"resourceVersion":%q,"labels":{%q:"running"},"annotations":{%q:"running"}}}`,
+		r.ResourceVersion, labelRunPhase, annRunPhase)
+	return p.patch(ctx, ns, r.Name, patch)
+}
+
+// ignoreConflict drops the 409 a poller write gets when the run changed
+// after it was listed, typically a Cancel that landed in between. The
+// resourceVersion in every poller patch makes it fail instead of
+// overwriting "cancelled"; the next tick re-reads the run.
+func ignoreConflict(err error) error {
+	if apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
 }
 
 // patch is the merge-patch helper. Uses application/merge-patch+json

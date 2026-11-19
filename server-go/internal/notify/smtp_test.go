@@ -56,7 +56,7 @@ func TestSMTPSendMail_CancelTearsDownHungConn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- smtpSendMail(ctx, host, port, nil, "a@b", []string{"c@d"}, []byte("hi"))
+		done <- smtpSendMail(ctx, host, port, false, nil, "a@b", []string{"c@d"}, []byte("hi"))
 	}()
 	// Let the dial land, then cancel — the watchdog must close the conn
 	// and unblock the greeting read immediately.
@@ -75,7 +75,7 @@ func TestSMTPSendMail_CancelTearsDownHungConn(t *testing.T) {
 
 func TestSMTPSendMail_RejectsCRLFAddresses(t *testing.T) {
 	t.Parallel()
-	err := smtpSendMail(context.Background(), "localhost", "25", nil,
+	err := smtpSendMail(context.Background(), "localhost", "25", false, nil,
 		"a@b", []string{"c@d\r\nRCPT TO:<evil@e>"}, []byte("hi"))
 	if err == nil || !strings.Contains(err.Error(), "CR/LF") {
 		t.Fatalf("got %v, want CR/LF rejection (before any dial)", err)
@@ -91,9 +91,44 @@ func TestSMTPSendMail_RejectsReservedIP(t *testing.T) {
 	// A live loopback listener proves the rejection happens at the
 	// reserved-IP check, not merely because nothing is listening.
 	host, port := hangServer(t)
-	err := smtpSendMail(context.Background(), host, port, nil,
+	err := smtpSendMail(context.Background(), host, port, false, nil,
 		"a@b", []string{"c@d"}, []byte("hi"))
 	if err == nil || !strings.Contains(err.Error(), "reserved address") {
 		t.Fatalf("got %v, want reserved-address rejection for loopback host %q", err, host)
+	}
+}
+
+// BLD-6: an SMTPS server (465) waits for a TLS ClientHello before it
+// greets, so implicit TLS must handshake first instead of reading.
+func TestSMTPSendMail_ImplicitTLSHandshakesFirst(t *testing.T) {
+	allowLoopbackDial(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	first := make(chan byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		b := make([]byte, 1)
+		if _, err := conn.Read(b); err != nil {
+			first <- 0
+			return
+		}
+		first <- b[0]
+	}()
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = smtpSendMail(ctx, host, port, true, nil, "a@b", []string{"c@d"}, []byte("hi"))
+
+	const tlsHandshakeRecord = 0x16
+	if got := <-first; got != tlsHandshakeRecord {
+		t.Fatalf("first byte from client = %#x, want a TLS handshake record (%#x)", got, tlsHandshakeRecord)
 	}
 }

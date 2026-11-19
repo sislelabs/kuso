@@ -245,6 +245,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			PrivateEgress:     privateEgress,
 			PlatformAPIEgress: platformAPIEgress,
 			EnvScope:          envCR.Spec.EnvScope,
+			SecurityContext:   envCR.Spec.SecurityContext,
 			Resources:         resources,
 			TimeoutSeconds:    req.TimeoutSeconds,
 			TriggeredBy:       req.TriggeredBy,

@@ -14,6 +14,7 @@ package notify
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"mime"
 	"net"
@@ -224,6 +225,12 @@ func (d *Dispatcher) sendTelegramSync(ctx context.Context, botToken, chatID stri
 	// leak the token into logs AND the outbox lastError column. Scrub the
 	// token from any error before it escapes this function.
 	if err := d.postSync(ctx, api, body, nil); err != nil {
+		var ue *upstreamError
+		if errors.As(err, &ue) {
+			scrubbed := *ue
+			scrubbed.Body = redact(ue.Body)
+			return &scrubbed
+		}
 		return fmt.Errorf("%s", redact(err.Error()))
 	}
 	return nil
@@ -259,9 +266,9 @@ func (d *Dispatcher) sendPushoverSync(ctx context.Context, token, user string, e
 // --- Email (SMTP) ---------------------------------------------------
 
 // sendEmailSync delivers an Event as a plain-text email over SMTP.
-// Config carries {host, port, username, password, from, to}. STARTTLS
-// is used when the server offers it; plain auth otherwise. `to` may be
-// a comma-separated list.
+// Config carries {host, port, username, password, from, to}. Port 465
+// is SMTPS (TLS from the first byte); on any other port STARTTLS is used
+// when the server offers it. `to` may be a comma-separated list.
 func (d *Dispatcher) sendEmailSync(ctx context.Context, cfg map[string]any, e Event) error {
 	host, _ := cfg["host"].(string)
 	from, _ := cfg["from"].(string)
@@ -298,7 +305,7 @@ func (d *Dispatcher) sendEmailSync(ctx context.Context, cfg map[string]any, e Ev
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 
-	if err := smtpSendMail(ctx, host, port, auth, from, recipients, []byte(msg)); err != nil {
+	if err := smtpSendMail(ctx, host, port, port == "465", auth, from, recipients, []byte(msg)); err != nil {
 		// Context cancellation closes the conn mid-conversation, which
 		// surfaces as an opaque I/O error — report the cancellation.
 		if cerr := ctx.Err(); cerr != nil {
@@ -322,7 +329,10 @@ var smtpIsReservedIP = httpx.IsReservedIP
 // outbox retries. Here the dial is context-aware, the conn carries a
 // hard deadline, and a watchdog closes the conn on cancellation so the
 // whole SMTP conversation actually tears down.
-func smtpSendMail(ctx context.Context, host, port string, auth smtp.Auth, from string, recipients []string, msg []byte) error {
+//
+// implicitTLS runs the TLS handshake before the SMTP greeting (SMTPS,
+// port 465), where the server says nothing until it sees a ClientHello.
+func smtpSendMail(ctx context.Context, host, port string, implicitTLS bool, auth smtp.Auth, from string, recipients []string, msg []byte) error {
 	// Mirror smtp.SendMail's validateLine: addresses go verbatim into
 	// MAIL FROM / RCPT TO lines, so CR/LF would inject commands.
 	for _, line := range append([]string{from}, recipients...) {
@@ -374,6 +384,9 @@ func smtpSendMail(ctx context.Context, host, port string, auth smtp.Auth, from s
 		}
 	}()
 
+	if implicitTLS {
+		conn = tls.Client(conn, &tls.Config{ServerName: host})
+	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		_ = conn.Close()
@@ -382,7 +395,7 @@ func smtpSendMail(ctx context.Context, host, port string, auth smtp.Auth, from s
 	defer c.Close()
 	// STARTTLS when the server offers it, plain otherwise — same
 	// opportunistic policy smtp.SendMail applied.
-	if ok, _ := c.Extension("STARTTLS"); ok {
+	if ok, _ := c.Extension("STARTTLS"); ok && !implicitTLS {
 		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 			return err
 		}

@@ -182,15 +182,6 @@ func TestEmit_UptimeStormSplitsByAudience(t *testing.T) {
 	}
 }
 
-func claimOne(t *testing.T, d *db.DB) *db.OutboxRow {
-	t.Helper()
-	row, err := d.ClaimOutboxRow(context.Background())
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	return row
-}
-
 func isDelivered(t *testing.T, d *db.DB, id int64) bool {
 	t.Helper()
 	var delivered bool

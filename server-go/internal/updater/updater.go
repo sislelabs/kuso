@@ -130,7 +130,7 @@ type Service struct {
 
 	settings settingStore // test seam; defaults to DB
 
-	// startMu makes StartUpdate single-flight within this replica; the
+	// startMu makes StartUpdateWith single-flight within this replica; the
 	// active-Job check covers other replicas and earlier calls.
 	startMu sync.Mutex
 
@@ -408,7 +408,7 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 
 // fetchVersion is fetchLatest's pinned cousin. Given a tag like
 // "v0.7.13", grab the GH release by name and parse its release.json.
-// Used by StartUpdate when the caller passes an explicit version.
+// Used by StartUpdateWith when the caller passes an explicit version.
 //
 // Why no caching: pinned upgrades are rare (probably a fix-forward or
 // rollback), so we don't bother adding state. The 1-2s round-trip is
@@ -713,21 +713,6 @@ type UpdateStatus struct {
 	Updated time.Time `json:"updated"`
 }
 
-// StartUpdate creates the kube Job that performs the upgrade. Returns
-// the Job name; the caller polls /api/system/update/status to track
-// progress (which reads the ConfigMap the Job writes to).
-//
-// targetVersion is "" for "latest" (the cached state from the
-// background ticker) or "vX.Y.Z" to pin to a specific tag. When pinned
-// we fetch the target release's manifest fresh — the cached state
-// might be stale or pointing at a different version. We also relax the
-// canAutoUpgrade gate when pinning, since the user is explicitly
-// asking for that exact release (they've presumably read the notes).
-// "Already on latest" is still enforced when no pin is given.
-func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string, error) {
-	return s.StartUpdateWith(ctx, targetVersion, UpdateOptions{})
-}
-
 // UpdateOptions are per-request overrides for StartUpdateWith.
 type UpdateOptions struct {
 	// AllowUnverified accepts a release whose signed release.json lacks
@@ -810,7 +795,17 @@ func (s *Service) currentUpdaterImage(ctx context.Context) (string, error) {
 	return m.Components.Updater.Image, nil
 }
 
-// StartUpdateWith is StartUpdate with per-request options.
+// StartUpdateWith creates the kube Job that performs the upgrade. Returns
+// the Job name; the caller polls /api/system/update/status to track
+// progress (which reads the ConfigMap the Job writes to).
+//
+// targetVersion is "" for "latest" (the cached state from the
+// background ticker) or "vX.Y.Z" to pin to a specific tag. When pinned
+// we fetch the target release's manifest fresh — the cached state
+// might be stale or pointing at a different version. We also relax the
+// canAutoUpgrade gate when pinning, since the user is explicitly
+// asking for that exact release (they've presumably read the notes).
+// "Already on latest" is still enforced when no pin is given.
 func (s *Service) StartUpdateWith(ctx context.Context, targetVersion string, opts UpdateOptions) (string, error) {
 	if s.Kube == nil {
 		return "", errors.New("kube client unavailable")

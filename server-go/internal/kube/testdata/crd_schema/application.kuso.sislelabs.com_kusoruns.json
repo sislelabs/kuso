@@ -131,6 +131,37 @@
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
           },
+          "securityContext": {
+            "description": "The owning service's opt-in extra Linux capabilities and privilege escalation (copied from its production env), for images that self-drop root at runtime. Default drops ALL caps with no escalation.",
+            "properties": {
+              "allowPrivilegeEscalation": {
+                "type": "boolean"
+              },
+              "capabilities": {
+                "properties": {
+                  "add": {
+                    "description": "Linux capabilities to ADD. Same allowlist as KusoEnvironment.spec.securityContext and kube.ValidateSecurityContext.",
+                    "items": {
+                      "enum": [
+                        "NET_BIND_SERVICE",
+                        "CHOWN",
+                        "DAC_OVERRIDE",
+                        "FOWNER",
+                        "SETUID",
+                        "SETGID",
+                        "SETPCAP",
+                        "KILL"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
           "service": {
             "description": "Service whose latest succeeded build image + env this\nrun inherits. CR name shape: \u003cproject\u003e-\u003cservice\u003e.\n",
             "type": "string"

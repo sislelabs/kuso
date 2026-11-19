@@ -1544,27 +1544,12 @@ func (s *Service) adoptCloneTokenSecret(ctx context.Context, ns, buildName, buil
 // builds package doesn't pull in notify (avoids an import cycle if
 // notify ever wants build types). Nil emitter = silent.
 
-// tailBuildLogs grabs the last `lines` log lines from the build's
-// container pods. Used by the failed-build notification path to
-// include a fenced log excerpt in the Discord card.
-//
-// Best-effort — bounded by a 5s deadline, kube errors are swallowed,
-// returns "" when no pod / no logs are available. The archive path
-// (archiveLogs) still runs separately for the durable DB snapshot;
-// this is a lightweight read of the tail, not a replacement.
-func (p *Poller) tailBuildLogs(ctx context.Context, ns string, b *kube.KusoBuild, lines int) string {
-	out := p.tailBuildLogLines(ctx, ns, b, lines)
-	if len(out) == 0 {
-		return ""
-	}
-	return strings.Join(out, "\n")
-}
-
-// tailBuildLogLines is the slice-returning variant used by the
-// failure classifier. The classifier walks lines in reverse looking
-// for known regex patterns and needs them split, not joined. Same
-// kube-fetching contract as tailBuildLogs (5s timeout, init containers
-// fallback when the main container has no logs).
+// tailBuildLogLines grabs the last `lines` log lines from the build's
+// container pods, split for the failure classifier (which walks them in
+// reverse looking for known patterns) and the failure card's excerpt.
+// Best-effort: bounded by a 5s deadline, kube errors are swallowed, nil
+// when no pod / no logs are available; falls back to init containers when
+// the main container has no logs.
 func (p *Poller) tailBuildLogLines(ctx context.Context, ns string, b *kube.KusoBuild, lines int) []string {
 	if p == nil || p.Svc == nil || p.Svc.Kube == nil || b == nil || lines <= 0 {
 		return nil
@@ -3681,14 +3666,9 @@ func promotionBranchMatches(buildBranch, envBranch, defaultBranch string) bool {
 	return buildBranch == envBranch
 }
 
-func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
-	_, err := p.promoteImageCount(ctx, ns, b)
-	return err
-}
-
-// promoteImageCount is promoteImage reporting how many of the build's own
-// envs took the image (0 when a newer build already won every env, or no
-// env tracks the build's branch).
+// promoteImageCount promotes the build's image to its envs and reports
+// how many of them took it (0 when a newer build already won every env,
+// or no env tracks the build's branch).
 func (p *Poller) promoteImageCount(ctx context.Context, ns string, b *kube.KusoBuild) (int, error) {
 	if b.Spec.Image == nil {
 		return 0, nil
@@ -4128,6 +4108,7 @@ func (s *Service) repointCrons(ctx context.Context, ns, project, sourceShortName
 			if perr == nil && prod != nil {
 				live.Spec.EnvFromSecrets = prod.Spec.EnvFromSecrets
 				live.Spec.Env = cronspkg.EnvForCron(prod.Spec.EnvVars)
+				live.Spec.SecurityContext = prod.Spec.SecurityContext
 			}
 			return nil
 		}); uerr != nil {
@@ -4327,22 +4308,6 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 	}
 }
 
-// asUnstructured is a small helper to build the unstructured shape for
-// writing builds in tests.
-func asUnstructured(b *kube.KusoBuild) (*unstructured.Unstructured, error) {
-	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(b)
-	if err != nil {
-		return nil, err
-	}
-	u := &unstructured.Unstructured{Object: m}
-	u.SetGroupVersionKind(kube.GVRBuilds.GroupVersion().WithKind("KusoBuild"))
-	return u, nil
-}
-
-// Used by tests under the same package to build seed objects without
-// re-importing kube internals.
-var _ = asUnstructured
-
 // repoProviderOf / repoTokenSecretOf pull the provider + token-secret from
 // a service's repo ref (empty when the service or repo is nil). Used to
 // stamp them onto the KusoBuild CR so the clone container can auth GitLab.
@@ -4438,11 +4403,11 @@ func (p *Poller) promoteDetached(ctx context.Context, ns string, b *kube.KusoBui
 // WaitForPromotions blocks until every in-flight async promotion has
 // finished, or the context expires. Returns true when the set drained.
 //
-// Exists for tests and for graceful shutdown: promotion moved off the
-// tick goroutine (see markSucceededAsync), so a caller that ticks and
-// then immediately asserts on the promoted state would otherwise race
-// the worker. Production code doesn't need this — the next tick
-// reconciles whatever is still outstanding.
+// Promotion runs off the tick goroutine (see markSucceededAsync), so a
+// test that ticks and then asserts on the promoted state would otherwise
+// race the worker, and a shutting-down server would cut a promotion off
+// mid-way (the next leader's tick reconciles it, so that is a delay, not
+// a loss). Shutdown should call it with a bounded ctx.
 func (p *Poller) WaitForPromotions(ctx context.Context) bool {
 	for {
 		p.promotingMu.Lock()

@@ -696,13 +696,6 @@ func looksKusoShaped(name string) bool {
 	return true
 }
 
-// Use the slog logger's info adapter for the cleanup callsites.
-// Avoids importing slog from the call site.
-type slogger interface {
-	Info(msg string, args ...any)
-	Warn(msg string, args ...any)
-}
-
 // LogAdapter wraps a *slog.Logger as a (msg, kv...) callback for the
 // sweep functions above. Tiny shim — the sweep functions accept a
 // plain `func(msg string, kv ...any)` so they don't pull slog into

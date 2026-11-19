@@ -8,14 +8,6 @@ import (
 	"kuso/server/internal/failures"
 )
 
-func fieldNames(em map[string]any) []string {
-	var out []string
-	for _, f := range fieldsOf(em) {
-		out = append(out, f["name"].(string))
-	}
-	return out
-}
-
 func embedOf(p map[string]any) map[string]any {
 	return p["embeds"].([]any)[0].(map[string]any)
 }
