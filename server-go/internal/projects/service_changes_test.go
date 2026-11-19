@@ -119,3 +119,24 @@ func TestApplyServiceChanges_Empty(t *testing.T) {
 		t.Fatal("want an error for an empty batch")
 	}
 }
+
+// Unsetting a variable that isn't there is OK but flagged, so the CLI can
+// say "not set" instead of claiming a removal.
+func TestApplyServiceChanges_UnsetMissingIsNotFound(t *testing.T) {
+	s := stagedFixture(t)
+	res, err := s.ApplyServiceChanges(context.Background(), "alpha", "web", ServiceChangesRequest{
+		EnvUnset: []string{"SEED", "NEVER_SET"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyServiceChanges: %v", err)
+	}
+	if len(res.Results) != 2 {
+		t.Fatalf("results = %+v, want 2", res.Results)
+	}
+	if r := res.Results[0]; !r.OK || r.NotFound {
+		t.Errorf("SEED result = %+v, want ok and found", r)
+	}
+	if r := res.Results[1]; !r.OK || !r.NotFound {
+		t.Errorf("NEVER_SET result = %+v, want ok with notFound", r)
+	}
+}

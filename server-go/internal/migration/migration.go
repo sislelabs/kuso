@@ -47,6 +47,9 @@ type Result struct {
 	EnvVarsCreated  int      `json:"envVarsCreated"`
 	Skipped         []Detail `json:"skipped"`
 	Errors          []Detail `json:"errors"`
+	// Dropped lists Coolify settings an imported service was created
+	// without (coolify.ServicePlan.Dropped), one row per setting.
+	Dropped []Detail `json:"dropped,omitempty"`
 }
 
 // ProjectsAPI is the minimal projects.Service surface the importer
@@ -189,11 +192,12 @@ func (s *Service) importOneProject(ctx context.Context, c CoolifyClient, project
 		}
 		s.importApp(ctx, c, projectSlug, slugs[it.App], it, out)
 	}
+	addonSlugs := coolify.AssignAddonSlugs(items)
 	for _, it := range items {
 		if it.Database == nil {
 			continue
 		}
-		s.importDatabase(ctx, projectSlug, it, out)
+		s.importDatabase(ctx, projectSlug, addonSlugs[it.Database], it, out)
 	}
 }
 
@@ -239,14 +243,9 @@ func (s *Service) createProject(ctx context.Context, slug, repoURL, branch strin
 // importApp creates the KusoService + writes its env vars. Per-row
 // errors are appended to out and don't fail the larger import.
 func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug, svcSlug string, it coolify.Item, out *Result) {
-	svcReq := projects.CreateServiceRequest{
-		Name:    svcSlug,
-		Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
-		Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
-		Repo: &projects.CreateServiceRepo{
-			URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
-			Path: coolify.NormalizeBaseDir(it.App.BaseDirectory),
-		},
+	svcReq, dropped := serviceRequest(svcSlug, it.App)
+	for _, d := range dropped {
+		out.Dropped = append(out.Dropped, Detail{Kind: "service", Name: projectSlug + "/" + svcSlug, Reason: d})
 	}
 	if _, err := s.Projects.AddService(ctx, projectSlug, svcReq); err != nil {
 		if !errors.Is(err, projects.ErrConflict) {
@@ -256,7 +255,7 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug, s
 		// Service already exists. Only a re-run of this same app may
 		// sync env into it; SetEnv replaces the whole list, so writing
 		// into an unrelated service would wipe its variables.
-		if err := s.checkExistingServiceRepo(ctx, projectSlug, svcSlug, svcReq.Repo); err != nil {
+		if err := s.checkExistingServiceRepo(ctx, projectSlug, svcSlug, svcReq); err != nil {
 			out.Errors = append(out.Errors, Detail{Kind: "service", Name: projectSlug + "/" + svcSlug, Reason: err.Error()})
 			return
 		}
@@ -289,6 +288,28 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug, s
 	out.EnvVarsCreated += len(envVars)
 }
 
+// serviceRequest maps a Coolify app through coolify.PlanService, the
+// mapping the CLI's `kuso migrate coolify` uses too. The second return
+// lists the Coolify settings the request can't carry.
+func serviceRequest(slug string, app *coolify.Application) (projects.CreateServiceRequest, []string) {
+	plan := coolify.PlanService(app)
+	req := projects.CreateServiceRequest{
+		Name:       slug,
+		Runtime:    plan.Runtime,
+		Port:       int32(plan.Port),
+		Dockerfile: plan.Dockerfile,
+	}
+	if plan.Runtime == "image" {
+		req.Image = &projects.ServiceImageSpec{Repository: plan.ImageRepository, Tag: plan.ImageTag}
+	} else {
+		req.Repo = &projects.CreateServiceRepo{URL: plan.RepoURL, Path: plan.RepoPath, DefaultBranch: plan.Branch}
+	}
+	if plan.StaticOutputDir != "" {
+		req.Static = &projects.ServiceStaticSpec{OutputDir: plan.StaticOutputDir}
+	}
+	return req, plan.Dropped
+}
+
 // assignServiceSlugs gives every app in one project a distinct service
 // slug. Apps are ordered by UUID so a re-run assigns the same slugs.
 // Mirrors assignServiceSlugs in cli/cmd/kusoCli/migrate.go.
@@ -309,12 +330,24 @@ func assignServiceSlugs(items []coolify.Item) map[*coolify.Application]string {
 }
 
 // checkExistingServiceRepo confirms a service that already exists was built
-// from the same repo URL + path this app wants. Mirrors the CLI's check.
-func (s *Service) checkExistingServiceRepo(ctx context.Context, project, service string, want *projects.CreateServiceRepo) error {
+// from the same repo URL + path (or, for runtime=image, the same image
+// repository) this app wants. Mirrors the CLI's check.
+func (s *Service) checkExistingServiceRepo(ctx context.Context, project, service string, wantReq projects.CreateServiceRequest) error {
 	svc, err := s.Projects.GetService(ctx, project, service)
 	if err != nil {
 		return fmt.Errorf("exists, and its repo can't be read to confirm it's this app: %w", err)
 	}
+	if wantReq.Image != nil {
+		var gotRepo string
+		if svc.Spec.Image != nil {
+			gotRepo = svc.Spec.Image.Repository
+		}
+		if gotRepo != wantReq.Image.Repository {
+			return fmt.Errorf("already exists for a different image (%q, this app is %q)", gotRepo, wantReq.Image.Repository)
+		}
+		return nil
+	}
+	want := wantReq.Repo
 	var gotURL, gotPath string
 	if svc.Spec.Repo != nil {
 		gotURL, gotPath = svc.Spec.Repo.URL, svc.Spec.Repo.Path
@@ -340,7 +373,7 @@ func repoKey(raw string) string {
 // Unsupported types (anything coolify.AddonKindFromCoolify doesn't
 // recognise) are stamped as skip rows so the operator knows the row
 // was seen but not provisioned.
-func (s *Service) importDatabase(ctx context.Context, projectSlug string, it coolify.Item, out *Result) {
+func (s *Service) importDatabase(ctx context.Context, projectSlug, addonName string, it coolify.Item, out *Result) {
 	kind := coolify.AddonKindFromCoolify(it.Database.DatabaseType)
 	if kind == "" {
 		out.Skipped = append(out.Skipped, Detail{
@@ -350,8 +383,12 @@ func (s *Service) importDatabase(ctx context.Context, projectSlug string, it coo
 		})
 		return
 	}
-	addonName := coolify.SlugifyName(it.Database.Name)
-	if _, err := s.Addons.Add(ctx, projectSlug, addons.CreateAddonRequest{Name: addonName, Kind: kind}); err != nil {
+	req := addons.CreateAddonRequest{
+		Name:    addonName,
+		Kind:    kind,
+		Version: coolify.AddonVersionFromImage(kind, it.Database.Image),
+	}
+	if _, err := s.Addons.Add(ctx, projectSlug, req); err != nil {
 		if !errors.Is(err, addons.ErrConflict) {
 			out.Errors = append(out.Errors, Detail{
 				Kind:   "addon",

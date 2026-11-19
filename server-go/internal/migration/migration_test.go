@@ -457,3 +457,52 @@ func TestImportCoolify_DistinctSlugsAndForeignServiceNotOverwritten(t *testing.T
 		t.Fatalf("envVarsCreated = %d, want 1 (only web-2)", result.EnvVarsCreated)
 	}
 }
+
+// The importer builds its request from coolify.PlanService: a
+// dockerimage app becomes runtime=image with no repo, a git app keeps
+// its branch, and same-named databases get distinct versioned addons.
+func TestImportCoolify_PlanMappingAndAddonSlugs(t *testing.T) {
+	fp := &fakeProjects{}
+	fa := &fakeAddons{}
+	s := &Service{Projects: fp, Addons: fa}
+
+	img := itemApp("u-img", "api", "Shop", "", "", "dockerimage", "8080")
+	img.App.DockerRegistryImageName = "ghcr.io/acme/api"
+	img.App.DockerRegistryImageTag = "1.4"
+	git := itemApp("u-git", "web", "Shop", "acme/web", "staging", "nixpacks", "3000")
+	git.App.StartCommand = "npm start"
+	dbA := itemDB("u-db-a", "db", "Shop", "standalone-postgresql")
+	dbA.Database.Image = "postgres:15-alpine"
+	dbB := itemDB("u-db-b", "db", "Shop", "standalone-postgresql")
+	dbB.Database.Image = "postgres:16"
+
+	inv := &coolify.Inventory{Items: []coolify.Item{git, img, dbB, dbA}}
+	res := s.ImportCoolify(context.Background(), &fakeCoolify{}, inv, pickedSet("u-img", "u-git", "u-db-a", "u-db-b"))
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors: %+v", res.Errors)
+	}
+
+	byName := map[string]projects.CreateServiceRequest{}
+	for _, c := range fp.createdSvc {
+		byName[c.req.Name] = c.req
+	}
+	api := byName["api"]
+	if api.Runtime != "image" || api.Repo != nil || api.Image == nil || api.Image.Repository != "ghcr.io/acme/api" || api.Image.Tag != "1.4" {
+		t.Errorf("image app request = %+v (image %+v), want runtime=image ghcr.io/acme/api:1.4 with no repo", api, api.Image)
+	}
+	web := byName["web"]
+	if web.Repo == nil || web.Repo.DefaultBranch != "staging" {
+		t.Errorf("git app repo = %+v, want defaultBranch=staging", web.Repo)
+	}
+	if len(res.Dropped) != 1 || !strings.Contains(res.Dropped[0].Reason, "start_command") {
+		t.Errorf("dropped = %+v, want the start_command row", res.Dropped)
+	}
+
+	addonVer := map[string]string{}
+	for _, c := range fa.created {
+		addonVer[c.req.Name] = c.req.Version
+	}
+	if len(addonVer) != 2 || addonVer["db"] != "15" || addonVer["db-2"] != "16" {
+		t.Errorf("addons = %v, want db=15 db-2=16", addonVer)
+	}
+}

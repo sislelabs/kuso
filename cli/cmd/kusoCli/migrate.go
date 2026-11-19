@@ -162,6 +162,9 @@ func renderMigrationReport(inv *coolify.Inventory, items []coolify.Item) string 
 			}
 			if it.App != nil {
 				detail = fmt.Sprintf("%s · `%s` branch=%s", detail, it.App.GitRepository, it.App.GitBranch)
+				for _, d := range coolify.PlanService(it.App).Dropped {
+					detail += " · ⚠ " + strings.ReplaceAll(d, "|", "\\|")
+				}
 			} else if it.Database != nil {
 				detail = fmt.Sprintf("%s · type=%s", detail, it.Database.DatabaseType)
 			}
@@ -310,14 +313,9 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				continue
 			}
 			svcSlug := svcSlugFor[it.App]
-			svcReq := kusoApi.CreateServiceRequest{
-				Name:    svcSlug,
-				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
-				Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
-				Repo: &kusoApi.ServiceRepoSpec{
-					URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
-					Path: coolify.NormalizeBaseDir(it.App.BaseDirectory),
-				},
+			svcReq, dropped := migrationServiceRequest(svcSlug, it.App)
+			for _, d := range dropped {
+				fmt.Fprintf(os.Stderr, "      ⚠ service %s: %s\n", svcSlug, d)
 			}
 			sr, err := api.AddService(projectSlug, svcReq)
 			if err != nil {
@@ -335,7 +333,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				// app, but a service built from another repo/path is someone
 				// else's: writing this app's env into it would silently
 				// repoint it (e.g. prod picking up staging's DATABASE_URL).
-				if err := checkExistingServiceRepo(projectSlug, svcSlug, svcReq.Repo); err != nil {
+				if err := checkExistingServiceRepo(projectSlug, svcSlug, svcReq); err != nil {
 					fmt.Fprintf(os.Stderr, "      ✗ service %s: %v — not writing env\n", svcSlug, err)
 					stats.failed++
 					continue
@@ -367,6 +365,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 
 		// Databases → addons.
+		addonSlugFor := coolify.AssignAddonSlugs(byProject[projectSlug])
 		for _, it := range byProject[projectSlug] {
 			if it.Database == nil {
 				continue
@@ -375,8 +374,12 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			if kind == "" {
 				continue
 			}
-			addonName := coolify.SlugifyName(it.Database.Name)
-			ar, err := api.AddAddon(projectSlug, kusoApi.CreateAddonRequest{Name: addonName, Kind: kind})
+			addonName := addonSlugFor[it.Database]
+			ar, err := api.AddAddon(projectSlug, kusoApi.CreateAddonRequest{
+				Name:    addonName,
+				Kind:    kind,
+				Version: coolify.AddonVersionFromImage(kind, it.Database.Image),
+			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "      ✗ addon %s: %v\n", addonName, err)
 				stats.failed++
@@ -420,11 +423,34 @@ func assignServiceSlugs(items []coolify.Item) map[*coolify.Application]string {
 	return out
 }
 
+// migrationServiceRequest builds the kuso service for a Coolify app from
+// coolify.PlanService, which the server-side importer uses too. The second
+// return is one line per Coolify setting the request can't carry.
+func migrationServiceRequest(slug string, app *coolify.Application) (kusoApi.CreateServiceRequest, []string) {
+	plan := coolify.PlanService(app)
+	req := kusoApi.CreateServiceRequest{
+		Name:       slug,
+		Runtime:    plan.Runtime,
+		Port:       int32(plan.Port),
+		Dockerfile: plan.Dockerfile,
+	}
+	if plan.Runtime == "image" {
+		req.Image = &kusoApi.ServiceImageSpec{Repository: plan.ImageRepository, Tag: plan.ImageTag}
+	} else {
+		req.Repo = &kusoApi.ServiceRepoSpec{URL: plan.RepoURL, Path: plan.RepoPath, DefaultBranch: plan.Branch}
+	}
+	if plan.StaticOutputDir != "" {
+		req.Static = &kusoApi.ServiceStatic{OutputDir: plan.StaticOutputDir}
+	}
+	return req, plan.Dropped
+}
+
 // checkExistingServiceRepo confirms a service that already exists (409 on
-// create) was built from the same repo URL + path this app wants. Anything
-// else — a different repo, a different path, or a spec we can't read — is
-// an error, so the caller never writes env into an unrelated service.
-func checkExistingServiceRepo(project, service string, want *kusoApi.ServiceRepoSpec) error {
+// create) was built from the same repo URL + path (or, for runtime=image,
+// the same image repository) this app wants. Anything else — a different
+// source or a spec we can't read — is an error, so the caller never writes
+// env into an unrelated service.
+func checkExistingServiceRepo(project, service string, wantReq kusoApi.CreateServiceRequest) error {
 	resp, err := api.GetService(project, service)
 	if err := checkRespErr(resp, err); err != nil {
 		return fmt.Errorf("exists, and its repo can't be read to confirm it's this app: %w", err)
@@ -435,11 +461,22 @@ func checkExistingServiceRepo(project, service string, want *kusoApi.ServiceRepo
 				URL  string `json:"url"`
 				Path string `json:"path"`
 			} `json:"repo"`
+			Image struct {
+				Repository string `json:"repository"`
+			} `json:"image"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(resp.Body(), &got); err != nil {
 		return fmt.Errorf("exists, and its spec can't be decoded: %w", err)
 	}
+	if wantReq.Image != nil {
+		if got.Spec.Image.Repository != wantReq.Image.Repository {
+			return fmt.Errorf("already exists for a different image (%q, this app is %q)",
+				got.Spec.Image.Repository, wantReq.Image.Repository)
+		}
+		return nil
+	}
+	want := wantReq.Repo
 	if repoKey(got.Spec.Repo.URL) != repoKey(want.URL) || strings.Trim(got.Spec.Repo.Path, "/") != strings.Trim(want.Path, "/") {
 		return fmt.Errorf("already exists for a different repo (%s path=%q, this app is %s path=%q)",
 			got.Spec.Repo.URL, got.Spec.Repo.Path, want.URL, want.Path)
@@ -476,15 +513,38 @@ func importCoolifyEnvVars(project, service string, vars []struct{ Key, Value str
 	return n, nil
 }
 
+// migrationAddonSlugs names every migrate database the way applyMigration
+// does: AssignAddonSlugs over the same per-project item set, keyed by the
+// project's kuso slug. Scripts and apply then agree on deduped names.
+func migrationAddonSlugs(items []coolify.Item) (addonSlug map[*coolify.Database]string, projectSlug map[string]string) {
+	projectSlug = migrationProjectSlugs(items)
+	byProject := map[string][]coolify.Item{}
+	for _, it := range items {
+		if it.Verdict.Action == "migrate" && it.ProjectName != "" {
+			byProject[it.ProjectName] = append(byProject[it.ProjectName], it)
+		}
+	}
+	addonSlug = map[*coolify.Database]string{}
+	for _, group := range byProject {
+		for d, slug := range coolify.AssignAddonSlugs(group) {
+			addonSlug[d] = slug
+		}
+	}
+	return addonSlug, projectSlug
+}
+
 func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
+	addonSlug, projectSlug := migrationAddonSlugs(items)
 	n := 0
 	for _, it := range items {
-		if it.Database == nil || it.Verdict.Action != "migrate" {
+		if it.Database == nil || it.Verdict.Action != "migrate" || it.ProjectName == "" {
 			continue
 		}
-		name := coolify.SlugifyName(it.Database.Name)
-		path := filepath.Join(outDir, "migrate-data-"+name+".sh")
-		body := buildDataMigrationScript(it)
+		name := addonSlug[it.Database]
+		// Two projects can each hold an addon called "db"; the project
+		// slug keeps their scripts from overwriting each other.
+		path := filepath.Join(outDir, "migrate-data-"+projectSlug[it.ProjectName]+"-"+name+".sh")
+		body := buildDataMigrationScript(it, projectSlug[it.ProjectName], name)
 		// 0o700: data-migration scripts contain DATABASE_URL with
 		// the source addon's password embedded inline. World-readable
 		// would leak the password to any other user on the dev box;
@@ -499,7 +559,7 @@ func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
 	return n
 }
 
-func buildDataMigrationScript(it coolify.Item) string {
+func buildDataMigrationScript(it coolify.Item, projectSlug, addonName string) string {
 	d := it.Database
 	kind := coolify.AddonKindFromCoolify(d.DatabaseType)
 	// external_db_url is reachable from the operator's machine;
@@ -530,7 +590,7 @@ set -euo pipefail
 SRC=%s
 DST="${DST:-}"            # set to the kuso addon URL before running
 if [[ -z "$DST" ]]; then echo "set DST=<kuso addon connection URL>" >&2; exit 1; fi
-`, coolify.SlugifyName(d.Name), kind, coolify.SlugifyName(it.ProjectName), srcField, shellQuote(src))
+`, addonName, kind, projectSlug, srcField, shellQuote(src))
 
 	switch kind {
 	case "postgres":

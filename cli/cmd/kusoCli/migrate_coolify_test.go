@@ -23,6 +23,7 @@ type fakeMigrationTarget struct {
 	envOn    map[string][]string // kuso service → env values written
 	created  []string
 	existing map[string]string
+	addons   []kusoApi.CreateAddonRequest
 }
 
 func newFakeMigrationTarget(t *testing.T, existing map[string]string) (*fakeMigrationTarget, *coolify.Client) {
@@ -35,6 +36,12 @@ func newFakeMigrationTarget(t *testing.T, existing map[string]string) (*fakeMigr
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodPost && p == "/api/projects":
+			w.WriteHeader(201)
+			_, _ = io.WriteString(w, "{}")
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/addons"):
+			var req kusoApi.CreateAddonRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			f.addons = append(f.addons, req)
 			w.WriteHeader(201)
 			_, _ = io.WriteString(w, "{}")
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/services"):
@@ -171,7 +178,7 @@ func TestBuildDataMigrationScript_SourceURLIsInert(t *testing.T) {
 		InternalDBURL: "postgres://u:p@internal-docker-host:5432/app",
 		ExternalDBURL: url,
 	}}
-	script := buildDataMigrationScript(it)
+	script := buildDataMigrationScript(it, "shop", "db")
 
 	i := strings.Index(script, "\nDST=")
 	if i < 0 {
@@ -195,7 +202,65 @@ func TestBuildDataMigrationScript_FallsBackToInternalURL(t *testing.T) {
 		Name: "db", DatabaseType: "standalone-postgresql",
 		InternalDBURL: "postgres://u:p@internal-docker-host:5432/app",
 	}}
-	if s := buildDataMigrationScript(it); !strings.Contains(s, "SRC='postgres://u:p@internal-docker-host:5432/app'") {
+	if s := buildDataMigrationScript(it, "shop", "db"); !strings.Contains(s, "SRC='postgres://u:p@internal-docker-host:5432/app'") {
 		t.Errorf("expected single-quoted internal URL fallback:\n%s", s)
+	}
+}
+
+func TestMigrationServiceRequest_DockerImageApp(t *testing.T) {
+	req, _ := migrationServiceRequest("api", &coolify.Application{
+		BuildPack: "dockerimage", GitBranch: "main", PortsExposes: "8080",
+		DockerRegistryImageName: "ghcr.io/acme/api", DockerRegistryImageTag: "1.4",
+	})
+	if req.Runtime != "image" || req.Repo != nil {
+		t.Fatalf("runtime=%q repo=%+v, want image with no repo", req.Runtime, req.Repo)
+	}
+	if req.Image == nil || req.Image.Repository != "ghcr.io/acme/api" || req.Image.Tag != "1.4" {
+		t.Errorf("image=%+v, want ghcr.io/acme/api:1.4", req.Image)
+	}
+	if req.Port != 8080 {
+		t.Errorf("port=%d, want 8080", req.Port)
+	}
+}
+
+func TestMigrationServiceRequest_CarriesBranchAndReportsDropped(t *testing.T) {
+	req, dropped := migrationServiceRequest("web", &coolify.Application{
+		BuildPack: "dockerfile", GitRepository: "acme/web", GitBranch: "staging",
+		DockerfileLocation: "/Dockerfile.prod", StartCommand: "node server.js",
+	})
+	if req.Repo == nil || req.Repo.DefaultBranch != "staging" {
+		t.Fatalf("repo=%+v, want defaultBranch=staging", req.Repo)
+	}
+	if req.Dockerfile != "Dockerfile.prod" {
+		t.Errorf("dockerfile=%q, want Dockerfile.prod", req.Dockerfile)
+	}
+	if len(dropped) != 1 || !strings.Contains(dropped[0], "start_command") {
+		t.Errorf("dropped=%v, want the start_command line", dropped)
+	}
+}
+
+// Two Coolify environments each with a "db" land in one kuso project:
+// apply must create two addons, with the version from the image, and the
+// data scripts must name the same addons.
+func TestApplyMigration_DuplicateDatabaseNamesGetDistinctAddons(t *testing.T) {
+	f, c := newFakeMigrationTarget(t, map[string]string{})
+	db := func(uuid, image string) coolify.Item {
+		return coolify.Item{ProjectName: "shop", Verdict: coolify.Verdict{Action: "migrate"},
+			Database: &coolify.Database{UUID: uuid, Name: "db", DatabaseType: "standalone-postgresql", Image: image}}
+	}
+	items := []coolify.Item{monorepoApp("prod", "/"), db("b", "postgres:16-alpine"), db("a", "postgres:15")}
+	if stats := applyMigration(t.Context(), c, items); stats.failed != 0 {
+		t.Fatalf("failed=%d, want 0", stats.failed)
+	}
+	got := map[string]string{}
+	for _, a := range f.addons {
+		got[a.Name] = a.Version
+	}
+	if len(got) != 2 || got["db"] != "15" || got["db-2"] != "16" {
+		t.Errorf("addons %v, want db=15 db-2=16", got)
+	}
+	slugs, _ := migrationAddonSlugs(items)
+	if slugs[items[1].Database] != "db-2" || slugs[items[2].Database] != "db" {
+		t.Errorf("script slugs %v disagree with apply", slugs)
 	}
 }

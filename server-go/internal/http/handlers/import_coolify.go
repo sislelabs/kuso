@@ -78,6 +78,9 @@ type PreviewResponse struct {
 	CoolifyVersion string         `json:"coolifyVersion"`
 	Stats          PreviewStats   `json:"stats"`
 	Items          []coolify.Item `json:"items"`
+	// Dropped maps an app's Coolify UUID to the settings commit will
+	// create its service without (coolify.ServicePlan.Dropped).
+	Dropped map[string][]string `json:"dropped,omitempty"`
 }
 
 func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +149,17 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 			NumFlag:     inv.NumFlag,
 		},
 		Items: inv.Items,
+	}
+	for _, it := range inv.Items {
+		if it.App == nil {
+			continue
+		}
+		if d := coolify.PlanService(it.App).Dropped; len(d) > 0 {
+			if resp.Dropped == nil {
+				resp.Dropped = map[string][]string{}
+			}
+			resp.Dropped[it.App.UUID] = d
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

@@ -84,6 +84,10 @@ type ServiceChangeResult struct {
 	Name  string `json:"name,omitempty"`
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// NotFound marks an env-unset of a variable that wasn't set. OK stays
+	// true (absent is the desired end state); the CLI says so instead of
+	// reporting a removal.
+	NotFound bool `json:"notFound,omitempty"`
 	// Err keeps the typed error for the handler's status mapping.
 	Err error `json:"-"`
 }
@@ -114,12 +118,13 @@ func (s *Service) ApplyServiceChanges(ctx context.Context, project, service stri
 	}
 	bctx, batch := withRolloutBatch(ctx)
 	out := &ServiceChangesResult{}
-	add := func(kind, name string, err error) {
+	add := func(kind, name string, err error) *ServiceChangeResult {
 		r := ServiceChangeResult{Kind: kind, Name: name, OK: err == nil, Err: err}
 		if err != nil {
 			r.Error = err.Error()
 		}
 		out.Results = append(out.Results, r)
+		return &out.Results[len(out.Results)-1]
 	}
 	for _, e := range req.EnvSet {
 		_, err := s.SetEnvValue(bctx, project, service, e.Name, e.Value)
@@ -127,10 +132,11 @@ func (s *Service) ApplyServiceChanges(ctx context.Context, project, service stri
 	}
 	for _, name := range req.EnvUnset {
 		_, err := s.UnsetEnvVar(bctx, project, service, name)
-		if errors.Is(err, ErrNotFound) {
-			err = nil // already gone: the desired end state
+		notFound := errors.Is(err, ErrNotFound)
+		if notFound {
+			err = nil
 		}
-		add("env-unset", name, err)
+		add("env-unset", name, err).NotFound = notFound
 	}
 	if req.Patch != nil {
 		_, err := s.PatchService(bctx, project, service, *req.Patch)
