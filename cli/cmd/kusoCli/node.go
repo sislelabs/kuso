@@ -97,9 +97,13 @@ on first use; replays return 410.`,
 			ExpiresAt time.Time         `json:"expiresAt"`
 			OneLiner  string            `json:"oneLiner"`
 			Labels    map[string]string `json:"labels"`
+			Warning   string            `json:"warning"`
 		}
 		if err := json.Unmarshal(resp.Body(), &out); err != nil {
 			return fmt.Errorf("decode mint response: %w", err)
+		}
+		if out.Warning != "" {
+			fmt.Fprintln(os.Stderr, "WARNING: "+out.Warning)
 		}
 		fmt.Printf("Token minted. Expires %s (%s from now).\n",
 			out.ExpiresAt.Local().Format(time.RFC3339),

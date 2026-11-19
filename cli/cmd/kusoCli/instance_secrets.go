@@ -71,7 +71,7 @@ history and the process list.`,
 		if err != nil {
 			return err
 		}
-		req := kusoApi.SetSharedSecretRequest{Key: key, Value: value}
+		req := kusoApi.SetInstanceSecretRequest{Key: key, Value: value}
 		resp, err := api.SetInstanceSecret(req)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
