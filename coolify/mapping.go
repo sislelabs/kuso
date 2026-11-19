@@ -2,6 +2,7 @@ package coolify
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -253,6 +254,78 @@ func PlanService(a *Application) ServicePlan {
 		drop("publish_directory", a.PublishDirectory, "only static apps serve a publish directory")
 	}
 	return p
+}
+
+// AssignAddonSlugs gives every database in one kuso project its own
+// addon name. Coolify scopes names per environment, so a production
+// and a staging "db" land in the same kuso project; without the suffix
+// the second create 409s and staging's apps get wired to production's
+// addon. Ordered by Coolify UUID so a re-run maps each database back
+// onto the same addon.
+func AssignAddonSlugs(items []Item) map[*Database]string {
+	var dbs []*Database
+	for _, it := range items {
+		if it.Database != nil {
+			dbs = append(dbs, it.Database)
+		}
+	}
+	sort.SliceStable(dbs, func(i, j int) bool { return dbs[i].UUID < dbs[j].UUID })
+	out := make(map[*Database]string, len(dbs))
+	taken := map[string]bool{}
+	for _, d := range dbs {
+		out[d] = UniqueSlug(SlugifyName(d.Name), taken)
+	}
+	return out
+}
+
+// AddonVersionFromImage derives the kuso addon version from a Coolify
+// database image ("postgres:15-alpine" → "15"), "" when the tag is
+// missing, "latest" or not numeric (the chart default then applies).
+// The chart builds the image from the version, so the precision
+// follows how each engine is tagged: mysql needs major.minor (a bare
+// "8" is 8.4, not 8.0), clickhouse takes the full tag, the rest the
+// major.
+func AddonVersionFromImage(kind, image string) string {
+	image = strings.TrimSpace(image)
+	if at := strings.Index(image, "@"); at >= 0 {
+		image = image[:at]
+	}
+	colon := strings.LastIndex(image, ":")
+	if colon < 0 || colon < strings.LastIndex(image, "/") {
+		return ""
+	}
+	tag := image[colon+1:]
+	if tag == "" || tag[0] < '0' || tag[0] > '9' {
+		return ""
+	}
+	switch kind {
+	case "clickhouse":
+		return tag
+	case "mysql":
+		return leadingVersion(tag, 2)
+	default:
+		return leadingVersion(tag, 1)
+	}
+}
+
+// leadingVersion returns the first n dot-separated numeric components
+// of tag: leadingVersion("8.0.36-debian", 2) = "8.0".
+func leadingVersion(tag string, n int) string {
+	end := 0
+	for parts := 0; end < len(tag); end++ {
+		c := tag[end]
+		if c == '.' {
+			parts++
+			if parts == n {
+				break
+			}
+			continue
+		}
+		if c < '0' || c > '9' {
+			break
+		}
+	}
+	return strings.TrimSuffix(tag[:end], ".")
 }
 
 // ParseFirstPort takes a comma-separated Coolify port list and returns

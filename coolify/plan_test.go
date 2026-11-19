@@ -46,3 +46,35 @@ func TestPlanService_ReportsDroppedSettings(t *testing.T) {
 		t.Errorf("static plan = %+v, want outputDir dist and nothing dropped", p)
 	}
 }
+
+func TestAddonVersionFromImage(t *testing.T) {
+	cases := []struct{ kind, image, want string }{
+		{"postgres", "postgres:15-alpine", "15"},
+		{"postgres", "postgres:16.4", "16"},
+		{"mongodb", "mongo:6.0.14", "6"},
+		{"mysql", "mysql:5.7", "5.7"},
+		{"mysql", "mysql:8.0.36-debian", "8.0"},
+		{"mysql", "mysql:8", "8"},
+		{"redis", "redis:7.2-alpine", "7"},
+		{"clickhouse", "clickhouse/clickhouse-server:24.3", "24.3"},
+		{"postgres", "postgres:latest", ""},
+		{"postgres", "postgres", ""},
+		{"postgres", "localhost:5000/postgres", ""},
+		{"postgres", "postgres:15@sha256:abc", "15"},
+	}
+	for _, c := range cases {
+		if got := AddonVersionFromImage(c.kind, c.image); got != c.want {
+			t.Errorf("AddonVersionFromImage(%q, %q) = %q, want %q", c.kind, c.image, got, c.want)
+		}
+	}
+}
+
+func TestAssignAddonSlugs_SameNameAcrossEnvironments(t *testing.T) {
+	prod := &Database{UUID: "a1", Name: "db"}
+	staging := &Database{UUID: "b2", Name: "db"}
+	items := []Item{{Database: staging, EnvName: "staging"}, {Database: prod, EnvName: "production"}}
+	out := AssignAddonSlugs(items)
+	if out[prod] != "db" || out[staging] != "db-2" {
+		t.Errorf("slugs = prod %q staging %q, want db and db-2", out[prod], out[staging])
+	}
+}
