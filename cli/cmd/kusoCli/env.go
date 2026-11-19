@@ -253,7 +253,7 @@ The server keeps the list: kuso api GET config/exec-env-names`,
 			res, err := applyServiceChanges(project, service, kusoApi.ServiceChangesRequest{EnvSet: sets})
 			if err != errChangesUnsupported {
 				if res != nil {
-					fmt.Printf("set %d env var(s) on %s/%s (%s)\n", len(kvs), project, service, rolloutNote(res))
+					fmt.Printf("set %d env var(s) on %s/%s (%s)\n", appliedCount(res, "env-set"), project, service, rolloutNote(res))
 				}
 				return err
 			}
@@ -331,13 +331,13 @@ var envUnsetCmd = &cobra.Command{
 			return nil
 		}
 
-		// Several keys: one batch, one rollout (missing keys count as
-		// removed, as below). Older servers fall through to per-key.
+		// Several keys: one batch, one rollout. Missing keys aren't
+		// counted as removed. Older servers fall through to per-key.
 		if len(keys) > 1 {
 			res, err := applyServiceChanges(project, service, kusoApi.ServiceChangesRequest{EnvUnset: keys})
 			if err != errChangesUnsupported {
 				if res != nil {
-					fmt.Printf("unset %d env var(s) on %s/%s (%s)\n", len(keys), project, service, rolloutNote(res))
+					fmt.Printf("unset %d env var(s) on %s/%s (%s)\n", appliedCount(res, "env-unset"), project, service, rolloutNote(res))
 				}
 				return err
 			}
