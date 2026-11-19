@@ -265,7 +265,7 @@ func TestListBuilds_SaysWhenOlderBuildsExist(t *testing.T) {
 	}
 }
 
-// NULL and '' both rendered as an empty cell.
+// NULL and ” both rendered as an empty cell.
 func TestSQLQuery_RendersNull(t *testing.T) {
 	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
 		return http.StatusOK, `{"columns":["a","b"],"rows":[["","x"]],"nulls":[[true,false]]}`

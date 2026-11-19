@@ -357,7 +357,7 @@ func TestMCPManageAddon(t *testing.T) {
 	}
 
 	del := callTool(t, s, "manage_addon", map[string]any{
-		"project": "analiz",
+		"project":     "analiz",
 		"action":      "delete",
 		"name":        "pg",
 		"confirmName": "pg",
