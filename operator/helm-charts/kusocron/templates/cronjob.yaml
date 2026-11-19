@@ -245,7 +245,8 @@ spec:
                   curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" "$PROBE_URL"
                   echo "==> ok"
               {{- else }}
-              image: {{ printf "%s:%s" (.Values.image).repository ((.Values.image).tag | default "latest") | quote }}
+              {{- $tagRef := printf "%s:%s" (.Values.image).repository ((.Values.image).tag | default "latest") }}
+              image: "{{ $tagRef }}{{ if and (.Values.image).digest (eq ((.Values.image).digestRef | default "") $tagRef) }}@{{ (.Values.image).digest }}{{ end }}"
               imagePullPolicy: {{ (.Values.image).pullPolicy }}
               command:
                 {{- range .Values.command }}
