@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +29,14 @@ type buildArgs struct {
 	Ref     string `json:"ref,omitempty" jsonschema:"full 40-character commit SHA to build; overrides branch. Branch names, tags and short SHAs are rejected: use branch to build a branch head"`
 	Env     string `json:"env,omitempty" jsonschema:"build for one environment (staging, preview-pr-N): uses its branch and build-time env vars; default production"`
 	DryRun  bool   `json:"dryRun,omitempty" jsonschema:"compile + assemble layers but skip registry push and env promotion (still runs a real build on the shared builder)"`
-	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true for the build tool — a non-dryRun build PROMOTES a new image to the live environment (a production deploy); ignored by build_status"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true — a non-dryRun build PROMOTES a new image to the live environment (a production deploy)"`
+}
+
+type buildStatusArgs struct {
+	Project string `json:"project" jsonschema:"project name"`
+	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
+	Env     string `json:"env,omitempty" jsonschema:"only builds for this environment (production, staging, preview-pr-N); default: the newest build across all envs"`
+	Branch  string `json:"branch,omitempty" jsonschema:"only builds of this branch"`
 }
 
 // buildRequest mirrors the server's builds.CreateBuildRequest.
@@ -117,6 +125,35 @@ func promotionNotes(s buildSummary) string {
 	return b.String()
 }
 
+// newestBuild finds the newest build matching args. An env goes through
+// the server's env-aware latest-per-service view (it knows each env's
+// branch); a branch filters the newest-first list.
+func newestBuild(ctx context.Context, client *kusoclient.Client, args buildStatusArgs) (buildSummary, bool, error) {
+	if args.Env != "" {
+		var latest map[string]buildSummary
+		path := apiPath("api", "projects", args.Project, "builds", "latest") + "?" + url.Values{"env": {args.Env}}.Encode()
+		if err := client.GetJSON(ctx, path, &latest); err != nil {
+			return buildSummary{}, false, fmt.Errorf("latest builds: %w", err)
+		}
+		b, ok := latest[args.Service]
+		if ok && args.Branch != "" && b.Branch != args.Branch {
+			return buildSummary{}, false, nil
+		}
+		return b, ok, nil
+	}
+	var list []buildSummary
+	path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
+	if err := client.GetJSON(ctx, path, &list); err != nil {
+		return buildSummary{}, false, fmt.Errorf("list builds: %w", err)
+	}
+	for _, b := range list {
+		if args.Branch == "" || b.Branch == args.Branch {
+			return b, true, nil
+		}
+	}
+	return buildSummary{}, false, nil
+}
+
 func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "build",
@@ -141,22 +178,27 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "build_status",
-		Description: "Get the newest build's status for a service (status is one of pending/building/succeeded/failed/…). Read-only. Use after build to follow a deploy; the errorMessage field carries the failure cause for failed builds.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args buildArgs) (*mcp.CallToolResult, buildSummary, error) {
+		Description: "Get the newest build's status for a service (status is one of pending/building/succeeded/failed/…), optionally only for one env or branch. Read-only. Use after build to follow a deploy; the errorMessage field carries the failure cause for failed builds.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args buildStatusArgs) (*mcp.CallToolResult, buildSummary, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, buildSummary{}, errors.New("project and service are required")
 		}
-		var list []buildSummary
-		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
-		if err := client.GetJSON(ctx, path, &list); err != nil {
-			return nil, buildSummary{}, fmt.Errorf("list builds: %w", err)
+		out, ok, err := newestBuild(ctx, client, args)
+		if err != nil {
+			return nil, buildSummary{}, err
 		}
-		if len(list) == 0 {
+		if !ok {
+			what := args.Service
+			if args.Env != "" {
+				what += " in env " + args.Env
+			}
+			if args.Branch != "" {
+				what += " on branch " + args.Branch
+			}
 			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: "no builds yet for " + args.Service}},
+				Content: []mcp.Content{&mcp.TextContent{Text: "no builds yet for " + what}},
 			}, buildSummary{}, nil
 		}
-		out := list[0] // newest-first
 		text := fmt.Sprintf("build %s: status=%s", out.ID, out.Status)
 		if out.ImageTag != "" {
 			text += "\n  image: " + out.ImageTag
