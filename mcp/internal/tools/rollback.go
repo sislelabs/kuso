@@ -79,6 +79,7 @@ type rollbackArgs struct {
 	Service string `json:"service" jsonschema:"service short name (no project prefix)"`
 	Build   string `json:"build" jsonschema:"the build id to roll back TO — get one from list_builds; it must have status=succeeded and still have its image"`
 	Env     string `json:"env,omitempty" jsonschema:"environment to roll back; defaults to production. Use this to target staging/qa/preview-pr-N instead"`
+	Force   bool   `json:"force,omitempty" jsonschema:"allow a build of a different branch than the environment deploys (the server refuses that otherwise; needs the project admin role) — only when the user asked for that build"`
 	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true — rollback re-points a LIVE environment at an older image, which is a production deploy in its own right"`
 }
 
@@ -145,7 +146,8 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 			"this re-points a LIVE environment at an older image and is a production deploy in its own " +
 			"right. Mutating; refused in --read-only mode. Defaults to the production environment; pass " +
 			"env to target staging/qa/preview-pr-N. Promotion-only: it does NOT rebuild, and it fails if " +
-			"the target build never succeeded or its image has aged out of the retention window. Call " +
+			"the target build never succeeded or its image has aged out of the retention window. A build " +
+			"of another branch than the env deploys is refused unless force=true. Call " +
 			"list_builds first to choose a target.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args rollbackArgs) (*mcp.CallToolResult, rollbackResult, error) {
 		if args.Project == "" || args.Service == "" || args.Build == "" {
@@ -160,8 +162,15 @@ func registerRollback(server *mcp.Server, client *kusoclient.Client) {
 			return nil, rollbackResult{}, errors.New("kuso-mcp is running in --read-only mode; rollback is refused")
 		}
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds", args.Build, "rollback")
+		q := url.Values{}
 		if env := strings.TrimSpace(args.Env); env != "" {
-			path += "?env=" + url.QueryEscape(env)
+			q.Set("env", env)
+		}
+		if args.Force {
+			q.Set("force", "true")
+		}
+		if len(q) > 0 {
+			path += "?" + q.Encode()
 		}
 		var wire rollbackEnvWire
 		if err := client.PostJSON(ctx, path, struct{}{}, &wire); err != nil {

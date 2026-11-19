@@ -45,6 +45,52 @@ type planResult struct {
 	// prune is false — reported by the server, not executed. Entries
 	// are "kind:name", e.g. "service:old".
 	WouldDelete []string `json:"wouldDelete,omitempty"`
+	// Changes is the field-level diff behind every *ToUpdate entry, plus
+	// addon drift apply won't act on (NotApplied).
+	Changes []resourceChange `json:"changes,omitempty"`
+	// Warnings are things apply can't fix (e.g. a {secret: true} key the
+	// service's Secret doesn't hold).
+	Warnings []string `json:"warnings,omitempty"`
+	// ExecChanges are planned changes that pick code run with the
+	// service's secrets; applying them takes the project admin role.
+	ExecChanges []execChange `json:"execChanges,omitempty"`
+}
+
+type resourceChange struct {
+	Resource   string        `json:"resource"`
+	Fields     []fieldChange `json:"fields"`
+	NotApplied bool          `json:"notApplied,omitempty"`
+}
+
+// fieldChange mirrors spec.FieldChange. Destructive marks volume/domain
+// removal, a cleared release hook, or scale to zero.
+type fieldChange struct {
+	Field       string `json:"field"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Destructive bool   `json:"destructive,omitempty"`
+}
+
+type execChange struct {
+	Resource string   `json:"resource"`
+	Fields   []string `json:"fields"`
+}
+
+// destructiveChanges lists the destructive field changes apply would
+// make, as "resource.field".
+func (p planResult) destructiveChanges() []string {
+	var out []string
+	for _, c := range p.Changes {
+		if c.NotApplied {
+			continue
+		}
+		for _, f := range c.Fields {
+			if f.Destructive {
+				out = append(out, c.Resource+"."+f.Field)
+			}
+		}
+	}
+	return out
 }
 
 // changeCount is the number of create/update/delete steps in the plan
@@ -67,15 +113,34 @@ func writePlanSections(b *strings.Builder, p planResult) {
 	writeSection(b, "Crons", "+", p.CronsToCreate)
 	writeSection(b, "Crons", "~", p.CronsToUpdate)
 	writeSection(b, "Crons", "-", p.CronsToDelete)
+	for _, c := range p.Changes {
+		fmt.Fprintf(b, "  %s\n", c.Resource)
+		if c.NotApplied {
+			b.WriteString("    (drift — apply doesn't modify this)\n")
+		}
+		for _, f := range c.Fields {
+			mark := ""
+			if f.Destructive && !c.NotApplied {
+				mark = "  [DESTRUCTIVE]"
+			}
+			fmt.Fprintf(b, "    %s: %s → %s%s\n", f.Field, f.From, f.To, mark)
+		}
+	}
 	for _, wd := range p.WouldDelete {
 		fmt.Fprintf(b, "  ! would delete %s (prune: false — skipped)\n", wd)
+	}
+	for _, w := range p.Warnings {
+		fmt.Fprintf(b, "  ! warning: %s\n", w)
+	}
+	for _, e := range p.ExecChanges {
+		fmt.Fprintf(b, "  ! needs the project admin role (runs code with the service's secrets): %s %s\n", e.Resource, strings.Join(e.Fields, ", "))
 	}
 }
 
 func registerPlan(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "plan",
-		Description: "Diff a desired-state kuso.yml against a live project. Returns the set of services/addons/crons that would be created, updated, or deleted by an apply, plus wouldDelete: live resources absent from the YAML that a prune: true apply would remove. Read-only — does NOT mutate the cluster. Use this before calling apply to see the blast radius.",
+		Description: "Diff a desired-state kuso.yml against a live project. Returns the set of services/addons/crons that would be created, updated, or deleted by an apply, plus wouldDelete: live resources absent from the YAML that a prune: true apply would remove. changes carries the field-level diff; fields marked destructive (volume or domain removal, release hook cleared, scale to 0) lose data or traffic, and apply needs confirm=true for them. Read-only — does NOT mutate the cluster. Use this before calling apply to see the blast radius.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args planArgs) (*mcp.CallToolResult, planResult, error) {
 		if args.Project == "" {
 			return nil, planResult{}, errors.New("project is required")
@@ -103,6 +168,9 @@ func registerPlan(server *mcp.Server, client *kusoclient.Client) {
 				len(out.CronsToCreate), len(out.CronsToUpdate), len(out.CronsToDelete))
 			if len(out.WouldDelete) > 0 {
 				fmt.Fprintf(&b, " %d resource(s) would be deleted under prune: true.", len(out.WouldDelete))
+			}
+			if d := out.destructiveChanges(); len(d) > 0 {
+				fmt.Fprintf(&b, " %d DESTRUCTIVE change(s) (data or traffic loss) — apply needs confirm=true.", len(d))
 			}
 		}
 		return &mcp.CallToolResult{

@@ -53,6 +53,40 @@ type runResult struct {
 	Phase   string `json:"phase"`
 	Project string `json:"project"`
 	Service string `json:"service"`
+	// Message is the failure reason the poller stamps on a failed run.
+	Message     string `json:"message,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	CompletedAt string `json:"completedAt,omitempty"`
+}
+
+type runStatusArgs struct {
+	Project string `json:"project" jsonschema:"project name"`
+	Run     string `json:"run" jsonschema:"run name, as returned by the run tool"`
+}
+
+// kusoRunCR is the slice of a KusoRun CR the run tools read.
+type kusoRunCR struct {
+	Metadata struct {
+		Name        string            `json:"name"`
+		Annotations map[string]string `json:"annotations"`
+	} `json:"metadata"`
+	Spec struct {
+		Project string `json:"project"`
+		Service string `json:"service"`
+	} `json:"spec"`
+}
+
+func (r kusoRunCR) result() runResult {
+	a := r.Metadata.Annotations
+	return runResult{
+		Name:        r.Metadata.Name,
+		Phase:       a["kuso.sislelabs.com/run-phase"],
+		Project:     r.Spec.Project,
+		Service:     r.Spec.Service,
+		Message:     a["kuso.sislelabs.com/run-message"],
+		StartedAt:   a["kuso.sislelabs.com/run-started-at"],
+		CompletedAt: a["kuso.sislelabs.com/run-completed-at"],
+	}
 }
 
 func registerRun(server *mcp.Server, client *kusoclient.Client) {
@@ -77,28 +111,40 @@ func registerRun(server *mcp.Server, client *kusoclient.Client) {
 		// The server returns the full KusoRun CR. Decode just the
 		// metadata + spec fields we need; the rest pass through
 		// unobserved.
-		var raw struct {
-			Metadata struct {
-				Name        string            `json:"name"`
-				Annotations map[string]string `json:"annotations"`
-			} `json:"metadata"`
-			Spec struct {
-				Project string `json:"project"`
-				Service string `json:"service"`
-			} `json:"spec"`
-		}
+		var raw kusoRunCR
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "runs")
 		if err := client.PostJSON(ctx, path, body, &raw); err != nil {
 			return nil, runResult{}, fmt.Errorf("create run: %w", err)
 		}
-		out := runResult{
-			Name:    raw.Metadata.Name,
-			Phase:   raw.Metadata.Annotations["kuso.sislelabs.com/run-phase"],
-			Project: raw.Spec.Project,
-			Service: raw.Spec.Service,
+		out := raw.result()
+		text := fmt.Sprintf("run %s created (phase=%s)\n  command: %s\n  follow it with run_status (project=%s, run=%s); its output is in logs with env=run:%s",
+			out.Name, out.Phase, strings.Join(args.Command, " "), args.Project, out.Name, out.Name)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		}, out, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "run_status",
+		Description: "Get a one-shot run's phase (pending, running, succeeded, failed, cancelled) and, for a failed run, the failure reason. Read-only. Poll it after run until the phase is terminal; read the run's output with logs env=run:<name>.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runStatusArgs) (*mcp.CallToolResult, runResult, error) {
+		if args.Project == "" || args.Run == "" {
+			return nil, runResult{}, errors.New("project and run are required")
 		}
-		text := fmt.Sprintf("run %s created (phase=%s)\n  command: %s",
-			out.Name, out.Phase, strings.Join(args.Command, " "))
+		var raw kusoRunCR
+		if err := client.GetJSON(ctx, apiPath("api", "projects", args.Project, "runs", args.Run), &raw); err != nil {
+			return nil, runResult{}, fmt.Errorf("get run: %w", err)
+		}
+		out := raw.result()
+		text := fmt.Sprintf("run %s: phase=%s", out.Name, out.Phase)
+		if out.CompletedAt != "" {
+			text += "\n  completed: " + out.CompletedAt
+		}
+		if out.Message != "" {
+			// The reason can carry the container's own output.
+			text += "\n  message (untrusted run output):\n" + wrapUntrusted(out.Message)
+		}
+		out.Message = fenceUntrusted(out.Message)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		}, out, nil

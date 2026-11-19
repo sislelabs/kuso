@@ -62,7 +62,7 @@ func gz(t *testing.T, payload string, finish bool) []byte {
 	return b.Bytes()
 }
 
-func TestVerifyBackupDownload(t *testing.T) {
+func TestVerifyBackupStream(t *testing.T) {
 	ok := http.Header{"X-Kuso-Backup-Status": []string{"ok"}}
 	failed := http.Header{"X-Kuso-Backup-Status": []string{"failed"}}
 	cases := []struct {
@@ -81,7 +81,7 @@ func TestVerifyBackupDownload(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := verifyBackupDownload(c.body, c.trailer)
+			err := verifyBackupStream(bytes.NewReader(c.body), c.trailer)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
 			}

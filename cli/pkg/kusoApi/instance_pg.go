@@ -22,6 +22,9 @@ type ProvisionInstancePGRequest struct {
 	HA          bool   `json:"ha,omitempty"`
 	Version     string `json:"version,omitempty"`
 	StorageSize string `json:"storageSize,omitempty"`
+	// ReattachData acknowledges that a data volume from an earlier
+	// managed PG still exists and will be reused (same major only).
+	ReattachData bool `json:"reattachData,omitempty"`
 }
 
 // ConfigureExternalInstancePGRequest is the body for POST

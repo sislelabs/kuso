@@ -31,7 +31,7 @@ func TestValidateMethod(t *testing.T) {
 }
 
 func TestBuildBody_Fields(t *testing.T) {
-	b, err := buildBody("", []string{"count=3", "enabled=true", "name=foo"}, []string{"id=007"})
+	b, err := buildBody("", []string{"count=3", "enabled=true", "name=foo", "ref=0123456"}, []string{"id=007"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestBuildBody_Fields(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("not json: %s", b)
 	}
-	if m["count"].(float64) != 3 || m["enabled"] != true || m["name"] != "foo" || m["id"] != "007" {
+	if m["count"].(float64) != 3 || m["enabled"] != true || m["name"] != "foo" || m["id"] != "007" || m["ref"] != "0123456" {
 		t.Fatalf("coercion wrong: %#v", m)
 	}
 }

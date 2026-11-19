@@ -54,11 +54,10 @@ type sqlQueryArgs struct {
 	Limit   int    `json:"limit,omitempty" jsonschema:"max rows to return (default 50, max 500)"`
 }
 
-// sqlTable mirrors the server's table-listing wire shape.
+// sqlTable mirrors the server's table-listing wire shape (no row count).
 type sqlTable struct {
 	Schema string `json:"schema"`
 	Name   string `json:"name"`
-	Rows   int64  `json:"rows,omitempty"`
 }
 
 // sqlTablesResult wraps the table list in an object — the MCP SDK
@@ -69,9 +68,27 @@ type sqlTablesResult struct {
 
 // sqlQueryResult mirrors handlers.SQLQueryResponse.
 type sqlQueryResult struct {
-	Columns   []string   `json:"columns"`
-	Rows      [][]string `json:"rows"`
-	Truncated bool       `json:"truncated,omitempty"`
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	// Nulls parallels Rows: true where the cell is SQL NULL, which Rows
+	// carries as "" (indistinguishable from an empty string).
+	Nulls     [][]bool `json:"nulls,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
+}
+
+// cells returns row i with SQL NULLs rendered as NULL.
+func (r sqlQueryResult) cells(i int) []string {
+	row := r.Rows[i]
+	if i >= len(r.Nulls) {
+		return row
+	}
+	out := append([]string(nil), row...)
+	for j, isNull := range r.Nulls[i] {
+		if isNull && j < len(out) {
+			out[j] = "NULL"
+		}
+	}
+	return out
 }
 
 // sqlQueryOutput is the structured result. The go-sdk copies it into
@@ -107,11 +124,7 @@ func registerDB(server *mcp.Server, client *kusoclient.Client) {
 				if t.Schema != "" && t.Schema != "public" {
 					name = t.Schema + "." + t.Name
 				}
-				fmt.Fprintf(&b, "  %s", name)
-				if t.Rows > 0 {
-					fmt.Fprintf(&b, "  (~%d rows)", t.Rows)
-				}
-				b.WriteString("\n")
+				fmt.Fprintf(&b, "  %s\n", name)
 			}
 		}
 		return &mcp.CallToolResult{
@@ -160,8 +173,8 @@ func registerDB(server *mcp.Server, client *kusoclient.Client) {
 			b.WriteString(strings.Join(out.Columns, " | "))
 			b.WriteString("\n")
 		}
-		for _, r := range out.Rows {
-			b.WriteString(strings.Join(r, " | "))
+		for i := range out.Rows {
+			b.WriteString(strings.Join(out.cells(i), " | "))
 			b.WriteString("\n")
 		}
 		// Row values are written by the application, not by kuso — fence

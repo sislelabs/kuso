@@ -38,36 +38,32 @@ func splitCmd(s string) []string {
 // preserve the repository when only --image-tag is bumped (the server
 // replaces spec.image wholesale, so we must resend the repository).
 // Returns "" (no error) when the cron exists but carries no image.
-func currentProjectCronImage(project, name string) (repo, tag, pullPolicy string, err error) {
+func currentProjectCronImage(project, name string) (*kusoApi.CronImage, error) {
 	resp, err := api.ListCrons(project)
 	if err := checkRespErr(resp, err); err != nil {
-		return "", "", "", err
+		return nil, err
 	}
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
 		} `json:"metadata"`
 		Spec struct {
-			Image *struct {
-				Repository string `json:"repository"`
-				Tag        string `json:"tag"`
-				PullPolicy string `json:"pullPolicy"`
-			} `json:"image"`
+			Image *kusoApi.CronImage `json:"image"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(resp.Body(), &items); err != nil {
-		return "", "", "", fmt.Errorf("decode crons: %w", err)
+		return nil, fmt.Errorf("decode crons: %w", err)
 	}
 	for _, c := range items {
 		// The list carries CR names (<project>-<name>); users pass the short one.
 		if c.Metadata.Name == name || c.Metadata.Name == project+"-"+name {
 			if c.Spec.Image != nil {
-				return c.Spec.Image.Repository, c.Spec.Image.Tag, c.Spec.Image.PullPolicy, nil
+				return c.Spec.Image, nil
 			}
-			return "", "", "", nil
+			return &kusoApi.CronImage{}, nil
 		}
 	}
-	return "", "", "", fmt.Errorf("cron %q not found in project %q", name, project)
+	return nil, fmt.Errorf("cron %q not found in project %q", name, project)
 }
 
 var cronCmd = &cobra.Command{
@@ -334,6 +330,7 @@ var (
 	pCronOnFailureSecret   string // "name:key"
 	pCronOnFailureClear    bool
 	pCronPullPolicy        string
+	pCronPullSecret        string
 )
 
 var cronAddHTTPCmd = &cobra.Command{
@@ -391,7 +388,7 @@ var cronAddCommandCmd = &cobra.Command{
 			DisplayName:       pCronDisplayName,
 			Kind:              "command",
 			Schedule:          pCronSchedule,
-			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag, PullPolicy: pCronPullPolicy},
+			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag, PullPolicy: pCronPullPolicy, PullSecret: pCronPullSecret},
 			Command:           splitCmd(pCronCmdString),
 			Suspend:           pCronSuspend,
 			PinImage:          pCronPinImage,
@@ -442,44 +439,39 @@ Service-attached crons (kind=service) use 'kuso cron edit-service'.`,
 			v := pCronURL
 			req.URL = &v
 		}
-		if cmd.Flags().Changed("image") || cmd.Flags().Changed("image-tag") || cmd.Flags().Changed("pull-policy") {
-			repo := pCronImage
-			// Editing ONLY --image-tag must not blank out the repository.
-			// The server replaces spec.image verbatim, so sending
-			// {repository:"", tag:"v2"} produced an InvalidImageName
-			// (":v2") and the cronjob never scheduled. Fetch the current
-			// cron and preserve its repository so a tag-only bump keeps
-			// the image it's already running.
-			tag := pCronImageTag
+		if cmd.Flags().Changed("image") || cmd.Flags().Changed("image-tag") || cmd.Flags().Changed("pull-policy") || cmd.Flags().Changed("pull-secret") {
+			// The server replaces spec.image whole, so every sub-field the
+			// user didn't pass is carried over from the live cron: a
+			// tag-only bump must keep the repository (else ":v2", an
+			// InvalidImageName), a repo change must keep the tag (the flag
+			// defaults to "latest"), and the pull policy and pull secret
+			// must survive (losing the secret is ImagePullBackOff on the
+			// next run of a private image).
+			cur, cerr := currentProjectCronImage(args[0], args[1])
 			if !cmd.Flags().Changed("image") {
-				cur, _, _, cerr := currentProjectCronImage(args[0], args[1])
 				if cerr != nil {
 					return fmt.Errorf("--image-tag needs the current image; %w (pass --image to set it explicitly)", cerr)
 				}
-				if cur == "" {
-					return fmt.Errorf("--image-tag / --pull-policy require an existing image on cron %q — none found; pass --image too", args[1])
-				}
-				repo = cur
-			}
-			// Mirror of the above: editing ONLY --image must not reset the
-			// TAG. --image-tag defaults to "latest", so sending it
-			// unconditionally silently unpinned a cron from e.g.
-			// alpine:3.21 → alpine:latest on an unrelated repo change.
-			// spec.image is replaced whole, so an unset pullPolicy would
-			// reset to the chart default; keep the stored one.
-			pullPolicy := pCronPullPolicy
-			if !cmd.Flags().Changed("image-tag") || !cmd.Flags().Changed("pull-policy") {
-				_, curTag, curPolicy, cerr := currentProjectCronImage(args[0], args[1])
-				if cerr == nil {
-					if !cmd.Flags().Changed("image-tag") && curTag != "" {
-						tag = curTag
-					}
-					if !cmd.Flags().Changed("pull-policy") {
-						pullPolicy = curPolicy
-					}
+				if cur.Repository == "" {
+					return fmt.Errorf("--image-tag / --pull-policy / --pull-secret require an existing image on cron %q — none found; pass --image too", args[1])
 				}
 			}
-			req.Image = &kusoApi.CronImage{Repository: repo, Tag: tag, PullPolicy: pullPolicy}
+			img := kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag, PullPolicy: pCronPullPolicy, PullSecret: pCronPullSecret}
+			if cerr == nil {
+				if !cmd.Flags().Changed("image") {
+					img.Repository = cur.Repository
+				}
+				if !cmd.Flags().Changed("image-tag") && cur.Tag != "" {
+					img.Tag = cur.Tag
+				}
+				if !cmd.Flags().Changed("pull-policy") {
+					img.PullPolicy = cur.PullPolicy
+				}
+				if !cmd.Flags().Changed("pull-secret") {
+					img.PullSecret = cur.PullSecret
+				}
+			}
+			req.Image = &img
 		}
 		if cmd.Flags().Changed("pin-image") {
 			v := pCronPinImage
@@ -598,6 +590,7 @@ func init() {
 		c.Flags().StringVar(&pCronOnFailureWebhook, "on-failure-webhook", "", "URL to POST to when a run fails")
 		c.Flags().StringVar(&pCronOnFailureSecret, "on-failure-secret", "", "addon conn Secret key that signs the failure webhook, as <secret>:<key> (e.g. myproj-db-conn:POSTGRES_PASSWORD)")
 		c.Flags().StringVar(&pCronPullPolicy, "pull-policy", "", "image pull policy (kind=command): Always|IfNotPresent|Never")
+		c.Flags().StringVar(&pCronPullSecret, "pull-secret", "", "kubernetes.io/dockerconfigjson Secret for a private image (kind=command)")
 	}
 	cronEditCmd.Flags().BoolVar(&pCronOnFailureClear, "on-failure-clear", false, "remove the failure webhook")
 	cronCmd.AddCommand(cronAddHTTPCmd)

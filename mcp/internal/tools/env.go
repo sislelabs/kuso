@@ -7,9 +7,10 @@
 // set_env used to POST the whole list to /env, which replaced
 // spec.envVars: keys the agent omitted were deleted, and since its
 // {name,value} shape can't carry valueFrom, every secretKeyRef (addon
-// refs) was dropped on every call. It now goes through the per-key
-// PUT/DELETE /env-vars/{name} routes, so keys it doesn't name are left
-// alone. All writes are refused in --read-only.
+// refs) was dropped on every call. It now sends only the keys it names:
+// service-level writes as one POST /changes batch (one rollout), per-env
+// overrides through the per-key /envs/{env}/env-vars/{name} routes. All
+// writes are refused in --read-only.
 
 package tools
 
@@ -35,7 +36,26 @@ type setEnvArgs struct {
 	Service string   `json:"service" jsonschema:"service short name (no project prefix)"`
 	EnvVars []envKV  `json:"envVars,omitempty" jsonschema:"env vars to create or overwrite; keys not listed here are left untouched"`
 	Unset   []string `json:"unset,omitempty" jsonschema:"env var names to remove"`
+	Env     string   `json:"env,omitempty" jsonschema:"write per-env overrides on one environment (staging, preview-pr-N) instead of the service-level vars, which apply to EVERY env including production"`
 	Confirm bool     `json:"confirm,omitempty" jsonschema:"must be true — set_env writes to the live service and triggers a rolling restart"`
+}
+
+// serviceChangesRequest / serviceChangesResult mirror the server's
+// POST .../changes batch, which applies every env write in one rollout.
+type serviceChangesRequest struct {
+	EnvSet   []envKV  `json:"envSet,omitempty"`
+	EnvUnset []string `json:"envUnset,omitempty"`
+}
+
+type serviceChangesResult struct {
+	Results []struct {
+		Kind  string `json:"kind"`
+		Name  string `json:"name,omitempty"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	} `json:"results"`
+	RolledOut  bool   `json:"rolledOut"`
+	FlushError string `json:"flushError,omitempty"`
 }
 
 // setEnvVarRequest mirrors apiv1.SetEnvVarRequest in its unified form, the
@@ -136,7 +156,7 @@ func describeValueFrom(vf map[string]any) string {
 func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "set_env",
-		Description: "Create/overwrite the env vars listed in envVars and remove the names listed in unset. This is the same write as `kuso env set`: the server decides storage, so a ${{ addon.KEY }} value becomes an addon secret ref, a build-relevant name stays a spec literal, and everything else (API keys included) becomes a managed secret. Per-key: env vars you don't mention (including addon refs) are left untouched. REQUIRES confirm=true (a write to the live service; pods roll). Use get_env to read the current list first. Use set_secret only to scope a secret to one env or to override a project-shared key. Mutating; refused in --read-only mode.",
+		Description: "Create/overwrite the env vars listed in envVars and remove the names listed in unset. This is the same write as `kuso env set`: the server decides storage, so a ${{ addon.KEY }} value becomes an addon secret ref, a build-relevant name stays a spec literal, and everything else (API keys included) becomes a managed secret. Per-key: env vars you don't mention (including addon refs) are left untouched. Without env the write is service-level and applies to EVERY environment including production (all keys in one rollout); pass env to write per-env overrides on just that environment (stored as given). REQUIRES confirm=true (a write to the live service; pods roll). Use get_env to read the current list first. Use set_secret only to scope a secret to one env or to override a project-shared key. Mutating; refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args setEnvArgs) (*mcp.CallToolResult, struct{}, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, struct{}{}, errors.New("project and service are required")
@@ -152,26 +172,67 @@ func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 		if !args.Confirm {
 			return nil, struct{}{}, errors.New("confirm=true is required — set_env writes to the live service and triggers a rolling restart")
 		}
+		env := strings.TrimSpace(args.Env)
+		if env == "" {
+			return setServiceEnv(ctx, client, args)
+		}
 		set, unset := 0, 0
 		for _, kv := range args.EnvVars {
-			path := apiPath("api", "projects", args.Project, "services", args.Service, "env-vars", kv.Name)
-			if err := client.PutJSON(ctx, path, setEnvVarRequest{Value: kv.Value, Auto: true}, nil); err != nil {
-				return nil, struct{}{}, fmt.Errorf("set env %s (after %d set, %d unset): %w", kv.Name, set, unset, err)
+			path := apiPath("api", "projects", args.Project, "services", args.Service, "envs", env, "env-vars", kv.Name)
+			if err := client.PutJSON(ctx, path, setEnvVarRequest{Value: kv.Value}, nil); err != nil {
+				return nil, struct{}{}, fmt.Errorf("set env %s on env %s (after %d set, %d unset): %w", kv.Name, env, set, unset, err)
 			}
 			set++
 		}
 		for _, name := range args.Unset {
-			path := apiPath("api", "projects", args.Project, "services", args.Service, "env-vars", name)
+			path := apiPath("api", "projects", args.Project, "services", args.Service, "envs", env, "env-vars", name)
 			if err := client.DeleteJSON(ctx, path); err != nil {
-				return nil, struct{}{}, fmt.Errorf("unset env %s (after %d set, %d unset): %w", name, set, unset, err)
+				return nil, struct{}{}, fmt.Errorf("unset env %s on env %s (after %d set, %d unset): %w", name, env, set, unset, err)
 			}
 			unset++
 		}
-		text := fmt.Sprintf("set %d and removed %d env var(s) on %s; other keys unchanged", set, unset, args.Service)
+		text := fmt.Sprintf("set %d and removed %d override(s) on %s [env=%s]; other keys and envs unchanged", set, unset, args.Service, env)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		}, struct{}{}, nil
 	})
+}
+
+// setServiceEnv writes service-level vars in one batch, so the pods roll
+// once instead of once per key. Items that fail are left unapplied; the
+// result is marked an error so a partial write can't read as success.
+func setServiceEnv(ctx context.Context, client *kusoclient.Client, args setEnvArgs) (*mcp.CallToolResult, struct{}, error) {
+	var res serviceChangesResult
+	path := apiPath("api", "projects", args.Project, "services", args.Service, "changes")
+	if err := client.PostJSON(ctx, path, serviceChangesRequest{EnvSet: args.EnvVars, EnvUnset: args.Unset}, &res); err != nil {
+		return nil, struct{}{}, fmt.Errorf("set env: %w", err)
+	}
+	set, unset := 0, 0
+	var failed []string
+	for _, r := range res.Results {
+		switch {
+		case !r.OK:
+			failed = append(failed, fmt.Sprintf("%s %s: %s", r.Kind, r.Name, r.Error))
+		case r.Kind == "env-set":
+			set++
+		case r.Kind == "env-unset":
+			unset++
+		}
+	}
+	if res.FlushError != "" {
+		failed = append(failed, "rollout: "+res.FlushError)
+	}
+	text := fmt.Sprintf("set %d and removed %d env var(s) on %s; other keys unchanged", set, unset, args.Service)
+	if res.RolledOut {
+		text += "; pods roll once"
+	}
+	if len(failed) > 0 {
+		text += "\nFAILED (not applied):\n  " + strings.Join(failed, "\n  ")
+	}
+	return &mcp.CallToolResult{
+		IsError: len(failed) > 0,
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}, struct{}{}, nil
 }
 
 func registerSetSecret(server *mcp.Server, client *kusoclient.Client) {

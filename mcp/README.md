@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** pre-release and unversioned (`make ship` doesn't build it; unstamped binaries report their VCS revision), but functional: 23 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, image vulnerability findings, and config-as-code plan/apply.
+**Status:** pre-release and unversioned (`make ship` doesn't build it; unstamped binaries report their VCS revision), but functional: 24 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, rollback, addon SQL, image vulnerability findings, and config-as-code plan/apply.
 
 ## Run
 
@@ -74,13 +74,14 @@ All tools are project-shaped (intent-grouped, not REST-mirrored). Registered tod
 | `manage_addon`      | add / delete addons (mutating; `confirm: true`; delete also needs `confirmName` equal to the addon name) |
 | `subscribe_addon`   | mount or unmount an addon's connection Secret on a service; services with a subscription list only get a new addon once subscribed (mutating; `confirm: true`) |
 | `get_env`           | a service's env vars, including addon `valueFrom` refs (read-only) |
-| `set_env`           | upsert / remove individual env vars, same storage rules as `kuso env set`; unnamed keys are untouched (mutating; `confirm: true`) |
+| `set_env`           | upsert / remove individual env vars, same storage rules as `kuso env set`; unnamed keys are untouched; `env` scopes the write to one environment's overrides (mutating; `confirm: true`) |
 | `set_secret`        | set secret-backed vars (mutating; `confirm: true`) |
 | `build`             | trigger a build, optionally for one `env` (mutating; `confirm: true`) |
 | `build_status`      | build state for a service, incl. promotion hold / not-promoted reason |
 | `run`               | one-shot Job in a service's context (mutating; `confirm: true`) |
+| `run_status`        | a run's phase and failure reason, to follow a `run` to completion (read-only) |
 | `plan`              | diff a kuso.yaml against live state (read-only) |
-| `apply`             | reconcile kuso.yaml (mutating; `confirm: true` only when the YAML sets `prune: true` — creates/updates apply without it, so `plan` first) |
+| `apply`             | reconcile kuso.yaml (mutating; `confirm: true` when the YAML sets `prune: true` or the plan has a destructive field change such as a dropped volume or domain — other creates/updates apply without it, so `plan` first) |
 | `list_builds`       | recent builds for a service, newest first (read-only) |
 | `rollback`          | re-point an env at a previous build's image (mutating; `confirm: true`) |
 | `sql_tables`        | list an addon database's tables (read-only) |

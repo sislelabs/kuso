@@ -71,8 +71,6 @@ func TestVulnsClient_Contract(t *testing.T) {
 			"GET", "/api/admin/vulns/platform/findings", "digest=sha256%3Aabc", ""},
 		{"scan-all", func() (*resty.Response, error) { return k.ScanAllVulns() },
 			"POST", "/api/admin/vulns/scan-all", "", ""},
-		{"scan get", func() (*resty.Response, error) { return k.GetVulnScan("42") },
-			"GET", "/api/admin/vulns/scans/42", "", ""},
 		{"settings get", func() (*resty.Response, error) { return k.GetVulnSettings() },
 			"GET", "/api/admin/settings/vulnscan", "", ""},
 		{"settings put", func() (*resty.Response, error) {

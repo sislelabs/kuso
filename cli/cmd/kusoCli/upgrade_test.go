@@ -84,14 +84,16 @@ func TestUpgradePollVerdict(t *testing.T) {
 		{"/404", false, true},
 		{"/html", false, true},
 	} {
-		retry, err := upgradePollVerdict(api.RawGet(c.path))
+		resp, rerr := api.RawGet(c.path)
+		retry, err := pollVerdict("update status", resp, rerr)
 		if retry != c.wantRetry || (err != nil) != c.wantErr {
 			t.Errorf("%s: retry=%v err=%v, want retry=%v err=%v", c.path, retry, err, c.wantRetry, c.wantErr)
 		}
 	}
 
 	srv.Close()
-	if retry, err := upgradePollVerdict(api.RawGet("/ok")); !retry || err == nil {
+	resp, rerr := api.RawGet("/ok")
+	if retry, err := pollVerdict("update status", resp, rerr); !retry || err == nil {
 		t.Errorf("transport error: retry=%v err=%v, want a retryable error", retry, err)
 	}
 }

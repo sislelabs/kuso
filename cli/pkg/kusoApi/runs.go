@@ -10,6 +10,14 @@ type CreateRunRequest struct {
 	Command        []string    `json:"command"`
 	Env            []RunEnvVar `json:"env,omitempty"`
 	TimeoutSeconds int         `json:"timeoutSeconds,omitempty"`
+	// Resources overrides the run container's requests/limits (the
+	// corev1.ResourceRequirements shape); nil keeps the chart default.
+	Resources *RunResources `json:"resources,omitempty"`
+}
+
+type RunResources struct {
+	Limits   map[string]string `json:"limits,omitempty"`
+	Requests map[string]string `json:"requests,omitempty"`
 }
 
 // RunEnvVar matches the server's runs.EnvVar.

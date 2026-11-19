@@ -1,7 +1,6 @@
 package kusoCli
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -217,17 +216,13 @@ instead of taking a fresh dump; that needs the admin role.`,
 // streamGzipCommand in server-go backup_download.go).
 const backupStatusTrailer = "X-Kuso-Backup-Status"
 
-// verifyBackupDownload rejects a download that isn't a complete dump. The
+// verifyBackupStream rejects a download that isn't a complete dump. The
 // server can only discover a failed pg_dump after it has sent 200, so the
 // status code proves nothing: trust the completion trailer when present
 // and always decompress the whole body, since a proxy may strip trailers
 // and the server leaves a failed stream's gzip unterminated. An empty
 // payload is a failure too — pg_dump never emits zero bytes, and that is
 // exactly what pre-fix servers shipped when the dump died.
-func verifyBackupDownload(body []byte, trailer http.Header) error {
-	return verifyBackupStream(bytes.NewReader(body), trailer)
-}
-
 func verifyBackupStream(body io.Reader, trailer http.Header) error {
 	if st := trailer.Get(backupStatusTrailer); st != "" && st != "ok" {
 		return fmt.Errorf("server reported the dump failed (%s: %s) — check the server log", backupStatusTrailer, st)

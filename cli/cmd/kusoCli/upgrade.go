@@ -251,11 +251,6 @@ tolerated.`,
 // pod to be replaced.
 const maxUpgradePollFailures = 20
 
-// upgradePollVerdict classifies one update-status poll; see pollVerdict.
-func upgradePollVerdict(resp *resty.Response, err error) (retry bool, verdict error) {
-	return pollVerdict("update status", resp, err)
-}
-
 // classifyUpgradePhase decides whether an update-status phase is terminal.
 // It matches the phase vocabulary the in-cluster updater actually writes
 // (updater.go UpdateStatus.Phase): pending | applying-crds | rolling-server

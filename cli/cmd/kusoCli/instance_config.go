@@ -17,6 +17,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -114,9 +115,8 @@ var instanceConfigSetCmd = &cobra.Command{
 // These are separate from the Kuso-CR "settings" above: they're the
 // admin knobs persisted to the Setting table and exposed at
 // GET/PUT /api/admin/settings/{build,session}. Both are admin-only and
-// return a flat JSON object. `set` is a read-modify-write of key=value
-// pairs (values JSON-parsed when possible), mirroring `instance-config
-// set` — so you only overwrite the keys you name.
+// return a flat JSON object. `set` takes key=value pairs (values
+// JSON-parsed when possible) and only changes the keys you name.
 
 // runSettingsGet is shared by build-settings/session-settings get.
 func runSettingsGet(path string) error {
@@ -134,9 +134,14 @@ func runSettingsGet(path string) error {
 	return jsonOut(out)
 }
 
-// runSettingsSet fetches the current blob at path, overlays the
-// key=value args (JSON-parsed, else raw string), and PUTs it back.
-func runSettingsSet(path string, args []string) error {
+// runSettingsSet fetches the current blob at path, checks every key the
+// user named exists in it (the server ignores unknown keys, so a typo
+// would report success), and PUTs the key=value args (JSON-parsed, else
+// raw string). patch=true sends only the named keys, for an endpoint
+// that treats omitted fields as "keep" — echoing the whole GET back
+// there pins every derived value (build maxConcurrent overrides the
+// adaptive cap). patch=false overlays them on the current blob.
+func runSettingsSet(path string, args []string, patch bool) error {
 	if api == nil {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
@@ -148,6 +153,10 @@ func runSettingsSet(path string, args []string) error {
 	if err := json.Unmarshal(resp.Body(), &cur); err != nil {
 		return fmt.Errorf("decode current settings: %w", err)
 	}
+	out := cur
+	if patch {
+		out = map[string]any{}
+	}
 	for _, kv := range args {
 		i := strings.IndexByte(kv, '=')
 		if i < 0 {
@@ -158,13 +167,21 @@ func runSettingsSet(path string, args []string) error {
 		if key == "" {
 			return fmt.Errorf("invalid pair %q (empty key)", kv)
 		}
+		if _, ok := cur[key]; !ok {
+			known := make([]string, 0, len(cur))
+			for k := range cur {
+				known = append(known, k)
+			}
+			sort.Strings(known)
+			return fmt.Errorf("unknown key %q (known: %s)", key, strings.Join(known, ", "))
+		}
 		var val any
 		if err := json.Unmarshal([]byte(raw), &val); err != nil {
 			val = raw
 		}
-		cur[key] = val
+		out[key] = val
 	}
-	body, err := json.Marshal(cur)
+	body, err := json.Marshal(out)
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)
 	}
@@ -192,12 +209,12 @@ var buildSettingsGetCmd = &cobra.Command{
 
 var buildSettingsSetCmd = &cobra.Command{
 	Use:   "set <key>=<value> [<key>=<value> ...]",
-	Short: "Set build-settings keys (read-modify-write)",
+	Short: "Set build-settings keys (only the keys you name are sent)",
 	Args:  cobra.MinimumNArgs(1),
 	Example: `  kuso instance-config build-settings set maxConcurrent=2
   kuso instance-config build-settings set memoryLimit=4Gi cpuLimit=2000m`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSettingsSet("/api/admin/settings/build", args)
+		return runSettingsSet("/api/admin/settings/build", args, true)
 	},
 }
 
@@ -222,7 +239,7 @@ var sessionSettingsSetCmd = &cobra.Command{
 	Example: `  kuso instance-config session-settings set ttlSeconds=2592000
   kuso instance-config session-settings set neverExpire=true`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSettingsSet("/api/admin/settings/session", args)
+		return runSettingsSet("/api/admin/settings/session", args, false)
 	},
 }
 

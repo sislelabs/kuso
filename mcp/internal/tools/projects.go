@@ -297,15 +297,26 @@ type addServiceArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Name    string `json:"name" jsonschema:"service name (e.g. web, api, worker)"`
 	Path    string `json:"path,omitempty" jsonschema:"monorepo subpath (default '.')"`
-	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|buildpacks|static (default: dockerfile)"`
+	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|static|worker|image (default: dockerfile)"`
 	Port    int    `json:"port,omitempty" jsonschema:"container port (default: 8080)"`
-	Confirm bool   `json:"confirm" jsonschema:"must be true to actually add"`
+	// SkipFirstBuild maps to the server's skipFirstBuild.
+	SkipFirstBuild bool `json:"skipFirstBuild,omitempty" jsonschema:"create the service without starting its first build (it is otherwise built and deployed right away)"`
+	Confirm        bool `json:"confirm" jsonschema:"must be true to actually add"`
 }
 
 type addServiceResult struct {
-	Project string `json:"project"`
-	Service string `json:"service"`
-	Status  string `json:"status"`
+	Project    string           `json:"project"`
+	Service    string           `json:"service"`
+	Status     string           `json:"status"`
+	FirstBuild *firstBuildState `json:"firstBuild,omitempty"`
+}
+
+// firstBuildState mirrors the server's firstBuild block on the
+// create-service response.
+type firstBuildState struct {
+	Triggered bool   `json:"triggered"`
+	Skipped   bool   `json:"skipped,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func runAddService(ctx context.Context, client *kusoclient.Client, args addServiceArgs) (addServiceResult, error) {
@@ -324,16 +335,36 @@ func runAddService(ctx context.Context, client *kusoclient.Client, args addServi
 		"runtime": fallback(args.Runtime, "dockerfile"),
 		"port":    fallbackInt(args.Port, 8080),
 	}
-	if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "services"), body, nil); err != nil {
+	if args.SkipFirstBuild {
+		body["skipFirstBuild"] = true
+	}
+	var resp struct {
+		FirstBuild *firstBuildState `json:"firstBuild"`
+	}
+	if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "services"), body, &resp); err != nil {
 		return addServiceResult{}, fmt.Errorf("add service: %w", err)
 	}
-	return addServiceResult{Project: args.Project, Service: args.Name, Status: "added"}, nil
+	return addServiceResult{Project: args.Project, Service: args.Name, Status: "added", FirstBuild: resp.FirstBuild}, nil
+}
+
+func (r addServiceResult) text() string {
+	s := fmt.Sprintf("%s/%s %s", r.Project, r.Service, r.Status)
+	switch fb := r.FirstBuild; {
+	case fb == nil:
+	case fb.Error != "":
+		s += "; its first build did NOT start: " + fb.Error + " — fix that, then call build"
+	case fb.Skipped:
+		s += "; first build skipped (call build to deploy it)"
+	case fb.Triggered:
+		s += "; first build started (follow it with build_status)"
+	}
+	return s
 }
 
 func registerAddService(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "add_service",
-		Description: "Add a service to a project. Auto-creates a production environment with default-branch tracking. " +
+		Description: "Add a service to a project. Auto-creates a production environment with default-branch tracking, and starts the first build right away, so adding a service deploys it (pass skipFirstBuild=true to only create it). " +
 			"REQUIRES confirm=true. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addServiceArgs) (*mcp.CallToolResult, addServiceResult, error) {
 		out, err := runAddService(ctx, client, args)
@@ -341,7 +372,7 @@ func registerAddService(server *mcp.Server, client *kusoclient.Client) {
 			return nil, addServiceResult{}, err
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s/%s %s", out.Project, out.Service, out.Status)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: out.text()}},
 		}, out, nil
 	})
 }
@@ -359,7 +390,8 @@ type manageAddonArgs struct {
 	Confirm bool   `json:"confirm" jsonschema:"must be true to actually mutate"`
 	// ConfirmName is forwarded as the server's ?confirm= data-loss
 	// guard; it must come from the caller, never be copied from Name.
-	ConfirmName string `json:"confirmName,omitempty" jsonschema:"required for delete: the addon name typed out again, exactly as the user named it — acknowledges that the addon's data is destroyed"`
+	ConfirmName string `json:"confirmName,omitempty" jsonschema:"required for delete: the addon name typed out again, exactly as the user named it"`
+	PurgeData   bool   `json:"purgeData,omitempty" jsonschema:"delete only: also destroy the addon's data volume and credentials (otherwise they are kept and the addon can be re-added with its data)"`
 }
 
 type manageAddonResult struct {
@@ -367,6 +399,7 @@ type manageAddonResult struct {
 	Addon   string `json:"addon"`
 	Action  string `json:"action"`
 	Status  string `json:"status"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // allowedAddonKindList is the set of IMPLEMENTED addon kinds — the ones
@@ -425,14 +458,20 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 		// PVC goes with the addon). Pass the caller's confirmName
 		// through so a mismatch fails, rather than echoing args.Name.
 		if args.ConfirmName != args.Name {
-			return manageAddonResult{}, fmt.Errorf("delete destroys addon %q and its data: pass confirmName equal to the addon name to acknowledge (got %q)", args.Name, args.ConfirmName)
+			return manageAddonResult{}, fmt.Errorf("delete removes addon %q (with purgeData, its data too): pass confirmName equal to the addon name to acknowledge (got %q)", args.Name, args.ConfirmName)
 		}
 		q := url.Values{"confirm": {args.ConfirmName}}
+		status := "deleted (data volume and credentials kept)"
+		if args.PurgeData {
+			q.Set("purgeData", "true")
+			status = "deleted with its data"
+		}
 		path := apiPath("api", "projects", args.Project, "addons", args.Name) + "?" + q.Encode()
-		if err := client.DeleteJSON(ctx, path); err != nil {
+		warning, err := client.DeleteWithWarning(ctx, path)
+		if err != nil {
 			return manageAddonResult{}, fmt.Errorf("delete addon: %w", err)
 		}
-		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "delete", Status: "deleted"}, nil
+		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "delete", Status: status, Warning: warning}, nil
 	default:
 		return manageAddonResult{}, fmt.Errorf("unknown action %q (want add | delete)", args.Action)
 	}
@@ -444,16 +483,24 @@ func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 		Description: "Add or delete an addon on a project. Adding creates the addon and its connection Secret (DATABASE_URL etc.), but services only get that Secret if they are subscribed to the addon, and existing services usually aren't. After adding, call subscribe_addon for every service that needs the connection. " +
 			"Supported kinds: " + strings.Join(allowedAddonKindList, ", ") + ". " +
 			"Other kinds are reserved (no workload would be deployed) and are refused. " +
-			"REQUIRES confirm=true. delete DESTROYS the addon's data and additionally requires confirmName equal to the addon name — only delete an addon the user explicitly named. Refused in --read-only mode.",
+			"REQUIRES confirm=true. delete removes the addon and additionally requires confirmName equal to the addon name — only delete an addon the user explicitly named. Its data volume and credentials are kept (re-adding the same name reattaches them) unless purgeData=true, which DESTROYS the data. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args manageAddonArgs) (*mcp.CallToolResult, manageAddonResult, error) {
 		out, err := runManageAddon(ctx, client, args)
 		if err != nil {
 			return nil, manageAddonResult{}, err
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("addon %s/%s %s", out.Project, out.Addon, out.Status)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: manageAddonText(out)}},
 		}, out, nil
 	})
+}
+
+func manageAddonText(r manageAddonResult) string {
+	s := fmt.Sprintf("addon %s/%s %s", r.Project, r.Addon, r.Status)
+	if r.Warning != "" {
+		s += "\nwarning: " + r.Warning
+	}
+	return s
 }
 
 // ---------- subscribe_addon ----------
@@ -520,8 +567,14 @@ func runSubscribeAddon(ctx context.Context, client *kusoclient.Client, args subs
 		seen[a] = true
 		next = append(next, a)
 	}
-	if err := client.PutJSON(ctx, path, map[string][]string{"addons": next}, nil); err != nil {
-		return subscribeAddonResult{}, fmt.Errorf("set subscribed addons: %w", err)
+	// expected makes the PUT conditional on the list read above, so a
+	// concurrent change isn't overwritten (the server answers 409).
+	expected := cur.Subscribed
+	if expected == nil {
+		expected = []string{}
+	}
+	if err := client.PutJSON(ctx, path, map[string][]string{"addons": next, "expected": expected}, nil); err != nil {
+		return subscribeAddonResult{}, fmt.Errorf("set subscribed addons (on a 409, re-run to merge into the current list): %w", err)
 	}
 	return subscribeAddonResult{Project: args.Project, Service: args.Service, Subscribed: next, Available: cur.Available}, nil
 }

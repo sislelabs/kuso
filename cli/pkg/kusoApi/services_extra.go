@@ -52,6 +52,9 @@ type ServiceChangesResult struct {
 		Name  string `json:"name,omitempty"`
 		OK    bool   `json:"ok"`
 		Error string `json:"error,omitempty"`
+		// NotFound marks an env-unset of a key that wasn't there (OK
+		// stays true: absent is the desired end state).
+		NotFound bool `json:"notFound,omitempty"`
 	} `json:"results"`
 	RolledOut  bool   `json:"rolledOut"`
 	FlushError string `json:"flushError,omitempty"`

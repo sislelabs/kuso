@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -106,6 +107,7 @@ any issues, grouped by severity. Read-only — nothing is changed. Use
 }
 
 var healthFixAction string
+var healthFixNamespace string
 var healthFixYes bool
 
 var healthFixCmd = &cobra.Command{
@@ -122,7 +124,17 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resource := args[0]
+		ns := healthFixNamespace
+		if ns == "" {
+			var err error
+			if ns, err = resolveIssueNamespace(resource); err != nil {
+				return err
+			}
+		}
 		prompt := fmt.Sprintf("Remediate %s", resource)
+		if ns != "" {
+			prompt += " in namespace " + ns
+		}
 		if healthFixAction != "" {
 			prompt += fmt.Sprintf(" (action=%s)", healthFixAction)
 		}
@@ -130,7 +142,7 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 		if err := confirmDestructive(healthFixYes, prompt); err != nil {
 			return err
 		}
-		resp, err := api.Remediate(resource, healthFixAction)
+		resp, err := api.Remediate(resource, ns, healthFixAction)
 		if err := checkRespErr(resp, err); err != nil {
 			return err
 		}
@@ -154,6 +166,36 @@ issue's canonical action itself. Prompts for confirmation unless --yes.`,
 		fmt.Printf("%s: %s\n", out.Resource, msg)
 		return nil
 	},
+}
+
+// resolveIssueNamespace finds the namespace of the flagged issue named
+// resource, so the server can't remediate a same-named resource in
+// another namespace. Several matches need an explicit --namespace; no
+// match leaves it to the server (which reports the issue as gone).
+func resolveIssueNamespace(resource string) (string, error) {
+	resp, err := api.ReconcileHealth()
+	if err := checkRespErr(resp, err); err != nil {
+		return "", err
+	}
+	var rep healthReport
+	if err := json.Unmarshal(resp.Body(), &rep); err != nil {
+		return "", fmt.Errorf("decode: %w", err)
+	}
+	seen := map[string]bool{}
+	var nss []string
+	for _, is := range rep.Issues {
+		if is.Resource == resource && !seen[is.Namespace] {
+			seen[is.Namespace] = true
+			nss = append(nss, is.Namespace)
+		}
+	}
+	if len(nss) > 1 {
+		return "", fmt.Errorf("%s is flagged in several namespaces (%s); pass --namespace", resource, strings.Join(nss, ", "))
+	}
+	if len(nss) == 1 {
+		return nss[0], nil
+	}
+	return "", nil
 }
 
 // orphanKinds are the reconcile-health issue kinds DELETE /api/admin/orphans
@@ -291,6 +333,7 @@ func init() {
 func init() {
 	healthCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	healthFixCmd.Flags().StringVar(&healthFixAction, "action", "", "remediation action (default: server resolves it)")
+	healthFixCmd.Flags().StringVar(&healthFixNamespace, "namespace", "", "namespace of the flagged resource (default: looked up from the scan; required when the name is flagged in several)")
 	healthFixCmd.Flags().BoolVarP(&healthFixYes, "yes", "y", false, "skip the confirmation prompt")
 	healthCmd.AddCommand(healthFixCmd)
 	rootCmd.AddCommand(healthCmd)

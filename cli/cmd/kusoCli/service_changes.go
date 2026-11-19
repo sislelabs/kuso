@@ -65,6 +65,18 @@ func changesFailure(res *kusoApi.ServiceChangesResult) error {
 	return fmt.Errorf("%d of the changes failed (the others are applied):\n  %s", len(failed), strings.Join(failed, "\n  "))
 }
 
+// appliedCount counts the items of kind that took effect: OK and, for
+// an unset, actually present.
+func appliedCount(res *kusoApi.ServiceChangesResult, kind string) int {
+	n := 0
+	for _, r := range res.Results {
+		if r.Kind == kind && r.OK && !r.NotFound {
+			n++
+		}
+	}
+	return n
+}
+
 func rolloutNote(res *kusoApi.ServiceChangesResult) string {
 	if res.RolledOut {
 		return "one rollout"

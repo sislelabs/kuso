@@ -225,23 +225,27 @@ func streamLogs(project, service, env string, tail int) error {
 		_ = conn.Close()
 	}()
 
+	// The server reports a missing env/service or a broken stream as an
+	// "error" frame followed by a Normal close, so a clean close after
+	// one must still fail the command.
+	var streamErr error
 	for {
 		var f struct {
-			Type   string `json:"type"`
-			Pod    string `json:"pod,omitempty"`
-			Line   string `json:"line,omitempty"`
-			Stream string `json:"stream,omitempty"`
-			Value  string `json:"value,omitempty"`
+			Type    string `json:"type"`
+			Pod     string `json:"pod,omitempty"`
+			Line    string `json:"line,omitempty"`
+			Stream  string `json:"stream,omitempty"`
+			Value   string `json:"value,omitempty"`
+			Message string `json:"message,omitempty"`
 		}
 		if err := conn.ReadJSON(&f); err != nil {
 			select {
 			case <-signaled:
-				// User-initiated stop. Exit clean.
 				return nil
 			default:
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
+				return streamErr
 			}
 			// Surface every other failure as a non-zero exit so CI
 			// scripts can detect a broken stream.
@@ -252,10 +256,21 @@ func streamLogs(project, service, env string, tail int) error {
 			fmt.Printf("[%s] %s\n", f.Pod, f.Line)
 		case "phase":
 			fmt.Fprintf(os.Stderr, "==> phase: %s\n", f.Value)
+		case "notice":
+			fmt.Fprintf(os.Stderr, "==> %s\n", frameText(f.Message, f.Line))
 		case "error":
-			fmt.Fprintf(os.Stderr, "==> error: %s\n", f.Line)
+			msg := frameText(f.Message, f.Line)
+			fmt.Fprintf(os.Stderr, "==> error: %s\n", msg)
+			streamErr = fmt.Errorf("log stream: %s", msg)
 		}
 	}
+}
+
+func frameText(message, line string) string {
+	if message != "" {
+		return message
+	}
+	return line
 }
 
 func init() {

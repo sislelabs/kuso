@@ -22,6 +22,7 @@
 //   status             a project's runtime rollup (read-only)
 //   run                fire a one-shot task pod against a service
 //                      (migrations, seeds, scripts) — mutating
+//   run_status         a run's phase + failure reason (read-only)
 //   list_builds        recent builds for a service (read-only)
 //   rollback           re-point an env at a previous build's image
 //                      (mutating) — so an agent can UNDO a deploy

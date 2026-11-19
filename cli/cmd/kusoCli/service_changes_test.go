@@ -90,3 +90,38 @@ func TestChangesFailureListsEachFailedItem(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The batch summary counts what took effect: a failed set and an unset
+// of a key that wasn't there are not reported as done.
+func TestEnvBatchSummaryCountsApplied(t *testing.T) {
+	var reply string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	t.Cleanup(func() { api = nil })
+	envCmd.PersistentFlags().Lookup("output").Changed = false
+
+	reply = `{"results":[{"kind":"env-set","name":"A","ok":true},{"kind":"env-set","name":"B","ok":false,"error":"bad"}],"rolledOut":true}`
+	out := captureStdout(t, func() {
+		if _, err := runRoot(t, "env", "set", "shop", "api", "A=1", "B=2"); err == nil {
+			t.Error("partial failure must return an error")
+		}
+	})
+	if !strings.Contains(out, "set 1 env var(s)") {
+		t.Errorf("set stdout %q", out)
+	}
+
+	reply = `{"results":[{"kind":"env-unset","name":"A","ok":true},{"kind":"env-unset","name":"TYPO","ok":true,"notFound":true}],"rolledOut":true}`
+	out = captureStdout(t, func() {
+		if _, err := runRoot(t, "env", "unset", "shop", "api", "A", "TYPO", "--yes"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "unset 1 env var(s)") {
+		t.Errorf("unset stdout %q", out)
+	}
+}

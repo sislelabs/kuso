@@ -37,8 +37,10 @@ func validateMethod(m string) (string, error) {
 }
 
 // coerceFieldValue applies gh-style coercion to a -f value: an integer
-// becomes a JSON number, true/false a bool, null a null, @file the raw
-// file contents (as a string), anything else a string.
+// in canonical form becomes a JSON number, true/false a bool, null a
+// null, @file the raw file contents (as a string), anything else a
+// string. Digit strings that don't round-trip ("0123456", a short SHA;
+// "+5") stay strings so the number conversion can't change them.
 func coerceFieldValue(v string) (any, error) {
 	switch {
 	case v == "true":
@@ -54,7 +56,7 @@ func coerceFieldValue(v string) (any, error) {
 		}
 		return string(b), nil
 	}
-	if n, err := strconv.Atoi(v); err == nil {
+	if n, err := strconv.Atoi(v); err == nil && strconv.Itoa(n) == v {
 		return n, nil
 	}
 	return v, nil

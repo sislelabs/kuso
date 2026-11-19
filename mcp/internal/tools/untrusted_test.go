@@ -70,7 +70,9 @@ func TestStructuredContent_FencesUntrustedFields(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/vulns"):
 			return http.StatusOK, `{"image":{"imageRef":"i","digest":"d","scan":{"id":1,"status":"succeeded","counts":{}}},"findings":[{"vulnId":"CVE-1","severity":"HIGH","pkgName":"p","title":"` + inject + `"}]}`
 		case strings.HasSuffix(r.URL.Path, "/builds"):
-			return http.StatusOK, `[{"id":"b1","status":"failed","commitMessage":"` + inject + `","errorMessage":"` + inject + `"}]`
+			return http.StatusOK, `[{"id":"b1","status":"failed","commitMessage":"` + inject + `","errorMessage":"` + inject + `","failureClass":{"kind":"build","summary":"` + inject + `"}}]`
+		case strings.Contains(r.URL.Path, "/runs/"):
+			return http.StatusOK, `{"metadata":{"name":"r1","annotations":{"kuso.sislelabs.com/run-phase":"failed","kuso.sislelabs.com/run-message":"` + inject + `"}}}`
 		}
 		return http.StatusNotFound, `{}`
 	})
@@ -84,6 +86,7 @@ func TestStructuredContent_FencesUntrustedFields(t *testing.T) {
 		{"list_builds", svc},
 		{"get_vulnerabilities", svc},
 		{"sql_query", map[string]any{"project": "shop", "addon": "db", "query": "select 1"}},
+		{"run_status", map[string]any{"project": "shop", "run": "r1"}},
 	} {
 		res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: tc.tool, Arguments: tc.args})
 		if err != nil || res.IsError {

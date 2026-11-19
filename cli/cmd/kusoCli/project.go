@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -791,11 +790,7 @@ resource names are immutable, so the operation has real cost:
 				project, oldName, project, newName)); err != nil {
 			return err
 		}
-		body, _ := json.Marshal(map[string]string{"newName": newName})
-		resp, err := api.RawPost(
-			fmt.Sprintf("/api/projects/%s/services/%s/rename",
-				url.PathEscape(project), url.PathEscape(oldName)),
-			body, "application/json")
+		resp, err := api.RenameService(project, oldName, newName)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("rename service: %w", err)
 		}
@@ -813,6 +808,7 @@ var (
 	serviceSetDomains            string // comma- or newline-separated host list
 	serviceSetInternal           string // "on" | "off" | "" (leave alone)
 	serviceSetPrivateEgress      string // "on" | "off" | "" (leave alone)
+	serviceSetTCPLiveness        string // "on" | "off" | "" (leave alone)
 	serviceSetPlatformAPIEgress  string // "on" | "off" | "" (leave alone)
 	serviceSetWaitForCI          string // "on" | "off" | "" (leave alone)
 	serviceSetStrictBuildSecrets string // "on" | "off" | "" (leave alone)
@@ -993,6 +989,16 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 				req.Internal = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--internal must be on|off (got %q)", serviceSetInternal)
+			}
+		}
+		if cmd.Flags().Changed("tcp-liveness") {
+			switch serviceSetTCPLiveness {
+			case "on", "true", "yes":
+				req.TCPLiveness = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.TCPLiveness = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--tcp-liveness must be on|off (got %q)", serviceSetTCPLiveness)
 			}
 		}
 		if cmd.Flags().Changed("private-egress") {
@@ -2022,6 +2028,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetTCPLiveness, "tcp-liveness", "", "default TCP liveness probe (on|off); off for a process that doesn't listen on its port; rolls the pods")
 	serviceSetCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetStrictBuildSecrets, "strict-build-secrets", "", strictBuildSecretsHelp)
@@ -2124,6 +2131,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetTCPLiveness, "tcp-liveness", "", "default TCP liveness probe (on|off); off for a process that doesn't listen on its port; rolls the pods")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWaitForCI, "wait-for-ci", "", "hold push/PR builds until the commit's GitHub CI checks pass (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetStrictBuildSecrets, "strict-build-secrets", "", strictBuildSecretsHelp)
