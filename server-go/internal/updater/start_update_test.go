@@ -292,3 +292,7 @@ func TestStartUpdate_DowngradeNeedsOverride(t *testing.T) {
 		t.Fatalf("updater job created for an unconfirmed downgrade")
 	}
 }
+
+func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string, error) {
+	return s.StartUpdateWith(ctx, targetVersion, UpdateOptions{})
+}

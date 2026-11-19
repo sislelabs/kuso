@@ -14,7 +14,7 @@ import (
 
 // updateJobDeadline bounds an updater Job. Without it a pod stuck in
 // ImagePullBackOff (or a hung download) never counts as failed and
-// blocks every later StartUpdate. Sized above the entrypoint's worst
+// blocks every later StartUpdateWith. Sized above the entrypoint's worst
 // case: bounded downloads plus server/activator/operator rolls and
 // their reverts.
 const updateJobDeadline = 45 * time.Minute

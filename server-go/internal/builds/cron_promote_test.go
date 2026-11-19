@@ -262,3 +262,8 @@ func TestRollbackRepointsCrons(t *testing.T) {
 		t.Errorf("pinned cron moved to %q", tag)
 	}
 }
+
+func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	_, err := p.promoteImageCount(ctx, ns, b)
+	return err
+}
