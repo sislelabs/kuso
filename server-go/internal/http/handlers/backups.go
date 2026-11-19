@@ -1508,6 +1508,10 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusBadGateway, "query: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1729,6 +1733,9 @@ func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit i
 		}
 		out.Rows = append(out.Rows, row)
 		out.Nulls = append(out.Nulls, nulls)
+	}
+	if err := rows.Err(); err != nil {
+		return SQLQueryResponse{}, http.StatusUnprocessableEntity, err
 	}
 	return out, http.StatusOK, nil
 }

@@ -275,6 +275,9 @@ func loadColumns(ctx context.Context, conn *sql.DB, schema, table string) (colum
 		out.Columns = append(out.Columns, c)
 	}
 	colRows.Close()
+	if err := colRows.Err(); err != nil {
+		return out, err
+	}
 
 	// Now the connection is free: resolve enum labels for any USER-DEFINED
 	// columns (an enum dropdown in the editor). Each is a separate query on
@@ -310,13 +313,16 @@ func loadColumns(ctx context.Context, conn *sql.DB, schema, table string) (colum
 				out.PrimaryKey = append(out.PrimaryKey, col)
 			}
 		}
-	} else {
+		err = pkRows.Err()
+	}
+	if err != nil {
 		// A failed PK query silently flips a table to read-only ("no primary
 		// key") even when it has one — exactly the bug that masked the
 		// MaxOpenConns(1) interleaving. Never swallow it silently again: log
 		// so the next regression is visible in server logs, not just the UI.
 		slog.Default().Warn("sql browser: primary-key lookup failed; table will show as read-only",
 			"schema", schema, "table", table, "err", err)
+		out.PrimaryKey = nil // a partial key would widen an edit's WHERE
 	}
 	out.Editable = len(out.PrimaryKey) > 0
 	return out, nil
@@ -341,7 +347,7 @@ func loadEnumValues(ctx context.Context, conn *sql.DB, typeName string) ([]strin
 			out = append(out, v)
 		}
 	}
-	return out, len(out) > 0
+	return out, rows.Err() == nil && len(out) > 0
 }
 
 // tableExists confirms a base table by that schema+name is present. Used to
@@ -612,6 +618,10 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Rows = append(out.Rows, strs)
 		out.Nulls = append(out.Nulls, nulls)
+	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
 	// Close the row cursor before reusing the pinned conn for the count
 	// (the pinned *sql.Conn serializes statements — an open cursor would

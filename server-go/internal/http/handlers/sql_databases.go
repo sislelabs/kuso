@@ -49,5 +49,9 @@ func (h *BackupsHandler) SQLDatabases(w http.ResponseWriter, r *http.Request) {
 		}
 		names = append(names, n)
 	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"databases": names})
 }
