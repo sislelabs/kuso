@@ -95,13 +95,17 @@ auth/permission layers, so they see the same truth:
   `describe_project`, `status`, `logs`, `plan`/`apply`, `build`,
   `build_status`, `list_builds`, `rollback`, `sql_tables`, `sql_query`,
   `get_vulnerabilities`,
-  `get_env`, `set_env`, `set_secret`, `run`, `manage_addon`,
+  `get_env`, `set_env`, `set_secret`, `run`, `run_status`, `manage_addon`,
   `subscribe_addon`, `add_service`, `bootstrap_project`, `update_project`.
   `set_env` stores values the way `kuso env set` does, and a new addon
   usually reaches a service only after `subscribe_addon`. Mutating tools require
   `confirm=true`, with one exception: `apply` needs it only when the YAML
-  sets `prune: true` (deletes). Creates and updates go through without
-  it, so run `plan` first. `manage_addon` delete also needs `confirmName`
+  sets `prune: true` (deletes) or the plan has a destructive change (a
+  dropped volume or domain, a cleared release hook, scale to 0). Other
+  creates and updates go through without it, so run `plan` first.
+  `set_env` without `env` writes service-level vars that reach every env,
+  production included; pass `env` for one environment's overrides. After
+  `run`, follow it with `run_status`. `manage_addon` delete also needs `confirmName`
   equal to the addon name. `--read-only` refuses every mutating tool — worth running
   when you only mean to investigate. Auth: `KUSO_URL`/`KUSO_TOKEN` env
   vars win when set; otherwise `kuso-mcp` reuses the CLI's
@@ -347,7 +351,7 @@ kuso cron edit-service <p> <svc> <name> --cmd './bin/sweep --all' --concurrency 
 kuso cron get <p> <svc> <name> [-o json]                                  # one service cron
 # Deadlines (seconds) on every add/edit: --timeout kills a run that's still going
 # (0 = no limit); --starting-deadline skips a missed run once it's that late (default 300).
-# add-command / edit: --pull-policy Always|IfNotPresent|Never
+# add-command / edit: --pull-policy Always|IfNotPresent|Never, --pull-secret <dockerconfigjson-secret>
 # --schedule: 5-field cron (`*/15 * * * *`, names OK: `0 9 * * MON-FRI`, `0 0 1 JAN *`)
 # or @yearly/@annually/@monthly/@weekly/@daily/@midnight/@hourly. Rejected: @every, @reboot, `?`, seconds field.
 ```
@@ -423,7 +427,7 @@ The user must create the source Secret with `DATABASE_URL=postgres://...` and co
 `kuso apply` reads `kuso.yml` and reconciles it against the live project. Discipline:
 
 - `--dry-run` prints the plan but doesn't write. **Always run with `--dry-run` first; eyeball every `delete` line before running without it.**
-- Deletes only happen when the file sets `prune: true`. With prune on, `kuso apply` lists what it will delete and asks first; `--yes` skips the prompt (required when not on a TTY, e.g. CI). With `prune: false` (the default) would-be deletions are only reported.
+- Deletes only happen when the file sets `prune: true`. With prune on, `kuso apply` lists what it will delete and asks first; it asks the same for a destructive change (a dropped volume or domain, a cleared release hook, scale to 0). `--yes` skips the prompt (required when not on a TTY, e.g. CI). With `prune: false` (the default) would-be deletions are only reported.
 - A misspelled addon name in `addons:` looks identical to "user wants the live addon deleted." Plan diffs are merciless.
 - (Historical: kuso servers older than the addon-scoping fix could list OTHER projects' addons in `addonsToDelete`. Current servers scope the plan to the file's project — but the dry-run discipline stays.)
 - `--rotate-secrets` re-mints `{generate:}` secrets — only when you mean it.
@@ -1050,7 +1054,7 @@ kuso project service set <project> <service> [--port N] [--runtime rt] \
     [--scale-up-stabilization SEC] [--scale-up-pods N] [--scale-up-percent PCT] \
     [--scale-down-stabilization SEC] \
     [--max-concurrent N] [--rate-limit RPS] [--rate-burst N] \
-    [--internal on|off] [--private-egress on|off] [--auto-deploy on|off] \
+    [--internal on|off] [--private-egress on|off] [--auto-deploy on|off] [--tcp-liveness on|off] \
     [--cap-add CAP]... [--allow-privilege-escalation on|off] \
     [--target-cpu PCT] [--command ARG]... [--dockerfile <rel>] \
     [--release-cmd '...'] [--release-timeout SEC] [--release-clear] \
@@ -1095,6 +1099,7 @@ kuso cron delete-project <project> <name>       # kind=http|command
 kuso run <project> <service> -- sh -c 'rake db:seed'      # NOTE: -- separator, not --cmd
 kuso run <project> <service> --follow -- <cmd>            # -f streams logs + blocks; exit code = the run's
 kuso run <project> <service> --set-env DEBUG=1 --timeout-seconds 600 -- <cmd>  # always runs against production
+kuso run <project> <service> --memory 2Gi --cpu 1 -- <cmd>  # raise the run container's limits
 kuso run cancel <project> <run>                           # kill a running one-shot
 
 # Shells + domains
