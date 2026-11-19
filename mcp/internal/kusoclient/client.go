@@ -128,10 +128,21 @@ func (c *Client) PostRaw(ctx context.Context, path, contentType string, body []b
 
 // DeleteJSON issues a DELETE. Refused in read-only mode.
 func (c *Client) DeleteJSON(ctx context.Context, path string) error {
+	_, err := c.DeleteWithWarning(ctx, path)
+	return err
+}
+
+// DeleteWithWarning is DeleteJSON that also returns the server's
+// X-Kuso-Warning header: a non-fatal problem on a delete that landed.
+func (c *Client) DeleteWithWarning(ctx context.Context, path string) (string, error) {
 	if c.cfg.ReadOnly {
-		return fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodDelete, path)
+		return "", fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodDelete, path)
 	}
-	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
+	h, err := c.do(ctx, http.MethodDelete, path, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return h.Get("X-Kuso-Warning"), nil
 }
 
 // PutJSON issues a PUT with a JSON body. Refused in read-only mode.
@@ -151,18 +162,24 @@ func (c *Client) PatchJSON(ctx context.Context, path string, body, out any) erro
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
+	_, err := c.do(ctx, method, path, body, out)
+	return err
+}
+
+// do is doJSON returning the response headers.
+func (c *Client) do(ctx context.Context, method, path string, body, out any) (http.Header, error) {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encode request body: %w", err)
+			return nil, fmt.Errorf("encode request body: %w", err)
 		}
 		rdr = strings.NewReader(string(buf))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.cfg.URL+path, rdr)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	req.Header.Set("Accept", "application/json")
@@ -172,21 +189,21 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("kuso server request failed: %w", err)
+		return nil, fmt.Errorf("kuso server request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Status: resp.StatusCode, Path: path, Body: string(respBody)}
+		return nil, &APIError{Status: resp.StatusCode, Path: path, Body: string(respBody)}
 	}
 	if out == nil || len(respBody) == 0 {
-		return nil
+		return resp.Header, nil
 	}
 	if err := json.Unmarshal(respBody, out); err != nil {
-		return fmt.Errorf("decode %s response: %w (body: %s)", path, err, truncate(string(respBody), 200))
+		return nil, fmt.Errorf("decode %s response: %w (body: %s)", path, err, truncate(string(respBody), 200))
 	}
-	return nil
+	return resp.Header, nil
 }
 
 func truncate(s string, n int) string {

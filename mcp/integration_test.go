@@ -358,9 +358,10 @@ func TestMCPManageAddon(t *testing.T) {
 
 	del := callTool(t, s, "manage_addon", map[string]any{
 		"project": "analiz",
-		"action":  "delete",
-		"name":    "pg",
-		"confirm": true,
+		"action":      "delete",
+		"name":        "pg",
+		"confirmName": "pg",
+		"confirm":     true,
 	})
 	if !strings.Contains(contentText(t, del), "analiz/pg deleted") {
 		t.Errorf("expected addon delete confirmation, got %q", contentText(t, del))

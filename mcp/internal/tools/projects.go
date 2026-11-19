@@ -390,7 +390,8 @@ type manageAddonArgs struct {
 	Confirm bool   `json:"confirm" jsonschema:"must be true to actually mutate"`
 	// ConfirmName is forwarded as the server's ?confirm= data-loss
 	// guard; it must come from the caller, never be copied from Name.
-	ConfirmName string `json:"confirmName,omitempty" jsonschema:"required for delete: the addon name typed out again, exactly as the user named it — acknowledges that the addon's data is destroyed"`
+	ConfirmName string `json:"confirmName,omitempty" jsonschema:"required for delete: the addon name typed out again, exactly as the user named it"`
+	PurgeData   bool   `json:"purgeData,omitempty" jsonschema:"delete only: also destroy the addon's data volume and credentials (otherwise they are kept and the addon can be re-added with its data)"`
 }
 
 type manageAddonResult struct {
@@ -398,6 +399,7 @@ type manageAddonResult struct {
 	Addon   string `json:"addon"`
 	Action  string `json:"action"`
 	Status  string `json:"status"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // allowedAddonKindList is the set of IMPLEMENTED addon kinds — the ones
@@ -456,14 +458,20 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 		// PVC goes with the addon). Pass the caller's confirmName
 		// through so a mismatch fails, rather than echoing args.Name.
 		if args.ConfirmName != args.Name {
-			return manageAddonResult{}, fmt.Errorf("delete destroys addon %q and its data: pass confirmName equal to the addon name to acknowledge (got %q)", args.Name, args.ConfirmName)
+			return manageAddonResult{}, fmt.Errorf("delete removes addon %q (with purgeData, its data too): pass confirmName equal to the addon name to acknowledge (got %q)", args.Name, args.ConfirmName)
 		}
 		q := url.Values{"confirm": {args.ConfirmName}}
+		status := "deleted (data volume and credentials kept)"
+		if args.PurgeData {
+			q.Set("purgeData", "true")
+			status = "deleted with its data"
+		}
 		path := apiPath("api", "projects", args.Project, "addons", args.Name) + "?" + q.Encode()
-		if err := client.DeleteJSON(ctx, path); err != nil {
+		warning, err := client.DeleteWithWarning(ctx, path)
+		if err != nil {
 			return manageAddonResult{}, fmt.Errorf("delete addon: %w", err)
 		}
-		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "delete", Status: "deleted"}, nil
+		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "delete", Status: status, Warning: warning}, nil
 	default:
 		return manageAddonResult{}, fmt.Errorf("unknown action %q (want add | delete)", args.Action)
 	}
@@ -475,16 +483,24 @@ func registerManageAddon(server *mcp.Server, client *kusoclient.Client) {
 		Description: "Add or delete an addon on a project. Adding creates the addon and its connection Secret (DATABASE_URL etc.), but services only get that Secret if they are subscribed to the addon, and existing services usually aren't. After adding, call subscribe_addon for every service that needs the connection. " +
 			"Supported kinds: " + strings.Join(allowedAddonKindList, ", ") + ". " +
 			"Other kinds are reserved (no workload would be deployed) and are refused. " +
-			"REQUIRES confirm=true. delete DESTROYS the addon's data and additionally requires confirmName equal to the addon name — only delete an addon the user explicitly named. Refused in --read-only mode.",
+			"REQUIRES confirm=true. delete removes the addon and additionally requires confirmName equal to the addon name — only delete an addon the user explicitly named. Its data volume and credentials are kept (re-adding the same name reattaches them) unless purgeData=true, which DESTROYS the data. Refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args manageAddonArgs) (*mcp.CallToolResult, manageAddonResult, error) {
 		out, err := runManageAddon(ctx, client, args)
 		if err != nil {
 			return nil, manageAddonResult{}, err
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("addon %s/%s %s", out.Project, out.Addon, out.Status)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: manageAddonText(out)}},
 		}, out, nil
 	})
+}
+
+func manageAddonText(r manageAddonResult) string {
+	s := fmt.Sprintf("addon %s/%s %s", r.Project, r.Addon, r.Status)
+	if r.Warning != "" {
+		s += "\nwarning: " + r.Warning
+	}
+	return s
 }
 
 // ---------- subscribe_addon ----------
