@@ -582,7 +582,7 @@ data:
        (it must stay alone on its line). The :latest value only exists in
        an unreleased tree. .Values.backup.image still overrides. */ -}}
 {{- define "kusoaddon.backupImageDefault" -}}
-ghcr.io/sislelabs/kuso-backup:v0.46.0@sha256:dd5bfcc896929b02bdbbaee10e5819ada33951cc01d0c32f9051c398640c7dfa
+ghcr.io/sislelabs/kuso-backup:v0.47.0@sha256:115232803c71e93048b7c8065c534da1bf2de73a38f97ef9b524de049cfcc03c
 {{- end }}
 
 {{- define "kusoaddon.backupImage" -}}

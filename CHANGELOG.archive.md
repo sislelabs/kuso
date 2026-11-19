@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.12] — 2026-09-28
+
+### Other
+- Stop Discord cards repeating themselves; fix env-group release race ([5879267](https://github.com/sislelabs/kuso/commit/58792675a20c1abcce5587a35cb22d80f70df7c6))
+
 ## [0.26.11] — 2026-09-28
 
 ### Other

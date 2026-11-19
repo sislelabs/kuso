@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.47.0] — 2026-11-19
+
+### ✨ Features
+- Add an Insights page to compare services over time ([73af426](https://github.com/sislelabs/kuso/commit/73af42699d7ef273481fa0d7ede39ed0a6e1fb52))
+
 ## [0.46.0] — 2026-11-16
 
 ### Other
@@ -1267,11 +1272,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix the remaining e2e findings and record revisions for all edits ([fc982f2](https://github.com/sislelabs/kuso/commit/fc982f2c735b96a760db1408fce11aab07ec590d))
-
-## [0.26.12] — 2026-09-28
-
-### Other
-- Stop Discord cards repeating themselves; fix env-group release race ([5879267](https://github.com/sislelabs/kuso/commit/58792675a20c1abcce5587a35cb22d80f70df7c6))
 
 
 ---
