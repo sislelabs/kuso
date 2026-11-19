@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.15] — 2026-09-28
+
+### Other
+- Fall back to v1 Endpoints when EndpointSlices are forbidden ([ec83980](https://github.com/sislelabs/kuso/commit/ec839807030a74904de14ceed8d0b403fb842cb1))
+
 ## [0.26.14] — 2026-09-28
 
 ### Other
