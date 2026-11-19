@@ -298,3 +298,39 @@ func TestRollback_MovesFromServiceWorkers(t *testing.T) {
 		t.Error("unrelated service was moved onto the rolled-back image")
 	}
 }
+
+// BLD-2: deleting feat/x in repo A must not cancel repo B's feat/x build
+// in the same project.
+func TestCancelBuildsForRepoRef_OnlyThatRepo(t *testing.T) {
+	t.Parallel()
+	mk := func(name, service, repoURL string) seed {
+		return seedBuild(&kube.KusoBuild{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "kuso",
+				Labels: map[string]string{kube.LabelProject: "shop"},
+			},
+			Spec: kube.KusoBuildSpec{
+				Project: "shop", Service: "shop-" + service, Branch: "feat/checkout",
+				Repo:  &kube.KusoRepoRef{URL: repoURL},
+				Image: &kube.KusoImage{Repository: "reg/shop/" + service, Tag: "abc"},
+			},
+		})
+	}
+	s := fakeService(t,
+		mk("shop-api-1", "api", "https://github.com/Acme/API.git"),
+		mk("shop-web-1", "web", "https://github.com/acme/web"),
+	)
+	n, err := s.CancelBuildsForRepoRef(context.Background(), "shop", "acme/api", "feat/checkout", "ref deleted")
+	if err != nil || n != 1 {
+		t.Fatalf("CancelBuildsForRepoRef = (%d, %v), want (1, nil)", n, err)
+	}
+	for name, want := range map[string]bool{"shop-api-1": true, "shop-web-1": false} {
+		b, err := s.Kube.GetKusoBuild(context.Background(), "kuso", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := buildPhase(b) == "cancelled"; got != want {
+			t.Errorf("%s cancelled = %v, want %v", name, got, want)
+		}
+	}
+}
