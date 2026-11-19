@@ -26,7 +26,7 @@ import (
 type applyArgs struct {
 	Project string `json:"project" jsonschema:"project name; must match the project: field in the YAML"`
 	YAML    string `json:"yaml" jsonschema:"the full kuso.yml as a string"`
-	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true when the YAML sets prune: true — guards the destructive delete of live services/addons/crons absent from the YAML"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true when the YAML sets prune: true (deletes live services/addons/crons absent from the YAML) or the plan has a destructive field change (volume or domain removal, release hook cleared, scale to 0)"`
 }
 
 // yamlSetsPruneTrue reports whether the kuso.yml sets the top-level
@@ -63,7 +63,7 @@ type stepError struct {
 func registerApply(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "apply",
-		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons + crons (create/update/delete, prune-gated; wouldDelete reports skipped prune candidates). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. When the YAML sets prune: true (which DELETES live services/addons/crons absent from the YAML) you MUST also pass confirm=true. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure). Any per-step error marks the tool result as an error: treat that as a partially-failed apply, not success.",
+		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons + crons (create/update/delete, prune-gated; wouldDelete reports skipped prune candidates). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. When the YAML sets prune: true (which DELETES live services/addons/crons absent from the YAML), or the plan has a destructive field change (volume or domain removal, release hook cleared, scale to 0), you MUST also pass confirm=true. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure). Any per-step error marks the tool result as an error: treat that as a partially-failed apply, not success.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args applyArgs) (*mcp.CallToolResult, applyResult, error) {
 		if args.Project == "" {
 			return nil, applyResult{}, errors.New("project is required")
@@ -78,6 +78,16 @@ func registerApply(server *mcp.Server, client *kusoclient.Client) {
 		// would be removed.
 		if yamlSetsPruneTrue(args.YAML) && !args.Confirm {
 			return nil, applyResult{}, errors.New("this YAML sets prune: true (or couldn't be parsed to rule it out); prune DELETES live resources absent from the YAML — retry with confirm=true (run plan first to see the blast radius)")
+		}
+		if !args.Confirm {
+			var plan planResult
+			planPath := apiPath("api", "projects", args.Project, "apply") + "?dryRun=1"
+			if err := client.PostRaw(ctx, planPath, "application/x-yaml", []byte(args.YAML), true, &plan); err != nil {
+				return nil, applyResult{}, fmt.Errorf("plan: %w", err)
+			}
+			if d := plan.destructiveChanges(); len(d) > 0 {
+				return nil, applyResult{}, fmt.Errorf("this apply makes %d destructive change(s) (data or traffic loss): %s — retry with confirm=true (run plan to see the diff)", len(d), strings.Join(d, ", "))
+			}
 		}
 		var out applyResult
 		path := apiPath("api", "projects", args.Project, "apply")
