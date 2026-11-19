@@ -14,7 +14,6 @@ export interface AuthSession {
   userGroups: string[];
   permissions: string[];
   adminDisabled: boolean;
-  templatesEnabled: boolean;
   consoleEnabled: boolean;
   metricsEnabled: boolean;
   sleepEnabled: boolean;

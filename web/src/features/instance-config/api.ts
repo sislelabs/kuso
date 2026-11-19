@@ -143,7 +143,6 @@ export interface RegistryInfo {
 }
 
 export interface TemplatesInfo {
-  enabled: boolean;
   catalogs: unknown[];
 }
 
@@ -159,7 +158,7 @@ export async function getInstanceInfo(): Promise<InstanceInfo> {
     api<Partial<Banner>>("/api/config/banner"),
     api<Record<string, unknown>>("/api/config/registry"),
     api<{ clusterissuer: string }>("/api/config/clusterissuer"),
-    api<{ enabled?: boolean; catalogs?: unknown }>("/api/config/templates"),
+    api<{ catalogs?: unknown }>("/api/config/templates"),
   ]);
   return {
     banner: {
@@ -174,7 +173,6 @@ export async function getInstanceInfo(): Promise<InstanceInfo> {
     },
     clusterIssuer: issuer.clusterissuer,
     templates: {
-      enabled: templates.enabled === true,
       catalogs: Array.isArray(templates.catalogs) ? templates.catalogs : [],
     },
   };

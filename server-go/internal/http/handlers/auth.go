@@ -213,7 +213,6 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 		// Field names match what the TS server emits so the Vue client's
 		// store layer doesn't need a remap.
 		resp["adminDisabled"] = feats.AdminDisabled
-		resp["templatesEnabled"] = feats.TemplatesEnabled
 		resp["consoleEnabled"] = feats.ConsoleEnabled
 		resp["metricsEnabled"] = feats.Metrics
 		resp["sleepEnabled"] = feats.Sleep

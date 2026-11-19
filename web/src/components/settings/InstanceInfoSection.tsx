@@ -60,15 +60,8 @@ export function InstanceInfoSection() {
           </Row>
           <Row label="ClusterIssuer"><span className="font-mono">{info.data.clusterIssuer}</span></Row>
           <Row label="Templates">
-            <span className={info.data.templates.enabled ? "" : muted}>
-              {info.data.templates.enabled ? "Enabled" : (
-                <>
-                  Disabled <span className="text-xs">(set <code className="font-mono">KUSO_TEMPLATES_ENABLED</code>)</span>
-                </>
-              )}
-            </span>
             {info.data.templates.catalogs.length === 0 ? (
-              <span className={`ml-2 ${muted}`}>· no catalogs</span>
+              <span className={muted}>No catalogs</span>
             ) : (
               <ul className="mt-1 space-y-0.5 font-mono text-xs text-[var(--text-secondary)]">
                 {info.data.templates.catalogs.map((c, i) => (

@@ -701,7 +701,6 @@ spec:
             # re-run install.sh.
             - { name: KUSO_ADMIN_PASSWORD_FILE, value: /etc/kuso/admin/password }
             - { name: KUSO_AUDIT, value: "true" }
-            - { name: KUSO_TEMPLATES_ENABLED, value: "false" }
           envFrom:
             - secretRef: { name: kuso-server-secrets }
             - secretRef: { name: kuso-github-app, optional: true }

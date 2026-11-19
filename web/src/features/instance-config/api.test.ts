@@ -93,7 +93,7 @@ describe("instance info", () => {
     expect(info.registry).toEqual({ enabled: true, host: "registry.example.com" });
     expect(info.banner.text).toBe("maintenance");
     expect(info.clusterIssuer).toBe("letsencrypt-prod");
-    expect(info.templates).toEqual({ enabled: false, catalogs: [] });
+    expect(info.templates).toEqual({ catalogs: [] });
   });
 
   it("labels catalogs of any shape", () => {
