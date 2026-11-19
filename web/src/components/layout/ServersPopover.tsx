@@ -2,41 +2,11 @@
 
 import Link from "next/link";
 import { Server } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LoadingState } from "@/components/ui/loading-state";
-import { api } from "@/lib/api-client";
-import { useCan, Perms } from "@/features/auth";
+import { useNodes, type NodeSummary } from "@/features/cluster";
 import { cn } from "@/lib/utils";
-import { nodePressures, roleLabels, type NodeCondition } from "./nodeHealth";
-
-export interface NodeSummary {
-  name: string;
-  ready: boolean;
-  roles: string[];
-  region?: string;
-  zone?: string;
-  // kusoLabels mirrors the kuso.sislelabs.com/* labels with the
-  // namespace prefix stripped. Only this set is editable through the
-  // UI; underlying kube labels stay invisible.
-  kusoLabels: Record<string, string>;
-  schedulable: boolean;
-  unreachable?: boolean;
-  createdAt?: string;
-  // Live capacity + usage. cpu in milli-cores, memory + disk in
-  // bytes. Usage fields are 0 when metrics-server isn't installed —
-  // the UI falls back to "—" in that case.
-  cpuCapacityMilli?: number;
-  cpuUsageMilli?: number;
-  memCapacityBytes?: number;
-  memUsageBytes?: number;
-  diskCapacityBytes?: number;
-  diskAvailableBytes?: number;
-  pods?: number;
-  podsCapacity?: number;
-  // Kubelet conditions (Memory/Disk/PID pressure). Absent on older servers.
-  conditions?: NodeCondition[];
-}
+import { nodePressures, roleLabels } from "./nodeHealth";
 
 // ServersPopover renders a compact "<n> nodes" pill in the top nav.
 // Hovering it (or clicking on touch) drops a popover that lists every
@@ -47,17 +17,9 @@ export interface NodeSummary {
 const MAX_BARS = 10;
 
 export function ServersPopover() {
-  // Node data is admin-only (server: requireAdmin → settings:admin). For
-  // a regular viewer the fetch 403s and the pill degrades to "0/0 nodes".
-  // Hide the whole thing for non-admins and don't fire the doomed request.
-  const isAdmin = useCan(Perms.SettingsAdmin);
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-    enabled: isAdmin,
-  });
+  // Node data is admin-only. Non-admins never see the pill.
+  const nodes = useNodes({ poll: true });
+  const isAdmin = nodes.canRead;
 
   const list = nodes.data ?? [];
   const ready = list.filter((n) => n.ready).length;

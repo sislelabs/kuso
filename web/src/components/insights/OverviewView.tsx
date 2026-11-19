@@ -2,16 +2,14 @@
 
 import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, CircleAlert } from "lucide-react";
-import { api } from "@/lib/api-client";
 import { relativeTime } from "@/lib/format";
 import { SERVICE_STATUS } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { useCan, Perms } from "@/features/auth";
 import { useProjects, useProjectsSummary, type ProjectSummaryItem } from "@/features/projects";
 import type { Insights } from "@/features/insights";
-import type { NodeSummary } from "@/components/layout/ServersPopover";
+import { useNodes } from "@/features/cluster";
 import { nodePressures } from "@/components/layout/nodeHealth";
 import { attentionItems } from "@/components/project/list/fleetModel";
 import { buildCardModel, serviceShortName } from "@/components/project/list/projectCardModel";
@@ -83,13 +81,7 @@ export function OverviewView({ data, dim }: { data: Insights; dim: boolean }) {
   const vulns = useFleetVulns(names, true);
   const uptime = useFleetUptime(names, true);
   const backups = useFleetBackups(isAdmin);
-  const nodes = useQuery({
-    queryKey: ["kubernetes", "nodes"],
-    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-    enabled: isAdmin,
-  });
+  const nodes = useNodes({ poll: true });
 
   const attention = useMemo((): AttentionRow[] => {
     const rows: AttentionRow[] = [];
