@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toastError } from "@/lib/errors";
 import {
   clearProjectPref,
   listProjectPrefs,
@@ -57,8 +58,9 @@ export function useSetProjectPref() {
       qc.setQueryData(projectPrefsQueryKey, next);
       return { prev };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(projectPrefsQueryKey, ctx.prev);
+      toastError(err, "Couldn't save project preference");
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: projectPrefsQueryKey });
