@@ -415,6 +415,9 @@ func NewRouter(d Deps) http.Handler {
 			Audit:  d.Audit,
 			Logger: d.Logger,
 		}
+		if d.Config != nil {
+			termH.ConsoleEnabled = func() bool { return d.Config.Features().ConsoleEnabled }
+		}
 		termH.Mount(r)
 	}
 
@@ -1244,13 +1247,30 @@ func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(ww, r)
 			logger.Info("http",
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", accessLogPath(r),
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"reqid", chimw.GetReqID(r.Context()),
 			)
 		})
 	}
+}
+
+// accessLogPath is the request path with any {token} route param masked:
+// on the deploy-hook, invite and review routes that segment is the
+// credential, and the access log reaches a wider audience than the API.
+func accessLogPath(r *http.Request) string {
+	path := r.URL.Path
+	rctx := chi.RouteContext(r.Context())
+	if rctx == nil {
+		return path
+	}
+	for i, k := range rctx.URLParams.Keys {
+		if k == "token" && i < len(rctx.URLParams.Values) && rctx.URLParams.Values[i] != "" {
+			path = strings.Replace(path, "/"+rctx.URLParams.Values[i], "/{token}", 1)
+		}
+	}
+	return path
 }
 
 // metricsScrapeTokenMatches returns true if the request's

@@ -74,7 +74,7 @@ func (h *SettingsHandler) PutSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in db.SessionSettings
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := decodeSettingsBody(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
@@ -140,6 +140,17 @@ type buildSettingsPatch struct {
 	CPURequest         *string `json:"cpuRequest"`
 	RegistryAuthSecret *string `json:"registryAuthSecret"`
 	RegistryHost       *string `json:"registryHost"`
+	// MaxConcurrentSet is read-only (GET echoes it). Accepted so a client
+	// that PUTs back what it read isn't refused; it is never applied.
+	MaxConcurrentSet *bool `json:"maxConcurrentSet"`
+}
+
+// decodeSettingsBody refuses unknown keys, so a typo'd setting is a 400
+// instead of a silent no-op reported as success (CLI-34).
+func decodeSettingsBody(r *http.Request, out any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(out)
 }
 
 func (p buildSettingsPatch) apply(in *db.BuildSettings) {
@@ -172,7 +183,7 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var patch buildSettingsPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := decodeSettingsBody(r, &patch); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}

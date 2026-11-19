@@ -14,10 +14,8 @@ package auth
 import (
 	"context"
 	"errors"
-	"net/http"
 
 	"kuso/server/internal/db"
-	"kuso/server/internal/httperr"
 )
 
 // Permission is a typed string so accidental misuse (passing a perm
@@ -250,28 +248,6 @@ func HasAny(perms []string, wants ...Permission) bool {
 		}
 	}
 	return false
-}
-
-// Require returns a middleware that 403s requests whose session
-// doesn't carry want. The session is read from the context the
-// bearer middleware sets — keeping a single context key for claims
-// is the only way to avoid a "wait, which middleware ran first"
-// debugging session a year from now.
-func (i *Issuer) Require(want Permission) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, ok := ClaimsFromContext(r.Context())
-			if !ok {
-				httperr.Write(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			if !Has(c.Permissions, want) {
-				httperr.Write(w, http.StatusForbidden, "forbidden: missing permission "+string(want))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // ProjectsAccessible returns the set of project names the session

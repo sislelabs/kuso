@@ -6,8 +6,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -471,15 +469,3 @@ func (h *AlertsHandler) fail(w http.ResponseWriter, op string, err error) {
 	h.Logger.Error("alerts handler", "op", op, "err", err)
 	writeErr(w, http.StatusInternalServerError, "internal")
 }
-
-// randomID16 — duplicated from ssh_keys.go to avoid an import dance.
-// Stable hex slug, used as the AlertRule primary key.
-func randomID16Alerts() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// Local re-export wrapping the existing helper from ssh_keys.go.
-// Keeps both files independent so reordering doesn't break compile.
-var _ = randomID16Alerts

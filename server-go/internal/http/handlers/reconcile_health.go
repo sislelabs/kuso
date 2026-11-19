@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -79,13 +81,57 @@ func (h *ReconcileHealthHandler) Report(w http.ResponseWriter, r *http.Request) 
 
 // remediateRequest is the wire body for POST /remediate. The minimum is
 // {resource}: the handler re-scans to find the matching issue (so the UI can
-// fire a one-click button knowing only the row's resource name). resource +
-// namespace + action may also be supplied; when action is omitted the scanned
-// issue's recommended Action is used.
+// fire a one-click button knowing only the row's resource name). namespace,
+// type and kind narrow the match when a name alone is ambiguous; when action
+// is omitted the scanned issue's recommended Action is used.
 type remediateRequest struct {
 	Resource  string `json:"resource"`
 	Namespace string `json:"namespace,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 	Action    string `json:"action,omitempty"`
+}
+
+// matchRemediateIssue picks the scanned issue body names. A bare resource
+// name can match issues in several namespaces, on both an addon and an env,
+// or several kinds on one CR. When it does and exactly one of them has a
+// remediation, that one is meant; otherwise the caller must narrow it.
+func matchRemediateIssue(issues []reconcilehealth.Issue, body remediateRequest) (*reconcilehealth.Issue, int, string) {
+	var hits []*reconcilehealth.Issue
+	for i := range issues {
+		is := &issues[i]
+		if is.Resource != body.Resource ||
+			body.Namespace != "" && is.Namespace != body.Namespace ||
+			body.Type != "" && is.Type != body.Type ||
+			body.Kind != "" && string(is.Kind) != body.Kind {
+			continue
+		}
+		hits = append(hits, is)
+	}
+	if len(hits) > 1 {
+		var actionable []*reconcilehealth.Issue
+		for _, is := range hits {
+			if is.Action != reconcilehealth.ActionNone {
+				actionable = append(actionable, is)
+			}
+		}
+		if len(actionable) == 1 {
+			hits = actionable
+		}
+	}
+	switch len(hits) {
+	case 0:
+		// Already healthy, or the name was wrong. 404 so the UI refreshes.
+		return nil, http.StatusNotFound, "no outstanding reconcile-health issue for that resource"
+	case 1:
+		return hits[0], 0, ""
+	}
+	opts := make([]string, 0, len(hits))
+	for _, is := range hits {
+		opts = append(opts, fmt.Sprintf("namespace=%s type=%s kind=%s", is.Namespace, is.Type, is.Kind))
+	}
+	return nil, http.StatusConflict, fmt.Sprintf("%d reconcile-health issues match %q; pass namespace, type or kind to pick one: %s",
+		len(hits), body.Resource, strings.Join(opts, "; "))
 }
 
 // Remediate applies the recognised remediation for one issue. Admin-only.
@@ -120,17 +166,9 @@ func (h *ReconcileHealthHandler) Remediate(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	var iss *reconcilehealth.Issue
-	for i := range rep.Issues {
-		if rep.Issues[i].Resource == body.Resource {
-			iss = &rep.Issues[i]
-			break
-		}
-	}
+	iss, status, msg := matchRemediateIssue(rep.Issues, body)
 	if iss == nil {
-		// No outstanding issue for this resource — it's already healthy, or
-		// the name was wrong. Surface as 404 so the UI can refresh the list.
-		writeErr(w, http.StatusNotFound, "no outstanding reconcile-health issue for that resource")
+		writeErr(w, status, msg)
 		return
 	}
 

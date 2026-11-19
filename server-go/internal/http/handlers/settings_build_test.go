@@ -54,3 +54,31 @@ func TestSettings_PutBuildKeepsOmittedFields(t *testing.T) {
 		t.Errorf("explicit maxConcurrent not applied: %+v", got)
 	}
 }
+
+// CLI-34: a typo'd key used to decode to nothing and report success.
+func TestSettings_PutRejectsUnknownKeys(t *testing.T) {
+	r, d, _ := newAdminServer(t)
+	seedAdminUser(t, d)
+	tok := loginAndGetToken(t, r)
+	put := func(path, body string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	if c := put("/api/admin/settings/build", `{"maxConcurent":4}`); c != http.StatusBadRequest {
+		t.Errorf("build typo: %d, want 400", c)
+	}
+	if c := put("/api/admin/settings/session", `{"ttlSeconds":3600,"neverExpir":true}`); c != http.StatusBadRequest {
+		t.Errorf("session typo: %d, want 400", c)
+	}
+	// What GET returns must still PUT back.
+	if c := put("/api/admin/settings/build", `{"maxConcurrentSet":false,"memoryLimit":"2Gi"}`); c != http.StatusOK {
+		t.Errorf("round-tripped build body: %d, want 200", c)
+	}
+	if c := put("/api/admin/settings/session", `{"ttlSeconds":3600,"neverExpire":false}`); c != http.StatusOK {
+		t.Errorf("session body: %d, want 200", c)
+	}
+}

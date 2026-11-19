@@ -15,11 +15,9 @@ package github
 
 import (
 	"errors"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Config bundles the env-driven knobs the package needs. Construct via
@@ -77,13 +75,4 @@ func (c *Config) InstallURL() string {
 		return ""
 	}
 	return "https://github.com/apps/" + c.AppSlug + "/installations/new"
-}
-
-// HTTPClient returns a *http.Client suitable for App-level (not
-// installation-level) calls. Callers usually go through Client.App(),
-// which wraps this with the App JWT transport.
-func defaultHTTPClient() *http.Client {
-	// A timeout so a hung GitHub API dial can't wedge the caller
-	// indefinitely (MED-4). 30s is generous for App-level calls.
-	return &http.Client{Timeout: 30 * time.Second}
 }

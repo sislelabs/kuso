@@ -138,3 +138,9 @@ func TestMiddleware_SeenRecorderOnlyOnSuccess(t *testing.T) {
 		t.Fatalf("seen = %v, want [u1]", seen)
 	}
 }
+
+func (t *SeenThrottle) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.last)
+}

@@ -11,13 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
+
+	"kuso/server/internal/httpx"
 )
 
 // Status values (wire strings).
@@ -55,34 +55,7 @@ func (c *Checker) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{
-		Timeout: 8 * time.Second,
-		Transport: &http.Transport{
-			DialContext:         (&net.Dialer{Timeout: 5 * time.Second, Control: publicOnly}).DialContext,
-			TLSHandshakeTimeout: 5 * time.Second,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("too many redirects")
-			}
-			return nil
-		},
-	}
-}
-
-// publicOnly rejects connections to non-public addresses after DNS
-// resolution (so a hostname pointing inward is caught too).
-func publicOnly(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("refusing non-public address %s", host)
-	}
-	return nil
+	return httpx.SSRFSafeClient(8 * time.Second)
 }
 
 // Ref is a parsed image reference.

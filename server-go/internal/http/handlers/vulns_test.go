@@ -242,8 +242,8 @@ func TestVulns_ServiceShowAndScan(t *testing.T) {
 		t.Errorf("findings = %v", fs)
 	}
 	rec, body = rig.do(t, adminClaims, http.MethodGet, "/api/projects/shop/services/web/vulns?includeIgnored=false", "")
-	if len(body["findings"].([]any)) != 2 {
-		t.Errorf("hide ignored: %v", body["findings"])
+	if rec.Code != 200 || len(body["findings"].([]any)) != 2 {
+		t.Errorf("hide ignored: %d %v", rec.Code, body["findings"])
 	}
 	if rec, _ := rig.do(t, adminClaims, http.MethodGet, "/api/projects/shop/services/web/vulns?severity=SEVERE", ""); rec.Code != 400 {
 		t.Errorf("bad severity: %d", rec.Code)
@@ -281,8 +281,8 @@ func TestVulns_AdminSettings(t *testing.T) {
 		t.Fatalf("put: %d %v invalidate=%d", rec.Code, body, rig.invalidate)
 	}
 	rec, body = rig.do(t, adminClaims, http.MethodGet, "/api/projects/shop/services/web/vulns/policy", "")
-	if body["effectiveMode"] != "off" {
-		t.Errorf("instance off wins: %v", body)
+	if rec.Code != 200 || body["effectiveMode"] != "off" {
+		t.Errorf("instance off wins: %d %v", rec.Code, body)
 	}
 	if rec, body := rig.do(t, adminClaims, http.MethodPost, "/api/admin/vulns/scan-all", ""); rec.Code != 202 || body["queued"] != 3.0 {
 		t.Errorf("scan-all: %d %v", rec.Code, body)

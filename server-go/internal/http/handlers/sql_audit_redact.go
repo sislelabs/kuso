@@ -31,10 +31,11 @@ func sqlWriteAuditMessage(op, schema, table string, key map[string]cellValue) st
 
 // sqlQueryAuditMessage is the query with its literals replaced by ?,
 // truncated to 4 KiB, prefixed with a hash of the full original text so
-// "did this exact query run twice" stays answerable.
-func sqlQueryAuditMessage(query string) string {
+// "did this exact query run twice" stays answerable. backslashEscapes is
+// true for ClickHouse, where \' inside any '…' literal is an escaped quote.
+func sqlQueryAuditMessage(query string, backslashEscapes bool) string {
 	sum := sha256.Sum256([]byte(query))
-	q := redactSQLLiterals(query)
+	q := redactSQLLiterals(query, backslashEscapes)
 	if len(q) > 4096 {
 		q = q[:4096] + "…[truncated]"
 	}
@@ -45,7 +46,7 @@ func sqlQueryAuditMessage(query string) string {
 // numbers and comment bodies with ?. Double-quoted identifiers are kept.
 // It is a scanner, not a parser: an unterminated literal redacts to the
 // end of the text, so it errs toward hiding.
-func redactSQLLiterals(q string) string {
+func redactSQLLiterals(q string, backslashEscapes bool) string {
 	var b strings.Builder
 	n := len(q)
 	isIdent := func(c byte) bool {
@@ -85,9 +86,9 @@ func redactSQLLiterals(q string) string {
 			b.WriteString(q[i:end])
 			i = end
 		case c == '\'' || (c == 'E' || c == 'e') && i+1 < n && q[i+1] == '\'' && (i == 0 || !isIdent(q[i-1])):
-			backslash := c != '\''
+			backslash := backslashEscapes || c != '\''
 			j := i + 1
-			if backslash {
+			if c != '\'' {
 				j++
 			}
 			for j < n {

@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,7 +55,7 @@ func TestInsightsCacheServesStaleAndRefreshesOnce(t *testing.T) {
 	t.Cleanup(func() {
 		insightsFetch = fetchInsightsTraffic
 		insightsCache.mu.Lock()
-		insightsCache.m = nil
+		insightsCache.m, insightsCache.fail = nil, nil
 		insightsCache.mu.Unlock()
 	})
 	rg := insightsRanges["1h"]
@@ -97,7 +99,7 @@ func TestInsightsSharedFetchSurvivesTheFirstCallerLeaving(t *testing.T) {
 	t.Cleanup(func() {
 		insightsFetch = fetchInsightsTraffic
 		insightsCache.mu.Lock()
-		insightsCache.m = nil
+		insightsCache.m, insightsCache.fail = nil, nil
 		insightsCache.mu.Unlock()
 	})
 	rg := insightsRanges["1h"]
@@ -120,7 +122,7 @@ func TestInsightsSharedFetchSurvivesTheFirstCallerLeaving(t *testing.T) {
 // created the cache map.
 func TestInsightsWarmBeforeAnyViewDoesNotPanic(t *testing.T) {
 	insightsCache.mu.Lock()
-	insightsCache.m = nil
+	insightsCache.m, insightsCache.fail = nil, nil
 	insightsCache.mu.Unlock()
 	insightsFetch = func(ctx context.Context, rg insightsRange, now time.Time) (insightsTraffic, error) {
 		return insightsTraffic{}, nil
@@ -128,7 +130,7 @@ func TestInsightsWarmBeforeAnyViewDoesNotPanic(t *testing.T) {
 	t.Cleanup(func() {
 		insightsFetch = fetchInsightsTraffic
 		insightsCache.mu.Lock()
-		insightsCache.m = nil
+		insightsCache.m, insightsCache.fail = nil, nil
 		insightsCache.mu.Unlock()
 	})
 	if _, err := loadInsightsTraffic(context.Background(), "24h", insightsRanges["24h"]); err != nil {
@@ -162,5 +164,61 @@ func TestCertProblemsOnlyForCallersHosts(t *testing.T) {
 	got := certProblems(certs, map[string]string{"a.example.com": "a", "ok.example.com": "a"}, now)
 	if len(got) != 1 || got[0].Host != "a.example.com" || got[0].Project != "a" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func resetPulseTraffic(t *testing.T) {
+	t.Cleanup(func() {
+		pulseFetch = defaultPulseFetch
+		pulseTraffic.mu.Lock()
+		pulseTraffic.series, pulseTraffic.err = nil, nil
+		pulseTraffic.mu.Unlock()
+	})
+}
+
+// HTTP-3: with Prometheus degraded, concurrent pulse polls share one
+// query, a short-deadline caller returns on its own deadline, and the
+// failure is remembered instead of re-queried by every queued caller.
+func TestPulseTrafficCoalescesHonoursDeadlineAndCachesFailure(t *testing.T) {
+	resetPulseTraffic(t)
+	var calls atomic.Int32
+	pulseFetch = func(ctx context.Context, now time.Time) (map[string][][2]float64, error) {
+		calls.Add(1)
+		time.Sleep(300 * time.Millisecond)
+		return nil, errors.New("prometheus down")
+	}
+	now := time.Now()
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var wg sync.WaitGroup
+	start := time.Now()
+	var shortTook time.Duration
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = cachedTrafficBySeries(short, now)
+		shortTook = time.Since(start)
+	}()
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := cachedTrafficBySeries(context.Background(), now); err == nil {
+				t.Error("want the prometheus error")
+			}
+		}()
+	}
+	wg.Wait()
+	if took := time.Since(start); took > 600*time.Millisecond {
+		t.Errorf("5 callers took %v; want one shared ~300ms query", took)
+	}
+	if shortTook > 200*time.Millisecond {
+		t.Errorf("50ms-deadline caller returned after %v", shortTook)
+	}
+	if _, err := cachedTrafficBySeries(context.Background(), now); err == nil {
+		t.Error("want the cached failure")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("prometheus queried %d times, want 1", got)
 	}
 }

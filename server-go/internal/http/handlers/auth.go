@@ -267,7 +267,6 @@ func (h *AuthHandler) Methods(w http.ResponseWriter, _ *http.Request) {
 	out := map[string]bool{"local": true, "github": false, "oauth2": false}
 	if h.Config != nil {
 		feats := h.Config.Features()
-		out["local"] = feats.LocalAuth
 		out["github"] = feats.GithubAuth
 		out["oauth2"] = feats.OAuth2Auth
 	}

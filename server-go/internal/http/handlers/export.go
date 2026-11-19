@@ -1010,7 +1010,6 @@ func pathTrimSuffix(s, suffix string) string {
 func stripServerMeta(m *metav1.ObjectMeta) {
 	m.ResourceVersion = ""
 	m.UID = ""
-	m.SelfLink = ""
 	m.Generation = 0
 	m.CreationTimestamp = metav1.Time{}
 	m.DeletionTimestamp = nil

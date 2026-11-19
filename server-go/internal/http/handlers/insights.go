@@ -122,10 +122,16 @@ type insightsEntry struct {
 	refreshing bool
 }
 
+type insightsFailure struct {
+	at  time.Time
+	err error
+}
+
 var insightsCache struct {
-	mu sync.Mutex
-	m  map[string]*insightsEntry
-	sf singleflight.Group
+	mu   sync.Mutex
+	m    map[string]*insightsEntry
+	fail map[string]insightsFailure
+	sf   singleflight.Group
 }
 
 // insightsFetch runs the queries; a var so tests can stub Prometheus.
@@ -178,12 +184,16 @@ func cachedInsightsTraffic(ctx context.Context, key string, rg insightsRange, no
 			return v, nil
 		}
 	}
+	if f, ok := insightsCache.fail[key]; ok && now.Sub(f.at) < promFailTTL {
+		insightsCache.mu.Unlock()
+		return insightsTraffic{}, f.err
+	}
 	insightsCache.mu.Unlock()
 	return loadInsightsTraffic(ctx, key, rg)
 }
 
 func loadInsightsTraffic(ctx context.Context, key string, rg insightsRange) (insightsTraffic, error) {
-	v, err, _ := insightsCache.sf.Do(key, func() (any, error) {
+	ch := insightsCache.sf.DoChan(key, func() (any, error) {
 		// Shared by every caller waiting on key, so it must not die
 		// with the request that happened to start it.
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -196,18 +206,28 @@ func loadInsightsTraffic(ctx context.Context, key string, rg insightsRange) (ins
 			e.refreshing = false
 		}
 		if err != nil {
+			if insightsCache.fail == nil {
+				insightsCache.fail = map[string]insightsFailure{}
+			}
+			insightsCache.fail[key] = insightsFailure{at: now, err: err}
 			return insightsTraffic{}, err
 		}
 		if insightsCache.m == nil {
 			insightsCache.m = map[string]*insightsEntry{}
 		}
 		insightsCache.m[key] = &insightsEntry{at: now, v: out}
+		delete(insightsCache.fail, key)
 		return out, nil
 	})
-	if err != nil {
-		return insightsTraffic{}, err
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return insightsTraffic{}, res.Err
+		}
+		return res.Val.(insightsTraffic), nil
+	case <-ctx.Done():
+		return insightsTraffic{}, ctx.Err()
 	}
-	return v.(insightsTraffic), nil
 }
 
 // Insights is GET /api/insights?range=1h|6h|24h.

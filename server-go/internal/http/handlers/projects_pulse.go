@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -39,28 +41,68 @@ type pulseDeploy struct {
 	At      time.Time `json:"at"`
 }
 
-// trafficBySeries is one query_range result keyed by Traefik's service
+// pulseTraffic is one query_range result keyed by Traefik's service
 // label, shared by every caller for pulseTTL so the home page polling
-// doesn't put one Prometheus range query per viewer per minute.
+// doesn't put one Prometheus range query per viewer per minute. A failure
+// is remembered for promFailTTL so a degraded Prometheus isn't asked again
+// by every queued poll.
 var pulseTraffic struct {
 	mu     sync.Mutex
 	at     time.Time
 	series map[string][][2]float64
+	errAt  time.Time
+	err    error
+	sf     singleflight.Group
+}
+
+const promFailTTL = 10 * time.Second
+
+// pulseFetch runs the query; a var so tests can stub Prometheus.
+var pulseFetch = defaultPulseFetch
+
+func defaultPulseFetch(ctx context.Context, now time.Time) (map[string][][2]float64, error) {
+	q := fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total[%s]))`, rateWindow(pulseStep))
+	return promQueryRangeBySeries(ctx, q, "service", now.Add(-pulseRange), now, pulseStep)
 }
 
 func cachedTrafficBySeries(ctx context.Context, now time.Time) (map[string][][2]float64, error) {
 	pulseTraffic.mu.Lock()
-	defer pulseTraffic.mu.Unlock()
 	if pulseTraffic.series != nil && now.Sub(pulseTraffic.at) < pulseTTL {
-		return pulseTraffic.series, nil
+		s := pulseTraffic.series
+		pulseTraffic.mu.Unlock()
+		return s, nil
 	}
-	q := fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total[%s]))`, rateWindow(pulseStep))
-	s, err := promQueryRangeBySeries(ctx, q, "service", now.Add(-pulseRange), now, pulseStep)
-	if err != nil {
+	if pulseTraffic.err != nil && now.Sub(pulseTraffic.errAt) < promFailTTL {
+		err := pulseTraffic.err
+		pulseTraffic.mu.Unlock()
 		return nil, err
 	}
-	pulseTraffic.series, pulseTraffic.at = s, now
-	return s, nil
+	pulseTraffic.mu.Unlock()
+
+	ch := pulseTraffic.sf.DoChan("pulse", func() (any, error) {
+		// Shared by every waiting caller, so it outlives the one that started it.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		at := time.Now().UTC()
+		s, err := pulseFetch(fctx, at)
+		pulseTraffic.mu.Lock()
+		defer pulseTraffic.mu.Unlock()
+		if err != nil {
+			pulseTraffic.err, pulseTraffic.errAt = err, at
+			return nil, err
+		}
+		pulseTraffic.series, pulseTraffic.at, pulseTraffic.err = s, at, nil
+		return s, nil
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(map[string][][2]float64), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Pulse is GET /api/projects/pulse.

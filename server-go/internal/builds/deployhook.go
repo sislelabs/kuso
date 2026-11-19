@@ -164,7 +164,7 @@ func (s *Service) VerifyHookRef(ctx context.Context, project, service string, br
 	}
 	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if err != nil {
-		return nil
+		return fmt.Errorf("verify deploy-hook ref: read project %s: %w", project, err)
 	}
 	repoURL := ""
 	if svcCR.Spec.Repo != nil {

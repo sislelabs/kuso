@@ -1344,9 +1344,6 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	return db, nil
 }
 
-// pgOpenAs opens a single-connection *sql.DB to the addon postgres as the
-// given user. One connection, no pooling: the request is short and we'd
-// rather spend a fresh handshake than risk pool reuse across users.
 // needsBrowserRole reports whether the SQL browser must go through the
 // restricted kuso_browser role.
 //
@@ -1423,10 +1420,6 @@ func browserSSLMode(addon *kube.KusoAddon) string {
 func pgDSN(host, port, user, pass, dbName, sslMode string) string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
 		host, port, user, pass, dbName, sslMode)
-}
-
-func pgOpenAs(host, port, user, pass, dbName string) (*sql.DB, error) {
-	return pgOpenAsWithSSL(host, port, user, pass, dbName, "disable")
 }
 
 func pgOpenAsWithSSL(host, port, user, pass, dbName, sslMode string) (*sql.DB, error) {
@@ -1514,6 +1507,10 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusBadGateway, "query: "+err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1638,7 +1635,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, "query rejected: "+reason)
 			return
 		}
-		h.auditSQLQuery(ctx, r, project, addon, req.Query)
+		h.auditSQLQuery(ctx, r, project, addon, req.Query, true)
 		start := time.Now()
 		out, status, err := h.runClickHouseQuery(ctx, info, req.Query, limit)
 		if err != nil {
@@ -1671,7 +1668,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	start := time.Now()
-	h.auditSQLQuery(ctx, r, project, addon, req.Query)
+	h.auditSQLQuery(ctx, r, project, addon, req.Query, false)
 	out, status, err := runReadOnlyPGQuery(ctx, conn, req.Query, limit)
 	if err != nil {
 		writeErr(w, status, err.Error())
@@ -1737,6 +1734,9 @@ func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit i
 		out.Rows = append(out.Rows, row)
 		out.Nulls = append(out.Nulls, nulls)
 	}
+	if err := rows.Err(); err != nil {
+		return SQLQueryResponse{}, http.StatusUnprocessableEntity, err
+	}
 	return out, http.StatusOK, nil
 }
 
@@ -1744,7 +1744,7 @@ func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit i
 // highest-blast-radius read endpoint we expose — admin gates access, but a
 // single compromised admin credential reading every row of `users` should
 // leave a trail. Shared by the Postgres and ClickHouse query paths.
-func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, project, addon, query string) {
+func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, project, addon, query string, clickhouse bool) {
 	if h.Audit == nil {
 		return
 	}
@@ -1759,7 +1759,7 @@ func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, pro
 		Pipeline: project,
 		App:      addon,
 		Resource: "kusoaddon",
-		Message:  sqlQueryAuditMessage(query),
+		Message:  sqlQueryAuditMessage(query, clickhouse),
 	})
 }
 

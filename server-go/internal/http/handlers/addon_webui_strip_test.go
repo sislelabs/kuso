@@ -23,6 +23,7 @@ func TestAddonWebUIProxy_StripsKusoCredentials(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig")
 	req.Header.Set("Cookie", "kuso.JWT_TOKEN=eyJ.a.b; m=rabbit-session; __Host-kuso_jwt=eyJ.c.d; other=1")
 	req.Header.Set("Sec-WebSocket-Protocol", "kuso.bearer, eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig, v12.stomp")
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
 	newAddonWebUIProxy(target, "/api/projects/p/addons/mail/webui", "https://kuso.example.com").ServeHTTP(httptest.NewRecorder(), req)
 
 	if got == nil {
@@ -36,6 +37,9 @@ func TestAddonWebUIProxy_StripsKusoCredentials(t *testing.T) {
 	}
 	if p := got.Get("Sec-WebSocket-Protocol"); p != "v12.stomp" {
 		t.Errorf("Sec-WebSocket-Protocol = %q, want v12.stomp", p)
+	}
+	if xff := got.Get("X-Forwarded-For"); strings.Contains(xff, "6.6.6.6") {
+		t.Errorf("client-sent X-Forwarded-For reached the addon: %q", xff)
 	}
 }
 
