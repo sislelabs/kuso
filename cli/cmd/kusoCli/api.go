@@ -62,7 +62,13 @@ credentials from 'kuso login'. Useful for endpoints without a dedicated
 command, scripting, and debugging.
 
 The path may omit the leading slash and the /api prefix:
-"projects" is treated as "/api/projects".`,
+"projects" is treated as "/api/projects".
+
+Body fields: -f/--field is TYPED (canonical integers, true/false and
+null become JSON values; @file reads a file) and -F/--raw-field always
+sends a string. Note this is the reverse of gh api, where -f is the raw
+one. Use -F for any value that must stay a string, such as an all-digit
+ID; values with a leading zero are never coerced.`,
 	Example: `  kuso api GET /api/projects
   kuso api GET projects
   kuso api POST /api/projects/acme/services/web/builds -f branch=main
@@ -152,8 +158,8 @@ func cutHeader(h string) (string, string, bool) {
 
 func init() {
 	apiCmd.Flags().StringVarP(&apiData, "data", "d", "", "raw JSON request body (or @file.json)")
-	apiCmd.Flags().StringArrayVarP(&apiFields, "field", "f", nil, "typed field key=value (repeatable; coerces numbers/bools/null; @file reads a value)")
-	apiCmd.Flags().StringArrayVarP(&apiCapF, "raw-field", "F", nil, "string field key=value (repeatable; no coercion)")
+	apiCmd.Flags().StringArrayVarP(&apiFields, "field", "f", nil, "typed field key=value (repeatable; coerces integers/bools/null, never leading-zero digits; @file reads a value; reverse of gh's -f)")
+	apiCmd.Flags().StringArrayVarP(&apiCapF, "raw-field", "F", nil, "string field key=value (repeatable; no coercion; reverse of gh's -F)")
 	apiCmd.Flags().StringArrayVarP(&apiHeaders, "header", "H", nil, "extra request header Key:Value (repeatable)")
 	apiCmd.Flags().BoolVarP(&apiInclude, "include", "i", false, "print response status + headers before the body")
 	apiCmd.Flags().StringVarP(&apiMethodX, "method", "X", "", "HTTP method (alternative to the positional METHOD)")
