@@ -94,12 +94,14 @@ func TestDefaultClientRefusesPrivateAddresses(t *testing.T) {
 	if got.Status != Unknown {
 		t.Fatalf("loopback registry reached through the default client: %+v", got)
 	}
-	for _, a := range []string{"10.0.0.1:443", "169.254.169.254:80", "192.168.1.1:443", "[::1]:443"} {
-		if publicOnly("tcp", a, nil) == nil {
-			t.Errorf("publicOnly(%s) allowed", a)
+	// HTTP-4: the platform SSRF policy, CGNAT/Tailscale and the other
+	// special ranges included, not a narrower private-only list.
+	dial := (&Checker{}).client().Transport.(*http.Transport).DialContext
+	for _, a := range []string{"10.0.0.1:443", "169.254.169.254:80", "192.168.1.1:443", "[::1]:443",
+		"100.100.100.100:8443", "100.64.0.5:443", "0.1.2.3:443", "198.18.0.1:443", "192.0.0.8:443"} {
+		_, err := dial(context.Background(), "tcp", a)
+		if err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Errorf("dial %s = %v, want a reserved-address refusal", a, err)
 		}
-	}
-	if err := publicOnly("tcp", "8.8.8.8:443", nil); err != nil {
-		t.Errorf("publicOnly(8.8.8.8) = %v", err)
 	}
 }
