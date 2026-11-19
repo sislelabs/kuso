@@ -16,7 +16,6 @@ import (
 	"kuso/server/internal/addons"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
-	"kuso/server/internal/kube"
 )
 
 // AddonWebUIHandler reverse-proxies the addon's built-in HTTP console
@@ -347,15 +346,4 @@ func stripKusoCredentials(h http.Header) {
 			h.Set("Sec-WebSocket-Protocol", strings.Join(kept, ", "))
 		}
 	}
-}
-
-// addonWebUIPortFor is exported as a helper for the addons handler's
-// list response, so the dashboard knows whether to render the
-// "Open Web UI" chip without having to teach the frontend the kind→port
-// table.
-func addonWebUIPortFor(cr *kube.KusoAddon) int32 {
-	if cr == nil || cr.Spec.WebUI == nil || !cr.Spec.WebUI.Enabled {
-		return 0
-	}
-	return addonWebUIPort(cr.Spec.Kind)
 }

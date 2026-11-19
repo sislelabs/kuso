@@ -179,10 +179,3 @@ func sumPodMetricsUsage(item unstructured.Unstructured, cpuMilli, memBytes *int6
 	}
 	return true
 }
-
-// ResetPodMetricsCacheForTesting drops every cached entry.
-func ResetPodMetricsCacheForTesting() {
-	podMetricsCache.mu.Lock()
-	podMetricsCache.m = map[string]podMetricsEntry{}
-	podMetricsCache.mu.Unlock()
-}

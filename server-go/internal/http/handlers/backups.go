@@ -1344,9 +1344,6 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database st
 	return db, nil
 }
 
-// pgOpenAs opens a single-connection *sql.DB to the addon postgres as the
-// given user. One connection, no pooling: the request is short and we'd
-// rather spend a fresh handshake than risk pool reuse across users.
 // needsBrowserRole reports whether the SQL browser must go through the
 // restricted kuso_browser role.
 //
@@ -1423,10 +1420,6 @@ func browserSSLMode(addon *kube.KusoAddon) string {
 func pgDSN(host, port, user, pass, dbName, sslMode string) string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
 		host, port, user, pass, dbName, sslMode)
-}
-
-func pgOpenAs(host, port, user, pass, dbName string) (*sql.DB, error) {
-	return pgOpenAsWithSSL(host, port, user, pass, dbName, "disable")
 }
 
 func pgOpenAsWithSSL(host, port, user, pass, dbName, sslMode string) (*sql.DB, error) {

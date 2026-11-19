@@ -60,13 +60,6 @@ func (t *SeenThrottle) Allow(key string, now time.Time) bool {
 	return true
 }
 
-// Len is the number of tracked keys (for tests).
-func (t *SeenThrottle) Len() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.last)
-}
-
 // NewThrottledSeenRecorder builds a SeenRecorder that writes at most once
 // per user per interval, off the request goroutine, with its own short
 // timeout so a slow DB never delays or fails the request. onErr may be nil.

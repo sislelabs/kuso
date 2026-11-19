@@ -435,7 +435,8 @@ func (h *KubernetesHandler) projectNamespace(ctx context.Context, project string
 	return h.Namespace
 }
 
-// requireEnvAccessAnyNS is requireEnvAccess for an env that may live in
+// requireEnvAccessAnyNS gates a kube envs/{env} handler by the project the
+// env belongs to (env CR → spec.project → membership). The env may live in
 // a project's custom namespace: it looks in the home namespace, then in
 // every project namespace, and returns the namespace it found the env in.
 func (h *KubernetesHandler) requireEnvAccessAnyNS(ctx context.Context, w http.ResponseWriter, envName string, role db.ProjectRole) (string, bool) {

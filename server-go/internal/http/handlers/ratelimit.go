@@ -51,22 +51,6 @@ func SetRateLimiterDB(d *db.DB) {
 	limiterDBMu.Unlock()
 }
 
-// ResetRateLimiterForTesting wipes the LoginAttempt table so a test
-// run that shares a Postgres-backed test process doesn't trip the
-// cap on the 11th login-flow test. Falls back to a no-op when no
-// DB is wired (in-process unit tests).
-func ResetRateLimiterForTesting() {
-	limiterDBMu.RLock()
-	d := limiterDB
-	limiterDBMu.RUnlock()
-	if d == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = d.ResetLoginAttemptsForTesting(ctx)
-}
-
 // Login gets two buckets: (ip, username) at rateLimitMax so a password
 // guesser is capped per account, plus a looser per-IP cap so one IP
 // can't spray unlimited usernames. Keying on the pair means one noisy

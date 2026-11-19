@@ -169,13 +169,6 @@ var nodeMetricsCache = struct {
 	sf    singleflight.Group
 }{}
 
-// ResetNodeMetricsCacheForTesting drops the cached node usage.
-func ResetNodeMetricsCacheForTesting() {
-	nodeMetricsCache.mu.Lock()
-	nodeMetricsCache.entry = nodeMetricsEntry{}
-	nodeMetricsCache.mu.Unlock()
-}
-
 // fetchNodeMetrics is the uncached read: CPU/memory from
 // metrics.k8s.io, disk from each kubelet's /stats/summary. Each half is
 // best-effort on its own; disk must not vanish because metrics-server
