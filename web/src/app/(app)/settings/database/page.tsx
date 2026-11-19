@@ -72,6 +72,7 @@ export default function DatabasePage() {
       api("/api/instance-pg/managed", { method: "POST", body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
+      qc.invalidateQueries({ queryKey: ["instance-addons"] });
       toast.success("Provisioning started — Postgres will be ready in ~1 minute.");
     },
     onError: (e) => toastError(e, "Provision failed"),
@@ -80,6 +81,7 @@ export default function DatabasePage() {
     mutationFn: (dsn: string) => api("/api/instance-pg/external", { method: "POST", body: { dsn } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
+      qc.invalidateQueries({ queryKey: ["instance-addons"] });
       toast.success("External Postgres connected.");
     },
     onError: (e) => toastError(e, "Connection failed"),
@@ -88,6 +90,7 @@ export default function DatabasePage() {
     mutationFn: () => api("/api/instance-pg", { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["instance-pg", "status"] });
+      qc.invalidateQueries({ queryKey: ["instance-addons"] });
       toast.success("Disabled.");
     },
     onError: (e) => toastError(e, "Disable failed"),
