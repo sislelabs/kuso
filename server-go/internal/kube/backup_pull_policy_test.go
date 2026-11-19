@@ -16,13 +16,14 @@ import (
 // three nodes on a stale pg16 image after a rebuild).
 func TestKusoAddonChart_BackupImagePullPolicy(t *testing.T) {
 	t.Parallel()
-	pinned := "ghcr.io/sislelabs/kuso-backup:v1.2.3@sha256:" + strings.Repeat("a", 64)
+	tag := "ghcr.io/sislelabs/kuso-backup:v1.2.3"
+	pinned := tag + "@sha256:" + strings.Repeat("a", 64)
 	cases := []struct {
 		name, kind, image, wantPolicy string
 		sets                          []string
 	}{
-		{"tag postgres", "postgres", "", "Always", nil},
-		{"tag external postgres", "postgres", "", "Always", []string{"external.secretName=creds"}},
+		{"tag postgres", "postgres", tag, "Always", nil},
+		{"tag external postgres", "postgres", tag, "Always", []string{"external.secretName=creds"}},
 		{"pinned postgres", "postgres", pinned, "IfNotPresent", nil},
 		{"pinned redis", "redis", pinned, "IfNotPresent", nil},
 		{"pinned mysql", "mysql", pinned, "IfNotPresent", nil},
