@@ -223,34 +223,10 @@ func rescopeAddonConnRefsByOrigin(in []kube.KusoEnvVar, cloneByOrigin map[string
 	return out
 }
 
-// rescopeAddonConnRefs is the name-derived form of
-// rescopeAddonConnRefsByOrigin: base "<addon>-conn" maps to
-// "<addon>-<envScope>-conn" when that clone is in cloneConns. A renamed or
-// replaced source defeats the derivation (the preview-clone-origin bug
-// class), so callers that hold a cloneByOrigin map should call
-// rescopeAddonConnRefsByOrigin instead. Kept for callers not yet switched.
-func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []string, envScope string) []kube.KusoEnvVar {
-	if envScope == "" || envScope == "production" || len(in) == 0 || len(droppedBaseConns) == 0 {
-		return in
-	}
-	clonePresent := make(map[string]bool, len(cloneConns))
-	for _, c := range cloneConns {
-		clonePresent[c] = true
-	}
-	baseToClone := make(map[string]string, len(droppedBaseConns))
-	for _, base := range droppedBaseConns {
-		clone := strings.TrimSuffix(base, "-conn") + "-" + envScope + "-conn"
-		if clonePresent[clone] {
-			baseToClone[base] = clone
-		}
-	}
-	return rescopeAddonConnRefsByOrigin(in, baseToClone)
-}
-
 // unclonedAddonRefs returns "VAR -> secret" for every explicit secretKeyRef
 // that targets a project addon a new isolated env won't get a clone of:
 // external addons (never cloned) and kinds outside the requested set.
-// rescopeAddonConnRefs can only redirect refs that have a clone.
+// rescopeAddonConnRefsByOrigin can only redirect refs that have a clone.
 func (s *Service) unclonedAddonRefs(ctx context.Context, project string, vars []kube.KusoEnvVar, kinds []string) ([]string, error) {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {

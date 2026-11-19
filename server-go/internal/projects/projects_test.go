@@ -1241,7 +1241,7 @@ func TestUpdate_BaseDomainRewritesEnvHosts(t *testing.T) {
 	if e, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production"); err == nil {
 		e.Spec.Host = "web.old.example.com"
 		e.Spec.AdditionalHosts = []string{"custom.example.org"} // custom host must survive
-		_, _ = s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", e)
+		_, _ = putEnvFixture(context.Background(), s.Kube, "kuso", e)
 	}
 
 	newBase := "new.example.com"
@@ -1448,7 +1448,7 @@ func TestPatchService_FastScaleUpNeedsPodLimits(t *testing.T) {
 	// limits (set before this rule existed) is not blocked.
 	svc, _ := s.GetService(ctx, "alpha", "web")
 	svc.Spec.Resources = nil
-	if _, err := s.Kube.UpdateKusoService(ctx, "kuso", svc); err != nil {
+	if _, err := putServiceFixture(ctx, s.Kube, "kuso", svc); err != nil {
 		t.Fatalf("seed legacy state: %v", err)
 	}
 	port := int32(4000)
@@ -1478,7 +1478,7 @@ func TestPatchService_ScaleDoesNotTouchPreviewEnvs(t *testing.T) {
 	// Pre-set the preview env's replicaCount=1 (mirrors ensurePreviewEnv).
 	if pe, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9"); err == nil {
 		pe.Spec.ReplicaCount = &one
-		_, _ = s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", pe)
+		_, _ = putEnvFixture(context.Background(), s.Kube, "kuso", pe)
 	}
 
 	mn, mx := 2, 5

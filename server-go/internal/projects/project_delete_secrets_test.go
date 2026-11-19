@@ -89,3 +89,70 @@ func TestDeleteProject_KeepsHelmOwnedConnSecrets(t *testing.T) {
 	mustExist("beta-pg-tls")
 	mustGone("beta-shared")
 }
+
+// A no-purge project delete keeps the project's own addon data, but an env
+// clone's data goes with its env as everywhere else: a recreated project's
+// same-named env group would otherwise mount the old clone's PVC.
+func TestDeleteProject_NoPurgeReclaimsEnvCloneData(t *testing.T) {
+	const ns = "kuso"
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		kube.GVRKuso:         "KusoList",
+		kube.GVRProjects:     "KusoProjectList",
+		kube.GVRServices:     "KusoServiceList",
+		kube.GVREnvironments: "KusoEnvironmentList",
+		kube.GVRAddons:       "KusoAddonList",
+		kube.GVRBuilds:       "KusoBuildList",
+		kube.GVRCrons:        "KusoCronList",
+		kube.GVRRuns:         "KusoRunList",
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	addon := func(name string, labels map[string]string) seed {
+		return typedSeed(kube.GVRAddons, "KusoAddon", name, &kube.KusoAddon{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+			Spec:       kube.KusoAddonSpec{Project: "beta", Kind: "postgres"},
+		})
+	}
+	for _, sd := range []seed{
+		seedProject("beta", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		addon("beta-pg", map[string]string{labelProject: "beta"}),
+		addon("beta-pg-staging", map[string]string{labelProject: "beta", labelEnv: "staging"}),
+	} {
+		if err := dyn.Tracker().Create(sd.gvr, sd.obj, sd.obj.GetNamespace()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	var objs []runtime.Object
+	for _, fqn := range []string{"beta-pg", "beta-pg-staging"} {
+		objs = append(objs,
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+				Name: "data-" + fqn + "-0", Namespace: ns,
+				Labels: map[string]string{"app.kubernetes.io/instance": fqn},
+			}},
+			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+				Name: fqn + "-conn", Namespace: ns,
+				Labels:      map[string]string{labelProject: "beta", "app.kubernetes.io/instance": fqn},
+				Annotations: map[string]string{"helm.sh/resource-policy": "keep"},
+			}},
+		)
+	}
+	cs := kubefake.NewSimpleClientset(objs...)
+	s := New(&kube.Client{Dynamic: dyn, Clientset: cs}, "kuso")
+
+	if err := s.Delete(context.Background(), "beta"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := cs.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "data-beta-pg-0", metav1.GetOptions{}); err != nil {
+		t.Errorf("project addon PVC must be retained: %v", err)
+	}
+	if _, err := cs.CoreV1().Secrets(ns).Get(ctx, "beta-pg-conn", metav1.GetOptions{}); err != nil {
+		t.Errorf("project addon conn must be retained: %v", err)
+	}
+	if _, err := cs.CoreV1().PersistentVolumeClaims(ns).Get(ctx, "data-beta-pg-staging-0", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("env clone PVC survived the project delete (err=%v)", err)
+	}
+	if _, err := cs.CoreV1().Secrets(ns).Get(ctx, "beta-pg-staging-conn", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("env clone conn survived the project delete (err=%v)", err)
+	}
+}

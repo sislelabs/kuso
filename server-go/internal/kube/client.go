@@ -66,16 +66,6 @@ func NewClient() (*Client, error) {
 	return newClientFromConfig(cfg)
 }
 
-// NewClientFromKubeconfig is the explicit-path variant — useful in tests
-// and CLI-driven flows that pass --kubeconfig.
-func NewClientFromKubeconfig(path string) (*Client, error) {
-	cfg, err := clientcmd.BuildConfigFromFlags("", path)
-	if err != nil {
-		return nil, fmt.Errorf("kube: build config from %q: %w", path, err)
-	}
-	return newClientFromConfig(cfg)
-}
-
 func newClientFromConfig(cfg *rest.Config) (*Client, error) {
 	// Bump default QPS/burst. client-go ships with 5 QPS / 10 burst,
 	// fine for a CLI but way too tight for a long-running control-

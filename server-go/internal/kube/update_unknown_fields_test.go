@@ -42,21 +42,17 @@ func TestUpdate_PreservesUnknownSpecFields(t *testing.T) {
 	}
 	check("updateWithRetry")
 
-	e, err := c.GetKusoEnvironment(ctx, "kuso", "p-api-production")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.Spec.Branch = "main"
-	e.Spec.Placement = nil // a known field the caller clears must stay cleared
-	out, err := c.UpdateKusoEnvironment(ctx, "kuso", e)
+	// A known field the caller clears must stay cleared.
+	out, err := c.UpdateKusoEnvironmentWithRetry(ctx, "kuso", "p-api-production",
+		func(e *KusoEnvironment) error { e.Spec.Branch = "main"; e.Spec.Placement = nil; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Spec.Branch != "main" || out.Spec.Placement != nil {
-		t.Fatalf("typed update lost the caller's change: branch=%q placement=%v", out.Spec.Branch, out.Spec.Placement)
+		t.Fatalf("update lost the caller's change: branch=%q placement=%v", out.Spec.Branch, out.Spec.Placement)
 	}
 	raw, _ := c.Dynamic.Resource(GVREnvironments).Namespace("kuso").Get(ctx, "p-api-production", metav1.GetOptions{})
 	if v, _, _ := unstructured.NestedBool(raw.Object, "spec", "futureField", "enabled"); !v {
-		t.Fatalf("typed update dropped spec.futureField: %v", raw.Object["spec"])
+		t.Fatalf("update dropped spec.futureField: %v", raw.Object["spec"])
 	}
 }

@@ -25,6 +25,7 @@ func fakeService(t *testing.T, seeds ...seed) *Service {
 	scheme := runtime.NewScheme()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		kube.GVRProjects:     "KusoProjectList",
+		kube.GVRServices:     "KusoServiceList",
 		kube.GVREnvironments: "KusoEnvironmentList",
 		kube.GVRAddons:       "KusoAddonList",
 		GVRCNPGCluster:       "ClusterList",

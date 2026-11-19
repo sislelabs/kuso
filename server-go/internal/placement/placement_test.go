@@ -182,48 +182,6 @@ func TestMatches(t *testing.T) {
 	}
 }
 
-func TestCountMatches(t *testing.T) {
-	nodes := []NodeIdentity{
-		{Name: "web-1", Labels: map[string]string{"kuso.sislelabs.com/role": "web"}},
-		{Name: "web-2", Labels: map[string]string{"kuso.sislelabs.com/role": "web"}},
-		{Name: "db-1", Labels: map[string]string{"kuso.sislelabs.com/role": "db"}},
-	}
-
-	cases := []struct {
-		name      string
-		placement *kube.KusoPlacement
-		nodes     []NodeIdentity
-		want      int
-	}{
-		{"nil placement counts all", nil, nodes, 3},
-		{"nil placement, empty nodes", nil, nil, 0},
-		{"empty placement counts all", &kube.KusoPlacement{}, nodes, 3},
-		{
-			"label filter counts subset",
-			&kube.KusoPlacement{Labels: map[string]string{"role": "web"}},
-			nodes, 2,
-		},
-		{
-			"unsatisfiable placement counts zero",
-			&kube.KusoPlacement{Labels: map[string]string{"role": "cache"}},
-			nodes, 0,
-		},
-		{
-			"node whitelist counts subset",
-			&kube.KusoPlacement{Nodes: []string{"db-1"}},
-			nodes, 1,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := CountMatches(tc.placement, tc.nodes); got != tc.want {
-				t.Errorf("CountMatches() = %d, want %d", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestMatchesSchedulable_SkipsCordonedAndNotReady(t *testing.T) {
 	p := &kube.KusoPlacement{Nodes: []string{"n1"}}
 	ready := corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}

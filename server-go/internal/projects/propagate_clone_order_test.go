@@ -31,7 +31,7 @@ func TestPropagate_SubscribingProjectAddonKeepsEnvCloneLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	envCR.Spec.EnvFromSecrets = []string{"tickero-cache-staging-conn", "tickero-db-staging-conn", "tickero-api-secrets"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatal(err)
 	}
 

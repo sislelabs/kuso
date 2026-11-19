@@ -179,69 +179,6 @@ func TestAddEnvironment_RescopesExplicitAddonSecretRef(t *testing.T) {
 	}
 }
 
-// TestRescopeAddonConnRefs covers the helper that both AddEnvironment and
-// propagateChangedToEnvs rely on to keep a non-production env's explicit addon
-// secretKeyRef pointed at its OWN clone conn.
-func TestRescopeAddonConnRefs(t *testing.T) {
-	mkRef := func(name string) kube.KusoEnvVar {
-		return kube.KusoEnvVar{Name: "DATABASE_URL", ValueFrom: map[string]any{
-			"secretKeyRef": map[string]any{"name": name, "key": "DATABASE_URL"},
-		}}
-	}
-	skrName := func(e kube.KusoEnvVar) string {
-		skr, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
-		n, _ := skr["name"].(string)
-		return n
-	}
-
-	t.Run("rewrites base conn to clone when clone present", func(t *testing.T) {
-		in := []kube.KusoEnvVar{{Name: "PLAIN", Value: "x"}, mkRef("alpha-db-conn")}
-		out := rescopeAddonConnRefs(in, []string{"alpha-db-conn"}, []string{"alpha-db-staging-conn"}, "staging")
-		if got := skrName(out[1]); got != "alpha-db-staging-conn" {
-			t.Fatalf("got %q, want alpha-db-staging-conn", got)
-		}
-		if out[0].Value != "x" {
-			t.Fatalf("plain var mutated: %+v", out[0])
-		}
-	})
-
-	t.Run("no clone present leaves ref untouched (no dangling ref)", func(t *testing.T) {
-		in := []kube.KusoEnvVar{mkRef("alpha-db-conn")}
-		// clone not provisioned for this scope → must NOT rewrite to a
-		// non-existent secret.
-		out := rescopeAddonConnRefs(in, []string{"alpha-db-conn"}, []string{"alpha-redis-staging-conn"}, "staging")
-		if got := skrName(out[0]); got != "alpha-db-conn" {
-			t.Fatalf("got %q, want alpha-db-conn (unchanged)", got)
-		}
-	})
-
-	t.Run("production scope is a no-op", func(t *testing.T) {
-		in := []kube.KusoEnvVar{mkRef("alpha-db-conn")}
-		out := rescopeAddonConnRefs(in, []string{"alpha-db-conn"}, []string{"alpha-db-production-conn"}, "production")
-		if got := skrName(out[0]); got != "alpha-db-conn" {
-			t.Fatalf("production should not rescope; got %q", got)
-		}
-	})
-
-	t.Run("non-addon refs (instance-shared) untouched", func(t *testing.T) {
-		in := []kube.KusoEnvVar{mkRef("kuso-instance-shared")}
-		out := rescopeAddonConnRefs(in, []string{"alpha-db-conn"}, []string{"alpha-db-staging-conn"}, "staging")
-		if got := skrName(out[0]); got != "kuso-instance-shared" {
-			t.Fatalf("non-base-conn ref mutated; got %q", got)
-		}
-	})
-
-	t.Run("does not mutate input slice's nested maps", func(t *testing.T) {
-		src := mkRef("alpha-db-conn")
-		in := []kube.KusoEnvVar{src}
-		_ = rescopeAddonConnRefs(in, []string{"alpha-db-conn"}, []string{"alpha-db-staging-conn"}, "staging")
-		// the original src's nested map must still say alpha-db-conn
-		if got := skrName(src); got != "alpha-db-conn" {
-			t.Fatalf("input nested map was mutated: got %q", got)
-		}
-	})
-}
-
 // TestAddEnvironment_ShareAddonsKeepsProjectConns: --share-addons keeps the
 // shared project addon conn-secrets and does NOT provision per-env addons.
 func TestAddEnvironment_ShareAddonsKeepsProjectConns(t *testing.T) {

@@ -14,7 +14,6 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
 
@@ -33,39 +32,6 @@ func previewEnvCR(name string, connSecrets []string, releaseCmd []string, imageT
 		e.Spec.Image = &kube.KusoImage{Repository: "registry/app", Tag: imageTag}
 	}
 	return e
-}
-
-// TestSelectMigratableEnvs picks only the preview envs that (a) mount THIS
-// clone's conn secret, (b) carry a release command, and (c) have an image —
-// the join that decides which services migrate against a given clone.
-func TestSelectMigratableEnvs(t *testing.T) {
-	t.Parallel()
-	clone := "tickero-db-pr-36"
-	conn := "tickero-db-pr-36-conn"
-	migrateCmd := []string{"sh", "-c", "migrate up"}
-
-	envs := []kube.KusoEnvironment{
-		// api: mounts the clone, has release + image → SELECTED
-		previewEnvCR("tickero-api-pr-36", []string{conn, "shared-secrets"}, migrateCmd, "abc123"),
-		// frontend: mounts NO db conn, no release → skipped
-		previewEnvCR("tickero-frontend-pr-36", []string{"shared-secrets"}, nil, "def456"),
-		// backoffice: mounts the clone but has no release hook → skipped
-		previewEnvCR("tickero-backoffice-pr-36", []string{conn}, nil, "ghi789"),
-		// api but no image yet (build not promoted) → skipped (can't migrate)
-		previewEnvCR("tickero-api2-pr-36", []string{conn}, migrateCmd, ""),
-		// references a DIFFERENT clone → skipped
-		previewEnvCR("tickero-other-pr-36", []string{"tickero-other-pr-36-conn"}, migrateCmd, "xyz000"),
-	}
-
-	got := selectMigratableEnvs(envs, addons.ConnSecretName(clone))
-	var names []string
-	for _, e := range got {
-		names = append(names, e.Name)
-	}
-	want := []string{"tickero-api-pr-36"}
-	if strings.Join(names, ",") != strings.Join(want, ",") {
-		t.Errorf("selectMigratableEnvs = %v, want %v", names, want)
-	}
 }
 
 // TestBuildMigrateJob_RunsReleaseCmdAgainstClone verifies the post-seed

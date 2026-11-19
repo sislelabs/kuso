@@ -84,3 +84,14 @@ func EnvSecretName(project, service, env string) string {
 	safe := envSecretNameRE.ReplaceAllString(strings.ToLower(env), "-")
 	return project + "-" + service + "-" + safe + "-secrets"
 }
+
+// EnvScopeSecretName is EnvSecretName keyed by an env's scope LABEL. A
+// preview's label is "preview-pr-N" but the GitHub dispatcher creates and
+// mounts its per-PR Secret as "...-pr-N-secrets", so the label must not be
+// used verbatim for previews.
+func EnvScopeSecretName(project, service, scope string) string {
+	if n, ok := strings.CutPrefix(scope, "preview-pr-"); ok {
+		scope = "pr-" + n
+	}
+	return EnvSecretName(project, service, scope)
+}

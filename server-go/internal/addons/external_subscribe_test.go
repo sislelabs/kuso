@@ -54,7 +54,7 @@ func TestRefreshEnvSecrets_MountsExternalAddonConn(t *testing.T) {
 		t.Fatalf("get env: %v", err)
 	}
 	envCR.Spec.SubscribedAddons = []string{"cache", "psdb"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatalf("seed env: %v", err)
 	}
 

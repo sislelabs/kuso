@@ -66,7 +66,7 @@ func TestRefreshEnvSecrets_ReassertsOwnCloneConn(t *testing.T) {
 	// The damaged state: the clone conn is already gone, exactly as the
 	// dispatcher leaves it after copying production's reduced list.
 	envCR.Spec.EnvFromSecrets = []string{"tickero-api-secrets"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatalf("seed env: %v", err)
 	}
 

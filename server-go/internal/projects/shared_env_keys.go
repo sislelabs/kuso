@@ -19,7 +19,6 @@ package projects
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -452,53 +451,6 @@ func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar, overrid
 		}
 	}
 	return out
-}
-
-// envVarsEqual reports whether two KusoEnvVar entries carry the same
-// payload (name + value + valueFrom shape). Used by extractEnv
-// OnlyOverrides to tell mirrors from shadow overrides. Comparison
-// is conservative: anything not byte-identical is considered an
-// override (a user who reformats valueFrom shouldn't lose their
-// edit either).
-func envVarsEqual(a, b kube.KusoEnvVar) bool {
-	if a.Name != b.Name || a.Value != b.Value {
-		return false
-	}
-	// ValueFrom is a free-form map (we don't lose secretKeyRef on
-	// round-trip). Compare via reflect-style key set equality —
-	// can't reach in for typed fields without an import dance.
-	if len(a.ValueFrom) != len(b.ValueFrom) {
-		return false
-	}
-	for k, av := range a.ValueFrom {
-		bv, ok := b.ValueFrom[k]
-		if !ok {
-			return false
-		}
-		// ValueFrom values are themselves nested maps (secretKeyRef
-		// is {name, key}). JSON-roundtrip equality is the simplest
-		// safe comparison.
-		if !deepEqualJSON(av, bv) {
-			return false
-		}
-	}
-	return true
-}
-
-// deepEqualJSON compares two values via JSON marshal — handles nested
-// maps without pulling in reflect.DeepEqual surprises (NaN, function
-// values). The inputs come from JSON parsing originally so this
-// round-trip is loss-free.
-func deepEqualJSON(a, b any) bool {
-	ja, err := json.Marshal(a)
-	if err != nil {
-		return false
-	}
-	jb, err := json.Marshal(b)
-	if err != nil {
-		return false
-	}
-	return string(ja) == string(jb)
 }
 
 // mergeExplicitOverrides layers env-level overrides on top of an

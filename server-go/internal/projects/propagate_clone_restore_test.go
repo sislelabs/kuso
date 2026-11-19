@@ -33,7 +33,7 @@ func TestPropagate_RestoresEnvCloneConn(t *testing.T) {
 	}
 	// The damaged state: the clone is gone, the production source has crept in.
 	envCR.Spec.EnvFromSecrets = []string{"tickero-cache-conn", "tickero-db-conn", "tickero-api-secrets"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,7 +82,7 @@ func TestPropagate_EnvClonesFollowSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	prev.Spec.EnvFromSecrets = []string{"tickero-db-pr-5-conn"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", prev); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", prev); err != nil {
 		t.Fatal(err)
 	}
 	s.AddonConnSecrets = func(context.Context, string) ([]string, error) {
@@ -93,7 +93,7 @@ func TestPropagate_EnvClonesFollowSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	envCR.Spec.EnvFromSecrets = []string{"tickero-db-staging-conn", "tickero-frontend-secrets"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SetSubscribedAddons(context.Background(), "tickero", "frontend", []string{"cache"}, nil); err != nil {

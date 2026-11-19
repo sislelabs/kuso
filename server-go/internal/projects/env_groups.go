@@ -1187,9 +1187,10 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	// the clone addons with their data PVCs and conn Secrets. Deleting CRs
 	// alone orphaned all of those (scubatony/verify, 2026-09-28).
 	var cleanupErrs []error
+	envCtx := withSecretNameList(ctx)
 	for i := range envList.Items {
 		n := envList.Items[i].GetName()
-		if err := s.deleteEnvironment(ctx, project, n, false); err != nil {
+		if err := s.deleteEnvironment(envCtx, project, n, false); err != nil {
 			if !errors.Is(err, errEnvCleanupOrphans) {
 				return fmt.Errorf("delete env %s: %w", n, err)
 			}

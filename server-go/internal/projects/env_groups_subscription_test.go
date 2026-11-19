@@ -109,7 +109,7 @@ func TestCreateEnvGroup_RunsReleaseHookAgainstFreshAddons(t *testing.T) {
 			t.Fatalf("get %s: %v", name, err)
 		}
 		env.Spec.Image = &kube.KusoImage{Repository: "registry/acme", Tag: "abc123"}
-		if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", env); err != nil {
+		if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", env); err != nil {
 			t.Fatalf("update %s: %v", name, err)
 		}
 	}

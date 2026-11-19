@@ -17,6 +17,7 @@ type volumePVC struct {
 	name         string
 	request      resource.Quantity
 	storageClass string
+	accessModes  []corev1.PersistentVolumeAccessMode
 }
 
 const gi = int64(1) << 30
@@ -82,6 +83,44 @@ func planVolumeSizes(prev []kube.KusoVolume, vols []VolumePatch, pvcs map[string
 	return nil
 }
 
+// checkVolumeImmutables refuses a storageClass or accessMode change on a
+// volume whose PVC already exists. A bound PVC's spec is immutable apart
+// from its size, so the env chart's next upgrade would be rejected and every
+// later image/env/ingress change on that env would stop landing (OPS-3).
+// Only an explicit change is checked: an omitted field keeps the old spec
+// value, and an unchanged one is never blocked by an existing mismatch.
+func checkVolumeImmutables(prev []kube.KusoVolume, vols []VolumePatch, pvcs map[string][]volumePVC) error {
+	prevByName := make(map[string]kube.KusoVolume, len(prev))
+	for _, v := range prev {
+		prevByName[v.Name] = v
+	}
+	for _, v := range vols {
+		old, inSpec := prevByName[v.Name]
+		if v.StorageClass != "" && (!inSpec || v.StorageClass != old.StorageClass) {
+			for _, p := range pvcs[v.Name] {
+				if p.storageClass != v.StorageClass {
+					return fmt.Errorf("%w: volume %q: its disk %s uses StorageClass %q, which cannot be changed on an existing volume; keep %q or use a new volume name",
+						ErrConflict, v.Name, p.name, p.storageClass, p.storageClass)
+				}
+			}
+		}
+		mode, err := normalizeAccessMode(v.AccessMode)
+		if err != nil || mode == "" {
+			continue // an invalid mode is refused by the spec validation
+		}
+		if oldMode, _ := normalizeAccessMode(old.AccessMode); inSpec && mode == oldMode {
+			continue
+		}
+		for _, p := range pvcs[v.Name] {
+			if len(p.accessModes) > 0 && string(p.accessModes[0]) != mode {
+				return fmt.Errorf("%w: volume %q: its disk %s is %s, and the access mode of an existing volume cannot be changed; keep %s or use a new volume name",
+					ErrConflict, v.Name, p.name, p.accessModes[0], p.accessModes[0])
+			}
+		}
+	}
+	return nil
+}
+
 // singleWriterVolume returns the first volume only one pod can safely
 // write ("" access mode is the chart's ReadWriteOnce default), "" if none.
 func singleWriterVolume(vols []kube.KusoVolume) string {
@@ -141,12 +180,15 @@ func (s *Service) checkVolumeSizes(ctx context.Context, ns, project string, svc 
 		if !mine[p.Labels["app.kubernetes.io/instance"]] {
 			continue
 		}
-		vp := volumePVC{name: p.Name, request: p.Spec.Resources.Requests[corev1.ResourceStorage]}
+		vp := volumePVC{name: p.Name, request: p.Spec.Resources.Requests[corev1.ResourceStorage], accessModes: p.Spec.AccessModes}
 		if p.Spec.StorageClassName != nil {
 			vp.storageClass = *p.Spec.StorageClassName
 		}
 		name := p.Labels["kuso.sislelabs.com/volume"]
 		pvcs[name] = append(pvcs[name], vp)
+	}
+	if err := checkVolumeImmutables(svc.Spec.Volumes, vols, pvcs); err != nil {
+		return err
 	}
 	return planVolumeSizes(svc.Spec.Volumes, vols, pvcs, func(sc string) (bool, error) {
 		if sc == "" {

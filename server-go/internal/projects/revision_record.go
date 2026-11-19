@@ -393,6 +393,8 @@ func (s *Service) replayServiceDomains(ctx context.Context, project, service str
 	}
 	after, err := s.GetService(ctx, project, service)
 	if err != nil {
+		slog.WarnContext(ctx, "revision replay applied but not recorded: re-read service failed",
+			"project", project, "service", service, "err", err)
 		return nil
 	}
 	added, removed := stringsDiff(domainHostsOf(before), domainHostsOf(after.Spec.Domains))
@@ -491,6 +493,8 @@ func (s *Service) replayEnvDomains(ctx context.Context, project string, snap rev
 	}
 	after, err := s.Kube.GetKusoEnvironment(ctx, ns, envCRNameFor(project, snap.Service, snap.Env))
 	if err != nil {
+		slog.WarnContext(ctx, "revision replay applied but not recorded: re-read env failed",
+			"project", project, "service", snap.Service, "env", snap.Env, "err", err)
 		return nil
 	}
 	s.recordEnvDomainsChange(ctx, scope, project, snap.Service, snap.Env, before, after)
@@ -540,6 +544,8 @@ func (s *Service) replayEnvOverrides(ctx context.Context, project string, snap r
 	}
 	after, err := s.Kube.GetKusoEnvironment(ctx, ns, crName)
 	if err != nil {
+		slog.WarnContext(ctx, "revision replay applied but not recorded: re-read env failed",
+			"project", project, "service", snap.Service, "env", snap.Env, "err", err)
 		return nil
 	}
 	summary := envVarsSummary(current, envOverridesOf(after))

@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -257,5 +258,39 @@ func TestCreateEnvGroup_RollbackFailureIsSurfacedNotSwallowed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "injected rollback delete failure") {
 		t.Errorf("rollback failure (orphaned clone addon) must be surfaced alongside the cause, got: %v", err)
+	}
+}
+
+// The "<env>-tls-extra-*" sweep lists the namespace's Secrets once per
+// project delete, not once per env.
+func TestDeleteProject_SecretListsDoNotScaleWithEnvs(t *testing.T) {
+	t.Parallel()
+	countLists := func(envs int) int {
+		seeds := []seed{
+			seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+			seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		}
+		for i := 0; i < envs; i++ {
+			n := fmt.Sprintf("alpha-web-e%d", i)
+			seeds = append(seeds, seedEnv("alpha", "web", fmt.Sprintf("e%d", i), "main", n))
+		}
+		extra := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-e0-tls-extra-x", Namespace: "kuso"}}
+		s, _, cs := newCascadeFixture(t, seeds, extra)
+		if err := s.Delete(context.Background(), "alpha"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if _, err := cs.CoreV1().Secrets("kuso").Get(context.Background(), extra.Name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("tls-extra Secret not reclaimed: %v", err)
+		}
+		n := 0
+		for _, a := range cs.Actions() {
+			if a.GetVerb() == "list" && a.GetResource().Resource == "secrets" {
+				n++
+			}
+		}
+		return n
+	}
+	if one, five := countLists(1), countLists(5); five != one {
+		t.Fatalf("Secret LISTs: %d with 1 env, %d with 5 envs; want equal", one, five)
 	}
 }

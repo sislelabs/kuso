@@ -225,14 +225,6 @@ func TestRewriteEnvVars_Multiple(t *testing.T) {
 	}
 }
 
-func TestFormatVarRef(t *testing.T) {
-	got := FormatVarRef("pg", "DATABASE_URL")
-	want := "${{ pg.DATABASE_URL }}"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
 // TestRewriteEnvVar_AllowPendingSpeculativeSecretRef is the regression test
 // for the kuso-apply migration bug: a `${{ db.DATABASE_URL }}` ref to an addon
 // whose conn Secret doesn't exist yet (provisioned async in the same apply)

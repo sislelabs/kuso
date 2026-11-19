@@ -233,3 +233,29 @@ func getAddon(t *testing.T, dyn *dynamicfake.FakeDynamicClient, name string) *ku
 	}
 	return &a
 }
+
+// The clone's conn replaces the source's, so a dropped pooler hands the app
+// POOLER_URL="", and a dropped placement schedules it on any node.
+func TestEnsureEnvAddons_CloneCarriesPoolerAndPlacement(t *testing.T) {
+	src := addonCR("alpha", "pg", "postgres")
+	src.Spec.Pooler = &kube.KusoAddonPooler{Enabled: true, PoolSize: 10}
+	src.Spec.Placement = &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}}
+	c, dyn := newTestCloner(t, "alpha", src)
+
+	if _, err := c.EnsureEnvAddons(context.Background(), "alpha", "staging", EnvAddonOpts{
+		Kinds:      []string{"postgres"},
+		NameSuffix: "-staging",
+	}); err != nil {
+		t.Fatalf("EnsureEnvAddons: %v", err)
+	}
+	clone := getAddon(t, dyn, "alpha-pg-staging")
+	if clone == nil {
+		t.Fatalf("clone alpha-pg-staging not created")
+	}
+	if clone.Spec.Pooler == nil || !clone.Spec.Pooler.Enabled || clone.Spec.Pooler.PoolSize != 10 {
+		t.Errorf("clone pooler = %+v, want the source's", clone.Spec.Pooler)
+	}
+	if clone.Spec.Placement == nil || clone.Spec.Placement.Labels["region"] != "eu" {
+		t.Errorf("clone placement = %+v, want the source's", clone.Spec.Placement)
+	}
+}

@@ -181,3 +181,120 @@ func TestClearShadowedEnvLiterals_HealsExistingDesync(t *testing.T) {
 		t.Error("explicit valueFrom wiring must survive even when its name is in the Secret")
 	}
 }
+
+// seedEnvSpec seeds an env CR with a caller-built spec (labels as seedEnv).
+func seedEnvSpec(project, service, envLabel, name string, spec kube.KusoEnvironmentSpec) seed {
+	spec.Project = project
+	spec.Service = serviceCRName(project, service)
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", name, &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "kuso",
+			Labels: map[string]string{labelProject: project, labelService: service, labelEnv: envLabel},
+		},
+		Spec: spec,
+	})
+}
+
+func envVarOnCR(t *testing.T, s *Service, env, name string) (string, bool) {
+	t.Helper()
+	e, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", env)
+	if err != nil {
+		t.Fatalf("get env %s: %v", env, err)
+	}
+	for _, ev := range e.Spec.EnvVars {
+		if ev.Name == name {
+			return ev.Value, true
+		}
+	}
+	return "", false
+}
+
+// A service-level secret write must not delete staging's pinned override
+// (staging would then run on the production value from the service Secret)
+// nor a preview's per-PR literal (previews never mount the service Secret,
+// so the literal is their only copy).
+func TestSetEnvValue_KeepsPinnedOverrideAndPreviewLiteral(t *testing.T) {
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnvWithVars("alpha", "web", "production", "main", "alpha-web-production",
+			kube.KusoEnvVar{Name: "PAYMENT_KEY", Value: "stale"}),
+		seedEnvSpec("alpha", "web", "staging", "alpha-web-staging", kube.KusoEnvironmentSpec{
+			Kind:         "staging",
+			EnvVars:      []kube.KusoEnvVar{{Name: "PAYMENT_KEY", Value: "sk_test"}},
+			EnvOverrides: []string{"PAYMENT_KEY"},
+		}),
+		seedEnvSpec("alpha", "web", "preview-pr-7", "alpha-web-pr-7", kube.KusoEnvironmentSpec{
+			Kind:    "preview",
+			EnvVars: []kube.KusoEnvVar{{Name: "PAYMENT_KEY", Value: "pr-value"}},
+		}),
+	)
+	if _, err := s.SetEnvValue(context.Background(), "alpha", "web", "PAYMENT_KEY", "sk_live"); err != nil {
+		t.Fatalf("SetEnvValue: %v", err)
+	}
+	if _, ok := envVarOnCR(t, s, "alpha-web-production", "PAYMENT_KEY"); ok {
+		t.Error("production: the unpinned stale literal must still be cleared")
+	}
+	if v, ok := envVarOnCR(t, s, "alpha-web-staging", "PAYMENT_KEY"); !ok || v != "sk_test" {
+		t.Errorf("staging pinned override = %q (present=%v), want sk_test", v, ok)
+	}
+	if v, ok := envVarOnCR(t, s, "alpha-web-pr-7", "PAYMENT_KEY"); !ok || v != "pr-value" {
+		t.Errorf("preview literal = %q (present=%v), want pr-value", v, ok)
+	}
+}
+
+// The boot heal must apply the same rule as the write path.
+func TestClearShadowedEnvLiterals_SkipsPreviewsAndOverrides(t *testing.T) {
+	secretName := kube.ServiceSecretName("alpha", "web")
+	s := fakeServiceWithSecrets(t,
+		[]runtime.Object{&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "kuso"},
+			Data:       map[string][]byte{"API_URL": []byte("https://prod")},
+		}},
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnvSpec("alpha", "web", "staging", "alpha-web-staging", kube.KusoEnvironmentSpec{
+			Kind:           "staging",
+			EnvFromSecrets: []string{secretName},
+			EnvVars:        []kube.KusoEnvVar{{Name: "API_URL", Value: "https://staging"}},
+			EnvOverrides:   []string{"API_URL"},
+		}),
+		seedEnvSpec("alpha", "web", "preview-pr-7", "alpha-web-pr-7", kube.KusoEnvironmentSpec{
+			Kind:    "preview",
+			EnvVars: []kube.KusoEnvVar{{Name: "API_URL", Value: "https://pr-7"}},
+		}),
+	)
+	n, err := s.clearShadowedEnvLiterals(context.Background(), "kuso", "alpha", "web", secretName)
+	if err != nil {
+		t.Fatalf("clearShadowedEnvLiterals: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("cleared %d keys, want 0", n)
+	}
+	if _, ok := envVarOnCR(t, s, "alpha-web-staging", "API_URL"); !ok {
+		t.Error("staging pinned override was cleared")
+	}
+	if _, ok := envVarOnCR(t, s, "alpha-web-pr-7", "API_URL"); !ok {
+		t.Error("preview literal was cleared")
+	}
+}
+
+// The attach must order the list the way the addon refresh does (the env's
+// own clone conns last), or the next addon event reorders it and rolls pods.
+func TestSetEnvValue_AttachKeepsCloneConnLast(t *testing.T) {
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnvSpec("alpha", "web", "staging", "alpha-web-staging", kube.KusoEnvironmentSpec{
+			Kind:           "staging",
+			EnvFromSecrets: []string{"alpha-shared", "alpha-db-staging-conn"},
+		}),
+	)
+	if _, err := s.SetEnvValue(context.Background(), "alpha", "web", "API_KEY", "v"); err != nil {
+		t.Fatalf("SetEnvValue: %v", err)
+	}
+	got := envFromOf(t, s, "alpha-web-staging")
+	if len(got) == 0 || got[len(got)-1] != "alpha-db-staging-conn" {
+		t.Fatalf("envFromSecrets = %v, want the env's clone conn last", got)
+	}
+}

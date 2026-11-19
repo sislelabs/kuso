@@ -200,6 +200,9 @@ type CreateAddonRequest struct {
 	// Pooler enables the opt-in PgBouncer pooler at create time.
 	// Nil = no pooler.
 	Pooler *kube.KusoAddonPooler `json:"pooler,omitempty"`
+	// Placement pins the new addon's pods. Internal only: the env-addon
+	// cloner carries the source's (already validated) placement.
+	Placement *kube.KusoPlacement `json:"-"`
 	// TLS opts a native kind=postgres addon into in-cluster wire TLS.
 	// "" / "disable" (default) = plaintext + sslmode=disable. "require"
 	// = serve TLS + sslmode=require, for apps that mandate encrypted
@@ -638,6 +641,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			External:         req.External,
 			UseInstanceAddon: req.UseInstanceAddon,
 			Pooler:           req.Pooler,
+			Placement:        req.Placement,
 			TLS:              req.TLS,
 			Backup:           s.createBackup(ctx, req),
 			AppRole:          newAddonGetsAppRole(req, isExternal),
@@ -1464,7 +1468,10 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// "tickero-pg-conn", so the exclude silently never matched and this
 	// guard did nothing at all. Every caller reaches Delete with a short
 	// name, so it was defeated on every code path.
-	if err := s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true}); err != nil {
+	//
+	// An env-scoped clone was only ever mounted by envs in its own scope, so
+	// only those need rewriting (Add skips the refresh for clones entirely).
+	if err := s.refreshEnvSecretsScoped(ctx, project, cr.Labels[kube.LabelEnv], nil, map[string]bool{connSecretName(fqn): true}); err != nil {
 		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, errors.Join(err, unsubErr))
 	}
 	if unsubErr != nil {
@@ -1548,6 +1555,11 @@ func (s *Service) checkReleaseName(ctx context.Context, ns, fqn string, isClone 
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("preflight cron name: %w", err)
 	}
+	if _, err := s.Kube.GetKusoEnvironment(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by an environment in this project", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight environment name: %w", err)
+	}
 	return nil
 }
 
@@ -1571,17 +1583,6 @@ func addonPVCSelector(fqn string) string {
 // projects.UnsubscribeAddon to centralise the per-service lock. Every
 // write is attempted; the failures come back joined.
 func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonShort string) (err error) {
-	// Defensive: the fake dynamic client used in unit tests panics on
-	// List for GVRs whose list-kind isn't registered. Production
-	// always has the KusoServiceList kind wired, so the recover is a
-	// pure test-friendliness measure — addon-package tests that don't
-	// seed services shouldn't crash the delete path.
-	defer func() {
-		if r := recover(); r != nil {
-			// best-effort; an unsubscribe failure leaves a stale
-			// subscription entry that the next user save will clean up
-		}
-	}()
 	// Match short ("pg") AND fully-qualified ("tickero-pg") shape so a
 	// service that recorded its subscription as the FQN gets cleaned up too.
 	isThis := func(sub string) bool { return sub == addonShort || sub == project+"-"+addonShort }
@@ -1678,18 +1679,6 @@ func effectiveSubscription(envSubs, svcSubs []string, project string) []string {
 	return out
 }
 
-// mustJSON serializes a string slice to JSON for inclusion in a
-// merge-patch body. Empty slice serializes to `[]` so the patch
-// keeps the field as an explicit (non-nil) empty list rather than
-// silently re-entering legacy mount-all mode.
-func mustJSON(v []string) string {
-	if v == nil {
-		v = []string{}
-	}
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
 // RefreshEnvSecrets recomputes the project's addon-conn secret list and
 // rewrites every env's envFromSecrets. Public entrypoint with a stable
 // signature — callers that have no just-created addon to account for
@@ -1724,6 +1713,12 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 // re-injected into every env, leaving pods with an env-var ref to a
 // soon-to-vanish secret (CreateContainerConfigError on the next restart).
 func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
+	return s.refreshEnvSecretsScoped(ctx, project, "", extraConnSecrets, excludeConnSecrets)
+}
+
+// refreshEnvSecretsScoped is refreshEnvSecretsFiltered limited to the envs
+// whose env label is onlyScope ("" = every env in the project).
+func (s *Service) refreshEnvSecretsScoped(ctx context.Context, project, onlyScope string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
 	// Serialise refreshes per project and read the addon set live, not from
 	// the informer cache: each refresh rewrites envFromSecrets wholesale, so
 	// two concurrent adds that each saw a stale list (missing the other's
@@ -1832,6 +1827,9 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	var errs []error
 	for i := range envs {
 		env := &envs[i]
+		if onlyScope != "" && env.Labels[kube.LabelEnv] != onlyScope {
+			continue
+		}
 		// Use the retry-on-conflict RMW path so concurrent writes from
 		// the projects package (SetEnv / SetSharedEnvKeys / Patch
 		// Service / SetSubscribedAddons) don't race us — pre-v0.17.1
@@ -1967,7 +1965,12 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
 				}
 				if envName := live.Labels[kube.LabelEnv]; envName != "" {
-					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
+					perEnv = append(perEnv, kube.EnvScopeSecretName(project, svc, envName))
+					// `kuso secret set --env preview-pr-N` writes the
+					// label-named Secret; keep it where it's already mounted.
+					if legacy := kube.EnvSecretName(project, svc, envName); slices.Contains(live.Spec.EnvFromSecrets, legacy) {
+						perEnv = append(perEnv, legacy)
+					}
 				}
 			}
 			// perEnv is the desired SET; the ORDER comes from the env's live
@@ -2122,16 +2125,6 @@ func createAddon(ctx context.Context, s *Service, ns string, a *kube.KusoAddon) 
 		return nil, err
 	}
 	return &out, nil
-}
-
-// buildEnvFromSecretsPatch renders the merge-patch body for replacing
-// spec.envFromSecrets on a KusoEnvironment.
-func buildEnvFromSecretsPatch(secrets []string) []byte {
-	if secrets == nil {
-		secrets = []string{}
-	}
-	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"envFromSecrets": secrets}})
-	return body
 }
 
 // connectionURLKeys are the per-kind primary DSN keys a service reads. At

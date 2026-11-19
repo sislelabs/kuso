@@ -78,7 +78,7 @@ func TestPropagate_RescopesAddonRefsByRecordedOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.Spec.EnvFromSecrets = []string{"acme-db-staging-conn"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", env); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", env); err != nil {
 		t.Fatal(err)
 	}
 	svc, err := s.Kube.GetKusoService(context.Background(), "kuso", "acme-api")
@@ -188,7 +188,7 @@ func TestPropagate_WithholdsUnclonedProductionRefsFromStaging(t *testing.T) {
 	}
 	// Staging was set up sharing the production cache on purpose.
 	env.Spec.EnvFromSecrets = []string{"acme-db-staging-conn", "acme-cache-conn"}
-	if _, err := s.Kube.UpdateKusoEnvironment(ctx, "kuso", env); err != nil {
+	if _, err := putEnvFixture(ctx, s.Kube, "kuso", env); err != nil {
 		t.Fatal(err)
 	}
 	svc, err := s.Kube.GetKusoService(ctx, "kuso", "acme-api")

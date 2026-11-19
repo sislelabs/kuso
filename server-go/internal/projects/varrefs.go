@@ -352,12 +352,6 @@ func RewriteEnvVarsWithOpts(in []EnvVar, svcResolver ServiceRefResolver, addonRe
 	return out, nil
 }
 
-// FormatVarRef returns the canonical wire form for a (name, key) pair.
-// Used by the frontend autocomplete to insert the right syntax.
-func FormatVarRef(name, key string) string {
-	return "${{ " + strings.TrimSpace(name) + "." + strings.TrimSpace(key) + " }}"
-}
-
 // addonRefDNSSafe matches the CRD pattern enforced on
 // secretKeyRef.name (^[a-z0-9][a-z0-9-]*-conn$) ignoring the trailing
 // `-conn` suffix that SecretName() appends. Used by the AllowPending
