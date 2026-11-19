@@ -44,6 +44,8 @@ type TerminalWSHandler struct {
 	DB     *db.DB
 	Audit  *audit.Service
 	Logger *slog.Logger
+	// ConsoleEnabled is the kuso.console.enabled kill switch; nil allows.
+	ConsoleEnabled func() bool
 
 	// Per-user concurrency cap, same rationale as LogsWSHandler:
 	// a tab-storm must not open unbounded exec streams against the
@@ -64,6 +66,10 @@ func (h *TerminalWSHandler) Mount(r chi.Router) {
 // Terminal upgrades to a WebSocket and proxies an interactive exec
 // into one pod of the service.
 func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
+	if h.ConsoleEnabled != nil && !h.ConsoleEnabled() {
+		writeErr(w, http.StatusForbidden, "forbidden: the browser terminal is disabled on this instance (kuso.console.enabled is false)")
+		return
+	}
 	claims, respHeader, ok := authenticateWS(w, r, h.Issuer)
 	if !ok {
 		return
