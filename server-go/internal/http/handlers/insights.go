@@ -184,8 +184,12 @@ func cachedInsightsTraffic(ctx context.Context, key string, rg insightsRange, no
 
 func loadInsightsTraffic(ctx context.Context, key string, rg insightsRange) (insightsTraffic, error) {
 	v, err, _ := insightsCache.sf.Do(key, func() (any, error) {
+		// Shared by every caller waiting on key, so it must not die
+		// with the request that happened to start it.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		now := time.Now().UTC()
-		out, err := insightsFetch(ctx, rg, now)
+		out, err := insightsFetch(fctx, rg, now)
 		insightsCache.mu.Lock()
 		defer insightsCache.mu.Unlock()
 		if e := insightsCache.m[key]; e != nil {
@@ -193,6 +197,9 @@ func loadInsightsTraffic(ctx context.Context, key string, rg insightsRange) (ins
 		}
 		if err != nil {
 			return insightsTraffic{}, err
+		}
+		if insightsCache.m == nil {
+			insightsCache.m = map[string]*insightsEntry{}
 		}
 		insightsCache.m[key] = &insightsEntry{at: now, v: out}
 		return out, nil

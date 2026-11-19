@@ -81,6 +81,61 @@ func TestInsightsCacheServesStaleAndRefreshesOnce(t *testing.T) {
 	}
 }
 
+// One viewer closing the tab must not fail the fetch every other viewer
+// is waiting on: the shared fetch runs detached from any one request.
+func TestInsightsSharedFetchSurvivesTheFirstCallerLeaving(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	insightsFetch = func(ctx context.Context, rg insightsRange, now time.Time) (insightsTraffic, error) {
+		close(started)
+		<-release
+		if err := ctx.Err(); err != nil {
+			return insightsTraffic{}, err
+		}
+		return insightsTraffic{req: map[string][][2]float64{"v": {{1, 0}}}}, nil
+	}
+	t.Cleanup(func() {
+		insightsFetch = fetchInsightsTraffic
+		insightsCache.mu.Lock()
+		insightsCache.m = nil
+		insightsCache.mu.Unlock()
+	})
+	rg := insightsRanges["1h"]
+	first, cancel := context.WithCancel(context.Background())
+	firstErr := make(chan error, 1)
+	go func() { _, err := loadInsightsTraffic(first, "leave", rg); firstErr <- err }()
+	<-started
+	second := make(chan error, 1)
+	go func() { _, err := loadInsightsTraffic(context.Background(), "leave", rg); second <- err }()
+	time.Sleep(20 * time.Millisecond) // let the second caller join the flight
+	cancel()
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatalf("second viewer got %v after the first one left", err)
+	}
+	<-firstErr
+}
+
+// WarmInsights runs loadInsightsTraffic before any page view has
+// created the cache map.
+func TestInsightsWarmBeforeAnyViewDoesNotPanic(t *testing.T) {
+	insightsCache.mu.Lock()
+	insightsCache.m = nil
+	insightsCache.mu.Unlock()
+	insightsFetch = func(ctx context.Context, rg insightsRange, now time.Time) (insightsTraffic, error) {
+		return insightsTraffic{}, nil
+	}
+	t.Cleanup(func() {
+		insightsFetch = fetchInsightsTraffic
+		insightsCache.mu.Lock()
+		insightsCache.m = nil
+		insightsCache.mu.Unlock()
+	})
+	if _, err := loadInsightsTraffic(context.Background(), "24h", insightsRanges["24h"]); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseResources(t *testing.T) {
 	got := parseResources(map[string]any{
 		"requests": map[string]any{"cpu": "500m", "memory": "512Mi"},
