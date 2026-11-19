@@ -383,12 +383,3 @@ func (d *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 func (t *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return t.Tx.ExecContext(ctx, query, args...)
 }
-
-// envOrDefault is exported across this package so cmd/ can read the
-// DSN env var without importing os here just for that.
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}

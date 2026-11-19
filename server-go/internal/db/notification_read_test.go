@@ -84,11 +84,6 @@ func TestNotificationAttentionFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range list {
-		if !IsAttentionEvent(e.Type, e.Severity, e.Extra) {
-			t.Errorf("attention list carried %s/%s", e.Type, e.Severity)
-		}
-	}
 	if len(list) != 5 {
 		t.Errorf("attention list len = %d, want 5", len(list))
 	}
@@ -98,29 +93,6 @@ func TestNotificationAttentionFilter(t *testing.T) {
 	}
 	if len(scoped) != 2 {
 		t.Errorf("scoped attention len = %d, want 2 (build.failed + security)", len(scoped))
-	}
-}
-
-func TestIsAttentionEvent(t *testing.T) {
-	cases := []struct {
-		typ, sev string
-		extra    map[string]string
-		want     bool
-	}{
-		{"build.succeeded", "info", nil, false},
-		{"pod.recovered", "info", nil, false},
-		{"build.failed", "warn", nil, true},
-		{"build.failed", "error", nil, true},
-		{"alert.fired", "info", nil, true},
-		{"alert.fired", "info", map[string]string{"state": "resolved"}, false},
-		{"alert.fired", "warn", map[string]string{"state": "resolved"}, true},
-		{"update.available", "info", nil, true},
-		{"security.scan_failed", "info", nil, true},
-	}
-	for _, c := range cases {
-		if got := IsAttentionEvent(c.typ, c.sev, c.extra); got != c.want {
-			t.Errorf("IsAttentionEvent(%q,%q) = %v, want %v", c.typ, c.sev, got, c.want)
-		}
 	}
 }
 

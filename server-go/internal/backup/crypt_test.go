@@ -3,8 +3,11 @@ package backup
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -142,4 +145,55 @@ func TestOpenSSLCompatibility(t *testing.T) {
 	if err != nil || !bytes.Equal(back, plain) {
 		t.Fatalf("go→openssl mismatch: err=%v len=%d", err, len(back))
 	}
+}
+
+// Encrypt writes r to w in the openssl format crypt.go decrypts; production
+// encryption happens in the backup image, this is the test-side producer.
+func Encrypt(w io.Writer, r io.Reader, passphrase string) error {
+	salt := make([]byte, 8)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("salt: %w", err)
+	}
+	key, iv, err := deriveKeyIV(passphrase, salt)
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return fmt.Errorf("cipher: %w", err)
+	}
+	enc := cipher.NewCBCEncrypter(block, iv)
+	if _, err := w.Write(append([]byte(saltMagic), salt...)); err != nil {
+		return err
+	}
+	buf := make([]byte, 64*1024)
+	var pending []byte
+	for {
+		n, rerr := r.Read(buf)
+		pending = append(pending, buf[:n]...)
+		if full := len(pending) / aes.BlockSize * aes.BlockSize; full > 0 && rerr == nil {
+			// Hold back the tail so the final block can be padded.
+			if full == len(pending) {
+				full -= aes.BlockSize
+			}
+			out := make([]byte, full)
+			enc.CryptBlocks(out, pending[:full])
+			if _, err := w.Write(out); err != nil {
+				return err
+			}
+			pending = append(pending[:0], pending[full:]...)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
+	pad := aes.BlockSize - len(pending)%aes.BlockSize
+	pending = append(pending, bytes.Repeat([]byte{byte(pad)}, pad)...)
+	out := make([]byte, len(pending))
+	enc.CryptBlocks(out, pending)
+	_, err = w.Write(out)
+	return err
 }

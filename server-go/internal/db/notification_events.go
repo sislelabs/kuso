@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -177,13 +176,6 @@ const attentionPredicate = `(("severity" IN ('warn','error') OR "type" = 'alert.
 		        OR ("NotificationEvent"."type" = 'node.unreachable' AND r."type" = 'node.recovered'
 		          AND NULLIF(r."extra", '')::jsonb->>'node' = NULLIF("NotificationEvent"."extra", '')::jsonb->>'node')))
 		  )))`
-
-// IsAttentionEvent is attentionPredicate for an in-memory event.
-func IsAttentionEvent(eventType, severity string, extra map[string]string) bool {
-	return severity == "warn" || severity == "error" ||
-		(eventType == "alert.fired" && extra["state"] != "resolved") ||
-		eventType == "update.available" || strings.HasPrefix(eventType, "security.")
-}
 
 // ListNotificationEvents returns the newest `limit` events (clamped
 // to the table cap). When unreadOnly is true, only events with

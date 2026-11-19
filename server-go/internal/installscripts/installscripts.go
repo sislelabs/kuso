@@ -29,12 +29,6 @@ var installSH []byte
 //go:embed scripts/install-cli.sh
 var installCliSH []byte
 
-// InstallSH returns the cluster install script bytes.
-func InstallSH() []byte { return installSH }
-
-// InstallCliSH returns the CLI install script bytes.
-func InstallCliSH() []byte { return installCliSH }
-
 // Mount registers the two routes onto r. Both endpoints serve the
 // scripts as text/x-shellscript with Cache-Control: no-store so a
 // freshly-rolled server immediately serves the new version (no
