@@ -1967,7 +1967,12 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 					perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
 				}
 				if envName := live.Labels[kube.LabelEnv]; envName != "" {
-					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
+					perEnv = append(perEnv, kube.EnvScopeSecretName(project, svc, envName))
+					// `kuso secret set --env preview-pr-N` writes the
+					// label-named Secret; keep it where it's already mounted.
+					if legacy := kube.EnvSecretName(project, svc, envName); slices.Contains(live.Spec.EnvFromSecrets, legacy) {
+						perEnv = append(perEnv, legacy)
+					}
 				}
 			}
 			// perEnv is the desired SET; the ORDER comes from the env's live
