@@ -107,8 +107,8 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 	sort.Strings(names)
 
-	// Parse skips interpolation; resolve what the file itself can
-	// (defaults, $$) before anything classifies on those values.
+	// Parse resolved defaults but kept $$ and unresolved ${VAR}; unescape
+	// and flag those before anything classifies on the values.
 	services := make(map[string]types.ServiceConfig, len(names))
 	for _, name := range names {
 		services[name] = resolveService(proj.Services[name], rep)
