@@ -40,6 +40,7 @@ type CronImage struct {
 	Repository string `json:"repository"`
 	Tag        string `json:"tag,omitempty"`
 	PullPolicy string `json:"pullPolicy,omitempty"`
+	PullSecret string `json:"pullSecret,omitempty"`
 }
 
 // CreateProjectCronRequest covers kind=http and kind=command crons —
