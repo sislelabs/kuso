@@ -28,7 +28,9 @@ func TestVerifyHookRefFailsClosedOnProjectReadError(t *testing.T) {
 		t.Fatalf("off-branch commit with a readable project: %v, want ErrInvalid", err)
 	}
 	s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("get", "kusoprojects",
-		func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, errors.New("apiserver unavailable") })
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("apiserver unavailable")
+		})
 	if err := s.VerifyHookRef(ctx, "shop", "web", []string{"main"}, "abc123"); err == nil {
 		t.Fatal("project read error let the hook through unchecked")
 	}
