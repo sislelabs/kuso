@@ -20,7 +20,7 @@
 {{- if and $existing $existing.data (index $existing.data "MEILI_MASTER_KEY") -}}
   {{- $existingKey = (index $existing.data "MEILI_MASTER_KEY" | b64dec) -}}
 {{- end -}}
-{{- $masterKey := .Values.password | default $existingKey | default (randAlphaNum 32) -}}
+{{- $masterKey := $existingKey | default (randAlphaNum 32) -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

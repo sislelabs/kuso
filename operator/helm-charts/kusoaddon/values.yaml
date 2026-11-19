@@ -60,10 +60,6 @@ storageSize: ""
 # over the size-derived default.
 resources: {}
 
-# password: optional explicit password. When empty, the server (or a hook)
-# generates a random one and stores it in the connection secret.
-password: ""
-
 # database: kind-specific default database name. For postgres/mongodb defaults
 # to `<project>` if empty.
 database: ""

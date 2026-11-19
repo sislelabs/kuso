@@ -503,7 +503,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ ((.Values.networkPolicy).ingressController).namespace | default "traefik" | quote }}
+              kubernetes.io/metadata.name: "traefik"
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik
@@ -515,7 +515,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: traefik
       ports:
-        {{- range (((.Values.networkPolicy).ingressController).ports | default (list 8000 8443)) }}
+        {{- range (list 8000 8443) }}
         - port: {{ int . }}
           protocol: TCP
         {{- end }}
@@ -630,7 +630,6 @@ spec:
 #     traffic. allow-intra-project already covers it; listed here so the
 #     CNPG contract doesn't silently depend on that rule's shape.
 # Inert in projects without an HA Postgres addon (no pod matches).
-{{- $cnpg := (.Values.networkPolicy).cnpg | default dict }}
 {{- range $sel := list (dict "key" "cnpg.io/cluster" "suffix" "cluster") (dict "key" "cnpg.io/poolerName" "suffix" "pooler") }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -651,7 +650,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $cnpg.operatorNamespace | default "cnpg-system" | quote }}
+              kubernetes.io/metadata.name: "cnpg-system"
       ports:
         - { port: 8000, protocol: TCP }
     - from:
@@ -666,14 +665,14 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: {{ $cnpg.apiServerServiceCIDR | default "10.43.0.1/32" | quote }}
+            cidr: "10.43.0.1/32"
       ports:
         - { port: 443, protocol: TCP }
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
       ports:
-        - { port: {{ int ($cnpg.apiServerPort | default 6443) }}, protocol: TCP }
+        - { port: 6443, protocol: TCP }
     - to:
         - podSelector:
             matchLabels:

@@ -28,11 +28,6 @@
   spec.passwordSecret.{name,key} on KusoAddon and create that Secret
   out-of-band — the legacy spec.password field has been removed
   because it persisted plaintext credentials in etcd.
-
-  Backwards compat: if .Values.password is still set (legacy clusters
-  whose CRDs haven't been re-applied), we honour it but log a Helm
-  warning via the chart's NOTES.txt. New clusters won't see this
-  field on the CR at all.
 */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $existingPw := "" -}}
@@ -58,10 +53,10 @@
   `kuso project addon repair-password` to recover.
 */}}
 {{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
-{{- if and $existingSts (not $existingPw) (not $providedPw) (not .Values.password) -}}
+{{- if and $existingSts (not $existingPw) (not $providedPw) -}}
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
-{{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $providedPw | default $existingPw | default (randAlphaNum 24) -}}
 {{- $appRole := .Values.appRole -}}
 {{- $adminPw := include "kusoaddon.adminPassword" (list $ $name $existingSts) -}}
 {{- /* tlsOn: opt-in in-cluster TLS. Default "disable" → plaintext +

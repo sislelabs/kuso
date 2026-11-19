@@ -129,6 +129,12 @@ spec:
                         operate. Its purpose is providers with a low
                         connection cap, where multiplexing is the only way to
                         run more than a couple of app pods. Requires host.
+                    serverTLSSslmode:
+                      type: string
+                      enum: ["", require, verify-ca, verify-full]
+                      description: >-
+                        PgBouncer's TLS mode toward an external backend.
+                        Unset = require. Ignored for in-cluster backends.
                     host:
                       type: string
                       description: >-
@@ -279,6 +285,18 @@ spec:
                       type: string
                       maxLength: 63
                       pattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+                    image:
+                      type: string
+                      description: >-
+                        Overrides the kuso-backup image the release pins. The
+                        backup Jobs hold DB passwords, S3 credentials and the
+                        backup key, so pin it by digest.
+                    scratchSizeLimit:
+                      type: string
+                      pattern: '^$|^[0-9]+(\.[0-9]+)?(E|P|T|G|M|K|Ei|Pi|Ti|Gi|Mi|Ki)?$'
+                      description: >-
+                        Size cap on the dump scratch emptyDir. Unset = 3x
+                        storageSize; external addons stay uncapped.
                 # Hard placement: addons schedule on nodes whose labels
                 # match. Same shape as KusoService.spec.placement —
                 # operator helm chart turns this into nodeSelector +

@@ -32,7 +32,7 @@
   {{- $existingSK = (index $existing.data "S3_SECRET_ACCESS_KEY" | b64dec) -}}
 {{- end -}}
 {{- $accessKey := $existingAK | default (randAlphaNum 20) -}}
-{{- $secretKey := .Values.password | default $existingSK | default (randAlphaNum 40) -}}
+{{- $secretKey := $existingSK | default (randAlphaNum 40) -}}
 {{- /*
   Credentials (BLOB-2). The conn Secret every subscribed service and
   preview mounts used to carry the MinIO ROOT key. Now:

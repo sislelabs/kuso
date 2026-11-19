@@ -159,6 +159,17 @@ spec:
                 replicaCount:
                   type: integer
                   default: 1
+                minReadySeconds:
+                  type: integer
+                  minimum: 0
+                  description: >-
+                    Seconds a new pod must stay Ready before the rollout counts
+                    it available. Unset = 10. Changing it does not restart pods.
+                revisionHistoryLimit:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Old ReplicaSets kept for rollback. Unset = 3.
                 spreadPolicy:
                   type: string
                   description: >-

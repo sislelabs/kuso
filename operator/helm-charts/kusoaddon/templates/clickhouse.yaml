@@ -22,7 +22,7 @@
 {{- if and $existing $existing.data (index $existing.data "CLICKHOUSE_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "CLICKHOUSE_PASSWORD" | b64dec) -}}
 {{- end -}}
-{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $existingPw | default (randAlphaNum 24) -}}
 {{- $database := .Values.database | default "kuso" -}}
 {{- $serverConfig := `<clickhouse>
   <logger>

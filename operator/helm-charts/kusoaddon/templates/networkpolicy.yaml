@@ -23,7 +23,6 @@
 {{- $conn := include "kusoaddon.connSecretName" . }}
 {{- $subKey := include "kusoaddon.subscriberKey" $conn }}
 {{- $base := include "kusoaddon.fullname" . | trunc 40 | trimSuffix "-" }}
-{{- $platformNS := .Values.platformNamespace | default "kuso" }}
 {{- /* The shared instance server (project kuso-instance) is reached by
        tenants of every project, so it must not get a project-scoped
        ingress allow-list: any ingress policy selecting its pods denies
@@ -88,7 +87,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $platformNS | quote }}
+              kubernetes.io/metadata.name: "kuso"
           podSelector:
             matchLabels:
               kuso.sislelabs.com/project: kuso-instance
