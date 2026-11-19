@@ -108,10 +108,17 @@ describe("recents", () => {
   });
 
   it("drops malformed stored entries instead of throwing", () => {
-    expect(parseRecents("not json")).toEqual([]);
-    expect(parseRecents(JSON.stringify([{ kind: "service", project: "a" }, { kind: "project", project: "b" }]))).toEqual([
-      { kind: "project", project: "b" },
-    ]);
+    expect(parseRecents("not json", "u1")).toEqual([]);
+    const list = [{ kind: "service", project: "a" }, { kind: "project", project: "b" }];
+    expect(parseRecents(JSON.stringify({ user: "u1", list }), "u1")).toEqual([{ kind: "project", project: "b" }]);
+  });
+
+  it("only returns the signed-in user's recents", () => {
+    const raw = JSON.stringify({ user: "u1", list: [{ kind: "addon", project: "p", name: "db" }] });
+    expect(parseRecents(raw, "u1")).toHaveLength(1);
+    expect(parseRecents(raw, "u2")).toEqual([]);
+    expect(parseRecents(raw, "")).toEqual([]);
+    expect(parseRecents(JSON.stringify([{ kind: "project", project: "b" }]), "u1")).toEqual([]);
   });
 });
 
