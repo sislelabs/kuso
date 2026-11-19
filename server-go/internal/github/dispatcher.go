@@ -325,7 +325,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 				if !projectTracksRepo(ctx, d, &proj, repoFullName) {
 					continue
 				}
-				if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, branch, "ref deleted (branch deleted)"); cerr != nil {
+				if n, cerr := d.Builds.CancelBuildsForRepoRef(ctx, proj.Name, repoFullName, branch, "ref deleted (branch deleted)"); cerr != nil {
 					d.Logger.Warn("cancel builds on branch delete", "project", proj.Name, "branch", branch, "err", cerr)
 				} else if n > 0 {
 					d.Logger.Info("branch deleted → cancelled in-flight builds", "project", proj.Name, "branch", branch, "cancelled", n)

@@ -88,7 +88,7 @@ func buildOwnedBy(b *kube.KusoBuild, project, service string) bool {
 }
 
 // cancelBuild is the shared cancel core behind the user-initiated
-// Cancel, the webhook ref-deletion cleanup (CancelBuildsForRef), and the
+// Cancel, the webhook ref-deletion cleanup (CancelBuildsForRepoRef), and the
 // poller's clone-ref-missing diversion. `reason` is stored as the build
 // message and shown in `kuso build list` / `build why`. All cancel paths
 // emit build.cancelled at severity=info — never the @here build.failed —
@@ -174,15 +174,6 @@ func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason st
 	return nil
 }
 
-// CancelBuildsForRef is CancelBuildsForRepoRef without the repo filter.
-//
-// Deprecated: it cancels same-named branches of every repo in the project
-// (BLD-2). Kept only until the webhook dispatcher calls
-// CancelBuildsForRepoRef; delete it then.
-func (s *Service) CancelBuildsForRef(ctx context.Context, project, branch, reason string) (int, error) {
-	return s.cancelBuildsForRef(ctx, project, "", branch, reason)
-}
-
 // CancelBuildsForRepoRef cancels every in-flight (queued / pending /
 // running) build in a project that was cloning `branch` of the GitHub repo
 // repoFullName (owner/name), transitioning them to cancelled with the
@@ -193,20 +184,10 @@ func (s *Service) CancelBuildsForRef(ctx context.Context, project, branch, reaso
 // Best-effort: a per-build cancel error is logged, not propagated, so one
 // stuck build doesn't block cancelling the rest.
 func (s *Service) CancelBuildsForRepoRef(ctx context.Context, project, repoFullName, branch, reason string) (int, error) {
-	if repoFullName == "" {
+	if s.Kube == nil || branch == "" || repoFullName == "" {
 		return 0, nil
 	}
-	return s.cancelBuildsForRef(ctx, project, repoFullName, branch, reason)
-}
-
-func (s *Service) cancelBuildsForRef(ctx context.Context, project, repoFullName, branch, reason string) (int, error) {
-	if s.Kube == nil || branch == "" {
-		return 0, nil
-	}
-	wantRepo := ""
-	if repoFullName != "" {
-		wantRepo = "github.com/" + strings.ToLower(repoFullName)
-	}
+	wantRepo := "github.com/" + strings.ToLower(repoFullName)
 	ns := s.nsFor(ctx, project)
 	raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,
@@ -225,7 +206,7 @@ func (s *Service) cancelBuildsForRef(ctx context.Context, project, repoFullName,
 		if b.Spec.Branch != branch {
 			continue
 		}
-		if wantRepo != "" && (b.Spec.Repo == nil || kube.RepoIdentity(b.Spec.Repo.URL) != wantRepo) {
+		if b.Spec.Repo == nil || kube.RepoIdentity(b.Spec.Repo.URL) != wantRepo {
 			continue
 		}
 		if cerr := s.cancelBuild(ctx, project, b.Name, reason); cerr != nil {
@@ -243,7 +224,7 @@ func (s *Service) cancelBuildsForRef(ctx context.Context, project, repoFullName,
 
 // CancelPreviewBuilds cancels every in-flight build made for one of the
 // named preview envs (AnnPreviewEnv). The PR-close path uses this instead
-// of CancelBuildsForRef: a PR's head branch name says nothing about which
+// of CancelBuildsForRepoRef: a PR's head branch name says nothing about which
 // builds belong to the PR (a fork PR from `mallory:main` shares its head
 // name with production), but the preview env a build was made for does.
 func (s *Service) CancelPreviewBuilds(ctx context.Context, project string, previewEnvs []string, reason string) (int, error) {
