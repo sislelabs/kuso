@@ -11,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/kube"
 )
 
 // A deploy hook is a secret URL that starts a build of one service: paste
@@ -159,12 +161,15 @@ func (s *Service) VerifyHookRef(ctx context.Context, project, service string, br
 		return nil
 	}
 	svcCR, err := s.Kube.GetOwnedService(ctx, s.nsFor(ctx, project), project, project+"-"+service)
-	if err != nil {
+	if kube.IsNotFoundOrNotOwned(err) {
 		return nil // create() reports a missing service with the right status
+	}
+	if err != nil {
+		return fmt.Errorf("verify deploy-hook ref: read service: %w", err)
 	}
 	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if err != nil {
-		return nil
+		return fmt.Errorf("verify deploy-hook ref: read project: %w", err)
 	}
 	repoURL := ""
 	if svcCR.Spec.Repo != nil {
