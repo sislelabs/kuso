@@ -153,9 +153,6 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 			"project", project, "addon", addon, "target", target.Host, "err", perr)
 		writeErr(rw, http.StatusBadGateway, "upstream addon unavailable")
 	}
-	// Default Director rewrites Host header to the target — necessary
-	// for upstreams that use Host for SPA route detection (mailpit
-	// embeds an iframe-busting check). We let httputil set it.
 	proxy.ServeHTTP(w, r)
 }
 
@@ -163,12 +160,12 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 // the caller's kuso credentials stripped from every outbound request.
 // prefix is the kuso-side path the console is mounted under.
 func newAddonWebUIProxy(target *url.URL, prefix, origin string) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	director := proxy.Director
-	proxy.Director = func(out *http.Request) {
-		director(out)
-		stripKusoCredentials(out.Header)
-	}
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = pr.In.Host
+		pr.SetXForwarded() // Rewrite drops client-sent X-Forwarded-*
+		stripKusoCredentials(pr.Out.Header)
+	}}
 	proxy.ModifyResponse = func(res *http.Response) error {
 		confineConsoleResponse(res, prefix, origin)
 		return nil
