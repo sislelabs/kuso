@@ -1638,7 +1638,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, "query rejected: "+reason)
 			return
 		}
-		h.auditSQLQuery(ctx, r, project, addon, req.Query)
+		h.auditSQLQuery(ctx, r, project, addon, req.Query, true)
 		start := time.Now()
 		out, status, err := h.runClickHouseQuery(ctx, info, req.Query, limit)
 		if err != nil {
@@ -1671,7 +1671,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	start := time.Now()
-	h.auditSQLQuery(ctx, r, project, addon, req.Query)
+	h.auditSQLQuery(ctx, r, project, addon, req.Query, false)
 	out, status, err := runReadOnlyPGQuery(ctx, conn, req.Query, limit)
 	if err != nil {
 		writeErr(w, status, err.Error())
@@ -1744,7 +1744,7 @@ func runReadOnlyPGQuery(ctx context.Context, conn *sql.DB, query string, limit i
 // highest-blast-radius read endpoint we expose — admin gates access, but a
 // single compromised admin credential reading every row of `users` should
 // leave a trail. Shared by the Postgres and ClickHouse query paths.
-func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, project, addon, query string) {
+func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, project, addon, query string, clickhouse bool) {
 	if h.Audit == nil {
 		return
 	}
@@ -1759,7 +1759,7 @@ func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, pro
 		Pipeline: project,
 		App:      addon,
 		Resource: "kusoaddon",
-		Message:  sqlQueryAuditMessage(query),
+		Message:  sqlQueryAuditMessage(query, clickhouse),
 	})
 }
 
