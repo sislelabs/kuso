@@ -1,6 +1,8 @@
 package compose
 
 import (
+	"context"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,44 @@ services:
 	}
 	if !strings.Contains(string(out), "internal: true") {
 		t.Errorf("marshaled kuso.yaml has no internal key:\n%s", out)
+	}
+}
+
+// Mirrors server-go serviceNameRE and validateProjectName.
+var (
+	serverServiceName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
+	serverProjectName = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
+)
+
+func TestConvert_SlugsFitServerNameLimits(t *testing.T) {
+	long := "customer-portal-frontend-service-nextjs-app"
+	proj, err := Parse(context.Background(), []byte(`
+services:
+  `+long+`:
+    image: myorg/a:1
+  `+long+`-x:
+    image: myorg/b:1
+  `+strings.ToUpper(long)+`_:
+    image: myorg/c:1
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := Convert(proj, "2024 "+long+" monorepo checkout")
+	if !serverProjectName.MatchString(doc.Project) {
+		t.Errorf("project slug %q (%d chars) fails validateProjectName", doc.Project, len(doc.Project))
+	}
+	seen := map[string]bool{}
+	for _, s := range doc.Services {
+		if !serverServiceName.MatchString(s.Name) {
+			t.Errorf("service slug %q (%d chars) fails serviceNameRE", s.Name, len(s.Name))
+		}
+		if seen[s.Name] {
+			t.Errorf("duplicate service slug %q", s.Name)
+		}
+		seen[s.Name] = true
+	}
+	if len(doc.Services) != 3 {
+		t.Fatalf("want 3 services, got %+v", doc.Services)
 	}
 }

@@ -22,18 +22,22 @@ func repoSubPath(context string) string {
 	return c
 }
 
+// Name limits the server enforces: serviceNameRE allows 32 characters
+// (addons share the compose slug space, so they get the same cap),
+// validateProjectName allows 40 and needs a leading letter.
+const (
+	maxServiceSlug = 32
+	maxProjectSlug = 40
+	maxVolumeSlug  = 63
+)
+
 // slugify turns an arbitrary compose service / volume name into a
-// kube-safe slug: lowercase, runs of non-[a-z0-9] collapse to "-",
-// trim leading and trailing dashes, clamp to 50 chars (leaving
-// headroom for environment-suffix expansion under the 63-byte DNS
-// label limit — the same clamp the coolify importer settled on).
+// kube-safe slug of at most max characters: lowercase, runs of
+// non-[a-z0-9] collapse to "-", leading and trailing dashes trimmed.
 // Empty input returns "x-unnamed" so callers can't emit a slug-less
 // resource.
-func slugify(s string) string {
+func slugify(s string, max int) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return "x-unnamed"
-	}
 	var out strings.Builder
 	prevDash := true
 	for _, r := range s {
@@ -52,18 +56,32 @@ func slugify(s string) string {
 	if res == "" {
 		return "x-unnamed"
 	}
-	if len(res) > 50 {
-		res = strings.Trim(res[:50], "-")
+	return clampSlug(res, max)
+}
+
+func clampSlug(s string, max int) string {
+	if len(s) > max {
+		s = strings.TrimRight(s[:max], "-")
+	}
+	return s
+}
+
+// projectSlug is slugify with the project rules: 40 characters and a
+// leading letter.
+func projectSlug(s string) string {
+	res := slugify(s, maxProjectSlug)
+	if res[0] >= '0' && res[0] <= '9' {
+		res = clampSlug("x-"+res, maxProjectSlug)
 	}
 	return res
 }
 
-// dedupeSlugs assigns a stable, collision-free slug per input name,
-// preserving order. The first name keeps its slug; a later name that
-// slugifies to the same string becomes "<slug>-2", "<slug>-3", … —
-// the same scheme the coolify importer uses so report and apply agree.
-// The suffix skips names already handed out, so a literal "worker-2"
-// can't collide with a suffixed "worker".
+// dedupeSlugs assigns a stable, collision-free service slug per input
+// name, preserving order. The first name keeps its slug; a later name
+// that slugifies to the same string becomes "<slug>-2", "<slug>-3", …
+// — the same scheme the coolify importer uses so report and apply
+// agree. The suffix skips names already handed out, so a literal
+// "worker-2" can't collide with a suffixed "worker".
 func dedupeSlugs(names []string) map[string]string {
 	out := map[string]string{}
 	taken := map[string]bool{}
@@ -71,17 +89,19 @@ func dedupeSlugs(names []string) map[string]string {
 		if _, done := out[n]; done {
 			continue
 		}
-		out[n] = uniqueSlug(slugify(n), taken)
+		out[n] = uniqueSlug(slugify(n, maxServiceSlug), taken, maxServiceSlug)
 	}
 	return out
 }
 
 // uniqueSlug returns base, or base-2, base-3, … — the first not in
-// taken — and marks it taken.
-func uniqueSlug(base string, taken map[string]bool) string {
+// taken — and marks it taken. The base is shortened as needed so the
+// suffixed slug still fits in max.
+func uniqueSlug(base string, taken map[string]bool, max int) string {
 	slug := base
 	for i := 2; taken[slug]; i++ {
-		slug = base + "-" + itoa(i)
+		suffix := "-" + itoa(i)
+		slug = clampSlug(base, max-len(suffix)) + suffix
 	}
 	taken[slug] = true
 	return slug

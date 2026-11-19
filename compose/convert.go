@@ -99,7 +99,7 @@ type addonRef struct {
 // skip rather than dropped or errored.
 func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	rep := &Report{}
-	doc := &Doc{APIVersion: "kuso/v1", Project: slugify(projectName)}
+	doc := &Doc{APIVersion: "kuso/v1", Project: projectSlug(projectName)}
 
 	// Deterministic order: compose stores services in a map.
 	names := make([]string, 0, len(proj.Services))
@@ -466,7 +466,7 @@ func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {
 				rep.skip(svc.Name, "anonymous volume at %q not imported — name it in compose to get a kuso volume", v.Target)
 				continue
 			}
-			name := uniqueSlug(slugify(v.Source), taken)
+			name := uniqueSlug(slugify(v.Source, maxVolumeSlug), taken, maxVolumeSlug)
 			out = append(out, Volume{Name: name, MountPath: v.Target, SizeGi: defaultVolumeSizeGi})
 			rep.service(svc.Name, "volume %q → kuso volume `%s` at %s (%dGi default)", v.Source, name, v.Target, defaultVolumeSizeGi)
 			// kuso volumes have no read-only mode — mounting :ro in
