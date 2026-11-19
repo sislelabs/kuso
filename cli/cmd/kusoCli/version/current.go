@@ -23,16 +23,26 @@ var (
 		Use:   "latest",
 		Short: "Print the latest version number of kusoCli",
 		Long:  "Print the latest version number of kusoCli",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println(GetLatestVersionInfo())
+		RunE: func(cmd *cobra.Command, args []string) error {
+			latest, err := latestVersionFromGit()
+			if err != nil {
+				return err
+			}
+			fmt.Println("Latest version: " + latest)
+			return nil
 		},
 	}
 	subCmdCheck = &cobra.Command{
 		Use:   "check",
 		Short: "Check if the current version is the latest version of kusoCli",
 		Long:  "Check if the current version is the latest version of kusoCli",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println(GetVersionInfoWithLatestAndCheck())
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, err := versionCheck()
+			if err != nil {
+				return err
+			}
+			fmt.Println(out)
+			return nil
 		},
 	}
 	//subCmdUpgrade = &cobra.Command{
@@ -86,35 +96,35 @@ func GetVersionInfo() string {
 	return "Version: " + GetVersion() + "\n" + "Git repository: " + GetGitModelUrl()
 }
 
-func GetLatestVersionFromGit() string {
+// latestReleaseURL is a var so tests can point it at a local server.
+var latestReleaseURL = gitModelUrl + "/releases/latest"
+
+func latestVersionFromGit() (string, error) {
 	netClient := &http.Client{
 		Timeout: time.Second * 10,
 	}
-
-	response, err := netClient.Get(gitModelUrl + "/releases/latest")
+	response, err := netClient.Get(latestReleaseURL)
 	if err != nil {
-		return "Error: " + err.Error()
+		return "", fmt.Errorf("fetch latest release: %w", err)
 	}
-
-	if response.StatusCode != 200 {
-		return "Error: " + response.Status
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch latest release: %s", response.Status)
 	}
-
 	tag := strings.Split(response.Request.URL.Path, "/")
-
-	return tag[len(tag)-1]
+	return tag[len(tag)-1], nil
 }
 
-func GetLatestVersionInfo() string {
-	return "Latest version: " + GetLatestVersionFromGit()
-}
-
-func GetVersionInfoWithLatestAndCheck() string {
-	if GetVersion() == GetLatestVersionFromGit() {
-		return GetVersionInfo() + "\n" + GetLatestVersionInfo() + "\n" + "You are using the latest version."
-	} else {
-		return GetVersionInfo() + "\n" + GetLatestVersionInfo() + "\n" + "You are using an outdated version.\n" + "Update the CLI with: curl -fsSL https://<your-instance>/install-cli.sh | sh\n(`kuso upgrade` upgrades the server, not the CLI.)"
+func versionCheck() (string, error) {
+	latest, err := latestVersionFromGit()
+	if err != nil {
+		return "", err
 	}
+	out := GetVersionInfo() + "\nLatest version: " + latest + "\n"
+	if GetVersion() == latest {
+		return out + "You are using the latest version.", nil
+	}
+	return out + "You are using an outdated version.\n" + "Update the CLI with: curl -fsSL https://<your-instance>/install-cli.sh | sh\n(`kuso upgrade` upgrades the server, not the CLI.)", nil
 }
 
 //func UpgradeCLI() error {
