@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/SKI
 
 ## Update
 
-Re-run the same `curl` — `install.sh` overwrites `SKILL.md` with the latest from `main`. Pin to a specific kuso release with the commands below. `export` matters: the variable has to be set before the shell expands the URL, and `install.sh` (run by `bash`) reads it too.
+Re-run the same `curl`. `install.sh` overwrites `SKILL.md` with the version that matches your installed `kuso` CLI (its release tag), or with `main` when there's no CLI on PATH or it's a dev build. To pin a different release, use the commands below. `export` matters: the variable has to be set before the shell expands the URL, and `install.sh` (run by `bash`) reads it too.
 
 ```bash
 export KUSO_SKILL_REF=v0.27.7
