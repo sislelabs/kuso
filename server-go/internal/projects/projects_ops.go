@@ -679,6 +679,14 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			if derr := s.Kube.DeleteKusoAddon(ctx, ns, a.Name); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("delete addon %s: %w", a.Name, derr)
 			}
+			// A clone goes with its env even without PurgeData: a recreated
+			// project's same-named env group would otherwise mount the old
+			// clone's PVC with its kept, matching password.
+			if isEnvClone(a.Labels) {
+				for _, rerr := range s.reclaimCloneAddonData(ctx, ns, a.Name) {
+					cleanupFail("CloneAddonData", a.Name, rerr)
+				}
+			}
 			if a.Spec.External != nil && a.Spec.External.SecretName != "" {
 				s.deleteExternalAddonSecrets(ctx, ns, a.Name, a.Spec.External.SecretName, cleanupFail)
 			}
