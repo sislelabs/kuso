@@ -111,9 +111,11 @@ function MonitoredProjectsSection({
         </>
       }
       actions={
-        <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
-          {monitoredCount} of {projects.data?.length ?? 0} enrolled
-        </span>
+        projects.isSuccess && (
+          <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
+            {monitoredCount} of {projects.data.length} enrolled
+          </span>
+        )
       }
     >
       {!agentEnabled && (
@@ -137,6 +139,8 @@ function MonitoredProjectsSection({
 
       {projects.isPending ? (
         <Skeleton className="h-24" />
+      ) : projects.isError ? (
+        <QueryErrorState what="projects" error={projects.error} onRetry={() => void projects.refetch()} />
       ) : rows.length === 0 ? (
         <p className="py-4 text-center text-sm text-[var(--text-secondary)]">
           {filter ? "No projects match." : "No projects yet."}

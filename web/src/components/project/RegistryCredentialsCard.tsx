@@ -7,6 +7,7 @@ import { toastError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
 import {
   useRegistryCredentials,
   useRegistryLogin,
@@ -46,8 +47,9 @@ export function RegistryCredentialsCard({ project }: { project: string }) {
 
   return (
     <div className="space-y-4">
-
-      {creds.length === 0 ? (
+      {list.isError ? (
+        <QueryErrorState what="registry credentials" error={list.error} onRetry={() => void list.refetch()} />
+      ) : list.isPending ? null : creds.length === 0 ? (
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
           No registry credentials yet.
         </p>
