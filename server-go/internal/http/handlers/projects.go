@@ -27,6 +27,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/imagecheck"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/podusage"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
 )
@@ -232,6 +233,9 @@ type ProjectsHandler struct {
 	Kube       *kube.Client
 	Namespace  string
 	Reconciler *spec.Reconciler
+	// Usage is the podusage history behind /api/insights CPU and memory.
+	// Optional: nil leaves those series empty.
+	Usage *podusage.Store
 	// DB is used for the tenancy filter on /api/projects (admins
 	// bypass; everyone else sees only projects they belong to).
 	// Optional: when nil the filter no-ops, preserving the
@@ -291,6 +295,7 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// "summary" is a reserved project name (see projects.reservedRouteNames).
 	r.Get("/api/projects/summary", h.Summary)
 	r.Get("/api/projects/pulse", h.Pulse)
+	r.Get("/api/insights", h.Insights)
 	r.Get("/api/projects/{project}", h.Describe)
 	r.Patch("/api/projects/{project}", h.Update)
 	r.Delete("/api/projects/{project}", h.Delete)

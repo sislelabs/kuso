@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight, ChartLine } from "lucide-react";
 import { formatCpu, relativeTime } from "@/lib/format";
 import { SERVICE_STATUS, TONE_CLASSES } from "@/lib/status";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,9 @@ function DeployTicks({ times, since, className }: { times: ReadonlyArray<number>
 }
 
 const cell = "flex min-w-0 items-center gap-3 px-4 py-3 sm:px-5";
+// Cells that open Insights on their metric.
+const cellLink =
+  "outline-none transition-colors hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]";
 const big = "font-display text-[17px] font-semibold leading-tight text-[var(--text-primary)] [font-stretch:108%] tabular-nums";
 const unit = "font-sans text-[13px] font-medium text-[var(--text-tertiary)] [font-stretch:100%]";
 const small = "truncate text-xs text-[var(--text-tertiary)]";
@@ -124,13 +128,13 @@ export function FleetStrip({
       </div>
 
       {requests && requestTotal !== undefined && (
-        <div className={cell}>
+        <Link href="/insights?m=requests" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>{compact(requestTotal)}</div>
             <div className={small}>requests, last 24h</div>
           </div>
           <Sparkline points={requests} className="hidden h-7 w-24 shrink-0 sm:block" />
-        </div>
+        </Link>
       )}
 
       <div className={cell}>
@@ -160,7 +164,7 @@ export function FleetStrip({
       </div>
 
       {capacity && capacity.memUsed > 0 && (
-        <div className={cell}>
+        <Link href="/insights?m=memory" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>
               {formatBytes(capacity.memUsed)}
@@ -171,7 +175,7 @@ export function FleetStrip({
               {capacity.cpuTotalMilli ? ` of ${capacity.cpuTotalMilli / 1000}` : ""}
             </div>
           </div>
-        </div>
+        </Link>
       )}
 
       <div className={cn(cell, "col-span-2 sm:col-span-1 lg:flex-1")}>
@@ -199,6 +203,15 @@ export function FleetStrip({
           />
         )}
       </div>
+
+      <Link href="/insights" className={cn(cell, cellLink, "col-span-2 text-[var(--text-primary)] sm:col-span-1 lg:shrink-0")}>
+        <ChartLine className="size-4 shrink-0 text-[var(--accent)]" aria-hidden />
+        <div className="min-w-0">
+          <div className="text-[13px] font-medium">Insights</div>
+          <div className={small}>compare services</div>
+        </div>
+        <ArrowRight className="ml-auto size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+      </Link>
     </div>
   );
 }

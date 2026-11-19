@@ -504,6 +504,7 @@ func mountAuthenticatedRoutes(
 				Reconciler: d.Spec,
 				DB:         d.DB,
 				Audit:      d.Audit,
+				Usage:      d.UsageHistory,
 			}
 			// Only wire the addon reverter when the addon service exists —
 			// assigning a nil *addons.Service to the interface would make
