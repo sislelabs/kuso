@@ -1468,7 +1468,10 @@ func (s *Service) DeleteWith(ctx context.Context, project, name string, opts Del
 	// "tickero-pg-conn", so the exclude silently never matched and this
 	// guard did nothing at all. Every caller reaches Delete with a short
 	// name, so it was defeated on every code path.
-	if err := s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true}); err != nil {
+	//
+	// An env-scoped clone was only ever mounted by envs in its own scope, so
+	// only those need rewriting (Add skips the refresh for clones entirely).
+	if err := s.refreshEnvSecretsScoped(ctx, project, cr.Labels[kube.LabelEnv], nil, map[string]bool{connSecretName(fqn): true}); err != nil {
 		return fmt.Errorf("%w: addon deleted but removing it from envs failed: %w", ErrEnvRefresh, errors.Join(err, unsubErr))
 	}
 	if unsubErr != nil {
@@ -1733,6 +1736,12 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 // re-injected into every env, leaving pods with an env-var ref to a
 // soon-to-vanish secret (CreateContainerConfigError on the next restart).
 func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
+	return s.refreshEnvSecretsScoped(ctx, project, "", extraConnSecrets, excludeConnSecrets)
+}
+
+// refreshEnvSecretsScoped is refreshEnvSecretsFiltered limited to the envs
+// whose env label is onlyScope ("" = every env in the project).
+func (s *Service) refreshEnvSecretsScoped(ctx context.Context, project, onlyScope string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
 	// Serialise refreshes per project and read the addon set live, not from
 	// the informer cache: each refresh rewrites envFromSecrets wholesale, so
 	// two concurrent adds that each saw a stale list (missing the other's
@@ -1841,6 +1850,9 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	var errs []error
 	for i := range envs {
 		env := &envs[i]
+		if onlyScope != "" && env.Labels[kube.LabelEnv] != onlyScope {
+			continue
+		}
 		// Use the retry-on-conflict RMW path so concurrent writes from
 		// the projects package (SetEnv / SetSharedEnvKeys / Patch
 		// Service / SetSubscribedAddons) don't race us — pre-v0.17.1
