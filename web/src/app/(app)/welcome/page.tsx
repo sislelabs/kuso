@@ -450,7 +450,9 @@ function Step2PickRepo({
           defaultBranch: repo.defaultBranch,
         },
         github: installID ? { installationId: installID } : undefined,
-        previews: { enabled: true, ttlDays: 7 },
+        // A new project has no staging env to base previews on; the server
+        // refuses to turn them on until it has one.
+        previews: { enabled: false },
       });
       onPicked(slug);
     } catch (err) {
