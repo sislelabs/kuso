@@ -92,12 +92,18 @@ type failureClass struct {
 	Summary string `json:"summary"`
 }
 
-// fenced returns a copy safe for structuredContent: the commit message and
-// the error scraped from build logs are attacker-controllable, so they go
-// out inside the untrusted fence like the text output.
+// fenced returns a copy safe for structuredContent: the commit message,
+// the error scraped from build logs and the failure summary derived from
+// them are attacker-controllable, so they go out inside the untrusted
+// fence like the text output.
 func (s buildSummary) fenced() buildSummary {
 	s.CommitMessage = fenceUntrusted(s.CommitMessage)
 	s.ErrorMessage = fenceUntrusted(s.ErrorMessage)
+	if s.FailureClass != nil {
+		fc := *s.FailureClass
+		fc.Summary = fenceUntrusted(fc.Summary)
+		s.FailureClass = &fc
+	}
 	return s
 }
 

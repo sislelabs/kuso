@@ -23,11 +23,15 @@ type Client struct {
 	http *http.Client
 }
 
+// requestTimeout sits above the server's 30s apply budget, so a slow
+// apply isn't cancelled mid-way by the client hanging up.
+const requestTimeout = 60 * time.Second
+
 // New returns a Client backed by an http.Client with a sensible timeout.
 func New(cfg *config.Config) *Client {
 	return &Client{
 		cfg:  cfg,
-		http: &http.Client{Timeout: 30 * time.Second},
+		http: &http.Client{Timeout: requestTimeout},
 	}
 }
 

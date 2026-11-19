@@ -567,8 +567,14 @@ func runSubscribeAddon(ctx context.Context, client *kusoclient.Client, args subs
 		seen[a] = true
 		next = append(next, a)
 	}
-	if err := client.PutJSON(ctx, path, map[string][]string{"addons": next}, nil); err != nil {
-		return subscribeAddonResult{}, fmt.Errorf("set subscribed addons: %w", err)
+	// expected makes the PUT conditional on the list read above, so a
+	// concurrent change isn't overwritten (the server answers 409).
+	expected := cur.Subscribed
+	if expected == nil {
+		expected = []string{}
+	}
+	if err := client.PutJSON(ctx, path, map[string][]string{"addons": next, "expected": expected}, nil); err != nil {
+		return subscribeAddonResult{}, fmt.Errorf("set subscribed addons (on a 409, re-run to merge into the current list): %w", err)
 	}
 	return subscribeAddonResult{Project: args.Project, Service: args.Service, Subscribed: next, Available: cur.Available}, nil
 }

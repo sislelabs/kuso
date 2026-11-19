@@ -85,6 +85,9 @@ type ServiceSpec struct {
 	Repo        struct {
 		URL  string `json:"url,omitempty"`
 		Path string `json:"path,omitempty"`
+		// DefaultBranch is set when the service pins its own branch
+		// instead of following the project's.
+		DefaultBranch string `json:"defaultBranch,omitempty"`
 	} `json:"repo,omitempty"`
 	Runtime    string   `json:"runtime,omitempty"`
 	Dockerfile string   `json:"dockerfile,omitempty"`

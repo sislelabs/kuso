@@ -162,13 +162,18 @@ func TestSubscribeAddon_MergesIntoCurrentList(t *testing.T) {
 		t.Fatalf("want GET then PUT subscribed-addons, got %+v", got)
 	}
 	var body struct {
-		Addons []string `json:"addons"`
+		Addons   []string `json:"addons"`
+		Expected []string `json:"expected"`
 	}
 	if err := json.Unmarshal([]byte(got[1].Body), &body); err != nil {
 		t.Fatalf("bad PUT body %q: %v", got[1].Body, err)
 	}
 	if strings.Join(body.Addons, ",") != "cache,db" {
 		t.Fatalf("want addons [cache db], got %v", body.Addons)
+	}
+	// Without expected the PUT is a blind overwrite of a concurrent change.
+	if strings.Join(body.Expected, ",") != "cache,queue" {
+		t.Fatalf("want expected [cache queue] (the list read), got %q", got[1].Body)
 	}
 
 	text, isErr, _ = callText(t, sess, "subscribe_addon", map[string]any{
@@ -222,6 +227,25 @@ func TestRollback_DecodesEnvironmentResponse(t *testing.T) {
 	}
 }
 
+// A cross-branch rollback got a 400 the agent couldn't get past: the
+// tool had no force arg.
+func TestRollback_ForwardsForce(t *testing.T) {
+	var gotQuery string
+	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
+		gotQuery = r.URL.RawQuery
+		return http.StatusOK, `{"metadata":{"name":"shop-api-staging"}}`
+	})
+	_, isErr, err := callText(t, sess, "rollback", map[string]any{
+		"project": "shop", "service": "api", "build": "b1", "env": "staging", "force": true, "confirm": true,
+	})
+	if err != nil || isErr {
+		t.Fatalf("rollback failed: err=%v", err)
+	}
+	if gotQuery != "env=staging&force=true" {
+		t.Fatalf("query %q", gotQuery)
+	}
+}
+
 // list_builds used to cut the server's list to `limit` without saying so,
 // so an agent hunting for a rollback target couldn't tell older ones existed.
 func TestListBuilds_SaysWhenOlderBuildsExist(t *testing.T) {
@@ -238,5 +262,19 @@ func TestListBuilds_SaysWhenOlderBuildsExist(t *testing.T) {
 	text, _, _ = callText(t, sess, "list_builds", map[string]any{"project": "shop", "service": "api", "limit": 5})
 	if strings.Contains(text, "Older builds exist") {
 		t.Fatalf("no note expected when everything fits, got:\n%s", text)
+	}
+}
+
+// NULL and '' both rendered as an empty cell.
+func TestSQLQuery_RendersNull(t *testing.T) {
+	sess, _ := newRecordingSession(t, func(r *http.Request) (int, string) {
+		return http.StatusOK, `{"columns":["a","b"],"rows":[["","x"]],"nulls":[[true,false]]}`
+	})
+	text, isErr, err := callText(t, sess, "sql_query", map[string]any{"project": "p", "addon": "db", "query": "select 1"})
+	if err != nil || isErr {
+		t.Fatalf("sql_query failed: err=%v text=%s", err, text)
+	}
+	if !strings.Contains(text, "NULL | x") {
+		t.Fatalf("text %s", text)
 	}
 }
