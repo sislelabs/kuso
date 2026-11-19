@@ -162,28 +162,3 @@ func bumpStat(inv *Inventory, v Verdict) {
 		inv.NumFlag++
 	}
 }
-
-// SplitFQDN unpacks Coolify's comma-separated fqdn field into a list
-// of "host" values (no scheme). Returns nil for empty strings.
-func SplitFQDN(fqdn string) []string {
-	if fqdn == "" {
-		return nil
-	}
-	parts := strings.Split(fqdn, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		// Strip scheme.
-		p = strings.TrimPrefix(p, "https://")
-		p = strings.TrimPrefix(p, "http://")
-		// Strip path.
-		if i := strings.Index(p, "/"); i >= 0 {
-			p = p[:i]
-		}
-		out = append(out, p)
-	}
-	return out
-}

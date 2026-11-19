@@ -91,8 +91,6 @@ func AddonKindFromCoolify(coolifyType string) string {
 		return "mongodb"
 	case "mysql":
 		return "mysql"
-	case "mariadb":
-		return "mysql" // closest kuso equivalent; addon helm doesn't distinguish
 	case "clickhouse":
 		return "clickhouse"
 	}

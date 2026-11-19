@@ -2,7 +2,6 @@ package coolify
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -242,15 +241,3 @@ func ItemKind(it Item) string {
 	}
 	return "unknown"
 }
-
-// slugifyRE is currently unused by the public API — SlugifyName builds
-// its output via a builder rather than regex replace so it can apply
-// the "single dash run" + "trim trailing dash on truncation" rules in
-// one pass. Kept as a fallback for callers that need the regex shape.
-var slugifyRE = regexp.MustCompile(`[^a-z0-9-]+`)
-
-// SlugifyRegex returns the underlying allow-list regex. Exposed for
-// callers that want to validate user input directly (e.g. confirm a
-// CLI-supplied service name will round-trip through SlugifyName
-// unchanged).
-func SlugifyRegex() *regexp.Regexp { return slugifyRE }

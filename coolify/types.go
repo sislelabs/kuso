@@ -4,8 +4,6 @@
 
 package coolify
 
-import "time"
-
 // Project is a Coolify project — the top-level grouping that holds
 // environments, applications, services, databases.
 type Project struct {
@@ -147,12 +145,4 @@ func SelectEnvVars(in []EnvVar) []struct{ Key, Value string } {
 		out = append(out, struct{ Key, Value string }{e.Key, e.EffectiveValue()})
 	}
 	return out
-}
-
-// ParsedAt parses the Coolify ISO-8601 timestamp. Returns zero on
-// parse failure — none of our migration paths actually need exact
-// times, just rough chronology in reports.
-func ParsedAt(s string) time.Time {
-	t, _ := time.Parse("2006-01-02T15:04:05.000000Z", s)
-	return t
 }

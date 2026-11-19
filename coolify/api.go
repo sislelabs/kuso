@@ -33,10 +33,6 @@ func (c *Client) ListApplications(ctx context.Context) ([]Application, error) {
 	return get[[]Application](ctx, c, "/applications")
 }
 
-func (c *Client) GetApplication(ctx context.Context, uuid string) (Application, error) {
-	return get[Application](ctx, c, "/applications/"+uuid)
-}
-
 func (c *Client) ListApplicationEnvs(ctx context.Context, appUUID string) ([]EnvVar, error) {
 	return get[[]EnvVar](ctx, c, "/applications/"+appUUID+"/envs")
 }
@@ -47,17 +43,6 @@ func (c *Client) ListServices(ctx context.Context) ([]Service, error) {
 
 func (c *Client) ListDatabases(ctx context.Context) ([]Database, error) {
 	return get[[]Database](ctx, c, "/databases")
-}
-
-func (c *Client) GetDatabase(ctx context.Context, uuid string) (Database, error) {
-	return get[Database](ctx, c, "/databases/"+uuid)
-}
-
-// ListDatabaseEnvs is documented but kuso doesn't need it today —
-// the connection URL already lives on the Database struct, and the
-// addon helm chart generates its own password. Kept for future use.
-func (c *Client) ListDatabaseEnvs(ctx context.Context, dbUUID string) ([]EnvVar, error) {
-	return get[[]EnvVar](ctx, c, "/databases/"+dbUUID+"/envs")
 }
 
 // AssertReadOnly returns an error if anyone tries to use this client
