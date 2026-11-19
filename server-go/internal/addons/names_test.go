@@ -34,3 +34,14 @@ func TestAdd_RefusesNameHeldByService(t *testing.T) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
 }
+
+// Addon "web-staging" and service web's env "staging" are both helm release
+// alpha-web-staging.
+func TestAdd_RefusesNameHeldByEnvironment(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProj("alpha"),
+		seedEnvWithSecrets("alpha", "web", "staging", "alpha-web-staging", nil, nil))
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "web-staging", Kind: "postgres"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+}

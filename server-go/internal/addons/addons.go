@@ -1548,6 +1548,11 @@ func (s *Service) checkReleaseName(ctx context.Context, ns, fqn string, isClone 
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("preflight cron name: %w", err)
 	}
+	if _, err := s.Kube.GetKusoEnvironment(ctx, ns, fqn); err == nil {
+		return fmt.Errorf("%w: %s is already used by an environment in this project", ErrConflict, fqn)
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight environment name: %w", err)
+	}
 	return nil
 }
 
