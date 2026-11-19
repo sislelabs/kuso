@@ -100,10 +100,6 @@ func (k *KusoClient) CreateProject(req CreateProjectRequest) (*resty.Response, e
 	return k.client.Post("/api/projects")
 }
 
-func (k *KusoClient) DeleteProject(name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + esc(name))
-}
-
 // DeleteProjectOptions toggles destructive behavior on the delete
 // endpoint. PurgeData=true ALSO wipes every PVC labeled with this
 // project — required when the caller wants a clean slate, not just
@@ -408,11 +404,6 @@ func (k *KusoClient) SetEnvVar(project, service, name string, req SetEnvVarReque
 	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env-vars/" + esc(name))
 }
 
-// UnsetEnvVar removes a single env var by name. 404 when absent.
-func (k *KusoClient) UnsetEnvVar(project, service, name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env-vars/" + esc(name))
-}
-
 // Environments
 
 // CreateEnvRequest mirrors the server's projects.CreateEnvRequest.
@@ -463,11 +454,7 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 	return k.client.Post("/api/projects/" + esc(project) + "/addons")
 }
 
-func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
-	return k.DeleteAddonWith(project, addon, false)
-}
-
-// DeleteAddonWith is DeleteAddon; purgeData also removes the data volumes
+// DeleteAddonWith deletes an addon; purgeData also removes the data volumes
 // and credentials a plain delete keeps, including those left behind by an
 // earlier plain delete of the same addon.
 func (k *KusoClient) DeleteAddonWith(project, addon string, purgeData bool) (*resty.Response, error) {

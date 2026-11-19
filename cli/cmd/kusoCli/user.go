@@ -36,7 +36,6 @@ var (
 	profileSetEmail     string
 	profileSetFirstName string
 	profileSetLastName  string
-	profileSetUsername  string
 )
 
 var userCmd = &cobra.Command{

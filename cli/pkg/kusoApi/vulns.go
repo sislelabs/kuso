@@ -268,10 +268,6 @@ func (k *KusoClient) ScanAllVulns() (*resty.Response, error) {
 	return k.client.Post("/api/admin/vulns/scan-all")
 }
 
-func (k *KusoClient) GetVulnScan(id string) (*resty.Response, error) {
-	return k.client.Get("/api/admin/vulns/scans/" + esc(id))
-}
-
 // UpdateAddonImage pins an addon to its tag's newest image now; the
 // addon restarts.
 func (k *KusoClient) UpdateAddonImage(project, addon string) (*resty.Response, error) {

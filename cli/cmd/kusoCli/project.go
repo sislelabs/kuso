@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -791,11 +790,7 @@ resource names are immutable, so the operation has real cost:
 				project, oldName, project, newName)); err != nil {
 			return err
 		}
-		body, _ := json.Marshal(map[string]string{"newName": newName})
-		resp, err := api.RawPost(
-			fmt.Sprintf("/api/projects/%s/services/%s/rename",
-				url.PathEscape(project), url.PathEscape(oldName)),
-			body, "application/json")
+		resp, err := api.RenameService(project, oldName, newName)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("rename service: %w", err)
 		}
