@@ -32,6 +32,7 @@ interface VersionState {
   };
   lastChecked?: string;
   lastCheckError?: string;
+  checksDisabled?: boolean;
 }
 
 interface UpdateStatus {
@@ -138,7 +139,8 @@ export default function UpdatesPage() {
       : "text-[var(--success)]";
 
   return (
-    <SettingsPage title="Updates" description={description} actions={checkButton}>
+    // The refresh endpoint needs system:update and 503s with checks off.
+    <SettingsPage title="Updates" description={description} actions={canUpdate && !v.checksDisabled ? checkButton : undefined}>
       <SettingsSection
         footerHint={
           <>
