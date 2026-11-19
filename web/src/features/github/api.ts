@@ -62,10 +62,6 @@ export async function listRepos(): Promise<GithubRepoRef[]> {
   return api("/api/github/repos");
 }
 
-export async function listInstallationRepos(installationId: number): Promise<GithubRepo[]> {
-  return api(`/api/github/installations/${installationId}/repos`);
-}
-
 export async function detectRuntime(body: {
   installationId: number;
   owner: string;

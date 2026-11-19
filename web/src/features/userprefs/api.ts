@@ -25,13 +25,3 @@ export async function setProjectPref(
     body,
   });
 }
-
-export async function clearProjectPref(project: string): Promise<void> {
-  await api(`/api/me/project-prefs/${encodeURIComponent(project)}`, {
-    method: "DELETE",
-  });
-}
-
-export async function renameFolder(from: string, to: string): Promise<void> {
-  await api("/api/me/folders/rename", { method: "POST", body: { from, to } });
-}

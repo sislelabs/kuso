@@ -92,24 +92,6 @@ export async function unsetServiceEnvVar(
   );
 }
 
-// setServiceEnvSecret writes a single secret VALUE into the kuso-managed
-// <project>-<service>-secrets Secret via the legacy per-key set endpoint.
-// Superseded in the env editor by setServiceEnvValue (auto storage);
-// retained for any non-editor caller that still needs the explicit
-// secretValue form. An empty string is a valid write (clears the value
-// while keeping the key), so the caller always passes a concrete string.
-export async function setServiceEnvSecret(
-  project: string,
-  service: string,
-  name: string,
-  secretValue: string,
-): Promise<void> {
-  return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env-vars/${encodeURIComponent(name)}`,
-    { method: "PUT", body: { secretValue } },
-  );
-}
-
 export interface DetectedEnv {
   // Names surfaced by the build-time env-detect init container
   // (.env.example + source grep). Empty until the next build runs.
@@ -552,17 +534,6 @@ export async function listAddonSecretKeys(project: string, addon: string): Promi
   return api(`/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret-keys`);
 }
 
-export async function getServiceLogs(
-  project: string,
-  service: string,
-  env = "production",
-  lines = 200
-): Promise<{ project: string; service: string; env: string; lines: { pod: string; line: string }[] }> {
-  return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs?env=${encodeURIComponent(env)}&lines=${lines}`
-  );
-}
-
 // ---- Crons ----
 
 export interface KusoCron {
@@ -676,31 +647,6 @@ export interface LogSearchResponse {
   // Cursor for the next (older) page. Absent once the archive is
   // exhausted, which is how the reader knows to stop paging.
   nextBeforeId?: number;
-}
-
-export async function searchServiceLogs(
-  project: string,
-  service: string,
-  params: {
-    q?: string;
-    env?: string;
-    since?: string;
-    until?: string;
-    limit?: number;
-    beforeId?: number;
-  }
-): Promise<LogSearchResponse> {
-  const sp = new URLSearchParams();
-  if (params.q) sp.set("q", params.q);
-  if (params.env) sp.set("env", params.env);
-  if (params.since) sp.set("since", params.since);
-  if (params.until) sp.set("until", params.until);
-  if (params.limit) sp.set("limit", String(params.limit));
-  if (params.beforeId) sp.set("beforeId", String(params.beforeId));
-  const query = sp.toString();
-  return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs/search${query ? "?" + query : ""}`
-  );
 }
 
 // KusoRun — one-shot task pod bound to a service's most-recent

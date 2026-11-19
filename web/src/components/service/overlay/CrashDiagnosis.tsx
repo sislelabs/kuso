@@ -45,7 +45,7 @@ export function CrashDiagnosis({
   );
 }
 
-export function CrashDetails({
+function CrashDetails({
   crash,
   onNavigate,
   className,

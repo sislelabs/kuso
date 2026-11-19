@@ -1767,10 +1767,7 @@ function BootstrapBody({
   );
 }
 
-// Local types for the bootstrap response shape. Mirrors the server's
-// JSON. We re-declare here rather than importing to keep this file
-// self-contained for the existing-code edit; the canonical types live
-// in features/node-bootstrap/api.ts.
+// The bootstrap response shape. Mirrors the server's JSON.
 type MintedTokenLite = {
   jti: string;
   jtiPrefix: string;

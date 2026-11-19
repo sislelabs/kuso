@@ -15,7 +15,6 @@ import {
   getServiceEnv,
   getServiceEnvOverrides,
   listBuilds,
-  listErrors,
   listRuns,
   listServiceBranches,
   listServiceCrons,
@@ -159,16 +158,6 @@ export function useBuilds(project: string, service: string) {
 // env "" means every environment.
 export const errorsQueryKey = (project: string, service: string, since: string, env = "") =>
   ["projects", project, "services", service, "errors", since, env] as const;
-
-export function useErrors(project: string, service: string, since = "24h", env = "") {
-  return useQuery({
-    queryKey: errorsQueryKey(project, service, since, env),
-    queryFn: () => listErrors(project, service, since, env || undefined),
-    enabled: !!project && !!service,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-  });
-}
 
 export const projectErrorSummaryQueryKey = (project: string, since: string) =>
   ["projects", project, "errors", "summary", since] as const;

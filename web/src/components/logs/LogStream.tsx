@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useLogStream, type LogLine, type StreamConnection } from "@/features/logs";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Copy, RotateCcw, Search, X } from "lucide-react";
+import { ChevronDown, Copy, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { AnsiText } from "./AnsiText";
@@ -270,32 +270,3 @@ const LogRow = memo(function LogRow({ line: l, wrap }: { line: LogLine; wrap: bo
     </div>
   );
 });
-
-export function PhaseStepper({ phase }: { phase?: string | null }) {
-  const steps = ["CLONING", "INSTALLING", "BUILDING", "PUSHING", "DEPLOYING", "ACTIVE"];
-  const currentIdx = steps.indexOf((phase ?? "").toUpperCase());
-  return (
-    <div className="flex items-center gap-1 text-xs font-medium">
-      {steps.map((s, i) => {
-        const done = i < currentIdx;
-        const active = i === currentIdx;
-        return (
-          <span
-            key={s}
-            className={cn(
-              "rounded border px-1.5 py-0.5",
-              done && "border-[var(--success)]/30 bg-[var(--success-subtle)] text-[var(--success)]",
-              active && "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--accent)] animate-pulse",
-              !done && !active && "border-[var(--border-subtle)] text-[var(--text-tertiary)]"
-            )}
-          >
-            {s.charAt(0) + s.slice(1).toLowerCase()}
-            {i < steps.length - 1 && <span className="mx-1 opacity-50">→</span>}
-          </span>
-        );
-      })}
-      {/* Reset icon to show that this is the latest phase indicator */}
-      <RotateCcw className="ml-2 h-3 w-3 text-[var(--text-tertiary)]" />
-    </div>
-  );
-}

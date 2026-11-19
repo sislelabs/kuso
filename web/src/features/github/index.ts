@@ -1,7 +1,6 @@
 export {
   useInstallURL,
   useInstallations,
-  useInstallationRepos,
   useGithubRepos,
   announceGithubInstalled,
   useDetectRuntime,

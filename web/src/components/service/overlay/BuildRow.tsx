@@ -808,7 +808,7 @@ function RetryReleaseButton({ project, service, buildId, sha }: { project: strin
   );
 }
 
-export function RollbackButton({
+function RollbackButton({
   project,
   service,
   env,
