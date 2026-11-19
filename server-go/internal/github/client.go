@@ -53,10 +53,14 @@ func NewClient(cfg *Config) (*Client, error) {
 	}, nil
 }
 
+// apiTimeout bounds every GitHub API call (MED-4, DEAD-1): callers on a
+// poller ctx have no deadline of their own.
+const apiTimeout = 30 * time.Second
+
 // App returns a go-github client signed with the App JWT. Use for
 // App-level calls only (e.g. ListInstallations).
 func (c *Client) App() *gogithub.Client {
-	cli := gogithub.NewClient(&http.Client{Transport: c.appTransport})
+	cli := gogithub.NewClient(&http.Client{Transport: c.appTransport, Timeout: apiTimeout})
 	if c.baseURL != "" {
 		// WithEnterpriseURLs normalises the trailing-slash / /api/v3 quirks;
 		// on parse failure we keep the default rather than panic.
@@ -73,14 +77,14 @@ func (c *Client) Installation(installationID int64) (*gogithub.Client, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if t, ok := c.transports[installationID]; ok {
-		return gogithub.NewClient(&http.Client{Transport: t}), nil
+		return gogithub.NewClient(&http.Client{Transport: t, Timeout: apiTimeout}), nil
 	}
 	itr, err := ghinstallation.New(http.DefaultTransport, c.cfg.AppID, installationID, c.cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("github: installation transport: %w", err)
 	}
 	c.transports[installationID] = itr
-	return gogithub.NewClient(&http.Client{Transport: itr}), nil
+	return gogithub.NewClient(&http.Client{Transport: itr, Timeout: apiTimeout}), nil
 }
 
 // MintInstallationToken returns a fresh installation token for the given
@@ -98,6 +102,8 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 	if err != nil {
 		return "", err
 	}
+	ctx, cancel := context.WithTimeout(ctx, apiTimeout)
+	defer cancel()
 	tok, err := itr.Token(ctx)
 	if err != nil {
 		return "", fmt.Errorf("github: mint token: %w", err)
