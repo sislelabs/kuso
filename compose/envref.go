@@ -206,8 +206,6 @@ type envChoice struct {
 	why   string
 }
 
-func (c envChoice) matched() bool { return c.ref != "" || c.flag }
-
 // chooseAddonEnv picks the conn-secret key an app env var should
 // reference. The var's NAME decides the role where it names one
 // (_HOST, _PORT, _USER, _PASSWORD, _DB…); otherwise the VALUE's shape

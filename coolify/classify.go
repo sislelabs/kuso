@@ -37,6 +37,9 @@ func ClassifyApplication(a Application) Verdict {
 	case "nixpacks", "dockerfile", "static":
 		return Verdict{Kind: KindCoolifyApp, Action: "migrate",
 			Reason: "git-backed " + a.BuildPack + " app — direct port to KusoService"}
+	case "dockerimage":
+		return Verdict{Kind: KindCoolifyApp, Action: "migrate",
+			Reason: "prebuilt image app — KusoService runtime=image"}
 	case "dockercompose":
 		return Verdict{Kind: KindComposeSkip, Action: "skip",
 			Reason: "docker-compose stacks are skipped per migration policy — kuso doesn't run compose; rewrite as N services or keep on Coolify"}
@@ -91,8 +94,6 @@ func AddonKindFromCoolify(coolifyType string) string {
 		return "mongodb"
 	case "mysql":
 		return "mysql"
-	case "mariadb":
-		return "mysql" // closest kuso equivalent; addon helm doesn't distinguish
 	case "clickhouse":
 		return "clickhouse"
 	}

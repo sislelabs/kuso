@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
 )
@@ -36,10 +37,10 @@ import (
 // directory the compose file lives in (or "" when those don't need to
 // resolve, e.g. an uploaded file with no sibling env_files).
 //
-// Interpolation of ${VAR} is disabled: an import shouldn't depend on
-// the importer's shell environment, and unresolved variables are
-// preserved verbatim so the user can see and fill them in on the kuso
-// side rather than having them silently blanked.
+// ${VAR} never reads the importer's shell environment. Defaults the
+// file carries (${VAR:-def}) resolve before the model is loaded, so
+// they work in ports and volumes too; unresolved variables and "$$"
+// stay verbatim for the converter to flag and unescape.
 func Parse(ctx context.Context, raw []byte, workingDir string) (*types.Project, error) {
 	return parse(ctx, raw, workingDir, false)
 }
@@ -98,7 +99,9 @@ func parse(ctx context.Context, raw []byte, workingDir string, skipInclude bool)
 		},
 	}
 	proj, err := loader.LoadWithContext(ctx, cfg, func(o *loader.Options) {
-		o.SkipInterpolation = true
+		o.SkipInterpolation = false
+		o.Interpolate.LookupValue = func(string) (string, bool) { return "", false }
+		o.Interpolate.Substitute = func(v string, _ template.Mapping) (string, error) { return resolveDefaults(v), nil }
 		o.SkipValidation = false
 		o.SkipNormalization = false
 		o.ResolvePaths = false

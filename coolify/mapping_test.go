@@ -17,9 +17,9 @@ func TestSlugifyName(t *testing.T) {
 		{"  trim-me  ", "trim-me"},
 		{"already-fine", "already-fine"},
 		{"___underscores___", "underscores"},
-		{strings.Repeat("a", 80), strings.Repeat("a", 50)},
+		{strings.Repeat("a", 80), strings.Repeat("a", 32)},
 		// Trailing dash after truncation is stripped.
-		{strings.Repeat("a", 49) + "!" + strings.Repeat("b", 30), strings.Repeat("a", 49)},
+		{strings.Repeat("a", 31) + "!" + strings.Repeat("b", 30), strings.Repeat("a", 31)},
 	}
 	for _, c := range cases {
 		got := SlugifyName(c.in)

@@ -69,7 +69,10 @@ func TestClassifyDatastore(t *testing.T) {
 		{"nginx:1.27", "", ""},
 		{"myorg/api:1.0", "", ""},
 		// Kinds the kusoaddon chart implements become addons.
-		{"mysql:8.0.36", "mysql", "8"},
+		{"mysql:8.0.36", "mysql", "8.0"},
+		{"mysql:5.7-debian", "mysql", "5.7"},
+		{"clickhouse/clickhouse-server:24.3", "clickhouse", "24.3"},
+		{"postgres:alpine", "postgres", ""},
 		{"mongo:7", "mongodb", "7"},
 		{"valkey/valkey:8", "valkey", "8"},
 		{"rabbitmq:3-management", "rabbitmq", "3"},

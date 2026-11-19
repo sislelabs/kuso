@@ -135,7 +135,7 @@ func (r *Report) Markdown() string {
 		fmt.Fprintf(&b, "### %s\n\n", svc)
 		fmt.Fprintf(&b, "| action | detail |\n| --- | --- |\n")
 		for _, n := range byService[svc] {
-			fmt.Fprintf(&b, "| %s | %s |\n", actionGlyph(n.Action), n.Detail)
+			fmt.Fprintf(&b, "| %s | %s |\n", actionGlyph(n.Action), strings.ReplaceAll(n.Detail, "|", `\|`))
 		}
 		fmt.Fprintln(&b)
 	}

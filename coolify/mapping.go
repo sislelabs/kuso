@@ -2,7 +2,7 @@ package coolify
 
 import (
 	"fmt"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -19,9 +19,9 @@ import (
 //
 // Canonical choices (with reasons):
 //
-//   - SlugifyName clamps to 50, not 63, leaving 13 chars of headroom
-//     for environment suffixes like `-preview-pr-12` that still need
-//     to fit under the 63-byte DNS label limit.
+//   - SlugifyName clamps to 32, the server's service-name limit
+//     (serviceNameRE); project slugs get the project limit of 40 and a
+//     leading letter (validateProjectName).
 //   - RuntimeForBuildPack defaults to "dockerfile" on unknown — the
 //     imported app needs *some* runtime, and Dockerfile is the lowest
 //     common denominator.
@@ -32,17 +32,22 @@ import (
 //     empty when the input is unusable, so the importer doesn't
 //     create a service with no name.
 
+// Server-side name limits: serviceNameRE allows 32 characters,
+// validateProjectName 40.
+const (
+	maxServiceSlug = 32
+	maxProjectSlug = 40
+)
+
 // SlugifyName turns an arbitrary Coolify name into a kube-safe slug:
 // lowercase, runs of non-[a-z0-9] collapse to "-", trim leading and
-// trailing dashes, clamp to 50 chars (leave headroom for
-// environment-suffix expansion under the 63-byte DNS label limit).
+// trailing dashes, clamp to the 32-character service-name limit.
 // Empty input returns "x-unnamed" so callers can't create a slug-less
 // kuso resource.
-func SlugifyName(s string) string {
+func SlugifyName(s string) string { return slugifyMax(s, maxServiceSlug) }
+
+func slugifyMax(s string, max int) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return "x-unnamed"
-	}
 	var out strings.Builder
 	prevDash := true
 	for _, r := range s {
@@ -57,14 +62,18 @@ func SlugifyName(s string) string {
 			}
 		}
 	}
-	res := strings.Trim(out.String(), "-")
-	if len(res) > 50 {
-		res = strings.Trim(res[:50], "-")
-	}
+	res := clampSlug(strings.Trim(out.String(), "-"), max)
 	if res == "" {
 		res = "x-unnamed"
 	}
 	return res
+}
+
+func clampSlug(s string, max int) string {
+	if len(s) > max {
+		s = strings.TrimRight(s[:max], "-")
+	}
+	return s
 }
 
 // AssignKusoSlugs maps Coolify project names to deduplicated kuso
@@ -78,7 +87,11 @@ func AssignKusoSlugs(coolifyNames []string) map[string]string {
 		if _, done := out[name]; done {
 			continue
 		}
-		out[name] = UniqueSlug(SlugifyName(name), taken)
+		base := slugifyMax(name, maxProjectSlug)
+		if base[0] >= '0' && base[0] <= '9' {
+			base = clampSlug("x-"+base, maxProjectSlug)
+		}
+		out[name] = uniqueSlug(base, taken, maxProjectSlug)
 	}
 	return out
 }
@@ -86,10 +99,16 @@ func AssignKusoSlugs(coolifyNames []string) map[string]string {
 // UniqueSlug returns base, or base-2, base-3, … — the first one not in
 // taken — and marks it taken. Keyed on names actually handed out, not on
 // the base, so a literal "acme-2" can't collide with a suffixed "acme".
+// The base is shortened so the result fits the service-name limit.
 func UniqueSlug(base string, taken map[string]bool) string {
+	return uniqueSlug(base, taken, maxServiceSlug)
+}
+
+func uniqueSlug(base string, taken map[string]bool, max int) string {
 	slug := base
 	for n := 2; taken[slug]; n++ {
-		slug = fmt.Sprintf("%s-%d", base, n)
+		suffix := fmt.Sprintf("-%d", n)
+		slug = clampSlug(base, max-len(suffix)) + suffix
 	}
 	taken[slug] = true
 	return slug
@@ -169,9 +188,144 @@ func RuntimeForBuildPack(bp string) string {
 		return "nixpacks"
 	case "static":
 		return "static"
+	case "dockerimage":
+		return "image"
 	default:
 		return "dockerfile"
 	}
+}
+
+// ServicePlan is the kuso service an Application maps to. The CLI and
+// the server importer both build their create request from it, so the
+// two can't drift on which Coolify settings carry over.
+type ServicePlan struct {
+	Runtime  string
+	Port     int
+	RepoURL  string
+	RepoPath string
+	// Branch pins the service's branch, so apps on different branches of
+	// one repo don't all build the project default.
+	Branch string
+	// Dockerfile is relative to RepoPath; "" means "Dockerfile".
+	Dockerfile      string
+	ImageRepository string
+	ImageTag        string
+	StaticOutputDir string
+	// Dropped has one report line per non-empty Coolify setting that
+	// kuso's service create has no field for.
+	Dropped []string
+}
+
+// PlanService maps an Application onto a kuso service.
+func PlanService(a *Application) ServicePlan {
+	p := ServicePlan{
+		Runtime:  RuntimeForBuildPack(a.BuildPack),
+		Port:     ParseFirstPort(a.PortsExposes),
+		RepoURL:  NormalizeRepoURL(a.GitRepository),
+		RepoPath: NormalizeBaseDir(a.BaseDirectory),
+		Branch:   strings.TrimSpace(a.GitBranch),
+	}
+	drop := func(field, val, why string) {
+		if v := strings.TrimSpace(val); v != "" {
+			p.Dropped = append(p.Dropped, fmt.Sprintf("%s=%q not carried over — %s", field, v, why))
+		}
+	}
+	switch p.Runtime {
+	case "image":
+		p.ImageRepository = strings.TrimSpace(a.DockerRegistryImageName)
+		p.ImageTag = strings.TrimSpace(a.DockerRegistryImageTag)
+		p.RepoURL, p.RepoPath, p.Branch = "", "", ""
+	case "dockerfile":
+		if df := strings.TrimPrefix(strings.TrimSpace(a.DockerfileLocation), "/"); df != "Dockerfile" {
+			p.Dockerfile = df
+		}
+		drop("dockerfile_target_build", a.DockerfileTarget, "kuso builds the Dockerfile's final stage")
+	case "static":
+		p.StaticOutputDir = NormalizeBaseDir(a.PublishDirectory)
+	}
+	drop("install_command", a.InstallCommand, "kuso has no install-command field; put it in the Dockerfile or nixpacks.toml")
+	drop("build_command", a.BuildCommand, "kuso has no build-command field; put it in the Dockerfile or nixpacks.toml")
+	drop("start_command", a.StartCommand, "set the service command in kuso after import")
+	if a.HealthCheckEnabled {
+		drop("health_check_path", a.HealthCheckPath, "kuso probes the service port by runtime; configure a health check after import")
+		drop("health_check_port", a.HealthCheckPort, "kuso probes the service port by runtime")
+	}
+	if p.Runtime != "static" {
+		drop("publish_directory", a.PublishDirectory, "only static apps serve a publish directory")
+	}
+	return p
+}
+
+// AssignAddonSlugs gives every database in one kuso project its own
+// addon name. Coolify scopes names per environment, so a production
+// and a staging "db" land in the same kuso project; without the suffix
+// the second create 409s and staging's apps get wired to production's
+// addon. Ordered by Coolify UUID so a re-run maps each database back
+// onto the same addon.
+func AssignAddonSlugs(items []Item) map[*Database]string {
+	var dbs []*Database
+	for _, it := range items {
+		if it.Database != nil {
+			dbs = append(dbs, it.Database)
+		}
+	}
+	sort.SliceStable(dbs, func(i, j int) bool { return dbs[i].UUID < dbs[j].UUID })
+	out := make(map[*Database]string, len(dbs))
+	taken := map[string]bool{}
+	for _, d := range dbs {
+		out[d] = UniqueSlug(SlugifyName(d.Name), taken)
+	}
+	return out
+}
+
+// AddonVersionFromImage derives the kuso addon version from a Coolify
+// database image ("postgres:15-alpine" → "15"), "" when the tag is
+// missing, "latest" or not numeric (the chart default then applies).
+// The chart builds the image from the version, so the precision
+// follows how each engine is tagged: mysql needs major.minor (a bare
+// "8" is 8.4, not 8.0), clickhouse takes the full tag, the rest the
+// major.
+func AddonVersionFromImage(kind, image string) string {
+	image = strings.TrimSpace(image)
+	if at := strings.Index(image, "@"); at >= 0 {
+		image = image[:at]
+	}
+	colon := strings.LastIndex(image, ":")
+	if colon < 0 || colon < strings.LastIndex(image, "/") {
+		return ""
+	}
+	tag := image[colon+1:]
+	if tag == "" || tag[0] < '0' || tag[0] > '9' {
+		return ""
+	}
+	switch kind {
+	case "clickhouse":
+		return tag
+	case "mysql":
+		return leadingVersion(tag, 2)
+	default:
+		return leadingVersion(tag, 1)
+	}
+}
+
+// leadingVersion returns the first n dot-separated numeric components
+// of tag: leadingVersion("8.0.36-debian", 2) = "8.0".
+func leadingVersion(tag string, n int) string {
+	end := 0
+	for parts := 0; end < len(tag); end++ {
+		c := tag[end]
+		if c == '.' {
+			parts++
+			if parts == n {
+				break
+			}
+			continue
+		}
+		if c < '0' || c > '9' {
+			break
+		}
+	}
+	return strings.TrimSuffix(tag[:end], ".")
 }
 
 // ParseFirstPort takes a comma-separated Coolify port list and returns
@@ -223,15 +377,3 @@ func ItemKind(it Item) string {
 	}
 	return "unknown"
 }
-
-// slugifyRE is currently unused by the public API — SlugifyName builds
-// its output via a builder rather than regex replace so it can apply
-// the "single dash run" + "trim trailing dash on truncation" rules in
-// one pass. Kept as a fallback for callers that need the regex shape.
-var slugifyRE = regexp.MustCompile(`[^a-z0-9-]+`)
-
-// SlugifyRegex returns the underlying allow-list regex. Exposed for
-// callers that want to validate user input directly (e.g. confirm a
-// CLI-supplied service name will round-trip through SlugifyName
-// unchanged).
-func SlugifyRegex() *regexp.Regexp { return slugifyRE }

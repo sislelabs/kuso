@@ -4,8 +4,6 @@
 
 package coolify
 
-import "time"
-
 // Project is a Coolify project — the top-level grouping that holds
 // environments, applications, services, databases.
 type Project struct {
@@ -35,7 +33,7 @@ type Application struct {
 	UUID          string `json:"uuid"`
 	Name          string `json:"name"`
 	Description   string `json:"description"`
-	BuildPack     string `json:"build_pack"` // nixpacks | dockerfile | dockercompose | static
+	BuildPack     string `json:"build_pack"` // nixpacks | dockerfile | dockerimage | dockercompose | static
 	GitRepository string `json:"git_repository"`
 	GitBranch     string `json:"git_branch"`
 	GitFullURL    string `json:"git_full_url"`
@@ -55,6 +53,10 @@ type Application struct {
 	HealthCheckEnabled  bool   `json:"health_check_enabled,omitempty"`
 	HealthCheckPath     string `json:"health_check_path,omitempty"`
 	HealthCheckPort     string `json:"health_check_port,omitempty"`
+	PublishDirectory    string `json:"publish_directory,omitempty"`
+	// build_pack=dockerimage: a prebuilt registry image, no git repo.
+	DockerRegistryImageName string `json:"docker_registry_image_name,omitempty"`
+	DockerRegistryImageTag  string `json:"docker_registry_image_tag,omitempty"`
 	EnvironmentID       int    `json:"environment_id"`
 	CreatedAt           string `json:"created_at"`
 	UpdatedAt           string `json:"updated_at"`
@@ -147,12 +149,4 @@ func SelectEnvVars(in []EnvVar) []struct{ Key, Value string } {
 		out = append(out, struct{ Key, Value string }{e.Key, e.EffectiveValue()})
 	}
 	return out
-}
-
-// ParsedAt parses the Coolify ISO-8601 timestamp. Returns zero on
-// parse failure — none of our migration paths actually need exact
-// times, just rough chronology in reports.
-func ParsedAt(s string) time.Time {
-	t, _ := time.Parse("2006-01-02T15:04:05.000000Z", s)
-	return t
 }

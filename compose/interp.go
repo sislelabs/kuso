@@ -8,7 +8,7 @@ import (
 
 // resolveService returns a copy of svc with interpolate applied to the
 // values the converter carries over (image, command, entrypoint, build
-// args, environment). Whatever stays unresolved is flagged and recorded
+// args, volumes, environment). Whatever stays unresolved is flagged and recorded
 // for the --apply gate. The caller's project is not mutated.
 func resolveService(svc types.ServiceConfig, rep *Report) types.ServiceConfig {
 	note := func(what, val string, vars []string) {
@@ -50,6 +50,20 @@ func resolveService(svc types.ServiceConfig, rep *Report) types.ServiceConfig {
 		}
 		svc.Build = &b
 	}
+	if len(svc.Volumes) > 0 {
+		vols := make([]types.ServiceVolumeConfig, len(svc.Volumes))
+		for i, v := range svc.Volumes {
+			var vs []string
+			orig := v.Source
+			v.Source, vs = interpolate(v.Source)
+			note("volume source", orig, vs)
+			orig = v.Target
+			v.Target, vs = interpolate(v.Target)
+			note("volume target", orig, vs)
+			vols[i] = v
+		}
+		svc.Volumes = vols
+	}
 	if len(svc.Environment) > 0 {
 		env := types.MappingWithEquals{}
 		for k, v := range svc.Environment {
@@ -74,7 +88,19 @@ func resolveService(svc types.ServiceConfig, rep *Report) types.ServiceConfig {
 //	${V:-def} ${V-def}  → def (itself interpolated)
 //	${V:+alt} ${V+alt}  → "" (V is unset)
 //	$V ${V} ${V:?err}   → kept verbatim, V reported as unresolved
-func interpolate(s string) (string, []string) {
+func interpolate(s string) (string, []string) { return interpolateMode(s, false) }
+
+// resolveDefaults is the pre-load pass Parse runs over every string in
+// the file: it resolves only what the file itself defines (defaults and
+// alternates) and leaves "$$" and unresolved references verbatim, so
+// resolveService can still unescape and flag them on the values the
+// converter carries.
+func resolveDefaults(s string) string {
+	out, _ := interpolateMode(s, true)
+	return out
+}
+
+func interpolateMode(s string, keepEscapes bool) (string, []string) {
 	if !strings.Contains(s, "$") {
 		return s, nil
 	}
@@ -89,6 +115,9 @@ func interpolate(s string) (string, []string) {
 		switch next := s[i+1]; {
 		case next == '$':
 			out.WriteByte('$')
+			if keepEscapes {
+				out.WriteByte('$')
+			}
 			i += 2
 		case next == '{':
 			end := matchBrace(s, i+2)
@@ -102,7 +131,7 @@ func interpolate(s string) (string, []string) {
 			name, op, arg := splitExpr(body)
 			switch op {
 			case ":-", "-":
-				v, u := interpolate(arg)
+				v, u := interpolateMode(arg, keepEscapes)
 				out.WriteString(v)
 				unresolved = append(unresolved, u...)
 			case ":+", "+":

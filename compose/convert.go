@@ -27,6 +27,7 @@ type Service struct {
 	Repo      string            `yaml:"repo,omitempty"`
 	Path      string            `yaml:"path,omitempty"`
 	Port      int32             `yaml:"port,omitempty"`
+	Internal  bool              `yaml:"internal,omitempty"`
 	Command   []string          `yaml:"command,omitempty"`
 	Domains   []Domain          `yaml:"domains,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
@@ -98,7 +99,7 @@ type addonRef struct {
 // skip rather than dropped or errored.
 func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	rep := &Report{}
-	doc := &Doc{APIVersion: "kuso/v1", Project: slugify(projectName)}
+	doc := &Doc{APIVersion: "kuso/v1", Project: projectSlug(projectName)}
 
 	// Deterministic order: compose stores services in a map.
 	names := make([]string, 0, len(proj.Services))
@@ -107,8 +108,8 @@ func Convert(proj *types.Project, projectName string) (*Doc, *Report) {
 	}
 	sort.Strings(names)
 
-	// Parse skips interpolation; resolve what the file itself can
-	// (defaults, $$) before anything classifies on those values.
+	// Parse resolved defaults but kept $$ and unresolved ${VAR}; unescape
+	// and flag those before anything classifies on the values.
 	services := make(map[string]types.ServiceConfig, len(names))
 	for _, name := range names {
 		services[name] = resolveService(proj.Services[name], rep)
@@ -218,6 +219,16 @@ func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Repo
 	if what, ok := datastoreVariants[baseImageName(repo)]; ok {
 		rep.flag(svc.Name, "image %q includes %s, but the managed %s addon runs the stock image — anything relying on it (e.g. CREATE EXTENSION postgis) will fail", svc.Image, what, kind)
 	}
+	if len(svc.Ports) > 0 {
+		ports := make([]string, 0, len(svc.Ports))
+		for _, p := range svc.Ports {
+			ports = append(ports, portString(p))
+		}
+		rep.skip(svc.Name, "ports %s not imported — project services reach the addon through its conn vars; for outside access use `kuso project addon public-tcp enable`", strings.Join(ports, ", "))
+	}
+	if n, ok := composeReplicas(svc); ok && n != 1 {
+		rep.skip(svc.Name, "replicas=%d not imported — the managed addon runs one instance; set `ha` on the addon for a replicated setup", n)
+	}
 	verNote := version
 	if verNote == "" {
 		verNote = "(chart default)"
@@ -273,6 +284,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		if reserved := maybeReservedDatastore(svc.Image); reserved != "" {
 			rep.flag(svc.Name, "%q looks like a %s datastore, but kuso has no managed %s addon yet — kept as a plain image service (no conn-secret / backups)", svc.Image, reserved, reserved)
 		}
+		if l, ok := datastoreLookalikes[baseImageName(repo)]; ok {
+			rep.flag(svc.Name, "%q is a %s build with %s, which the managed %s addon doesn't ship — kept as a plain image service (no conn-secret / backups)", svc.Image, l.kind, l.what, l.kind)
+		}
 		applyImageCapabilities(svc, &out, rep)
 	default:
 		out.Runtime = "dockerfile"
@@ -281,6 +295,9 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 
 	// Ports: first published port → service port + a domain entry.
 	out.Port, out.Domains = convertPorts(svc, slug, rep)
+	if out.Port == 0 {
+		out.Port, out.Internal = convertInternal(svc, slug, rep)
+	}
 
 	// Environment + env_file → env map, with depends_on-driven addon
 	// rewrite where a value names a datastore service.
@@ -289,11 +306,14 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 	// Volumes: named → KusoVolume; bind/anon → flagged.
 	out.Volumes = convertVolumes(svc, rep)
 
-	// deploy.replicas → scale.
-	if svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas > 0 {
-		n := *svc.Deploy.Replicas
-		out.Scale = &Scale{Min: n, Max: n}
-		rep.service(svc.Name, "deploy.replicas=%d → scale.min/max=%d", n, n)
+	// scale / deploy.replicas → scale.
+	if n, ok := composeReplicas(svc); ok {
+		if n > 0 {
+			out.Scale = &Scale{Min: n, Max: n}
+			rep.service(svc.Name, "replicas=%d → scale.min/max=%d", n, n)
+		} else {
+			rep.flag(svc.Name, "replicas=0 means compose never starts this service, but kuso will run it — remove it from the import or stop it in kuso after deploy")
+		}
 	}
 
 	// kuso's `command` renders as the k8s container command, which
@@ -313,6 +333,18 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 
 	noteUnmapped(svc, rep)
 	return out
+}
+
+// composeReplicas returns the replica count from `scale:` or
+// `deploy.replicas:`, and whether either was set.
+func composeReplicas(svc types.ServiceConfig) (int, bool) {
+	switch {
+	case svc.Scale != nil:
+		return *svc.Scale, true
+	case svc.Deploy != nil && svc.Deploy.Replicas != nil:
+		return *svc.Deploy.Replicas, true
+	}
+	return 0, false
 }
 
 func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []Domain) {
@@ -348,6 +380,20 @@ func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []D
 		rep.skip(svc.Name, "extra ports %s not imported — kuso exposes one port per service", strings.Join(extra, ", "))
 	}
 	return port, domains
+}
+
+// convertInternal handles a service that publishes no port: compose
+// keeps it off the host, so kuso must not give it a public domain.
+// The first `expose` port becomes the service port.
+func convertInternal(svc types.ServiceConfig, slug string, rep *Report) (int32, bool) {
+	for _, e := range svc.Expose {
+		if p, err := strconv.ParseUint(strings.TrimSuffix(e, "/tcp"), 10, 16); err == nil && p > 0 {
+			rep.service(svc.Name, "no published ports → internal service `%s` (no public domain), port=%d from expose", slug, p)
+			return int32(p), true
+		}
+	}
+	rep.service(svc.Name, "no published ports → internal service `%s` (no public domain)", slug)
+	return 0, true
 }
 
 func portString(p types.ServicePortConfig) string {
@@ -448,7 +494,7 @@ func convertVolumes(svc types.ServiceConfig, rep *Report) []Volume {
 				rep.skip(svc.Name, "anonymous volume at %q not imported — name it in compose to get a kuso volume", v.Target)
 				continue
 			}
-			name := uniqueSlug(slugify(v.Source), taken)
+			name := uniqueSlug(slugify(v.Source, maxVolumeSlug), taken, maxVolumeSlug)
 			out = append(out, Volume{Name: name, MountPath: v.Target, SizeGi: defaultVolumeSizeGi})
 			rep.service(svc.Name, "volume %q → kuso volume `%s` at %s (%dGi default)", v.Source, name, v.Target, defaultVolumeSizeGi)
 			// kuso volumes have no read-only mode — mounting :ro in
@@ -532,6 +578,18 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	if svc.StopGracePeriod != nil {
 		rep.skip(svc.Name, "stop_grace_period not imported")
 	}
+	if svc.StopSignal != "" {
+		rep.skip(svc.Name, "stop_signal=%q not imported — kuso stops containers with SIGTERM", svc.StopSignal)
+	}
+	if svc.Hostname != "" {
+		rep.skip(svc.Name, "hostname=%q not imported — peers reach the service by its kuso name via ${{ svc.HOST }}", svc.Hostname)
+	}
+	if svc.ShmSize > 0 {
+		rep.skip(svc.Name, "shm_size not imported — kuso pods get the default /dev/shm (64Mi)")
+	}
+	if len(svc.VolumesFrom) > 0 {
+		rep.flag(svc.Name, "volumes_from %s NOT imported — kuso volumes are per-service, so this service will not see the other service's files", strings.Join(svc.VolumesFrom, ", "))
+	}
 
 	// platform is the most dangerous silent drop: importing an arm64
 	// image onto an amd64 cluster (or vice versa) crashloops the pod with
@@ -574,7 +632,7 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 		rep.skip(svc.Name, "init not imported — kuso does not inject an init process; ensure your entrypoint reaps zombies if needed")
 	}
 	if len(svc.Expose) > 0 {
-		rep.skip(svc.Name, "expose %s not imported — kuso exposes the single service port; cluster peers reach any port via ${{ svc.URL }}", strings.Join(svc.Expose, ", "))
+		rep.skip(svc.Name, "expose %s not imported as extra ports — kuso has one service port (the first expose port when nothing is published); cluster peers reach any port via ${{ svc.URL }}", strings.Join(svc.Expose, ", "))
 	}
 	if svc.ContainerName != "" {
 		rep.skip(svc.Name, "container_name=%q not imported — kuso names pods from the service", svc.ContainerName)

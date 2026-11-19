@@ -33,13 +33,6 @@ var datastoreImages = map[string]string{
 	"bitnami/rabbitmq":             "rabbitmq",
 }
 
-// reservedDatastores are kinds that look like datastores but the kuso
-// addon chart doesn't implement yet. We detect them only to flag
-// them, never to create a (broken) addon.
-var reservedDatastores = map[string]bool{
-	"mariadb": true, "kafka": true, "memcached": true,
-}
-
 // maybeReservedDatastore returns the reserved kind name when an image
 // is a recognizable-but-unimplemented datastore, else "".
 func maybeReservedDatastore(image string) string {
@@ -53,6 +46,18 @@ func maybeReservedDatastore(image string) string {
 		return "memcached"
 	}
 	return ""
+}
+
+// datastoreLookalikes are datastore builds that bundle extensions or
+// modules the stock managed addon lacks, and whose tags aren't engine
+// versions. They stay plain image services so they keep working, and
+// are flagged so the user knows no addon was made.
+var datastoreLookalikes = map[string]struct{ kind, what string }{
+	"pgvector/pgvector":        {"postgres", "the pgvector extension"},
+	"timescale/timescaledb":    {"postgres", "the TimescaleDB extension"},
+	"timescale/timescaledb-ha": {"postgres", "the TimescaleDB extension"},
+	"redis/redis-stack":        {"redis", "the Redis Stack modules (search, JSON, …)"},
+	"redis/redis-stack-server": {"redis", "the Redis Stack modules (search, JSON, …)"},
 }
 
 // imageParts splits a compose image reference into its repository
@@ -104,6 +109,8 @@ func baseImageName(repo string) string {
 		first := repo[:i]
 		if strings.ContainsAny(first, ".:") {
 			rest := repo[i+1:]
+			// Docker Hub mirrors (public.ecr.aws/docker/library/…).
+			rest = strings.TrimPrefix(rest, "docker/library/")
 			rest = strings.TrimPrefix(rest, "library/")
 			return rest
 		}
@@ -112,9 +119,12 @@ func baseImageName(repo string) string {
 }
 
 // classifyDatastore returns the kuso addon kind for a compose image,
-// or "" when the image is not a recognized datastore. version is the
-// major version parsed from the tag (e.g. "16" from "16-alpine"), or
-// "" when the tag is absent / "latest" / unparseable.
+// or "" when the image is not a recognized datastore. version is what
+// the addon chart builds its image tag from, "" when the tag is
+// absent / "latest" / not numeric. Its precision follows how each
+// engine is tagged: mysql keeps major.minor (a bare "8" is 8.4, not
+// 8.0), clickhouse and redpanda keep the full tag, the rest the major
+// ("16-alpine" → "16").
 func classifyDatastore(image string) (kind, version string) {
 	repo, tag := imageParts(image)
 	base := baseImageName(repo)
@@ -122,28 +132,39 @@ func classifyDatastore(image string) (kind, version string) {
 	if !ok {
 		return "", ""
 	}
-	// The redpanda chart renders redpanda:<version> with the full tag
-	// (default v24.1.1); a bare major isn't a published tag.
-	if kind == "redpanda" && tag != "" && tag != "latest" {
+	tag = strings.TrimSpace(tag)
+	switch {
+	case tag == "" || tag == "latest":
+		return kind, ""
+	// The redpanda chart takes the full v-prefixed tag (default v24.1.1).
+	case kind == "redpanda":
 		return kind, tag
+	case tag[0] < '0' || tag[0] > '9':
+		return kind, ""
+	case kind == "clickhouse":
+		return kind, tag
+	case kind == "mysql":
+		return kind, leadingVersion(tag, 2)
 	}
-	return kind, majorVersion(tag)
+	return kind, leadingVersion(tag, 1)
 }
 
-// majorVersion extracts the leading numeric component of a tag.
-// "16-alpine" → "16", "8.0.36" → "8", "latest"/"" → "".
-func majorVersion(tag string) string {
-	tag = strings.TrimSpace(tag)
-	if tag == "" || tag == "latest" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range tag {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
+// leadingVersion returns the first n dot-separated numeric components
+// of tag: leadingVersion("8.0.36-debian", 2) = "8.0".
+func leadingVersion(tag string, n int) string {
+	end := 0
+	for parts := 0; end < len(tag); end++ {
+		c := tag[end]
+		if c == '.' {
+			parts++
+			if parts == n {
+				break
+			}
 			continue
 		}
-		break
+		if c < '0' || c > '9' {
+			break
+		}
 	}
-	return b.String()
+	return strings.TrimSuffix(tag[:end], ".")
 }

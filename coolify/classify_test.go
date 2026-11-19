@@ -14,9 +14,7 @@ func TestClassifyDatabase_ChartBackedEnginesMigrate(t *testing.T) {
 		{"standalone-mysql", "mysql", "migrate"},
 		{"standalone-mongodb", "mongodb", "migrate"},
 		{"standalone-clickhouse", "clickhouse", "migrate"},
-		// mariadb lands on the mysql addon — a different engine, so it
-		// stays a flag for a human to check dump compatibility.
-		{"standalone-mariadb", "mysql", "flag"},
+		{"standalone-mariadb", "", "flag"},
 		{"standalone-dragonfly", "", "flag"},
 		{"standalone-keydb", "", "flag"},
 	}
