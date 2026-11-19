@@ -332,65 +332,6 @@ func mergeUnknown(live, typed, out map[string]any) {
 	}
 }
 
-// overlayUnknownFromLive decodes live into a fresh T to find which spec
-// keys this binary can't represent, then preserves them on u.
-func overlayUnknownFromLive[T any](live, u *unstructured.Unstructured, gvr schema.GroupVersionResource, kind string) error {
-	var typed T
-	if err := fromUnstructured(live, &typed); err != nil {
-		return err
-	}
-	rt, err := toUnstructured(&typed, gvr, kind)
-	if err != nil {
-		return err
-	}
-	preserveUnknownSpec(live.Object, rt.Object, u.Object)
-	return nil
-}
-
-// update is the generic typed → dynamic update helper. Uses Update
-// (PUT) and bumps resourceVersion to whatever the apiserver currently
-// has on conflict, then retries. helm-operator continuously patches
-// .status; without retry, a Spec write that arrives during a status
-// reconcile silently 409s and the caller sees a generic 500. The
-// caller's mutation is already baked into `obj` so we can't re-run
-// it — instead we bump rv and retry the same shape, which is correct
-// for spec-only edits because helm-operator only writes status.
-func update[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, kind, namespace string, obj *T) (*T, error) {
-	base, err := toUnstructured(obj, gvr, kind)
-	if err != nil {
-		return nil, err
-	}
-	rv := base.GetResourceVersion()
-	var updated *unstructured.Unstructured
-	rerr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, base.GetName(), metav1.GetOptions{})
-		if gerr != nil {
-			return gerr
-		}
-		u := base.DeepCopy()
-		u.SetResourceVersion(rv)
-		if oerr := overlayUnknownFromLive[T](latest, u, gvr, kind); oerr != nil {
-			return oerr
-		}
-		var uerr error
-		updated, uerr = c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
-		if uerr == nil {
-			return nil
-		}
-		// On conflict, retry against the live resourceVersion.
-		rv = latest.GetResourceVersion()
-		return uerr
-	})
-	if rerr != nil {
-		return nil, fmt.Errorf("kube: update %s in %q: %w", gvr.Resource, namespace, rerr)
-	}
-	var out T
-	if err := fromUnstructured(updated, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 func deleteCR(ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace, name string) error {
 	if err := c.Dynamic.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
 		return fmt.Errorf("kube: delete %s/%s in %q: %w", gvr.Resource, name, namespace, err)
@@ -504,17 +445,6 @@ func (c *Client) CreateKusoProject(ctx context.Context, namespace string, p *Kus
 	return create[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)
 }
 
-// UpdateKusoProject replaces an existing KusoProject's spec.
-//
-// Prefer UpdateKusoProjectWithRetry for user-editable spec writes: the
-// plain path re-PUTs a stale object on conflict and silently drops a
-// concurrent writer's change (a lost update once the server runs 2+
-// replicas). This variant is fine for callers that already hold the
-// only writer (single-shot migrations, create-time seeds).
-func (c *Client) UpdateKusoProject(ctx context.Context, namespace string, p *KusoProject) (*KusoProject, error) {
-	return update[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)
-}
-
 // UpdateKusoProjectWithRetry — RMW variant for project CRs. Project
 // settings edits (baseDomain, previews, github) race against the
 // operator's status patches and, on a multi-replica control plane,
@@ -532,11 +462,6 @@ func (c *Client) DeleteKusoProject(ctx context.Context, namespace, name string) 
 // CreateKusoService creates a new KusoService CR.
 func (c *Client) CreateKusoService(ctx context.Context, namespace string, s *KusoService) (*KusoService, error) {
 	return create[KusoService](ctx, c, GVRServices, "KusoService", namespace, s)
-}
-
-// UpdateKusoService replaces an existing KusoService's spec.
-func (c *Client) UpdateKusoService(ctx context.Context, namespace string, s *KusoService) (*KusoService, error) {
-	return update[KusoService](ctx, c, GVRServices, "KusoService", namespace, s)
 }
 
 // DeleteKusoService deletes a KusoService by name.
@@ -586,12 +511,6 @@ func StampAddonEnvScope(a *KusoAddon) {
 	}
 }
 
-// UpdateKusoAddon replaces an existing KusoAddon's spec. Used by the
-// addon settings flow (placement edits, future size/version updates).
-func (c *Client) UpdateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {
-	return update[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
-}
-
 // DeleteKusoAddon removes the CR. Helm-operator's release uninstall
 // cascades the StatefulSet, the data PVC, and the <addon>-conn Secret.
 func (c *Client) DeleteKusoAddon(ctx context.Context, namespace, name string) error {
@@ -610,10 +529,6 @@ func (c *Client) GetKusoCron(ctx context.Context, namespace, name string) (*Kuso
 
 func (c *Client) CreateKusoCron(ctx context.Context, namespace string, k *KusoCron) (*KusoCron, error) {
 	return create[KusoCron](ctx, c, GVRCrons, "KusoCron", namespace, k)
-}
-
-func (c *Client) UpdateKusoCron(ctx context.Context, namespace string, k *KusoCron) (*KusoCron, error) {
-	return update[KusoCron](ctx, c, GVRCrons, "KusoCron", namespace, k)
 }
 
 func (c *Client) DeleteKusoCron(ctx context.Context, namespace, name string) error {
@@ -664,15 +579,6 @@ func (c *Client) StampKusoEnvironmentScope(ctx context.Context, namespace, name,
 		return fmt.Errorf("kube: stamp env scope %s/%s: %w", namespace, name, err)
 	}
 	return nil
-}
-
-// UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
-//
-// NOTE: callers that mutate envFromSecrets values must also bump
-// spec.secretsRev (§6.2) — this wrapper does not do that automatically.
-// Use the secrets package, which has the right call ordering.
-func (c *Client) UpdateKusoEnvironment(ctx context.Context, namespace string, e *KusoEnvironment) (*KusoEnvironment, error) {
-	return update[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
 }
 
 // OwnerRefForService returns a metav1.OwnerReference pointing at the

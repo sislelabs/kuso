@@ -74,7 +74,7 @@ func TestDelete_KeepsEnvScopedCloneSubscribed(t *testing.T) {
 	// how EnsureEnvAddons leaves a preview env, and it's what makes deleting
 	// the source take the clone down with it.
 	envCR.Spec.SubscribedAddons = []string{"pg"}
-	if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", envCR); err != nil {
+	if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", envCR); err != nil {
 		t.Fatalf("seed env state: %v", err)
 	}
 

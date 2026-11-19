@@ -39,7 +39,7 @@ func TestRefreshEnvSecrets_HonoursExcludedAddonConns(t *testing.T) {
 	}
 	env.Annotations = map[string]string{AnnotationExcludedAddonConns: "e2e-cache-conn"}
 	env.Spec.SubscribedAddons = []string{"db", "cache"}
-	if _, err := s.Kube.UpdateKusoEnvironment(ctx, "kuso", env); err != nil {
+	if _, err := putEnvFixture(ctx, s.Kube, "kuso", env); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RefreshEnvSecrets(ctx, "e2e"); err != nil {

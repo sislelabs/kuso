@@ -51,7 +51,7 @@ func TestRefreshEnvSecrets_KeepsSharedS3ReadOnly(t *testing.T) {
 	}
 	ro.Annotations = map[string]string{AnnotationSharedS3ReadOnly: "true"}
 	ro.Spec.EnvFromSecrets = []string{"alpha-files-readonly"}
-	if _, err := s.Kube.UpdateKusoEnvironment(ctx, "kuso", ro); err != nil {
+	if _, err := putEnvFixture(ctx, s.Kube, "kuso", ro); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RefreshEnvSecrets(ctx, "alpha"); err != nil {

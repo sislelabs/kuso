@@ -47,7 +47,7 @@ func TestRefreshEnvSecrets_CloneReassertHonoursSubscription(t *testing.T) {
 			t.Fatalf("get %s: %v", name, err)
 		}
 		env.Spec.SubscribedAddons = subs
-		if _, err := s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", env); err != nil {
+		if _, err := putEnvFixture(context.Background(), s.Kube, "kuso", env); err != nil {
 			t.Fatalf("update %s: %v", name, err)
 		}
 	}
