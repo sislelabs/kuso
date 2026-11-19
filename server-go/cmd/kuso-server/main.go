@@ -410,10 +410,6 @@ func main() {
 	// branch means /api/notifications/{id}/test still works on
 	// kube-less dev installs.
 	notifyDisp := notify.New(database, logger, 256)
-	// Hand the renderer the server's build version so it can stamp it
-	// into the Discord embed footer ("distill · v0.11.3"). Done once
-	// at boot since version is a build-time constant.
-	notify.SetVersion(version.Version())
 	goSafe(logger, "notify", func() { notifyDisp.Run(ctx) })
 	if jwtProblem != "" {
 		notifyDisp.Emit(notify.Event{

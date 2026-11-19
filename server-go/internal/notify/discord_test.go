@@ -16,8 +16,6 @@ import (
 // limits the truncation logic enforces.
 func TestDiscordPayload_RichCard(t *testing.T) {
 	t.Setenv("KUSO_PUBLIC_URL", "https://kuso.example.com")
-	SetVersion("v9.9.9")
-	defer SetVersion("")
 
 	e := Event{
 		Type:        EventBuildSucceeded,

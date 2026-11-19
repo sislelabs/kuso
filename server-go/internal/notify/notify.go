@@ -1179,19 +1179,6 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max-1]) + "…"
 }
 
-// currentVersion is the kuso server version stamped at build time. We
-// read it lazily via a getter rather than a fixed init so tests can
-// override it without touching the version package. The default empty
-// string just means "no version suffix on the footer."
-var currentVersion = ""
-
-// SetVersion installs the server version string the renderer surfaces
-// in the embed footer. Called once from cmd/kuso-server/main during
-// boot. Optional — empty version just omits the suffix.
-func SetVersion(v string) {
-	currentVersion = strings.TrimSpace(v)
-}
-
 // signatureHeaders computes the X-Hub-Signature-256 / X-Kuso-* HMAC
 // headers for a webhook. Returns an empty Header when secret is
 // empty (skips signing entirely — receivers without a configured
