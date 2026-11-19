@@ -592,6 +592,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	// child delete = invisible orphan). NotFound stays ignored; anything
 	// else is logged with locator context and collected, and the join is
 	// surfaced at the end.
+	ctx = withSecretNameList(ctx)
 	var cleanupErrs []error
 	cleanupFail := func(kind, resName string, err error) {
 		slog.Warn("project delete: cleanup step failed; resource may be orphaned",
@@ -613,21 +614,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		// env CR directly (not via DeleteEnvironment), so mirror that path's
 		// Phase-5 TLS cleanup here to avoid leaking a Secret per env/preview.
 		if s.Kube.Clientset != nil {
-			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, e.Name+"-tls", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-				cleanupFail("Secret", e.Name+"-tls", derr)
-			}
-			prefix := e.Name + "-tls-extra-"
-			if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr != nil {
-				cleanupFail("SecretList", prefix+"*", lerr)
-			} else {
-				for i := range secs.Items {
-					if strings.HasPrefix(secs.Items[i].Name, prefix) {
-						if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-							cleanupFail("Secret", secs.Items[i].Name, derr)
-						}
-					}
-				}
-			}
+			s.deleteEnvTLSSecrets(ctx, ns, e.Name, cleanupFail)
 		}
 	}
 	services, err := s.listServicesForProject(ctx, name)

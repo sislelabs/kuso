@@ -531,24 +531,7 @@ func (s *Service) deleteEnvironment(ctx context.Context, project, env string, fo
 	// a TLS Secret forever. cert-manager removes its Certificate CR on Ingress
 	// teardown but leaves the Secret behind; we reclaim it here.
 	if s.Kube.Clientset != nil {
-		// Primary host secret is the well-known "<env>-tls".
-		if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, env+"-tls", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-			cleanupFail("Secret", env+"-tls", derr)
-		}
-		// Additional-host secrets are "<env>-tls-extra-<host>"; the host
-		// suffix isn't known here without the env CR, so name-prefix match.
-		prefix := env + "-tls-extra-"
-		if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr != nil {
-			cleanupFail("SecretList", prefix+"*", lerr)
-		} else {
-			for i := range secs.Items {
-				if strings.HasPrefix(secs.Items[i].Name, prefix) {
-					if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-						cleanupFail("Secret", secs.Items[i].Name, derr)
-					}
-				}
-			}
-		}
+		s.deleteEnvTLSSecrets(ctx, ns, env, cleanupFail)
 	}
 
 	// envKind is referenced for the production-env guard above; keep
