@@ -439,8 +439,8 @@ func (d *DB) CompleteVulnScan(ctx context.Context, id int64, res VulnScanResult)
 		return fmt.Errorf("complete vuln scan: clear findings: %w", err)
 	}
 	if len(res.Findings) > 0 {
-		stmt, err := tx.PrepareContext(ctx, pq.CopyIn("VulnFinding", "scanId", "vulnId", "pkgName", "pkgType",
-			"installedVersion", "fixedVersion", "severity", "title", "primaryURL", "target", "pkgPath"))
+		stmt, err := tx.PrepareContext(ctx, `COPY "VulnFinding" ("scanId", "vulnId", "pkgName", "pkgType",
+			"installedVersion", "fixedVersion", "severity", "title", "primaryURL", "target", "pkgPath") FROM STDIN`)
 		if err != nil {
 			return fmt.Errorf("complete vuln scan: prepare copy: %w", err)
 		}

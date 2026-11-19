@@ -38,9 +38,9 @@ import (
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/transport/spdy"
+	"k8s.io/streaming/pkg/httpstream"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
@@ -273,7 +273,7 @@ func (h *PortForwardWSHandler) openPortForwardStreams(ctx context.Context, ns, p
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("spdy transport: %w", err)
 	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
+	dialer := spdy.NewDialerForStreaming(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
 
 	streamConn, _, err := dialer.Dial(portforwardProtocolV1Name)
 	if err != nil {

@@ -67,6 +67,8 @@ interface CommitResponse {
   envVarsCreated: number;
   skipped: CommitDetail[];
   errors: CommitDetail[];
+  // Coolify settings an imported service was created without.
+  dropped: CommitDetail[];
 }
 
 interface PreviewStats {
@@ -82,6 +84,8 @@ interface PreviewResponse {
   coolifyVersion: string;
   stats: PreviewStats;
   items: PreviewItem[];
+  // App UUID → settings commit will create that service without.
+  dropped?: Record<string, string[]>;
 }
 
 export default function ImportPage() {
@@ -124,7 +128,7 @@ export default function ImportPage() {
         method: "POST",
         body: { baseUrl, token, uuids },
       });
-      return { ...res, skipped: res.skipped ?? [], errors: res.errors ?? [] };
+      return { ...res, skipped: res.skipped ?? [], errors: res.errors ?? [], dropped: res.dropped ?? [] };
     },
     onSuccess: (data) => {
       setCommitResult(data);
@@ -274,6 +278,7 @@ function PreviewTable({
               const action = it.verdict?.action ?? "skip";
               const reason = it.verdict?.reason ?? "";
               const importable = action === "migrate" && !!it.uuid;
+              const dropped = data.dropped?.[it.app?.uuid ?? it.uuid] ?? [];
               return (
                 <tr key={it.uuid || it.name} className="hover:bg-[var(--bg-secondary)]/40">
                   <Td>
@@ -304,7 +309,16 @@ function PreviewTable({
                       {action}
                     </span>
                   </Td>
-                  <Td className="text-[var(--text-secondary)]">{reason}</Td>
+                  <Td className="text-[var(--text-secondary)]">
+                    {reason}
+                    {dropped.length > 0 && (
+                      <ul className="mt-1 space-y-0.5 text-xs text-[var(--warning)]">
+                        {dropped.map((d) => (
+                          <li key={d}>Not imported: {d}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </Td>
                 </tr>
               );
             })}
@@ -360,11 +374,16 @@ function CommitResultPanel({ result }: { result: CommitResponse }) {
           </div>
         </div>
       </header>
-      {(result.skipped.length > 0 || result.errors.length > 0) && (
+      {(result.skipped.length > 0 || result.errors.length > 0 || result.dropped.length > 0) && (
         <ul className="mt-3 space-y-1 font-mono text-xs">
           {result.errors.map((d, i) => (
             <li key={`e-${i}`} className="text-[var(--error)]">
               ✗ {d.kind} {d.name} — {d.reason}
+            </li>
+          ))}
+          {result.dropped.map((d, i) => (
+            <li key={`d-${i}`} className="text-[var(--warning)]">
+              ⚠ {d.kind} {d.name} — {d.reason}
             </li>
           ))}
           {result.skipped.map((d, i) => (

@@ -38,15 +38,14 @@ type Service struct {
 // Features tracks toggles whose value changes rarely. The auth/session
 // surface reads these on every request, so they're kept in memory.
 type Features struct {
-	Sleep            bool
-	Metrics          bool
-	BuildPipeline    bool
-	TemplatesEnabled bool
-	ConsoleEnabled   bool
-	AuditEnabled     bool
-	AdminDisabled    bool
-	GithubAuth       bool
-	OAuth2Auth       bool
+	Sleep          bool
+	Metrics        bool
+	BuildPipeline  bool
+	ConsoleEnabled bool
+	AuditEnabled   bool
+	AdminDisabled  bool
+	GithubAuth     bool
+	OAuth2Auth     bool
 }
 
 // New constructs a Service. namespace falls back to "kuso".
@@ -83,12 +82,11 @@ func featuresFromEnv() Features {
 		}
 	}
 	return Features{
-		BuildPipeline:    os.Getenv("KUSO_BUILD_REGISTRY") != "",
-		TemplatesEnabled: os.Getenv("KUSO_TEMPLATES_ENABLED") == "true",
-		ConsoleEnabled:   os.Getenv("KUSO_CONSOLE_ENABLED") == "true",
-		AuditEnabled:     os.Getenv("KUSO_AUDIT_ENABLED") != "false",
-		AdminDisabled:    os.Getenv("KUSO_ADMIN_DISABLED") == "true",
-		GithubAuth:       githubID != "" && githubSecret != "" && githubCallback != "",
+		BuildPipeline:  os.Getenv("KUSO_BUILD_REGISTRY") != "",
+		ConsoleEnabled: os.Getenv("KUSO_CONSOLE_ENABLED") == "true",
+		AuditEnabled:   os.Getenv("KUSO_AUDIT_ENABLED") != "false",
+		AdminDisabled:  os.Getenv("KUSO_ADMIN_DISABLED") == "true",
+		GithubAuth:     githubID != "" && githubSecret != "" && githubCallback != "",
 		OAuth2Auth: os.Getenv("OAUTH2_CLIENT_AUTH_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_TOKEN_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_ID") != "" &&

@@ -182,14 +182,8 @@ func (h *ConfigHandler) ClusterIssuer(w http.ResponseWriter, _ *http.Request) {
 }
 
 // Templates returns the templates catalog config from the CR spec.
-// Templates feature itself is opt-in via KUSO_TEMPLATES_ENABLED, but the
-// handler still returns the catalog so the UI can render it disabled.
 func (h *ConfigHandler) Templates(w http.ResponseWriter, _ *http.Request) {
-	feats := h.Cfg.Features()
-	out := map[string]any{
-		"enabled":  feats.TemplatesEnabled,
-		"catalogs": []any{},
-	}
+	out := map[string]any{"catalogs": []any{}}
 	if t, ok := h.Cfg.Settings()["templates"].(map[string]any); ok {
 		if c, ok := t["catalogs"]; ok {
 			out["catalogs"] = c

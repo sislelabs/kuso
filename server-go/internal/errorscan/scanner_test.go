@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -26,36 +27,38 @@ func TestTickQueryUsesPositionalPlaceholders(t *testing.T) {
 	t.Parallel()
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	names, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parse package: %v", err)
+		t.Fatalf("list package files: %v", err)
 	}
 
 	var checked int
-	for _, pkg := range pkgs {
-		for name, file := range pkg.Files {
-			if strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				// Only SQL-looking literals: they name the quoted table.
-				if !strings.Contains(lit.Value, `"LogLine"`) &&
-					!strings.Contains(strings.ToUpper(lit.Value), "SELECT ") {
-					return true
-				}
-				checked++
-				if strings.Contains(lit.Value, "?") {
-					t.Errorf("%s: SQL literal uses a `?` placeholder, which lib/pq "+
-						"passes through literally and Postgres rejects. Use $1, $2, …:\n%s",
-						fset.Position(lit.Pos()), lit.Value)
-				}
-				return true
-			})
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			// Only SQL-looking literals: they name the quoted table.
+			if !strings.Contains(lit.Value, `"LogLine"`) &&
+				!strings.Contains(strings.ToUpper(lit.Value), "SELECT ") {
+				return true
+			}
+			checked++
+			if strings.Contains(lit.Value, "?") {
+				t.Errorf("%s: SQL literal uses a `?` placeholder, which lib/pq "+
+					"passes through literally and Postgres rejects. Use $1, $2, …:\n%s",
+					fset.Position(lit.Pos()), lit.Value)
+			}
+			return true
+		})
 	}
 	if checked == 0 {
 		t.Fatal("no SQL literals found to check — the guard is not actually scanning anything")
