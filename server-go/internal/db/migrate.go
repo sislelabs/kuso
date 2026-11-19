@@ -348,17 +348,16 @@ type MigrationStatus struct {
 	LatestName      string `json:"latestName,omitempty"`
 }
 
-// MigrationCounts is the metrics-probe view of MigrationState: applied
-// + pending, errors swallowed to 0 (a scrape must never fail). Satisfies
+// MigrationCounts is the metrics-probe view of MigrationState. Satisfies
 // metrics.MigrationProbe without pulling the metrics package in here.
-func (d *DB) MigrationCounts() (applied, pending int) {
+func (d *DB) MigrationCounts() (applied, pending int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	st, err := d.MigrationState(ctx)
 	if err != nil {
-		return 0, 0
+		return 0, 0, err
 	}
-	return st.Applied, st.Pending
+	return st.Applied, st.Pending, nil
 }
 
 // MigrationState reports how many migrations are applied vs pending.
@@ -371,14 +370,19 @@ func (d *DB) MigrationState(ctx context.Context) (MigrationStatus, error) {
 	}
 	appliedVersions := map[int]bool{}
 	rows, err := d.QueryContext(ctx, `SELECT "version" FROM "SchemaMigration"`)
-	if err == nil {
-		for rows.Next() {
-			var v int
-			if rows.Scan(&v) == nil {
-				appliedVersions[v] = true
-			}
+	if err != nil {
+		return st, fmt.Errorf("read SchemaMigration: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return st, fmt.Errorf("scan SchemaMigration: %w", err)
 		}
-		rows.Close()
+		appliedVersions[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return st, fmt.Errorf("read SchemaMigration: %w", err)
 	}
 	st.BaselineApplied = true // if we got here, applySchema ran at boot
 	for _, m := range migs {
