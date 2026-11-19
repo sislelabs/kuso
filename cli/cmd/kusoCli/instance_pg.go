@@ -72,6 +72,7 @@ var (
 	provisionSize        string
 	provisionVersion     string
 	provisionStorageSize string
+	provisionReattach    bool
 	provisionHA          bool
 	provisionWait        bool
 )
@@ -90,7 +91,10 @@ Once Ready, per-project DBs are provisioned via:
     kuso project addon add <project> <name> postgres --use-instance-addon pg
 
 Refuses when a managed PG already exists or an external DSN is
-configured — disable the existing one first.`,
+configured — disable the existing one first. When a data volume from an
+earlier managed PG is still there, it also refuses until you pass
+--reattach-data (reuses that data; same Postgres major only) or remove
+the volume yourself.`,
 	Example: `  kuso instance-pg provision
   kuso instance-pg provision --size medium --storage 50Gi --wait
   kuso instance-pg provision --ha`,
@@ -99,10 +103,11 @@ configured — disable the existing one first.`,
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		req := kusoApi.ProvisionInstancePGRequest{
-			Size:        provisionSize,
-			HA:          provisionHA,
-			Version:     provisionVersion,
-			StorageSize: provisionStorageSize,
+			Size:         provisionSize,
+			HA:           provisionHA,
+			Version:      provisionVersion,
+			StorageSize:  provisionStorageSize,
+			ReattachData: provisionReattach,
 		}
 		resp, err := api.ProvisionInstancePG(req)
 		if err := checkRespErr(resp, err); err != nil {
@@ -273,6 +278,7 @@ func init() {
 	instancePGProvisionCmd.Flags().StringVar(&provisionVersion, "version", "", "Postgres major version (default 16)")
 	instancePGProvisionCmd.Flags().StringVar(&provisionStorageSize, "storage", "", "PVC size (default 20Gi)")
 	instancePGProvisionCmd.Flags().BoolVar(&provisionHA, "ha", false, "use CloudNativePG with 3 replicas (requires CNPG operator)")
+	instancePGProvisionCmd.Flags().BoolVar(&provisionReattach, "reattach-data", false, "reuse the data volume an earlier managed PG left behind (same Postgres major only)")
 	instancePGProvisionCmd.Flags().BoolVar(&provisionWait, "wait", false, "block until the Postgres is Ready and the admin DSN is registered")
 
 	_ = externalDSN // reserved for future flag-based external (currently positional)
