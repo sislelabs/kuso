@@ -90,3 +90,39 @@ func TestPatchService_VolumeSizeMatchesExistingDisk(t *testing.T) {
 		t.Errorf("new volume: %v", err)
 	}
 }
+
+// OPS-3: a bound PVC's storageClass and accessModes are immutable, so
+// changing either on an existing volume must be refused at the API rather
+// than wedge the env's helm release.
+func TestPatchService_VolumeImmutableFieldsMatchExistingDisk(t *testing.T) {
+	t.Parallel()
+	existing := []kube.KusoVolume{{Name: "uploads", MountPath: "/app/uploads", SizeGi: 5, StorageClass: "local-path"}}
+	newSvc := func() *Service {
+		s := fakeService(t,
+			seedProject("alpha", kube.KusoProjectSpec{BaseDomain: "alpha.example.com"}),
+			seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000, Volumes: existing}),
+			seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		)
+		pvc := volumePVCObj("alpha-web-production", "uploads", "5Gi", "local-path")
+		pvc.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		s.Kube.Clientset = kubefake.NewSimpleClientset(pvc,
+			&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "local-path"}})
+		return s
+	}
+	patch := func(v VolumePatch) error {
+		_, err := newSvc().PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Volumes: &[]VolumePatch{v}})
+		return err
+	}
+	if err := patch(VolumePatch{Name: "uploads", MountPath: "/app/uploads", StorageClass: "longhorn"}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "StorageClass") {
+		t.Errorf("storageClass change: err=%v, want a conflict", err)
+	}
+	if err := patch(VolumePatch{Name: "uploads", MountPath: "/app/uploads", AccessMode: "RWX"}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "access mode") {
+		t.Errorf("accessMode change: err=%v, want a conflict", err)
+	}
+	if err := patch(VolumePatch{Name: "uploads", MountPath: "/app/uploads", StorageClass: "local-path", AccessMode: "RWO"}); err != nil {
+		t.Errorf("unchanged values restated: %v", err)
+	}
+	if err := patch(VolumePatch{Name: "uploads", MountPath: "/data"}); err != nil {
+		t.Errorf("unrelated edit: %v", err)
+	}
+}
