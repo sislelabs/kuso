@@ -57,6 +57,7 @@ import (
 	"kuso/server/internal/leader"
 	"kuso/server/internal/logs"
 	"kuso/server/internal/logship"
+	"kuso/server/internal/marketplace"
 	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodejoin"
 	"kuso/server/internal/nodemetrics"
@@ -424,6 +425,12 @@ func main() {
 		})
 	}
 
+	// The catalog is embedded, so a template manifest that fails to parse
+	// is a release bug; log it loudly at boot rather than on first browse.
+	if err := marketplace.Validate(); err != nil {
+		logger.Error("marketplace: embedded catalog is invalid; the marketplace will be unavailable", "err", err)
+	}
+
 	// Vulnerability promotion gate (docs/VULN_SCANNING.md). It only
 	// reads and enqueues; the cluster-singletons leader runs the scans.
 	// nil under the KUSO_VULNSCAN_DISABLED kill switch.
@@ -471,6 +478,10 @@ func main() {
 			}
 		}
 	}()
+
+	// The build poller of the current singletons tenure, so shutdown can
+	// let its in-flight async promotions finish before cancelling them.
+	var activeBuildPoller atomic.Pointer[builds.Poller]
 
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
@@ -1103,6 +1114,7 @@ func main() {
 					buildPoller.VulnGate = vulnGate
 					buildPoller.VulnGateBlockOnTimeout = os.Getenv("KUSO_VULN_GATE_ON_TIMEOUT") == "block" || vulnGate.FailClosed
 				}
+				activeBuildPoller.Store(buildPoller)
 				goSafe(logger, "build-poller", func() { buildPoller.Run(workCtx) })
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
@@ -1909,9 +1921,12 @@ func main() {
 	// Step 2: give workers `workerDrain` to finish their current
 	// tick. They share workerCtx; we cancel it after the timer.
 	logger.Info("draining background workers", "timeout", workerDrain)
-	drainTimer := time.NewTimer(workerDrain)
-	defer drainTimer.Stop()
-	<-drainTimer.C
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), workerDrain)
+	defer cancelDrain()
+	if p := activeBuildPoller.Load(); p != nil && !p.WaitForPromotions(drainCtx) {
+		logger.Warn("build promotions still in flight at shutdown; the next leader's poller retries them")
+	}
+	<-drainCtx.Done()
 	cancelWorkers()
 	// Brief settle to let any goroutine that read ctx.Done() finish
 	// its return path. Doesn't need to be exact — Postgres
