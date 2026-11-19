@@ -219,6 +219,16 @@ func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Repo
 	if what, ok := datastoreVariants[baseImageName(repo)]; ok {
 		rep.flag(svc.Name, "image %q includes %s, but the managed %s addon runs the stock image — anything relying on it (e.g. CREATE EXTENSION postgis) will fail", svc.Image, what, kind)
 	}
+	if len(svc.Ports) > 0 {
+		ports := make([]string, 0, len(svc.Ports))
+		for _, p := range svc.Ports {
+			ports = append(ports, portString(p))
+		}
+		rep.skip(svc.Name, "ports %s not imported — project services reach the addon through its conn vars; for outside access use `kuso project addon public-tcp enable`", strings.Join(ports, ", "))
+	}
+	if n, ok := composeReplicas(svc); ok && n != 1 {
+		rep.skip(svc.Name, "replicas=%d not imported — the managed addon runs one instance; set `ha` on the addon for a replicated setup", n)
+	}
 	verNote := version
 	if verNote == "" {
 		verNote = "(chart default)"
@@ -296,11 +306,14 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 	// Volumes: named → KusoVolume; bind/anon → flagged.
 	out.Volumes = convertVolumes(svc, rep)
 
-	// deploy.replicas → scale.
-	if svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas > 0 {
-		n := *svc.Deploy.Replicas
-		out.Scale = &Scale{Min: n, Max: n}
-		rep.service(svc.Name, "deploy.replicas=%d → scale.min/max=%d", n, n)
+	// scale / deploy.replicas → scale.
+	if n, ok := composeReplicas(svc); ok {
+		if n > 0 {
+			out.Scale = &Scale{Min: n, Max: n}
+			rep.service(svc.Name, "replicas=%d → scale.min/max=%d", n, n)
+		} else {
+			rep.flag(svc.Name, "replicas=0 means compose never starts this service, but kuso will run it — remove it from the import or stop it in kuso after deploy")
+		}
 	}
 
 	// kuso's `command` renders as the k8s container command, which
@@ -320,6 +333,18 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 
 	noteUnmapped(svc, rep)
 	return out
+}
+
+// composeReplicas returns the replica count from `scale:` or
+// `deploy.replicas:`, and whether either was set.
+func composeReplicas(svc types.ServiceConfig) (int, bool) {
+	switch {
+	case svc.Scale != nil:
+		return *svc.Scale, true
+	case svc.Deploy != nil && svc.Deploy.Replicas != nil:
+		return *svc.Deploy.Replicas, true
+	}
+	return 0, false
 }
 
 func convertPorts(svc types.ServiceConfig, slug string, rep *Report) (int32, []Domain) {
@@ -552,6 +577,18 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	}
 	if svc.StopGracePeriod != nil {
 		rep.skip(svc.Name, "stop_grace_period not imported")
+	}
+	if svc.StopSignal != "" {
+		rep.skip(svc.Name, "stop_signal=%q not imported — kuso stops containers with SIGTERM", svc.StopSignal)
+	}
+	if svc.Hostname != "" {
+		rep.skip(svc.Name, "hostname=%q not imported — peers reach the service by its kuso name via ${{ svc.HOST }}", svc.Hostname)
+	}
+	if svc.ShmSize > 0 {
+		rep.skip(svc.Name, "shm_size not imported — kuso pods get the default /dev/shm (64Mi)")
+	}
+	if len(svc.VolumesFrom) > 0 {
+		rep.flag(svc.Name, "volumes_from %s NOT imported — kuso volumes are per-service, so this service will not see the other service's files", strings.Join(svc.VolumesFrom, ", "))
 	}
 
 	// platform is the most dangerous silent drop: importing an arm64

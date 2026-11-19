@@ -140,3 +140,41 @@ services:
 		}
 	}
 }
+
+func TestConvert_ReportsPreviouslySilentKeys(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  web:
+    image: myorg/web:1
+    scale: 3
+    hostname: web.local
+    stop_signal: SIGINT
+    shm_size: 256m
+    volumes_from: [files]
+  files:
+    image: myorg/files:1
+  off:
+    image: myorg/off:1
+    deploy:
+      replicas: 0
+  db:
+    image: postgres:16
+    ports: ["5432:5432"]
+    shm_size: 1g
+    deploy:
+      replicas: 2
+`)
+	if web := findService(doc, "web"); web == nil || web.Scale == nil || web.Scale.Min != 3 {
+		t.Errorf("scale: 3 not mapped: %+v", web)
+	}
+	checks := []struct{ svc, substr string }{
+		{"web", "hostname"}, {"web", "stop_signal"}, {"web", "shm_size"}, {"web", "volumes_from"},
+		{"off", "replicas=0"},
+		{"db", "ports 5432:5432"}, {"db", "replicas=2"}, {"db", "shm_size"},
+	}
+	for _, c := range checks {
+		if !hasNote(rep, c.svc, c.substr) {
+			t.Errorf("%s: no report line for %s", c.svc, c.substr)
+		}
+	}
+}
