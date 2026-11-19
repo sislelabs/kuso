@@ -69,27 +69,6 @@ func Matches(p *kube.KusoPlacement, nodeName string, nodeLabels map[string]strin
 	return true
 }
 
-// CountMatches returns how many of the supplied nodes satisfy `p`.
-// 0 means the placement is unsatisfiable against this snapshot —
-// every workload pod created with it will sit Pending. Callers
-// should fail validation in that case so users see "no node
-// matches" at save time rather than discovering an indefinitely-
-// pending pod the next day.
-//
-// Empty / nil placement matches every node by definition.
-func CountMatches(p *kube.KusoPlacement, nodes []NodeIdentity) int {
-	if p == nil {
-		return len(nodes)
-	}
-	n := 0
-	for _, nd := range nodes {
-		if Matches(p, nd.Name, nd.Labels) {
-			n++
-		}
-	}
-	return n
-}
-
 // Schedulable reports whether new pods can land on the node right now:
 // not cordoned and Ready. A placement whose only matches are cordoned or
 // NotReady nodes (nodewatch auto-cordons a node NotReady > 5 min) would

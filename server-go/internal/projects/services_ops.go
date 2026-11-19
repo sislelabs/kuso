@@ -17,7 +17,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/addons"
@@ -27,13 +26,6 @@ import (
 	"kuso/server/internal/placement"
 	"kuso/server/internal/registryauth"
 )
-
-// decodeInto adapts the unstructured decode for the projects package.
-// Generics + interface boundaries make a shared one-liner cleaner than
-// re-importing kube.fromUnstructured.
-func decodeInto(u *unstructured.Unstructured, out any) error {
-	return runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, out)
-}
 
 // toStaticSpec maps the wire-shape into the kube CR shape, dropping
 // nil-valued requests. Empty pointer = use chart defaults.
@@ -3695,16 +3687,6 @@ const EnvMaskSentinel = "••••••••"
 // snapshots. Alias of EnvMaskSentinel so the History UI renders one
 // consistent mask regardless of which layer did the redacting.
 const revisionMaskSentinel = EnvMaskSentinel
-
-// envSelector matches every KusoEnvironment owned by (project,
-// service-short-name). Real env CRs label `kuso.sislelabs.com/service`
-// with the SHORT name (e.g. `web`), not the FQ name (`<project>-web`),
-// so propagation helpers must select by the short name. AddService
-// (line ~200) and AddEnvironment (line ~334) both stamp the short
-// name when creating envs.
-func envSelector(project, service string) string {
-	return labelSelector(map[string]string{labelProject: project, labelService: service})
-}
 
 // changedFields, propagateChangedToEnvs, and propagateBaseDomain live
 // in propagate.go now — the service → env mirroring chokepoint is the

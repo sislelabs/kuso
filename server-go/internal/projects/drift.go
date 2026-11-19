@@ -574,23 +574,6 @@ func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, 
 	return out
 }
 
-// envVarsForCompare strips the json:",omitempty" zero-value noise so
-// reflect.DeepEqual doesn't false-positive on an empty Value vs an
-// unset Value. The shape matches what propagateChangedToEnvs writes:
-// the env CR carries the rewritten secret refs verbatim from the
-// service spec, so the slices are identical when in sync.
-func envVarsForCompare(in []kube.KusoEnvVar) []kube.KusoEnvVar {
-	out := make([]kube.KusoEnvVar, len(in))
-	for i, v := range in {
-		out[i] = kube.KusoEnvVar{
-			Name:      v.Name,
-			Value:     v.Value,
-			ValueFrom: v.ValueFrom,
-		}
-	}
-	return out
-}
-
 // deploymentRolling reports whether kube is mid-rollout for the env's
 // Deployment. True only while .status.observedGeneration lags
 // .metadata.generation OR there are unavailable / unupdated replicas
@@ -733,15 +716,6 @@ func newestPodCreatedAt(ctx context.Context, s *Service, ns, envName string) tim
 		}
 	}
 	return newest
-}
-
-// fqService returns the FQ form of a service name (project-prefixed).
-// The CLI / API accept the short form; CR labels carry the FQ form.
-func fqService(project, service string) string {
-	if strings.HasPrefix(service, project+"-") {
-		return service
-	}
-	return project + "-" + service
 }
 
 // envRestingReplicas is the replica count an env holds when it isn't

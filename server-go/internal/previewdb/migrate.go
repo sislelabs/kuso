@@ -21,26 +21,6 @@ import (
 	"kuso/server/internal/releaserun"
 )
 
-// selectMigratableEnvs picks the preview env CRs that should run a migration
-// against a given clone after it is (re)seeded: those that mount the clone's
-// conn secret, carry a release command (the migration), and already have an
-// image to run it from. The preview env CR is the join table between a
-// per-addon clone and the per-service release command + app image.
-func selectMigratableEnvs(envs []kube.KusoEnvironment, cloneConn string) []kube.KusoEnvironment {
-	var out []kube.KusoEnvironment
-	for i := range envs {
-		e := envs[i]
-		if !envNeedsMigrate(&e, cloneConn) {
-			continue
-		}
-		if e.Spec.Image == nil || e.Spec.Image.Tag == "" {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 // envNeedsMigrate reports whether this env should run a migration against the
 // clone once everything is ready: it mounts the clone's conn secret AND has a
 // release hook. It does NOT require an image — the image is promoted by the

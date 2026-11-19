@@ -1690,18 +1690,6 @@ func effectiveSubscription(envSubs, svcSubs []string, project string) []string {
 	return out
 }
 
-// mustJSON serializes a string slice to JSON for inclusion in a
-// merge-patch body. Empty slice serializes to `[]` so the patch
-// keeps the field as an explicit (non-nil) empty list rather than
-// silently re-entering legacy mount-all mode.
-func mustJSON(v []string) string {
-	if v == nil {
-		v = []string{}
-	}
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
 // RefreshEnvSecrets recomputes the project's addon-conn secret list and
 // rewrites every env's envFromSecrets. Public entrypoint with a stable
 // signature — callers that have no just-created addon to account for
@@ -2148,16 +2136,6 @@ func createAddon(ctx context.Context, s *Service, ns string, a *kube.KusoAddon) 
 		return nil, err
 	}
 	return &out, nil
-}
-
-// buildEnvFromSecretsPatch renders the merge-patch body for replacing
-// spec.envFromSecrets on a KusoEnvironment.
-func buildEnvFromSecretsPatch(secrets []string) []byte {
-	if secrets == nil {
-		secrets = []string{}
-	}
-	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"envFromSecrets": secrets}})
-	return body
 }
 
 // connectionURLKeys are the per-kind primary DSN keys a service reads. At
