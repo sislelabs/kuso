@@ -750,14 +750,24 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 		return nil, err
 	}
 	fqn := serviceCRName(project, service)
-	for _, e := range envs {
+	// Exact name/label matches win across ALL envs before the suffix
+	// fallback: "staging" is also a suffix of "<p>-<svc>-pre-staging".
+	var suffixed []*kube.KusoEnvironment
+	for i := range envs {
+		e := &envs[i]
 		// The label list is only a hint; spec decides ownership.
-		if !kube.EnvOwnedBy(&e, project, fqn) {
+		if !kube.EnvOwnedBy(e, project, fqn) {
 			continue
 		}
-		if e.Name == env || e.Labels[kube.LabelEnv] == env || strings.HasSuffix(e.Name, "-"+env) {
-			return &e, nil
+		if e.Name == env || e.Labels[kube.LabelEnv] == env {
+			return e, nil
 		}
+		if strings.HasSuffix(e.Name, "-"+env) {
+			suffixed = append(suffixed, e)
+		}
+	}
+	if len(suffixed) == 1 {
+		return suffixed[0], nil
 	}
 	return nil, fmt.Errorf("%w: env %s for %s/%s", ErrNotFound, env, project, service)
 }

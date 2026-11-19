@@ -592,3 +592,20 @@ func TestFindEnv_SelectsByEnvLabelNotSpecKind(t *testing.T) {
 		t.Fatalf("findEnv(staging) selected %q, want alpha-web-staging", staging.Name)
 	}
 }
+
+// "staging" is a name suffix of "alpha-web-pre-staging"; listing order must
+// not let the suffix test pick that env over the exact staging match.
+func TestFindEnv_ExactMatchBeatsSuffix(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedEnvKindLabel("alpha-web-pre-staging", "alpha", "web", "production", "pre-staging"),
+		seedEnvKindLabel("alpha-web-staging", "alpha", "web", "production", "staging"),
+	)
+	got, err := s.findEnv(context.Background(), "alpha", "web", "staging")
+	if err != nil {
+		t.Fatalf("findEnv(staging): %v", err)
+	}
+	if got.Name != "alpha-web-staging" {
+		t.Fatalf("findEnv(staging) selected %q, want alpha-web-staging", got.Name)
+	}
+}
