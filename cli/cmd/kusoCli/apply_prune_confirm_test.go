@@ -47,3 +47,18 @@ func TestConfirmApplyDeletes_NoDeletesNoPrompt(t *testing.T) {
 		t.Fatalf("plan without deletions must not prompt: %v", err)
 	}
 }
+
+func TestConfirmApplyDeletes_RefusesDestructiveFieldOffTTY(t *testing.T) {
+	applyPlanServer(t, `{"servicesToUpdate":["web"],"changes":[{"resource":"service:web","fields":[{"field":"domains","from":"a.com","to":"","destructive":true}]}]}`)
+	err := confirmApplyDeletes("shop", []byte("project: shop\n"))
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("destructive field change must need confirmation, got %v", err)
+	}
+}
+
+func TestConfirmApplyDeletes_NotAppliedDriftNoPrompt(t *testing.T) {
+	applyPlanServer(t, `{"changes":[{"resource":"addon:db","notApplied":true,"fields":[{"field":"storageSize","from":"5Gi","to":"","destructive":true}]}]}`)
+	if err := confirmApplyDeletes("shop", []byte("project: shop\n")); err != nil {
+		t.Fatalf("drift apply won't act on must not prompt: %v", err)
+	}
+}

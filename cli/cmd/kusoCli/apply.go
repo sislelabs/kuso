@@ -22,7 +22,7 @@ func init() {
 	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "", "path to the manifest (default: kuso.yml, or kuso.yaml if only that exists)")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "show the plan without writing")
 	applyCmd.Flags().BoolVar(&applyRotateSecrets, "rotate-secrets", false, "re-mint generated ({generate: …}) secrets even if they already exist (default: generate-once)")
-	applyCmd.Flags().BoolVarP(&applyYes, "yes", "y", false, "skip the confirmation when the plan deletes services, addons or crons (prune: true)")
+	applyCmd.Flags().BoolVarP(&applyYes, "yes", "y", false, "skip the confirmation when the plan deletes services, addons or crons (prune: true) or makes a destructive change")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -43,8 +43,10 @@ needed.
 
 With "prune: true" in the file, services, addons and crons missing from
 it are deleted (addon data is not recoverable). When the plan contains
-deletions, apply prints the plan and asks for confirmation first; pass
---yes to skip the prompt (required when stdin is not a terminal).`,
+deletions or destructive changes (volume or domain removal, release
+hook cleared, scale to 0), apply prints the plan and asks for
+confirmation first; pass --yes to skip the prompt (required when stdin
+is not a terminal).`,
 	Example: `  kuso apply
   kuso apply kuso.yaml --dry-run
   kuso apply -f config/kuso.yml --dry-run`,
@@ -101,8 +103,9 @@ deletions, apply prints the plan and asks for confirmation first; pass
 }
 
 // confirmApplyDeletes fetches the server's plan for body and, when it
-// deletes anything (prune: true), prints the plan and asks before the
-// real apply. Plans without deletions proceed without a prompt.
+// deletes anything (prune: true) or carries a destructive field change,
+// prints the plan and asks before the real apply. Other plans proceed
+// without a prompt.
 func confirmApplyDeletes(project string, body []byte) error {
 	resp, err := api.ApplyConfig(project, body, true, false)
 	if err != nil {
@@ -116,13 +119,41 @@ func confirmApplyDeletes(project string, body []byte) error {
 		return fmt.Errorf("decode plan: %w", err)
 	}
 	deletes := applyPlanDeletes(plan)
-	if len(deletes) == 0 {
+	destructive := applyPlanDestructive(plan)
+	if len(deletes) == 0 && len(destructive) == 0 {
 		return nil
 	}
 	renderApplyResult(os.Stderr, os.Stderr, resp.Body(), true)
-	return confirmDestructive(false, fmt.Sprintf(
-		"\nprune: true will DELETE %d resource(s) from project %s: %s. Addon data is not recoverable. Continue?",
-		len(deletes), project, strings.Join(deletes, ", ")))
+	var parts []string
+	if len(deletes) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"prune: true will DELETE %d resource(s) from project %s: %s. Addon data is not recoverable.",
+			len(deletes), project, strings.Join(deletes, ", ")))
+	}
+	if len(destructive) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d destructive change(s) in project %s (data or traffic loss): %s.",
+			len(destructive), project, strings.Join(destructive, ", ")))
+	}
+	return confirmDestructive(false, "\n"+strings.Join(parts, "\n")+" Continue?")
+}
+
+// applyPlanDestructive lists the field changes the server marks
+// destructive (volume/domain removal, release hook cleared, scale to 0)
+// as "resource.field", skipping drift apply won't act on.
+func applyPlanDestructive(p applyPlan) []string {
+	var out []string
+	for _, c := range p.Changes {
+		if c.NotApplied {
+			continue
+		}
+		for _, f := range c.Fields {
+			if f.Destructive {
+				out = append(out, c.Resource+"."+f.Field)
+			}
+		}
+	}
+	return out
 }
 
 func applyPlanDeletes(p applyPlan) []string {
