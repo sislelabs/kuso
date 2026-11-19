@@ -19,9 +19,9 @@ import (
 //
 // Canonical choices (with reasons):
 //
-//   - SlugifyName clamps to 50, not 63, leaving 13 chars of headroom
-//     for environment suffixes like `-preview-pr-12` that still need
-//     to fit under the 63-byte DNS label limit.
+//   - SlugifyName clamps to 32, the server's service-name limit
+//     (serviceNameRE); project slugs get the project limit of 40 and a
+//     leading letter (validateProjectName).
 //   - RuntimeForBuildPack defaults to "dockerfile" on unknown — the
 //     imported app needs *some* runtime, and Dockerfile is the lowest
 //     common denominator.
@@ -32,17 +32,22 @@ import (
 //     empty when the input is unusable, so the importer doesn't
 //     create a service with no name.
 
+// Server-side name limits: serviceNameRE allows 32 characters,
+// validateProjectName 40.
+const (
+	maxServiceSlug = 32
+	maxProjectSlug = 40
+)
+
 // SlugifyName turns an arbitrary Coolify name into a kube-safe slug:
 // lowercase, runs of non-[a-z0-9] collapse to "-", trim leading and
-// trailing dashes, clamp to 50 chars (leave headroom for
-// environment-suffix expansion under the 63-byte DNS label limit).
+// trailing dashes, clamp to the 32-character service-name limit.
 // Empty input returns "x-unnamed" so callers can't create a slug-less
 // kuso resource.
-func SlugifyName(s string) string {
+func SlugifyName(s string) string { return slugifyMax(s, maxServiceSlug) }
+
+func slugifyMax(s string, max int) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return "x-unnamed"
-	}
 	var out strings.Builder
 	prevDash := true
 	for _, r := range s {
@@ -57,14 +62,18 @@ func SlugifyName(s string) string {
 			}
 		}
 	}
-	res := strings.Trim(out.String(), "-")
-	if len(res) > 50 {
-		res = strings.Trim(res[:50], "-")
-	}
+	res := clampSlug(strings.Trim(out.String(), "-"), max)
 	if res == "" {
 		res = "x-unnamed"
 	}
 	return res
+}
+
+func clampSlug(s string, max int) string {
+	if len(s) > max {
+		s = strings.TrimRight(s[:max], "-")
+	}
+	return s
 }
 
 // AssignKusoSlugs maps Coolify project names to deduplicated kuso
@@ -78,7 +87,11 @@ func AssignKusoSlugs(coolifyNames []string) map[string]string {
 		if _, done := out[name]; done {
 			continue
 		}
-		out[name] = UniqueSlug(SlugifyName(name), taken)
+		base := slugifyMax(name, maxProjectSlug)
+		if base[0] >= '0' && base[0] <= '9' {
+			base = clampSlug("x-"+base, maxProjectSlug)
+		}
+		out[name] = uniqueSlug(base, taken, maxProjectSlug)
 	}
 	return out
 }
@@ -86,10 +99,16 @@ func AssignKusoSlugs(coolifyNames []string) map[string]string {
 // UniqueSlug returns base, or base-2, base-3, … — the first one not in
 // taken — and marks it taken. Keyed on names actually handed out, not on
 // the base, so a literal "acme-2" can't collide with a suffixed "acme".
+// The base is shortened so the result fits the service-name limit.
 func UniqueSlug(base string, taken map[string]bool) string {
+	return uniqueSlug(base, taken, maxServiceSlug)
+}
+
+func uniqueSlug(base string, taken map[string]bool, max int) string {
 	slug := base
 	for n := 2; taken[slug]; n++ {
-		slug = fmt.Sprintf("%s-%d", base, n)
+		suffix := fmt.Sprintf("-%d", n)
+		slug = clampSlug(base, max-len(suffix)) + suffix
 	}
 	taken[slug] = true
 	return slug
