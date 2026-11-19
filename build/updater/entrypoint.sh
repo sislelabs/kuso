@@ -30,10 +30,24 @@ write_status() {
     --arg updated "$(now)" \
     '{phase:$phase, message:$message, started:$started, updated:$updated}')
 
-  kubectl create configmap "$CM" -n "$NS" \
-    --from-literal=status="$payload" \
-    --dry-run=client -o yaml \
-  | kubectl apply -f - >/dev/null
+  # A progress write is bookkeeping: if the apiserver blips between
+  # stages, dying here (ERR trap) would strand the cluster half-rolled
+  # with the server new and activator/operator old. Retry, and only let
+  # a terminal phase fail the Job.
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if kubectl create configmap "$CM" -n "$NS" \
+        --from-literal=status="$payload" \
+        --dry-run=client -o yaml \
+      | kubectl apply -f - >/dev/null; then
+      return 0
+    fi
+    sleep "${STATUS_RETRY_SLEEP:-$((attempt * 2))}"
+  done
+  case "$phase" in
+    done|failed|rolled-back|rollback-failed) return 1 ;;
+  esac
+  echo "==> WARNING: could not write status '${phase}' to ${CM}; continuing" >&2
 }
 
 # verify_sha256 <file> <expected-hex> <label>: the expected digest comes
