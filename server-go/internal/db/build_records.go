@@ -161,16 +161,22 @@ const fleetBuildRecordCap = 2000
 // insert at the build's terminal transition, so it is the deploy time.
 // Callers filter by project visibility.
 func (d *DB) ListSucceededBuildRecordsSince(ctx context.Context, since time.Time) ([]BuildRecord, error) {
+	return d.ListBuildRecordsSince(ctx, since, "succeeded")
+}
+
+// ListBuildRecordsSince is ListSucceededBuildRecordsSince for any
+// terminal status ("succeeded", "failed", ...).
+func (d *DB) ListBuildRecordsSince(ctx context.Context, since time.Time, status string) ([]BuildRecord, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT "buildName","project","service","branch","commitSha","commitMessage",
 		       "imageTag","status","startedAt","finishedAt","triggeredBy",
 		       "triggeredByUser","errorMessage","createdAt"
 		  FROM "BuildRecord"
-		 WHERE "createdAt" >= $1 AND "status" = 'succeeded'
+		 WHERE "createdAt" >= $1 AND "status" = $2
 		 ORDER BY "createdAt" DESC
-		 LIMIT $2`, since, fleetBuildRecordCap)
+		 LIMIT $3`, since, status, fleetBuildRecordCap)
 	if err != nil {
-		return nil, fmt.Errorf("ListSucceededBuildRecordsSince: %w", err)
+		return nil, fmt.Errorf("ListBuildRecordsSince: %w", err)
 	}
 	defer rows.Close()
 	var out []BuildRecord

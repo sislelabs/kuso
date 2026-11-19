@@ -30,6 +30,7 @@ import {
   type MetricKey,
 } from "./insightsModel";
 import { InsightsChart, type ChartDeploy, type ChartSeries } from "./InsightsChart";
+import { OverviewView } from "./OverviewView";
 
 const panel = "rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)]";
 const MAX_DEPLOY_ROWS = 10;
@@ -51,17 +52,19 @@ function useInsightsParams() {
   const m = search.get("m");
   const r = search.get("r");
   const s = search.get("s");
+  const view: "overview" | "compare" = search.get("v") === "compare" ? "compare" : "overview";
   const metric: MetricKey = isMetric(m) ? m : "requests";
   const range: InsightsRange = isRange(r) ? r : "24h";
   const selected = s === null ? null : s.split(",").filter(Boolean);
-  const set = (next: { metric?: MetricKey; range?: InsightsRange; selected?: string[] }) => {
+  const set = (next: { metric?: MetricKey; range?: InsightsRange; selected?: string[]; view?: "overview" | "compare" }) => {
     const q = new URLSearchParams(search.toString());
+    if (next.view) q.set("v", next.view);
     if (next.metric) q.set("m", next.metric);
     if (next.range) q.set("r", next.range);
     if (next.selected) q.set("s", next.selected.join(","));
     router.replace(`${pathname}?${q.toString()}`, { scroll: false });
   };
-  return { metric, range, selected, set };
+  return { view, metric, range, selected, set };
 }
 
 function Delta({ effect, def }: { effect: DeployEffect | null; def: MetricDef }) {
@@ -96,7 +99,7 @@ function Spark({ points, empty }: { points: InsightsPoint[]; empty: string }) {
 }
 
 export function InsightsView() {
-  const { metric, range, selected: urlSelected, set } = useInsightsParams();
+  const { view, metric, range, selected: urlSelected, set } = useInsightsParams();
   const query = useInsights(range);
   const data = query.data;
   const def = metricDef(metric);
@@ -105,7 +108,7 @@ export function InsightsView() {
     <div className="mx-auto max-w-[96rem] px-4 py-6 sm:px-6 lg:px-10 lg:py-9">
       <PageHeader
         title="Insights"
-        description={<Lede data={data} />}
+        description={view === "overview" ? "The whole cluster at a glance: what needs you, what looks off, and what's sitting idle." : <Lede data={data} />}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <TimeRangePicker presets={RANGES} value={range} onChange={(r) => set({ range: r })} />
@@ -113,9 +116,20 @@ export function InsightsView() {
           </div>
         }
       />
+      <Segmented
+        label="View"
+        className="mb-5"
+        options={[
+          { value: "overview", label: "Overview" },
+          { value: "compare", label: "Compare services" },
+        ]}
+        value={view}
+        onChange={(v) => set({ view: v })}
+      />
       {query.isPending && <InsightsSkeleton />}
       {query.isError && !data && <QueryErrorState error={query.error} onRetry={() => query.refetch()} what="insights" />}
-      {data && (
+      {data && view === "overview" && <OverviewView data={data} dim={query.isPlaceholderData} />}
+      {data && view === "compare" && (
         <Loaded
           data={data}
           def={def}

@@ -10,6 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"kuso/server/internal/hostcheck"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/podusage"
 )
@@ -40,10 +46,42 @@ type insightsResponse struct {
 	UsageAvailable    bool      `json:"usageAvailable"`
 	// UsageSince is the oldest CPU/memory sample held. The history is in
 	// memory, so it starts at the server's last restart.
-	UsageSince *time.Time        `json:"usageSince,omitempty"`
-	Services   []insightsService `json:"services"`
-	Deploys    []insightsDeploy  `json:"deploys"`
+	UsageSince   *time.Time            `json:"usageSince,omitempty"`
+	Services     []insightsService     `json:"services"`
+	Deploys      []insightsDeploy      `json:"deploys"`
+	FailedBuilds []insightsFailedBuild `json:"failedBuilds"`
+	// CertProblems are certificates for the caller's hosts that are not
+	// Ready, expired, or expire within certWarnDays.
+	CertProblems []insightsCertProblem `json:"certProblems"`
 }
+
+// insightsResources is one pod's requests and limits; zero is unset.
+type insightsResources struct {
+	CPURequestMilli int64 `json:"cpuRequestMilli,omitempty"`
+	CPULimitMilli   int64 `json:"cpuLimitMilli,omitempty"`
+	MemRequestBytes int64 `json:"memRequestBytes,omitempty"`
+	MemLimitBytes   int64 `json:"memLimitBytes,omitempty"`
+}
+
+type insightsFailedBuild struct {
+	Project       string    `json:"project"`
+	Service       string    `json:"service"`
+	At            time.Time `json:"at"`
+	Status        string    `json:"status"`
+	CommitMessage string    `json:"commitMessage"`
+	Error         string    `json:"error"`
+}
+
+type insightsCertProblem struct {
+	Project string `json:"project"`
+	Host    string `json:"host"`
+	Problem string `json:"problem"`
+}
+
+const (
+	certWarnDays    = 14
+	maxFailedBuilds = 20
+)
 
 type insightsService struct {
 	Project   string       `json:"project"`
@@ -54,6 +92,9 @@ type insightsService struct {
 	Memory    [][2]float64 `json:"memory"`
 	P95       [][2]float64 `json:"p95"`
 	ErrorRate [][2]float64 `json:"errorRate"`
+	// Pods is the replica count at the latest usage sample.
+	Pods      int                `json:"pods"`
+	Resources *insightsResources `json:"resources,omitempty"`
 }
 
 type insightsDeploy struct {
@@ -64,43 +105,102 @@ type insightsDeploy struct {
 	CommitMessage string    `json:"commitMessage"`
 }
 
-// insightsTraffic holds the three Traefik range queries for each range
-// preset, shared by every caller for pulseTTL.
+// insightsTraffic holds the three Traefik range queries for one range
+// preset, shared by every caller.
 type insightsTraffic struct {
 	req, errs, p95 map[string][][2]float64
 }
 
-var insightsCache struct {
-	mu sync.Mutex
-	at map[string]time.Time
-	v  map[string]insightsTraffic
+// insightsStale is how old a cached result may be and still be served
+// at once while a background refresh runs. The p95 histogram query
+// alone takes seconds, so page loads shouldn't wait on it.
+const insightsStale = 15 * time.Minute
+
+type insightsEntry struct {
+	at         time.Time
+	v          insightsTraffic
+	refreshing bool
 }
 
-func cachedInsightsTraffic(ctx context.Context, key string, rg insightsRange, now time.Time) (insightsTraffic, error) {
-	insightsCache.mu.Lock()
-	defer insightsCache.mu.Unlock()
-	if t, ok := insightsCache.at[key]; ok && now.Sub(t) < pulseTTL {
-		return insightsCache.v[key], nil
-	}
+var insightsCache struct {
+	mu sync.Mutex
+	m  map[string]*insightsEntry
+	sf singleflight.Group
+}
+
+// insightsFetch runs the queries; a var so tests can stub Prometheus.
+var insightsFetch = fetchInsightsTraffic
+
+func fetchInsightsTraffic(ctx context.Context, rg insightsRange, now time.Time) (insightsTraffic, error) {
 	step := rg.step.String()
 	win := rateWindow(step)
 	start := now.Add(-rg.dur)
 	var out insightsTraffic
-	var err error
-	if out.req, err = promQueryRangeBySeries(ctx, fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total[%s]))`, win), "service", start, now, step); err != nil {
-		return out, err
+	g, gctx := errgroup.WithContext(ctx)
+	run := func(dst *map[string][][2]float64, q string) {
+		g.Go(func() error {
+			m, err := promQueryRangeBySeries(gctx, q, "service", start, now, step)
+			*dst = m
+			return err
+		})
 	}
-	if out.errs, err = promQueryRangeBySeries(ctx, fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total{code=~"5.."}[%s]))`, win), "service", start, now, step); err != nil {
-		return out, err
+	run(&out.req, fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total[%s]))`, win))
+	run(&out.errs, fmt.Sprintf(`sum by (service) (rate(traefik_service_requests_total{code=~"5.."}[%s]))`, win))
+	run(&out.p95, fmt.Sprintf(`1000 * histogram_quantile(0.95, sum by (service, le) (rate(traefik_service_request_duration_seconds_bucket[%s])))`, win))
+	return out, g.Wait()
+}
+
+// cachedInsightsTraffic returns a fresh result, or a stale one (kicking
+// off a background refresh), or waits for one fetch shared by every
+// concurrent caller.
+func cachedInsightsTraffic(ctx context.Context, key string, rg insightsRange, now time.Time) (insightsTraffic, error) {
+	insightsCache.mu.Lock()
+	if insightsCache.m == nil {
+		insightsCache.m = map[string]*insightsEntry{}
 	}
-	if out.p95, err = promQueryRangeBySeries(ctx, fmt.Sprintf(`1000 * histogram_quantile(0.95, sum by (service, le) (rate(traefik_service_request_duration_seconds_bucket[%s])))`, win), "service", start, now, step); err != nil {
-		return out, err
+	if e := insightsCache.m[key]; e != nil {
+		age := now.Sub(e.at)
+		if age < pulseTTL {
+			insightsCache.mu.Unlock()
+			return e.v, nil
+		}
+		if age < insightsStale {
+			if !e.refreshing {
+				e.refreshing = true
+				go func() {
+					bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					_, _ = loadInsightsTraffic(bg, key, rg)
+				}()
+			}
+			v := e.v
+			insightsCache.mu.Unlock()
+			return v, nil
+		}
 	}
-	if insightsCache.at == nil {
-		insightsCache.at, insightsCache.v = map[string]time.Time{}, map[string]insightsTraffic{}
+	insightsCache.mu.Unlock()
+	return loadInsightsTraffic(ctx, key, rg)
+}
+
+func loadInsightsTraffic(ctx context.Context, key string, rg insightsRange) (insightsTraffic, error) {
+	v, err, _ := insightsCache.sf.Do(key, func() (any, error) {
+		now := time.Now().UTC()
+		out, err := insightsFetch(ctx, rg, now)
+		insightsCache.mu.Lock()
+		defer insightsCache.mu.Unlock()
+		if e := insightsCache.m[key]; e != nil {
+			e.refreshing = false
+		}
+		if err != nil {
+			return insightsTraffic{}, err
+		}
+		insightsCache.m[key] = &insightsEntry{at: now, v: out}
+		return out, nil
+	})
+	if err != nil {
+		return insightsTraffic{}, err
 	}
-	insightsCache.at[key], insightsCache.v[key] = now, out
-	return out, nil
+	return v.(insightsTraffic), nil
 }
 
 // Insights is GET /api/insights?range=1h|6h|24h.
@@ -127,12 +227,14 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	out := insightsResponse{
-		Range:       key,
-		StepSeconds: int(rg.step.Seconds()),
-		Since:       now.Add(-rg.dur),
-		Until:       now,
-		Services:    []insightsService{},
-		Deploys:     []insightsDeploy{},
+		Range:        key,
+		StepSeconds:  int(rg.step.Seconds()),
+		Since:        now.Add(-rg.dur),
+		Until:        now,
+		Services:     []insightsService{},
+		Deploys:      []insightsDeploy{},
+		FailedBuilds: []insightsFailedBuild{},
+		CertProblems: []insightsCertProblem{},
 	}
 	projects := make(map[string]bool, len(visible))
 	namespaces := map[string]struct{}{}
@@ -148,6 +250,7 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 	if h.Kube != nil {
 		// envKey ("<ns>-<env CR>") is how Traefik names the env's backend.
 		byEnvKey := map[string]int{}
+		hostProject := map[string]string{}
 		for ns := range namespaces {
 			envs, lerr := h.Kube.ListKusoEnvironments(ctx, ns)
 			if lerr != nil {
@@ -156,14 +259,23 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 			}
 			for i := range envs {
 				e := &envs[i]
-				if !projects[e.Spec.Project] || !isProductionEnv(e) {
+				if !projects[e.Spec.Project] {
+					continue
+				}
+				for _, host := range append([]string{e.Spec.Host}, e.Spec.AdditionalHosts...) {
+					if host != "" {
+						hostProject[strings.ToLower(host)] = e.Spec.Project
+					}
+				}
+				if !isProductionEnv(e) {
 					continue
 				}
 				byEnvKey[ns+"-"+e.Name] = len(out.Services)
 				out.Services = append(out.Services, insightsService{
-					Project: e.Spec.Project,
-					Service: strings.TrimPrefix(e.Spec.Service, e.Spec.Project+"-"),
-					Env:     e.Name,
+					Project:   e.Spec.Project,
+					Service:   strings.TrimPrefix(e.Spec.Service, e.Spec.Project+"-"),
+					Env:       e.Name,
+					Resources: parseResources(e.Spec.Resources),
 				})
 			}
 		}
@@ -172,6 +284,15 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 		} else {
 			out.RequestsAvailable = true
 			fillTraffic(out.Services, byEnvKey, tr)
+		}
+		if h.Kube.Dynamic != nil {
+			for ns := range namespaces {
+				certs, cerr := hostcheck.ListCertificatesIn(ctx, h.Kube.Dynamic, ns)
+				if cerr != nil {
+					continue
+				}
+				out.CertProblems = append(out.CertProblems, certProblems(certs, hostProject, now)...)
+			}
 		}
 	}
 	for i := range out.Services {
@@ -186,6 +307,9 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 			if out.UsageSince == nil || t.Before(*out.UsageSince) {
 				out.UsageSince = &t
 			}
+		}
+		if n := len(hist.Samples); n > 0 {
+			s.Pods = hist.Samples[n-1].Pods
 		}
 		for _, p := range hist.Samples {
 			t := float64(p.T / 1000)
@@ -224,6 +348,28 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 					CommitMessage: firstLine(rec.CommitMessage),
 				})
 			}
+		}
+		for _, status := range []string{"failed", "release-failed"} {
+			recs, ferr := h.DB.ListBuildRecordsSince(ctx, out.Since, status)
+			if ferr != nil {
+				h.Logger.Warn("insights: failed builds", "err", ferr)
+			}
+			for _, rec := range recs {
+				if projects[rec.Project] {
+					out.FailedBuilds = append(out.FailedBuilds, insightsFailedBuild{
+						Project:       rec.Project,
+						Service:       strings.TrimPrefix(rec.Service, rec.Project+"-"),
+						At:            rec.CreatedAt.UTC(),
+						Status:        rec.Status,
+						CommitMessage: firstLine(rec.CommitMessage),
+						Error:         firstLine(rec.ErrorMessage),
+					})
+				}
+			}
+		}
+		sort.Slice(out.FailedBuilds, func(i, j int) bool { return out.FailedBuilds[i].At.After(out.FailedBuilds[j].At) })
+		if len(out.FailedBuilds) > maxFailedBuilds {
+			out.FailedBuilds = out.FailedBuilds[:maxFailedBuilds]
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -303,4 +449,66 @@ func sortedTimes(m map[float64]float64) []float64 {
 	}
 	sort.Float64s(ks)
 	return ks
+}
+
+// certProblems keeps the certificates that cover one of the caller's
+// hosts and have something wrong with them, one row per host.
+func certProblems(certs []hostcheck.Cert, hostProject map[string]string, now time.Time) []insightsCertProblem {
+	var out []insightsCertProblem
+	for _, c := range certs {
+		problem, bad := hostcheck.CertProblem(c, now, certWarnDays)
+		if !bad {
+			continue
+		}
+		for _, name := range c.DNSNames {
+			if p, ok := hostProject[strings.ToLower(name)]; ok {
+				out = append(out, insightsCertProblem{Project: p, Host: name, Problem: problem})
+			}
+		}
+	}
+	return out
+}
+
+// parseResources reads a k8s ResourceRequirements-shaped map. nil when
+// nothing is set, so the chart default (no requests or limits) reads as
+// unknown rather than zero.
+func parseResources(m map[string]any) *insightsResources {
+	if len(m) == 0 {
+		return nil
+	}
+	get := func(section, key string, milli bool) int64 {
+		sec, _ := m[section].(map[string]any)
+		v, ok := sec[key]
+		if !ok {
+			return 0
+		}
+		q, err := resource.ParseQuantity(fmt.Sprint(v))
+		if err != nil {
+			return 0
+		}
+		if milli {
+			return q.MilliValue()
+		}
+		return q.Value()
+	}
+	r := &insightsResources{
+		CPURequestMilli: get("requests", "cpu", true),
+		CPULimitMilli:   get("limits", "cpu", true),
+		MemRequestBytes: get("requests", "memory", false),
+		MemLimitBytes:   get("limits", "memory", false),
+	}
+	if *r == (insightsResources{}) {
+		return nil
+	}
+	return r
+}
+
+// WarmInsights fills the 24h traffic cache shortly after boot, so the
+// first visitor after a release doesn't wait on the p95 query.
+func WarmInsights() {
+	time.AfterFunc(20*time.Second, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = loadInsightsTraffic(ctx, "24h", insightsRanges["24h"])
+	})
 }

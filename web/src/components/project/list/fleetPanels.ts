@@ -25,7 +25,7 @@ export const PANELS: readonly PanelDef[] = [
   { key: "cves", label: "CVEs", hint: "Critical and high CVEs in running images" },
   { key: "uptime", label: "Uptime", hint: "Uptime checks that are passing" },
   { key: "backups", label: "Backups", hint: "Addons with a working scheduled backup", adminOnly: true },
-  { key: "insights", label: "Insights link", hint: "Open the compare-services page" },
+  { key: "insights", label: "Insights link", hint: "Open the cluster overview" },
 ];
 
 export const DEFAULT_PANELS: readonly PanelKey[] = ["running", "requests", "errors", "capacity", "deploys", "cves", "insights"];
@@ -67,12 +67,28 @@ export function usePanelPrefs(): [PanelKey[], (next: PanelKey[]) => void] {
 }
 
 export interface FleetVulns {
+  /** Images running in a production env (a digest shared with staging counts here). */
+  production: { critical: number; high: number; images: number };
+  /** Staging and preview images plus addons. */
+  other: { critical: number; high: number };
+  /** The production image with the most critical, then high, CVEs. */
+  worst?: { label: string; href: string; critical: number; high: number };
+  /** Per-project split, for the Insights security table. */
+  byProject: Map<string, ProjectVulns>;
+  /** Images whose latest scan failed: their CVEs are unknown. */
+  failedScans: { project: string; name: string; href?: string; error?: string }[];
+}
+
+export interface ProjectVulns {
   critical: number;
   high: number;
   fixable: number;
-  scanned: number;
-  /** The image with the most critical, then high, CVEs. */
-  worst?: { label: string; href: string; critical: number; high: number };
+  otherCritical: number;
+  otherHigh: number;
+  images: number;
+  /** Oldest production scan, ISO: how stale the picture is. */
+  oldestScan?: string;
+  worst?: { label: string; href: string; critical: number };
 }
 
 function imageHref(im: VulnImageReport): string | undefined {
@@ -83,27 +99,67 @@ function imageHref(im: VulnImageReport): string | undefined {
   return `/projects/${p}`;
 }
 
+function isProduction(im: VulnImageReport): boolean {
+  return im.ownerKind === "service" && im.env === "production";
+}
+
 // summarizeVulns counts each image digest once: one image running in
 // several envs is one set of CVEs to fix, not several.
 export function summarizeVulns(images: readonly VulnImageReport[]): FleetVulns {
-  const out: FleetVulns = { critical: 0, high: 0, fixable: 0, scanned: 0 };
+  const out: FleetVulns = { production: { critical: 0, high: 0, images: 0 }, other: { critical: 0, high: 0 }, byProject: new Map(), failedScans: [] };
+  for (const im of images) {
+    if (im.scan?.status === "failed" && im.project) {
+      out.failedScans.push({ project: im.project, name: im.service ?? im.addon ?? im.workload ?? im.imageRef, href: imageHref(im), error: im.scan.error });
+    }
+  }
+  const scanned = images.filter((im) => im.scan?.status === "succeeded");
+  const prodDigests = new Set(scanned.filter(isProduction).map((im) => im.digest));
   const seen = new Set<string>();
   let worstScore = 0;
-  for (const im of images) {
-    const c = im.scan?.status === "succeeded" ? im.scan.counts : undefined;
-    if (!c || seen.has(im.digest)) continue;
-    seen.add(im.digest);
-    out.scanned++;
-    out.critical += c.critical;
-    out.high += c.high;
-    out.fixable += c.fixableCritical + c.fixableHigh;
-    const score = c.critical * 1000 + c.high;
-    const href = imageHref(im);
-    if (score > worstScore && href) {
-      worstScore = score;
-      const name = im.service ?? im.addon ?? "";
-      out.worst = { label: name && name !== im.project ? `${im.project} / ${name}` : (im.project ?? ""), href, critical: c.critical, high: c.high };
+  for (const im of scanned) {
+    const c = im.scan!.counts;
+    const prod = prodDigests.has(im.digest);
+    if (prod && isProduction(im)) {
+      const score = c.critical * 1000 + c.high;
+      const href = imageHref(im);
+      if (score > worstScore && href) {
+        worstScore = score;
+        const name = im.service ?? "";
+        out.worst = { label: name && name !== im.project ? `${im.project} / ${name}` : (im.project ?? ""), href, critical: c.critical, high: c.high };
+      }
     }
+    // Per project: one row per digest within the project, so a digest
+    // shared by two projects shows on both.
+    if (im.project) {
+      const pkey = `${im.project}|${im.digest}`;
+      if (!seen.has(pkey)) {
+        seen.add(pkey);
+        let pv = out.byProject.get(im.project);
+        if (!pv) {
+          pv = { critical: 0, high: 0, fixable: 0, otherCritical: 0, otherHigh: 0, images: 0 };
+          out.byProject.set(im.project, pv);
+        }
+        if (prod) {
+          pv.critical += c.critical;
+          pv.high += c.high;
+          pv.fixable += c.fixableCritical + c.fixableHigh;
+          pv.images++;
+          const at = im.scan!.finishedAt;
+          if (at && (!pv.oldestScan || at < pv.oldestScan)) pv.oldestScan = at;
+          const href = imageHref(im);
+          if (href && c.critical > (pv.worst?.critical ?? 0)) pv.worst = { label: im.service ?? im.project, href, critical: c.critical };
+        } else {
+          pv.otherCritical += c.critical;
+          pv.otherHigh += c.high;
+        }
+      }
+    }
+    if (seen.has(im.digest)) continue;
+    seen.add(im.digest);
+    const bucket = prod ? out.production : out.other;
+    bucket.critical += c.critical;
+    bucket.high += c.high;
+    if (prod) out.production.images++;
   }
   return out;
 }

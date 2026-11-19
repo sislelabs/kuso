@@ -19,6 +19,32 @@ export interface InsightsService {
   p95: InsightsPoint[];
   /** percent of requests answered 5xx */
   errorRate: InsightsPoint[];
+  /** replicas at the latest usage sample */
+  pods: number;
+  /** one pod's requests and limits; absent when the service sets none */
+  resources?: InsightsResources;
+}
+
+export interface InsightsResources {
+  cpuRequestMilli?: number;
+  cpuLimitMilli?: number;
+  memRequestBytes?: number;
+  memLimitBytes?: number;
+}
+
+export interface InsightsFailedBuild {
+  project: string;
+  service: string;
+  at: string;
+  status: string;
+  commitMessage: string;
+  error: string;
+}
+
+export interface InsightsCertProblem {
+  project: string;
+  host: string;
+  problem: string;
 }
 
 export interface InsightsDeploy {
@@ -40,6 +66,8 @@ export interface Insights {
   usageSince?: string;
   services: InsightsService[];
   deploys: InsightsDeploy[];
+  failedBuilds: InsightsFailedBuild[];
+  certProblems: InsightsCertProblem[];
 }
 
 export async function getInsights(range: InsightsRange): Promise<Insights> {

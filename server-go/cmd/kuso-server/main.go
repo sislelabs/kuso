@@ -48,6 +48,7 @@ import (
 	"kuso/server/internal/health"
 	"kuso/server/internal/helmhistory"
 	httpsrv "kuso/server/internal/http"
+	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/incidents"
 	"kuso/server/internal/instancepg"
@@ -1499,6 +1500,9 @@ func main() {
 		}
 		usageSampler := &podusage.Sampler{Kube: kubeClient, Store: usageStore, Logger: logger.With("component", "podusage")}
 		goSafe(logger, "podusage", func() { usageSampler.Run(ctx) })
+	}
+	if kubeClient != nil {
+		httphandlers.WarmInsights()
 	}
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:                    database,

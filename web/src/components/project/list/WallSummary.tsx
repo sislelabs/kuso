@@ -149,7 +149,7 @@ export function FleetStrip({
       )}
 
       {show("requests") && requests && requestTotal !== undefined && (
-        <Link href="/insights?m=requests" className={cn(cell, cellLink)}>
+        <Link href="/insights?v=compare&m=requests" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>{compact(requestTotal)}</div>
             <div className={small}>requests, last 24h</div>
@@ -186,36 +186,7 @@ export function FleetStrip({
         </div>
       )}
 
-      {show("cves") && (
-        <div className={cell}>
-          <div className="min-w-0">
-            <div className={cn(big, vulns && vulns.critical > 0 && "text-[var(--danger)]", vulns && vulns.critical + vulns.high === 0 && "text-[var(--success)]")}>
-              {vulns ? (vulns.critical > 0 ? vulns.critical : vulns.high) : "—"}
-              {vulns && <span className={unit}> {vulns.critical > 0 ? "critical CVEs" : "high CVEs"}</span>}
-            </div>
-            <div className={small}>
-              {!vulns ? (
-                "CVEs in running images"
-              ) : vulns.critical + vulns.high === 0 ? (
-                `none critical or high in ${vulns.scanned} images`
-              ) : (
-                <>
-                  {vulns.critical > 0 ? `${vulns.high} high, ` : ""}
-                  {vulns.fixable} fixable
-                  {vulns.worst && (
-                    <>
-                      {" "}· worst{" "}
-                      <Link href={vulns.worst.href} className={inlineLink}>
-                        {vulns.worst.label}
-                      </Link>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {show("cves") && <CvesCell vulns={vulns} />}
 
       {show("uptime") && (
         <div className={cell}>
@@ -293,7 +264,7 @@ export function FleetStrip({
       )}
 
       {show("capacity") && capacity && capacity.memUsed > 0 && (
-        <Link href="/insights?m=memory" className={cn(cell, cellLink)}>
+        <Link href="/insights?v=compare&m=memory" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>
               {formatBytes(capacity.memUsed)}
@@ -340,7 +311,7 @@ export function FleetStrip({
           <ChartLine className="size-4 shrink-0 text-[var(--accent)]" aria-hidden />
           <div className="min-w-0">
             <div className="text-[13px] font-medium">Insights</div>
-            <div className={small}>compare services</div>
+            <div className={small}>cluster overview</div>
           </div>
           <ArrowRight className="ml-auto size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
         </Link>
@@ -349,6 +320,37 @@ export function FleetStrip({
       </div>
       <PanelPicker panels={panels} onPanels={onPanels} isAdmin={isAdmin} />
     </div>
+  );
+}
+
+// CVE totals for production, with staging and addons as a second line.
+// The cell opens the worst production image's vulnerabilities.
+function CvesCell({ vulns }: { vulns: FleetVulns | undefined }) {
+  const prod = vulns?.production;
+  const showCritical = !prod || prod.critical > 0;
+  const n = prod ? (showCritical ? prod.critical : prod.high) : undefined;
+  const clean = !!prod && prod.critical + prod.high === 0;
+  const otherN = vulns ? vulns.other.critical : 0;
+  const body = (
+    <div className="min-w-0">
+      <div className={cn(big, prod && prod.critical > 0 && "text-[var(--danger)]", clean && "text-[var(--success)]")}>
+        {n === undefined ? "—" : n}
+        <span className={unit}> {clean ? "CVEs in production" : showCritical ? "critical in production" : "high in production"}</span>
+      </div>
+      <div className={small}>
+        {!vulns ? "CVEs in running images" : otherN > 0 ? `+${otherN} in staging & addons` : clean ? `none critical or high in ${prod?.images ?? 0} images` : "none in staging & addons"}
+      </div>
+    </div>
+  );
+  if (!vulns?.worst) return <div className={cell}>{body}</div>;
+  return (
+    <Link
+      href={vulns.worst.href}
+      title={`Worst: ${vulns.worst.label} (${vulns.worst.critical} critical, ${vulns.worst.high} high)`}
+      className={cn(cell, cellLink)}
+    >
+      {body}
+    </Link>
   );
 }
 
