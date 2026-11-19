@@ -250,21 +250,25 @@ func resolveServiceURLs(project, requestedService, explicitCallback string) (str
 			project, requestedService)
 	}
 
-	// Ensure scheme. kuso always serves HTTPS on its auto-domains.
+	callback, homepage := oauthCallbackURLs(host)
+	return requestedService, callback, homepage, nil
+}
+
+// betterAuthGithubCallback is Better Auth's standard callback path; the
+// provider id in the env (GITHUB_*) maps to it at runtime.
+const betterAuthGithubCallback = "/api/auth/callback/github"
+
+// oauthCallbackURLs turns a host, base URL or full callback URL into the
+// callback and homepage URLs. A value already ending in the callback
+// path is taken as the full callback, not a base to append it to.
+func oauthCallbackURLs(host string) (callback, homepage string) {
+	// kuso always serves HTTPS on its auto-domains.
 	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
 		host = "https://" + host
 	}
 	host = strings.TrimRight(host, "/")
-	homepage := host
-	// Better Auth's standard callback path. The provider id in the env
-	// (GITHUB_*) maps to /api/auth/callback/github at runtime.
-	callback := host + "/api/auth/callback/github"
-
-	if explicitCallback != "" && !strings.HasPrefix(explicitCallback, "http") {
-		// User passed a path-only or bare host; we already prefixed
-		// scheme above. Leave callback as-is.
-	}
-	return requestedService, callback, homepage, nil
+	host = strings.TrimSuffix(host, betterAuthGithubCallback)
+	return host + betterAuthGithubCallback, host
 }
 
 func serviceName(s map[string]any) string {
@@ -400,7 +404,7 @@ func init() {
 	githubOauthAppPrepareCmd.Flags().StringVar(&gOauthPrepKeyPrefix, "key-prefix", "GITHUB",
 		"env-var name prefix (e.g. GITHUB → GITHUB_CLIENT_ID/_SECRET)")
 	githubOauthAppPrepareCmd.Flags().StringVar(&gOauthPrepCallback, "callback", "",
-		"override the service's auto-detected public URL (rare)")
+		"override the service's auto-detected public URL: a host, base URL or the full …/api/auth/callback/github URL (rare)")
 	githubOauthAppPrepareCmd.Flags().StringVar(&gOauthPrepAppName, "app-name", "",
 		"GitHub Application name (default: <project>-<service>)")
 	githubOauthAppPrepareCmd.Flags().BoolVar(&gOauthPrepNoInput, "no-input", false,
