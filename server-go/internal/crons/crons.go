@@ -481,6 +481,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			PrivateEgress:           privateEgress,
 			PlatformAPIEgress:       platformAPIEgress,
 			EnvScope:                prod.Spec.EnvScope,
+			SecurityContext:         prod.Spec.SecurityContext,
 		},
 	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
@@ -818,6 +819,7 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		cr.Spec.Env = EnvForCron(prod.Spec.EnvVars)
 		cr.Spec.Placement = prod.Spec.Placement
 		cr.Spec.EnvScope = prod.Spec.EnvScope
+		cr.Spec.SecurityContext = prod.Spec.SecurityContext
 		cr.Spec.PrivateEgress = privateEgress
 		cr.Spec.PlatformAPIEgress = platformAPIEgress
 		return nil

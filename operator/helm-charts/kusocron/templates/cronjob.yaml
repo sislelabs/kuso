@@ -200,10 +200,24 @@ spec:
           {{- end }}
           containers:
             - name: cron
+              {{- /* The owning service's opt-in relaxation, rendered as
+                     kusoenvironment/templates/deployment.yaml does for the
+                     app container: a setpriv/gosu image needs the same caps
+                     in its cron as in its pods. */}}
               securityContext:
-                allowPrivilegeEscalation: false
+                allowPrivilegeEscalation: {{ if and .Values.securityContext .Values.securityContext.allowPrivilegeEscalation }}true{{ else }}false{{ end }}
                 capabilities:
                   drop: ["ALL"]
+                  {{- with .Values.securityContext }}
+                  {{- with .capabilities }}
+                  {{- with .add }}
+                  add:
+                    {{- range . }}
+                    - {{ . | quote }}
+                    {{- end }}
+                  {{- end }}
+                  {{- end }}
+                  {{- end }}
               {{- /* kind=http synthesises a curl probe. Image is
                      curlimages/curl — a 5MB scratch+curl image with
                      no other tools, which means no stray sh, no

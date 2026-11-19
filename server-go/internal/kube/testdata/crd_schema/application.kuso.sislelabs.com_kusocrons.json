@@ -223,6 +223,37 @@
             "description": "Standard cron expression — `*/15 * * * *`. Validated server-side.",
             "type": "string"
           },
+          "securityContext": {
+            "description": "The owning service's opt-in extra Linux capabilities and privilege escalation (copied from its production env), for images that self-drop root at runtime. Default drops ALL caps with no escalation.",
+            "properties": {
+              "allowPrivilegeEscalation": {
+                "type": "boolean"
+              },
+              "capabilities": {
+                "properties": {
+                  "add": {
+                    "description": "Linux capabilities to ADD. Same allowlist as KusoEnvironment.spec.securityContext and kube.ValidateSecurityContext.",
+                    "items": {
+                      "enum": [
+                        "NET_BIND_SERVICE",
+                        "CHOWN",
+                        "DAC_OVERRIDE",
+                        "FOWNER",
+                        "SETUID",
+                        "SETGID",
+                        "SETPCAP",
+                        "KILL"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
           "service": {
             "description": "For kind=service only. KusoService FQN (e.g. \u003cproject\u003e-\u003cshort\u003e) whose image + envFromSecrets we reuse.",
             "type": "string"

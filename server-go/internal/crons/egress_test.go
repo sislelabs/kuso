@@ -43,7 +43,8 @@ func egressFixture(t *testing.T, private, platform bool, extra ...*kube.KusoCron
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-production"},
 		Spec: kube.KusoEnvironmentSpec{
 			Project: "alpha", Service: "alpha-web", EnvScope: "production",
-			Image: &kube.KusoImage{Repository: "registry.local/alpha/web", Tag: "sha1"},
+			Image:           &kube.KusoImage{Repository: "registry.local/alpha/web", Tag: "sha1"},
+			SecurityContext: &kube.KusoSecurityContext{Capabilities: &kube.KusoCapabilities{Add: []string{"SETUID", "SETGID"}}},
 		},
 	})
 	for _, c := range extra {
@@ -70,6 +71,10 @@ func TestAdd_CopiesServiceEgress(t *testing.T) {
 		if cr.Spec.EnvScope != "production" {
 			t.Errorf("cron envScope = %q, want the env's production", cr.Spec.EnvScope)
 		}
+		// OPS-1: a setpriv/gosu image's cron needs the caps its pods get.
+		if sc := cr.Spec.SecurityContext; sc == nil || sc.Capabilities == nil || len(sc.Capabilities.Add) != 2 {
+			t.Errorf("cron securityContext = %+v, want the env's SETUID/SETGID", sc)
+		}
 	}
 }
 
@@ -88,5 +93,8 @@ func TestSyncFromService_RestampsEgress(t *testing.T) {
 	if !cr.Spec.PrivateEgress || !cr.Spec.PlatformAPIEgress {
 		t.Errorf("sync must restamp egress from the service, got private=%v platform=%v",
 			cr.Spec.PrivateEgress, cr.Spec.PlatformAPIEgress)
+	}
+	if cr.Spec.SecurityContext == nil {
+		t.Error("sync must restamp the env's securityContext")
 	}
 }

@@ -473,17 +473,12 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 					},
 					Containers: []corev1.Container{
 						{
-							Name:    "release",
-							Image:   fmt.Sprintf("%s:%s", image.Repository, image.Tag),
-							Command: env.Spec.Release.Command,
-							Env:     envVars,
-							EnvFrom: envFrom,
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: ptrBool(false),
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
+							Name:            "release",
+							Image:           fmt.Sprintf("%s:%s", image.Repository, image.Tag),
+							Command:         env.Spec.Release.Command,
+							Env:             envVars,
+							EnvFrom:         envFrom,
+							SecurityContext: containerSecurityContext(env.Spec.SecurityContext),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -708,4 +703,22 @@ func (r *Runner) replaceFailedJob(ctx context.Context, ns, name string) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// containerSecurityContext is the release container's context: kuso's
+// hardened default (drop ALL, no escalation) plus the env's opt-in
+// relaxation, rendered the way kusoenvironment's deployment.yaml renders
+// it for the app container. The hook runs the same image, so an image
+// that drops root via setpriv/gosu needs the same capabilities here.
+func containerSecurityContext(sc *kube.KusoSecurityContext) *corev1.SecurityContext {
+	out := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptrBool(sc != nil && sc.AllowPrivilegeEscalation != nil && *sc.AllowPrivilegeEscalation),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	if sc != nil && sc.Capabilities != nil {
+		for _, c := range sc.Capabilities.Add {
+			out.Capabilities.Add = append(out.Capabilities.Add, corev1.Capability(c))
+		}
+	}
+	return out
 }

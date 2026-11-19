@@ -4128,6 +4128,7 @@ func (s *Service) repointCrons(ctx context.Context, ns, project, sourceShortName
 			if perr == nil && prod != nil {
 				live.Spec.EnvFromSecrets = prod.Spec.EnvFromSecrets
 				live.Spec.Env = cronspkg.EnvForCron(prod.Spec.EnvVars)
+				live.Spec.SecurityContext = prod.Spec.SecurityContext
 			}
 			return nil
 		}); uerr != nil {
