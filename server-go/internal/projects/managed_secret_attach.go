@@ -47,7 +47,7 @@ func (s *Service) attachServiceSecretToEnvs(ctx context.Context, ns, project, se
 		// letting updateWithRetry re-read on conflict keeps both edits.
 		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
 			if !hasEnvFromSecret(live.Spec.EnvFromSecrets, secretName) {
-				live.Spec.EnvFromSecrets = append(live.Spec.EnvFromSecrets, secretName)
+				live.Spec.EnvFromSecrets = kube.CloneConnsLast(append(live.Spec.EnvFromSecrets, secretName), live.Labels[kube.LabelEnv])
 			}
 			return nil
 		}); uerr != nil {

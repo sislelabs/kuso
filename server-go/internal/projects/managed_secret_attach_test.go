@@ -278,3 +278,23 @@ func TestClearShadowedEnvLiterals_SkipsPreviewsAndOverrides(t *testing.T) {
 		t.Error("preview literal was cleared")
 	}
 }
+
+// The attach must order the list the way the addon refresh does (the env's
+// own clone conns last), or the next addon event reorders it and rolls pods.
+func TestSetEnvValue_AttachKeepsCloneConnLast(t *testing.T) {
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnvSpec("alpha", "web", "staging", "alpha-web-staging", kube.KusoEnvironmentSpec{
+			Kind:           "staging",
+			EnvFromSecrets: []string{"alpha-shared", "alpha-db-staging-conn"},
+		}),
+	)
+	if _, err := s.SetEnvValue(context.Background(), "alpha", "web", "API_KEY", "v"); err != nil {
+		t.Fatalf("SetEnvValue: %v", err)
+	}
+	got := envFromOf(t, s, "alpha-web-staging")
+	if len(got) == 0 || got[len(got)-1] != "alpha-db-staging-conn" {
+		t.Fatalf("envFromSecrets = %v, want the env's clone conn last", got)
+	}
+}
