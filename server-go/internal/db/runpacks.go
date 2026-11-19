@@ -148,6 +148,9 @@ WHERE cap."securityCtxId" = $1`, id)
 		}
 		c.CapabilitiesAdd = append(c.CapabilitiesAdd, v)
 	}
+	if err := addRows.Err(); err != nil {
+		return nil, err
+	}
 	dropRows, err := d.QueryContext(ctx, `
 SELECT cd.value
 FROM "Capability" cap
@@ -163,6 +166,9 @@ WHERE cap."securityCtxId" = $1`, id)
 			return nil, err
 		}
 		c.CapabilitiesDrop = append(c.CapabilitiesDrop, v)
+	}
+	if err := dropRows.Err(); err != nil {
+		return nil, err
 	}
 	return &c, nil
 }

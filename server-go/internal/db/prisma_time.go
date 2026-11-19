@@ -75,14 +75,7 @@ func prismaNow() prismaTime {
 	return prismaTime{Time: time.Now().UTC()}
 }
 
-// prismaAt wraps an explicit time.Time. Pass a zero time.Time when
-// you actually want NULL — use nullPrismaAt for that.
+// prismaAt wraps an explicit time.Time.
 func prismaAt(t time.Time) prismaTime {
 	return prismaTime{Time: t.UTC()}
-}
-
-// nullPrismaAt returns a nullPrismaTime that writes NULL when t is
-// zero.
-func nullPrismaAt(t time.Time) nullPrismaTime {
-	return nullPrismaTime{Time: t.UTC(), Valid: !t.IsZero()}
 }

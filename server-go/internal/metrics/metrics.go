@@ -47,7 +47,7 @@ type DBStatser interface {
 // An interface (not *db.DB) so this package stays free of the db
 // dependency — *db.DB satisfies it via MigrationCounts().
 type MigrationProbe interface {
-	MigrationCounts() (applied, pending int)
+	MigrationCounts() (applied, pending int, err error)
 }
 
 // Latency histograms for the three load-bearing async operations.
@@ -145,7 +145,7 @@ func ObserveReconcileObserve(start time.Time, err error) {
 	reconcileObserveDuration.WithLabelValues(outcome(err)).Observe(time.Since(start).Seconds())
 }
 
-// Register attaches the runtime gauges to the default registry. Idempotent
+// RegisterWithMigrations attaches the runtime gauges to the default registry. Idempotent
 // so a second call (in tests) is a no-op.
 //
 // kc may be nil — when not wired, the build-queue gauges return 0 so
@@ -156,20 +156,15 @@ func ObserveReconcileObserve(start time.Time, err error) {
 // scrape would otherwise issue a cluster-wide list. 10s is enough for
 // monitoring (the scrape interval is 15s anyway) and small enough to
 // reflect a queue draining in near-real-time.
-func Register(db DBStatser, kc *kube.Client, cacheTTL time.Duration) {
-	RegisterWithMigrations(db, nil, kc, cacheTTL)
-}
-
-// RegisterWithMigrations is Register plus the schema-migration gauges.
-// mig may be nil (the migration gauges then read 0). Kept as a separate
-// entrypoint so existing Register callers don't have to thread a probe
-// they don't have.
+//
+// mig may be nil (the migration gauges then read 0).
 func RegisterWithMigrations(db DBStatser, mig MigrationProbe, kc *kube.Client, cacheTTL time.Duration) {
 	registerOnce.Do(func() {
 		if cacheTTL <= 0 {
 			cacheTTL = 10 * time.Second
 		}
 		bq := &buildQueueProbe{kc: kc, ttl: cacheTTL}
+		mp := &migrationCountsProbe{mig: mig, ttl: cacheTTL}
 
 		// Schema-migration state. pending > 0 means the running binary
 		// expects migrations that haven't applied — a stuck/partial
@@ -182,10 +177,7 @@ func RegisterWithMigrations(db DBStatser, mig MigrationProbe, kc *kube.Client, c
 			Name:      "migrations_applied",
 			Help:      "Count of schema migrations recorded as applied.",
 		}, func() float64 {
-			if mig == nil {
-				return 0
-			}
-			applied, _ := mig.MigrationCounts()
+			applied, _ := mp.snapshot()
 			return float64(applied)
 		})
 
@@ -195,10 +187,7 @@ func RegisterWithMigrations(db DBStatser, mig MigrationProbe, kc *kube.Client, c
 			Name:      "migrations_pending",
 			Help:      "Count of embedded schema migrations not yet applied (should be 0).",
 		}, func() float64 {
-			if mig == nil {
-				return 0
-			}
-			_, pending := mig.MigrationCounts()
+			_, pending := mp.snapshot()
 			return float64(pending)
 		})
 
@@ -261,6 +250,36 @@ func RegisterWithMigrations(db DBStatser, mig MigrationProbe, kc *kube.Client, c
 }
 
 var registerOnce sync.Once
+
+// migrationCountsProbe serves both migration gauges from one read and
+// keeps the last good sample when the read fails, so a DB blip doesn't
+// report every embedded migration as pending.
+type migrationCountsProbe struct {
+	mig MigrationProbe
+	ttl time.Duration
+
+	mu      sync.Mutex
+	expires time.Time
+	applied int
+	pending int
+}
+
+func (m *migrationCountsProbe) snapshot() (applied, pending int) {
+	if m.mig == nil {
+		return 0, 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if time.Now().Before(m.expires) {
+		return m.applied, m.pending
+	}
+	a, p, err := m.mig.MigrationCounts()
+	if err == nil {
+		m.applied, m.pending = a, p
+		m.expires = time.Now().Add(m.ttl)
+	}
+	return m.applied, m.pending
+}
 
 // buildQueueProbe caches a (queueDepth, runningBuilds) pair so each
 // scrape doesn't issue two cluster-wide list calls. 10s TTL makes the

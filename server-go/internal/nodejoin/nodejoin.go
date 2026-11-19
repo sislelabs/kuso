@@ -534,9 +534,11 @@ func appendKnownHost(path, hostname string, key []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "%s %s\n", hostname, encodeBase64(key))
-	return err
+	if _, err := fmt.Fprintf(f, "%s %s\n", hostname, encodeBase64(key)); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func encodeBase64(b []byte) string {

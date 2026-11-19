@@ -77,3 +77,32 @@ func TestOutcomeLabel(t *testing.T) {
 		t.Errorf("outcome(err) = %q, want error", got)
 	}
 }
+
+type fakeMigrationProbe struct {
+	calls            int
+	applied, pending int
+	err              error
+}
+
+func (f *fakeMigrationProbe) MigrationCounts() (int, int, error) {
+	f.calls++
+	return f.applied, f.pending, f.err
+}
+
+func TestMigrationCountsProbeKeepsLastGoodOnError(t *testing.T) {
+	f := &fakeMigrationProbe{applied: 19}
+	mp := &migrationCountsProbe{mig: f, ttl: time.Hour}
+	if a, p := mp.snapshot(); a != 19 || p != 0 {
+		t.Fatalf("healthy: got applied=%d pending=%d", a, p)
+	}
+	mp.snapshot()
+	if f.calls != 1 {
+		t.Fatalf("both gauges within ttl should share one read, got %d reads", f.calls)
+	}
+
+	mp.expires = time.Time{}
+	f.applied, f.pending, f.err = 0, 19, errors.New("db down")
+	if a, p := mp.snapshot(); a != 19 || p != 0 {
+		t.Fatalf("read error: got applied=%d pending=%d, want last good 19/0", a, p)
+	}
+}

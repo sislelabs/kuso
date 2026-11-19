@@ -206,3 +206,16 @@ func TestApplyMigration_InsertOnConflict(t *testing.T) {
 		t.Errorf("SchemaMigration rows for v99999 = %d, want 1", n)
 	}
 }
+
+func TestMigrationState_ReadErrorIsNotAllPending(t *testing.T) {
+	d := openTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st, err := d.MigrationState(ctx)
+	if err == nil {
+		t.Fatalf("MigrationState with a dead ctx returned no error: %+v", st)
+	}
+	if _, _, err := d.MigrationCounts(); err != nil {
+		t.Fatalf("MigrationCounts healthy: %v", err)
+	}
+}

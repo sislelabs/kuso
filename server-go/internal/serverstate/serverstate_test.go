@@ -157,3 +157,9 @@ func TestUnregisterLoopTargeted(t *testing.T) {
 		t.Fatalf("unregistering unknown names must be a no-op; got %+v", s)
 	}
 }
+
+func UnregisterLoops() {
+	mu.Lock()
+	loops = map[string]*loopState{}
+	mu.Unlock()
+}

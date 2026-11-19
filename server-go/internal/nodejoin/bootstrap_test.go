@@ -184,3 +184,12 @@ func TestMergeFactLabels_EmptyFactsDropped(t *testing.T) {
 		t.Errorf("empty facts should produce empty labels: %v", got)
 	}
 }
+
+// BuildAgentExec returns the INSTALL_K3S_EXEC payload for the flag tests.
+func BuildAgentExec(labels map[string]string, nodeName string) string {
+	flags := buildAgentFlags(labels, nodeName)
+	if flags == "" {
+		return "agent"
+	}
+	return "agent " + flags
+}

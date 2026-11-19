@@ -1,9 +1,11 @@
 package nodejoin
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -54,6 +56,27 @@ func TestHostKeyPinSurvivesRestart(t *testing.T) {
 	}
 	if got, _ := (&SecretKnownHosts{Client: cs, Namespace: "kuso"}).Lookup(context.Background(), "[fd00::1]:22"); got != nil {
 		t.Error("unrelated host must have no pin")
+	}
+}
+
+// LOOP-3: two racing first dials both see "no pin"; the second Pin must
+// not replace the key the first one stored.
+func TestPinRefusesDifferentKeyForPinnedHost(t *testing.T) {
+	store := &SecretKnownHosts{Client: kubefake.NewSimpleClientset(), Namespace: "kuso"}
+	ctx := context.Background()
+	good, evil := newHostKey(t).Marshal(), newHostKey(t).Marshal()
+	if err := store.Pin(ctx, "node-3:22", good); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Pin(ctx, "node-3:22", good); err != nil {
+		t.Fatalf("re-pinning the same key: %v", err)
+	}
+	if err := store.Pin(ctx, "node-3:22", evil); !errors.Is(err, ErrHostKeyMismatch) {
+		t.Fatalf("pinning a different key: got %v, want ErrHostKeyMismatch", err)
+	}
+	got, err := store.Lookup(ctx, "node-3:22")
+	if err != nil || !bytes.Equal(got, good) {
+		t.Fatalf("pin was replaced: got %x err %v", got, err)
 	}
 }
 

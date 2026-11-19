@@ -26,15 +26,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(u)
-	base := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		base(r)
-		r.Host = u.Host
-		if r.Header.Get("Origin") != "" {
-			r.Header.Set("Origin", u.Scheme+"://"+u.Host)
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(u)
+		if pr.Out.Header.Get("Origin") != "" {
+			pr.Out.Header.Set("Origin", u.Scheme+"://"+u.Host)
 		}
-	}
+	}}
 
 	spaH, err := spa.Handler(os.DirFS(*dist), "/api/", "/ws/", "/healthz")
 	if err != nil {

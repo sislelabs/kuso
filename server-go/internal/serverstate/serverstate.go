@@ -144,25 +144,6 @@ func RegisterLoop(name string, interval time.Duration) {
 	mu.Unlock()
 }
 
-// UnregisterLoops drops every registered loop. Call when the lease context
-// is cancelled (leadership lost / shutdown) so a stale beat from a former
-// tenure can't make a non-leader — or a re-elected pod before its loops
-// restart — read as unhealthy. Mirrors SetLeading(false) resetting the
-// poller clock.
-//
-// NOTE: this wipes the WHOLE map. Only safe to call from a context that
-// owns every registered loop. Two independent leases now register into
-// this registry (cluster-singletons and kuso-server-singletons); each
-// must drop only ITS OWN loops on lease loss via UnregisterLoop(names…),
-// NOT this blanket clear, or one lease's cancel would strand the other's
-// still-running loops (their heartbeats would keep landing on a wiped
-// entry — a no-op — so those loops would read as unregistered/ignored).
-func UnregisterLoops() {
-	mu.Lock()
-	loops = map[string]*loopState{}
-	mu.Unlock()
-}
-
 // UnregisterLoop drops only the named loops. Call from a lease-holder
 // closure's cancel path to unregister exactly the loops that closure
 // started, leaving loops owned by a sibling lease untouched. Unknown

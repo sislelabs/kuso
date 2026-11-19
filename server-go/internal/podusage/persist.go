@@ -11,8 +11,9 @@ import (
 const (
 	// BucketInterval is the persisted resolution.
 	BucketInterval = 5 * time.Minute
-	// PersistRetention is how long buckets are kept in Postgres.
-	PersistRetention = 7 * 24 * time.Hour
+	// PersistRetention is how long buckets are kept in Postgres: what
+	// Load and the usage readers use (Retention) plus one prune period.
+	PersistRetention = Retention + time.Hour
 )
 
 // Persister writes each completed five-minute bucket to Postgres and

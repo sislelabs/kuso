@@ -98,9 +98,8 @@ func GetEntry(slug string) (*Entry, error) {
 	return e, nil
 }
 
-// Validate loads every template and confirms it parses + renders with
-// stub required answers. Used by the CI test and can be called at boot
-// as a fail-fast.
+// Validate loads and parses every embedded template manifest. Called
+// once at boot.
 func Validate() error {
 	_, err := Catalog()
 	return err
