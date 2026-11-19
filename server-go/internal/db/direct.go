@@ -177,6 +177,9 @@ func (d *DB) applyRoleTimeouts(ctx context.Context) error {
 		cfg = append(cfg, c)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: role timeouts: %w", err)
+	}
 	have := map[string]string{}
 	for _, c := range cfg {
 		if k, v, ok := strings.Cut(c.String, "="); ok {
