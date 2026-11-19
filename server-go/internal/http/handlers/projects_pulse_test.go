@@ -9,6 +9,7 @@ func TestTraefikServiceEnv(t *testing.T) {
 	cases := map[string]string{
 		"kuso-ja-web-junior-accelerator-web-production-80@kubernetes": "kuso-ja-web-junior-accelerator-web-production",
 		"kuso-tickero-api-production-http@kubernetes":                 "kuso-tickero-api-production",
+		"kuso-e2e-e2e-web-production-activator-80@kubernetes":         "kuso-e2e-e2e-web-production",
 	}
 	for in, want := range cases {
 		got, ok := traefikServiceEnv(in)

@@ -36,6 +36,8 @@ export interface Insights {
   until: string;
   requestsAvailable: boolean;
   usageAvailable: boolean;
+  /** Oldest CPU/memory sample: the history is in memory and starts at the server's last restart. */
+  usageSince?: string;
   services: InsightsService[];
   deploys: InsightsDeploy[];
 }

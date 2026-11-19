@@ -1482,11 +1482,21 @@ func main() {
 		}
 	}
 	// Per-service CPU/memory history for the Metrics panel. Sampled on
-	// every replica rather than under the leader lease: the history is
-	// in-memory, so whichever replica serves the request needs its own.
+	// every replica rather than under the leader lease: whichever replica
+	// serves the request reads its own store. Five-minute buckets go to
+	// Postgres and are loaded back here, so a restart keeps the history.
 	var usageStore *podusage.Store
 	if kubeClient != nil {
 		usageStore = podusage.NewStore()
+		if database != nil {
+			persister := &podusage.Persister{DB: database, Store: usageStore, Logger: logger.With("component", "podusage")}
+			loadCtx, cancelLoad := context.WithTimeout(ctx, 15*time.Second)
+			if err := persister.Load(loadCtx, time.Now()); err != nil {
+				logger.Warn("podusage: loading saved history failed; starting empty", "err", err)
+			}
+			cancelLoad()
+			goSafe(logger, "podusage-persist", func() { persister.Run(ctx) })
+		}
 		usageSampler := &podusage.Sampler{Kube: kubeClient, Store: usageStore, Logger: logger.With("component", "podusage")}
 		goSafe(logger, "podusage", func() { usageSampler.Run(ctx) })
 	}

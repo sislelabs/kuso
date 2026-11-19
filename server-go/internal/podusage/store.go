@@ -1,11 +1,9 @@
 // Package podusage keeps a short in-memory CPU/memory history per
 // service environment, sampled from the kubelets every SampleInterval.
 //
-// It is deliberately not persisted: the history only has to cover the
-// service Metrics panel's ranges up to Retention, and a restart costing
-// the history is cheaper than a table plus the RBAC and migration that
-// would come with it. Every replica samples on its own, so whichever
-// one serves the request has data.
+// Every replica samples on its own, so whichever one serves the request
+// has data. Persister saves five-minute buckets to Postgres and loads
+// them back on boot, so a restart no longer empties the history.
 package podusage
 
 import (
@@ -186,4 +184,52 @@ func firstAtOrAfter(s []Sample, t int64) int {
 		}
 	}
 	return lo
+}
+
+// Backfill seeds series with older samples (oldest first), ahead of any
+// already recorded. Samples at or after a series' first live sample are
+// dropped so the ring buffer stays in time order.
+func (st *Store) Backfill(samples map[Key][]Sample) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for k, old := range samples {
+		s := st.series[k]
+		var live []Sample
+		if s != nil {
+			live = s.ordered()
+		}
+		if len(live) > 0 {
+			cut := 0
+			for cut < len(old) && old[cut].T < live[0].T {
+				cut++
+			}
+			old = old[:cut]
+		}
+		if len(old) == 0 {
+			continue
+		}
+		ns := &series{}
+		for _, v := range old {
+			ns.add(v, st.capacity)
+		}
+		for _, v := range live {
+			ns.add(v, st.capacity)
+		}
+		st.series[k] = ns
+	}
+}
+
+// Window returns every series' samples in [from, to) as unix ms.
+func (st *Store) Window(from, to int64) map[Key][]Sample {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	out := map[Key][]Sample{}
+	for k, s := range st.series {
+		for _, v := range s.ordered() {
+			if v.T >= from && v.T < to {
+				out[k] = append(out[k], v)
+			}
+		}
+	}
+	return out
 }

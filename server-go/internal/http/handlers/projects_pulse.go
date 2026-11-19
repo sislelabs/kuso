@@ -132,7 +132,9 @@ func (h *ProjectsHandler) Pulse(w http.ResponseWriter, r *http.Request) {
 }
 
 // traefikServiceEnv turns Traefik's service label,
-// "<namespace>-<env>-<port>@kubernetes", into "<namespace>-<env>".
+// "<namespace>-<env>-<port>@kubernetes", into "<namespace>-<env>". A
+// sleep-enabled env is routed through its "<env>-activator" Service, so
+// that suffix is dropped too.
 func traefikServiceEnv(label string) (string, bool) {
 	base, ok := strings.CutSuffix(label, "@kubernetes")
 	if !ok {
@@ -142,7 +144,7 @@ func traefikServiceEnv(label string) (string, bool) {
 	if i <= 0 {
 		return "", false
 	}
-	return base[:i], true
+	return strings.TrimSuffix(base[:i], "-activator"), true
 }
 
 // sumVisibleTraffic adds up the series whose env belongs to a visible

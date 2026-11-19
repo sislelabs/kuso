@@ -32,14 +32,17 @@ var insightsRanges = map[string]insightsRange{
 // Series are [unixSeconds, value]: requests per minute, CPU millicores,
 // memory bytes, p95 latency ms, 5xx share of requests in percent.
 type insightsResponse struct {
-	Range             string            `json:"range"`
-	StepSeconds       int               `json:"stepSeconds"`
-	Since             time.Time         `json:"since"`
-	Until             time.Time         `json:"until"`
-	RequestsAvailable bool              `json:"requestsAvailable"`
-	UsageAvailable    bool              `json:"usageAvailable"`
-	Services          []insightsService `json:"services"`
-	Deploys           []insightsDeploy  `json:"deploys"`
+	Range             string    `json:"range"`
+	StepSeconds       int       `json:"stepSeconds"`
+	Since             time.Time `json:"since"`
+	Until             time.Time `json:"until"`
+	RequestsAvailable bool      `json:"requestsAvailable"`
+	UsageAvailable    bool      `json:"usageAvailable"`
+	// UsageSince is the oldest CPU/memory sample held. The history is in
+	// memory, so it starts at the server's last restart.
+	UsageSince *time.Time        `json:"usageSince,omitempty"`
+	Services   []insightsService `json:"services"`
+	Deploys    []insightsDeploy  `json:"deploys"`
 }
 
 type insightsService struct {
@@ -178,6 +181,12 @@ func (h *ProjectsHandler) Insights(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		hist := h.Usage.History(podusage.Key{Project: s.Project, Service: s.Service, Env: s.Env}, now, min(rg.dur, podusage.Retention), int(rg.dur/rg.step))
+		if hist.Since != nil {
+			t := time.UnixMilli(*hist.Since).UTC()
+			if out.UsageSince == nil || t.Before(*out.UsageSince) {
+				out.UsageSince = &t
+			}
+		}
 		for _, p := range hist.Samples {
 			t := float64(p.T / 1000)
 			s.CPU = append(s.CPU, [2]float64{t, p.CPUMilli})

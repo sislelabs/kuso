@@ -53,6 +53,7 @@ export function InsightsChart({
   ariaLabel,
   empty,
   dim,
+  noDataBefore,
 }: {
   series: ChartSeries[];
   deploys: ChartDeploy[];
@@ -65,6 +66,8 @@ export function InsightsChart({
   ariaLabel: string;
   empty?: string;
   dim?: boolean;
+  /** Shade the range before this time (unix seconds) as having no data. */
+  noDataBefore?: { t: number; label: string };
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -103,14 +106,16 @@ export function InsightsChart({
   const paths = series.map((s) => {
     // Break the line across gaps (no traffic, a restart) instead of
     // drawing a straight bridge over missing data.
+    // A point with no neighbour draws as a dot, or it would be invisible.
     let d = "";
-    let prev: number | null = null;
-    for (const [t, v] of s.points) {
-      const cmd = prev === null || t - prev > stepSeconds * 2.5 ? "M" : "L";
-      d += `${cmd}${x(t).toFixed(1)},${y(v).toFixed(1)}`;
-      prev = t;
-    }
-    return { ...s, d };
+    const dots: [number, number][] = [];
+    s.points.forEach(([t, v], i) => {
+      const gapBefore = i === 0 || t - s.points[i - 1][0] > stepSeconds * 2.5;
+      const gapAfter = i === s.points.length - 1 || s.points[i + 1][0] - t > stepSeconds * 2.5;
+      if (gapBefore && gapAfter) dots.push([x(t), y(v)]);
+      d += `${gapBefore ? "M" : "L"}${x(t).toFixed(1)},${y(v).toFixed(1)}`;
+    });
+    return { ...s, d, dots };
   });
 
   const onMove = (e: PointerEvent<SVGSVGElement>) => {
@@ -160,6 +165,28 @@ export function InsightsChart({
           </text>
         ))}
 
+        {noDataBefore && noDataBefore.t > t0 && (
+          <g>
+            <rect
+              x={PAD.left}
+              y={PAD.top}
+              width={Math.max(0, Math.min(x(noDataBefore.t), width - PAD.right) - PAD.left)}
+              height={plotH}
+              className="fill-[var(--bg-tertiary)]"
+              opacity={0.55}
+            />
+            {x(noDataBefore.t) - PAD.left > 220 && (
+              <text
+                x={(PAD.left + Math.min(x(noDataBefore.t), width - PAD.right)) / 2}
+                y={PAD.top + plotH / 2}
+                textAnchor="middle"
+                className="fill-[var(--text-tertiary)] text-[12px]"
+              >
+                {noDataBefore.label}
+              </text>
+            )}
+          </g>
+        )}
         {paths.map((s) => (
           <g key={s.id}>
             {series.length <= 2 && s.points.length > 1 && (
@@ -170,6 +197,9 @@ export function InsightsChart({
               />
             )}
             <path d={s.d} fill="none" stroke={s.color} strokeWidth={1.7} strokeLinejoin="round" />
+            {s.dots.map(([cx, cy], i) => (
+              <circle key={i} cx={cx} cy={cy} r={2.5} fill={s.color} />
+            ))}
           </g>
         ))}
 

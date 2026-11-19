@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Check, Link2, Search, X } from "lucide-react";
+import { Check, ChevronDown, Link2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { TimeRangePicker } from "@/components/shared/TimeRangePicker";
@@ -80,8 +80,8 @@ function Delta({ effect, def }: { effect: DeployEffect | null; def: MetricDef })
   );
 }
 
-function Spark({ points }: { points: InsightsPoint[] }) {
-  if (points.length < 2) return <span className="h-4 w-14" />;
+function Spark({ points, empty }: { points: InsightsPoint[]; empty: string }) {
+  if (points.length < 2) return <span className="w-14 shrink-0 text-right text-[11px] text-[var(--text-placeholder)]">{empty}</span>;
   const W = 56;
   const H = 16;
   const t0 = points[0][0];
@@ -213,11 +213,14 @@ function Loaded({
     : [];
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
-      <ServiceRail data={data} def={def} selected={selected} color={color} onToggle={toggle} onSelect={onSelect} />
-
-      <div className="min-w-0 space-y-6">
-        <section className={cn(panel, "px-4 pb-3 pt-4 sm:px-5")}>
+    <div className="space-y-6">
+      {/* The rail takes the chart card's height and scrolls inside it, so
+          the page has one scroll and the list never runs past the chart. */}
+      <div className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <div className="relative order-2 lg:order-none">
+          <ServiceRail data={data} def={def} selected={selected} color={color} onToggle={toggle} onSelect={onSelect} />
+        </div>
+        <section className={cn(panel, "min-w-0 px-4 pb-3 pt-4 sm:px-5")}>
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <Segmented label="Metric" options={METRICS.map((m) => ({ value: m.key, label: m.label }))} value={def.key} onChange={onMetric} />
             <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
@@ -260,114 +263,122 @@ function Loaded({
                   : undefined
             }
             dim={dim}
+            noDataBefore={
+              def.source === "usage" && data.usageSince
+                ? {
+                    t: Date.parse(data.usageSince) / 1000,
+                    label: `No CPU or memory history before ${new Date(data.usageSince).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}, when the server last restarted`,
+                  }
+                : undefined
+            }
           />
         </section>
+      </div>
 
-        <section>
-          <h2 className="mb-2.5 font-heading text-[15px] font-semibold text-[var(--text-primary)]">{def.label} for the selected services</h2>
-          <div className={cn(panel, "overflow-x-auto")}>
-            <table className="w-full min-w-[36rem] text-right text-[13px]">
-              <thead>
-                <tr className="border-b border-[var(--border-subtle)] font-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Service</th>
-                  <th className="px-4 py-2.5 font-medium">Now</th>
-                  <th className="px-4 py-2.5 font-medium">Average</th>
-                  <th className="px-4 py-2.5 font-medium">Peak</th>
-                  <th className="px-4 py-2.5 font-medium">Deploys</th>
-                  <th className="px-4 py-2.5 font-medium">Since last deploy</th>
+      <section>
+        <h2 className="mb-2.5 font-heading text-[15px] font-semibold text-[var(--text-primary)]">{def.label} for the selected services</h2>
+        <div className={cn(panel, "overflow-x-auto")}>
+          <table className="w-full min-w-[36rem] text-right text-[13px]">
+            <thead>
+              <tr className="border-b border-[var(--border-subtle)] font-mono text-[11px] uppercase tracking-wide text-[var(--text-tertiary)]">
+                <th className="px-4 py-2.5 text-left font-medium">Service</th>
+                <th className="px-4 py-2.5 font-medium">Now</th>
+                <th className="px-4 py-2.5 font-medium">Average</th>
+                <th className="px-4 py-2.5 font-medium">Peak</th>
+                <th className="px-4 py-2.5 font-medium">Deploys</th>
+                <th className="px-4 py-2.5 font-medium">Since last deploy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sel.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-tertiary)]">
+                    No services selected
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {sel.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-6 text-center text-[var(--text-tertiary)]">
-                      No services selected
+              )}
+              {sel.map((s) => {
+                const id = serviceId(s);
+                const st = seriesStats(s[def.key]);
+                const times = deploysBySvc.get(id) ?? [];
+                const last = times.length ? Math.max(...times) : null;
+                const eff = last === null ? null : deployEffect(s[def.key], last, rangeSeconds, data.stepSeconds);
+                return (
+                  <tr key={id} className="border-b border-[var(--border-subtle)] font-mono text-[var(--text-primary)] last:border-0">
+                    <td className="px-4 py-2.5 text-left font-sans">
+                      <Link
+                        href={`/projects/${encodeURIComponent(s.project)}?service=${encodeURIComponent(s.service)}`}
+                        className="inline-flex items-center gap-2 rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                      >
+                        <span className="size-2 rounded-full" style={{ background: color(id) }} />
+                        {serviceLabel(s)}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5">{st ? def.format(st.now) : "—"}</td>
+                    <td className="px-4 py-2.5">{st ? def.format(st.avg) : "—"}</td>
+                    <td className="px-4 py-2.5">{st ? def.format(st.peak) : "—"}</td>
+                    <td className="px-4 py-2.5">{times.length || "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <Delta effect={eff} def={def} />
+                      {eff && Math.abs(eff.pct) >= 5 && (
+                        <div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+                          {def.format(eff.before)} → {def.format(eff.after)}
+                        </div>
+                      )}
                     </td>
                   </tr>
-                )}
-                {sel.map((s) => {
-                  const id = serviceId(s);
-                  const st = seriesStats(s[def.key]);
-                  const times = deploysBySvc.get(id) ?? [];
-                  const last = times.length ? Math.max(...times) : null;
-                  const eff = last === null ? null : deployEffect(s[def.key], last, rangeSeconds, data.stepSeconds);
-                  return (
-                    <tr key={id} className="border-b border-[var(--border-subtle)] font-mono text-[var(--text-primary)] last:border-0">
-                      <td className="px-4 py-2.5 text-left font-sans">
-                        <Link
-                          href={`/projects/${encodeURIComponent(s.project)}?service=${encodeURIComponent(s.service)}`}
-                          className="inline-flex items-center gap-2 rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                        >
-                          <span className="size-2 rounded-full" style={{ background: color(id) }} />
-                          {serviceLabel(s)}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2.5">{st ? def.format(st.now) : "—"}</td>
-                      <td className="px-4 py-2.5">{st ? def.format(st.avg) : "—"}</td>
-                      <td className="px-4 py-2.5">{st ? def.format(st.peak) : "—"}</td>
-                      <td className="px-4 py-2.5">{times.length || "—"}</td>
-                      <td className="px-4 py-2.5">
-                        <Delta effect={eff} def={def} />
-                        {eff && Math.abs(eff.pct) >= 5 && (
-                          <div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-                            {def.format(eff.before)} → {def.format(eff.after)}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section>
-          <h2 className="mb-2.5 font-heading text-[15px] font-semibold text-[var(--text-primary)]">Deploys in this range</h2>
-          <div className={cn(panel, "overflow-hidden")}>
-            {groups.length === 0 && <p className="px-4 py-6 text-center text-[13px] text-[var(--text-tertiary)]">No deploys in the last {data.range}</p>}
-            <ul>
-              {groups.slice(0, MAX_DEPLOY_ROWS).map((g) => {
-                const ids = g.services.map((svc) => `${g.project}/${svc}`).filter((id) => byId.has(id));
-                const sumAt = (at: number) => {
-                  const effs = ids.map((id) => deployEffect(byId.get(id)![def.key], at, rangeSeconds, data.stepSeconds));
-                  if (!effs.length || effs.some((e) => !e)) return null;
-                  const before = effs.reduce((n, e) => n + e!.before, 0);
-                  const after = effs.reduce((n, e) => n + e!.after, 0);
-                  return before ? { before, after, pct: ((after - before) / before) * 100 } : null;
-                };
-                const eff = sumAt(g.at);
-                return (
-                  <li key={`${g.project}-${g.commitSha}-${g.at}`} className="border-b border-[var(--border-subtle)] last:border-0">
-                    <button
-                      type="button"
-                      disabled={!ids.length}
-                      onClick={() => onSelect(ids.slice(0, MAX_SELECTED))}
-                      className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 text-left text-[13px] outline-none hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] disabled:cursor-default sm:grid-cols-[3.5rem_minmax(0,16rem)_minmax(0,1fr)_auto]"
-                    >
-                      <span className="font-mono text-xs text-[var(--text-tertiary)]">
-                        {new Date(g.at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}
-                      </span>
-                      <span className="truncate text-[var(--text-primary)]">
-                        {g.project}
-                        {(g.services.length > 1 || g.services[0] !== g.project) && <span className="text-[var(--text-tertiary)]"> / {g.services.join(", ")}</span>}
-                      </span>
-                      <span className="hidden truncate text-[var(--text-secondary)] sm:block">{g.commitMessage}</span>
-                      <span className="flex items-center justify-end gap-1.5 whitespace-nowrap text-[11.5px] text-[var(--text-tertiary)]">
-                        {eff && (
-                          <>
-                            {def.label.toLowerCase()} <Delta effect={eff} def={def} />
-                          </>
-                        )}
-                      </span>
-                    </button>
-                  </li>
                 );
               })}
-            </ul>
-          </div>
-        </section>
-      </div>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="mb-2.5 font-heading text-[15px] font-semibold text-[var(--text-primary)]">Deploys in this range</h2>
+        <div className={cn(panel, "overflow-hidden")}>
+          {groups.length === 0 && <p className="px-4 py-6 text-center text-[13px] text-[var(--text-tertiary)]">No deploys in the last {data.range}</p>}
+          <ul>
+            {groups.slice(0, MAX_DEPLOY_ROWS).map((g) => {
+              const ids = g.services.map((svc) => `${g.project}/${svc}`).filter((id) => byId.has(id));
+              const sumAt = (at: number) => {
+                const effs = ids.map((id) => deployEffect(byId.get(id)![def.key], at, rangeSeconds, data.stepSeconds));
+                if (!effs.length || effs.some((e) => !e)) return null;
+                const before = effs.reduce((n, e) => n + e!.before, 0);
+                const after = effs.reduce((n, e) => n + e!.after, 0);
+                return before ? { before, after, pct: ((after - before) / before) * 100 } : null;
+              };
+              const eff = sumAt(g.at);
+              return (
+                <li key={`${g.project}-${g.commitSha}-${g.at}`} className="border-b border-[var(--border-subtle)] last:border-0">
+                  <button
+                    type="button"
+                    disabled={!ids.length}
+                    onClick={() => onSelect(ids.slice(0, MAX_SELECTED))}
+                    className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 text-left text-[13px] outline-none hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] disabled:cursor-default sm:grid-cols-[3.5rem_minmax(0,16rem)_minmax(0,1fr)_auto]"
+                  >
+                    <span className="font-mono text-xs text-[var(--text-tertiary)]">
+                      {new Date(g.at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}
+                    </span>
+                    <span className="truncate text-[var(--text-primary)]">
+                      {g.project}
+                      {(g.services.length > 1 || g.services[0] !== g.project) && <span className="text-[var(--text-tertiary)]"> / {g.services.join(", ")}</span>}
+                    </span>
+                    <span className="hidden truncate text-[var(--text-secondary)] sm:block">{g.commitMessage}</span>
+                    <span className="flex items-center justify-end gap-1.5 whitespace-nowrap text-[11.5px] text-[var(--text-tertiary)]">
+                      {eff && (
+                        <>
+                          {def.label.toLowerCase()} <Delta effect={eff} def={def} />
+                        </>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </section>
     </div>
   );
 }
@@ -388,6 +399,8 @@ function ServiceRail({
   onSelect: (ids: string[], metric?: MetricKey | null) => void;
 }) {
   const [q, setQ] = useState("");
+  // Phones: the list folds behind a toggle instead of a small scroll box.
+  const [open, setOpen] = useState(false);
   const groups = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const by = new Map<string, InsightsService[]>();
@@ -401,7 +414,16 @@ function ServiceRail({
   }, [data.services, q]);
 
   return (
-    <aside className={cn(panel, "order-2 flex max-h-[22rem] flex-col lg:order-none lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)]")} aria-label="Services">
+    <aside className={cn(panel, "flex flex-col lg:absolute lg:inset-0")} aria-label="Services">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between px-3 pt-3 text-[13px] font-medium text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] lg:hidden"
+      >
+        Services · {selected.length} selected
+        <ChevronDown aria-hidden className={cn("size-4 text-[var(--text-tertiary)] transition-transform", open && "rotate-180")} />
+      </button>
       <div className="p-2.5">
         <label className="flex h-8 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 text-[var(--text-tertiary)] focus-within:ring-2 focus-within:ring-[var(--ring)]">
           <Search className="size-3.5 shrink-0" aria-hidden />
@@ -430,7 +452,7 @@ function ServiceRail({
           </button>
         ))}
       </div>
-      <div className="relative min-h-0 flex-1 overflow-y-auto px-1.5 pb-2.5">
+      <div className={cn("relative min-h-0 flex-1 px-1.5 pb-2.5 lg:block lg:overflow-y-auto lg:overscroll-contain", open ? "block" : "hidden")}>
         {groups.length === 0 && <p className="px-2 py-4 text-[13px] text-[var(--text-tertiary)]">No services match</p>}
         {groups.map(([project, svcs]) => (
           <div key={project}>
@@ -465,7 +487,7 @@ function ServiceRail({
                     style={on ? { background: color(id) } : undefined}
                   />
                   <span className="min-w-0 flex-1 truncate">{s.service}</span>
-                  <Spark points={s[def.key]} />
+                  <Spark points={s[def.key]} empty={def.source === "traffic" ? "no traffic" : "no data"} />
                 </label>
               );
             })}

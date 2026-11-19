@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, ChartLine } from "lucide-react";
+import { ArrowRight, ChartLine, SlidersHorizontal } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatCpu, relativeTime } from "@/lib/format";
 import { SERVICE_STATUS, TONE_CLASSES } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { ProjectsPulse } from "@/features/projects";
 import type { AttentionItem } from "./fleetModel";
 import { formatBytes } from "./projectCardModel";
+import { DEFAULT_PANELS, PANELS, type FleetBackups, type FleetUptime, type FleetVulns, type PanelKey } from "./fleetPanels";
 
 const inlineLink =
   "rounded-sm text-[var(--text-primary)] underline decoration-[var(--border-strong)] underline-offset-[3px] outline-none hover:decoration-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]";
@@ -59,11 +61,14 @@ function DeployTicks({ times, since, className }: { times: ReadonlyArray<number>
   );
 }
 
-const cell = "flex min-w-0 items-center gap-3 px-4 py-3 sm:px-5";
+// Cells wrap and grow to fill each row. Every cell draws its right and
+// bottom edge; the row box overhangs its frame by 1px so the outer edges
+// are clipped.
+const cell = "flex min-w-0 flex-[1_1_9.5rem] items-center gap-3 border-b border-r sm:flex-[1_1_13rem] border-[var(--border-subtle)] px-4 py-3 sm:px-5";
 // Cells that open Insights on their metric.
 const cellLink =
   "outline-none transition-colors hover:bg-[var(--bg-tertiary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]";
-const big = "font-display text-[17px] font-semibold leading-tight text-[var(--text-primary)] [font-stretch:108%] tabular-nums";
+const big = "whitespace-nowrap font-display text-[17px] font-semibold leading-tight text-[var(--text-primary)] [font-stretch:108%] tabular-nums";
 const unit = "font-sans text-[13px] font-medium text-[var(--text-tertiary)] [font-stretch:100%]";
 const small = "truncate text-xs text-[var(--text-tertiary)]";
 
@@ -85,6 +90,9 @@ export interface FleetStripCapacity {
 // day's traffic, errors, capacity in use and deploys, each with a small
 // picture where there is a series to draw.
 export function FleetStrip({
+  panels,
+  onPanels,
+  isAdmin,
   running,
   stopped,
   broken,
@@ -93,7 +101,13 @@ export function FleetStrip({
   pulse,
   capacity,
   fallbackLastDeploy,
+  vulns,
+  uptime,
+  backups,
 }: {
+  panels: readonly PanelKey[];
+  onPanels: (next: PanelKey[]) => void;
+  isAdmin: boolean;
   running: number;
   stopped: number;
   broken: boolean;
@@ -102,32 +116,39 @@ export function FleetStrip({
   pulse: ProjectsPulse | undefined;
   capacity: FleetStripCapacity | undefined;
   fallbackLastDeploy: { name: string; at: string } | undefined;
+  vulns: FleetVulns | undefined;
+  uptime: FleetUptime | undefined;
+  backups: FleetBackups | undefined;
 }) {
   const requests = pulse?.requestsAvailable ? pulse.requests : undefined;
   const requestTotal = requests ? requests.reduce((n, [, v]) => n + v, 0) * ((pulse?.stepSeconds ?? 600) / 60) : undefined;
   const deploys = pulse?.deploys ?? [];
   const last = deploys[0] ? { name: deploys[0].project, at: deploys[0].at } : fallbackLastDeploy;
   const since = pulse ? Date.parse(pulse.since) : Date.now() - 24 * 3600 * 1000;
+  const show = (k: PanelKey) => panels.includes(k) && (k !== "backups" || isAdmin);
 
   return (
-    <div className="mb-8 grid grid-cols-2 overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] sm:grid-cols-3 lg:flex lg:items-stretch lg:[&>*:not(:last-child)]:border-r lg:[&>*]:border-[var(--border-subtle)]">
-      <div className={cell}>
-        <span
-          aria-hidden
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            broken ? "bg-[var(--danger)]" : "bg-[var(--success)] shadow-[0_0_0_4px_var(--success-subtle)]",
-          )}
-        />
-        <div className="min-w-0">
-          <div className={big}>
-            {running} <span className={unit}>running</span>
+    <div className="mb-8 flex overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <div className="-mb-px -mr-px flex min-w-0 flex-1 flex-wrap">
+      {show("running") && (
+        <div className={cell}>
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              broken ? "bg-[var(--danger)]" : "bg-[var(--success)] shadow-[0_0_0_4px_var(--success-subtle)]",
+            )}
+          />
+          <div className="min-w-0">
+            <div className={big}>
+              {running} <span className={unit}>running</span>
+            </div>
+            <div className={small}>{stopped} stopped</div>
           </div>
-          <div className={small}>{stopped} stopped</div>
         </div>
-      </div>
+      )}
 
-      {requests && requestTotal !== undefined && (
+      {show("requests") && requests && requestTotal !== undefined && (
         <Link href="/insights?m=requests" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>{compact(requestTotal)}</div>
@@ -137,33 +158,141 @@ export function FleetStrip({
         </Link>
       )}
 
-      <div className={cell}>
-        <div className="min-w-0">
-          <div
-            className={cn(
-              big,
-              errors === 0 && "text-[var(--success)]",
-              errors !== undefined && errors > 0 && "text-[var(--danger)]",
-            )}
-          >
-            {errors === undefined ? "—" : errors.toLocaleString()}
-          </div>
-          <div className={small}>
-            {errors && topErrorProject ? (
-              <>
-                errors, {topErrorProject.count === errors ? "all" : "most"} from{" "}
-                <Link href={`/projects/${topErrorProject.name}`} className={inlineLink}>
-                  {topErrorProject.name}
-                </Link>
-              </>
-            ) : (
-              "errors, last 24h"
-            )}
+      {show("errors") && (
+        <div className={cell}>
+          <div className="min-w-0">
+            <div
+              className={cn(
+                big,
+                errors === 0 && "text-[var(--success)]",
+                errors !== undefined && errors > 0 && "text-[var(--danger)]",
+              )}
+            >
+              {errors === undefined ? "—" : errors.toLocaleString()}
+            </div>
+            <div className={small}>
+              {errors && topErrorProject ? (
+                <>
+                  errors, {topErrorProject.count === errors ? "all" : "most"} from{" "}
+                  <Link href={`/projects/${topErrorProject.name}`} className={inlineLink}>
+                    {topErrorProject.name}
+                  </Link>
+                </>
+              ) : (
+                "errors, last 24h"
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {capacity && capacity.memUsed > 0 && (
+      {show("cves") && (
+        <div className={cell}>
+          <div className="min-w-0">
+            <div className={cn(big, vulns && vulns.critical > 0 && "text-[var(--danger)]", vulns && vulns.critical + vulns.high === 0 && "text-[var(--success)]")}>
+              {vulns ? (vulns.critical > 0 ? vulns.critical : vulns.high) : "—"}
+              {vulns && <span className={unit}> {vulns.critical > 0 ? "critical CVEs" : "high CVEs"}</span>}
+            </div>
+            <div className={small}>
+              {!vulns ? (
+                "CVEs in running images"
+              ) : vulns.critical + vulns.high === 0 ? (
+                `none critical or high in ${vulns.scanned} images`
+              ) : (
+                <>
+                  {vulns.critical > 0 ? `${vulns.high} high, ` : ""}
+                  {vulns.fixable} fixable
+                  {vulns.worst && (
+                    <>
+                      {" "}· worst{" "}
+                      <Link href={vulns.worst.href} className={inlineLink}>
+                        {vulns.worst.label}
+                      </Link>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {show("uptime") && (
+        <div className={cell}>
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              !uptime || !uptime.enabled || uptime.checked === 0
+                ? "bg-[var(--text-tertiary)]"
+                : uptime.bad.length > 0
+                  ? "bg-[var(--danger)]"
+                  : "bg-[var(--success)]",
+            )}
+          />
+          <div className="min-w-0">
+            <div className={big}>
+              {uptime && uptime.enabled && uptime.checked > 0 ? (
+                <>
+                  {uptime.up}
+                  <span className={unit}> / {uptime.checked} up</span>
+                </>
+              ) : (
+                "—"
+              )}
+            </div>
+            <div className={small}>
+              {!uptime ? (
+                "uptime checks"
+              ) : !uptime.enabled ? (
+                "uptime checks are off"
+              ) : uptime.checked === 0 ? (
+                "no uptime checks yet"
+              ) : uptime.bad.length > 0 ? (
+                <>
+                  down:{" "}
+                  <Link href={`/projects/${encodeURIComponent(uptime.bad[0].project)}?service=${encodeURIComponent(uptime.bad[0].service)}`} className={inlineLink}>
+                    {uptime.bad[0].project === uptime.bad[0].service ? uptime.bad[0].project : `${uptime.bad[0].project} / ${uptime.bad[0].service}`}
+                  </Link>
+                  {uptime.bad.length > 1 ? ` +${uptime.bad.length - 1}` : ""}
+                </>
+              ) : (
+                "every check passing"
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {show("backups") && (
+        <Link href="/settings/backups#addon-backups" className={cn(cell, cellLink)}>
+          <div className="min-w-0">
+            <div className={cn(big, backups && (backups.failing > 0 || !backups.controlPlaneHealthy) && "text-[var(--danger)]")}>
+              {backups ? (
+                <>
+                  {backups.covered - backups.failing}
+                  <span className={unit}> / {backups.total}</span>
+                </>
+              ) : (
+                "—"
+              )}
+            </div>
+            <div className={small}>
+              {!backups
+                ? "addon backups"
+                : !backups.controlPlaneHealthy
+                  ? "control-plane backup failing"
+                  : backups.failing > 0
+                    ? `addons backed up, ${backups.failing} failing`
+                    : backups.uncovered > 0
+                      ? `addons backed up, ${backups.uncovered} unscheduled`
+                      : "addons backed up"}
+            </div>
+          </div>
+        </Link>
+      )}
+
+      {show("capacity") && capacity && capacity.memUsed > 0 && (
         <Link href="/insights?m=memory" className={cn(cell, cellLink)}>
           <div className="min-w-0">
             <div className={big}>
@@ -178,41 +307,96 @@ export function FleetStrip({
         </Link>
       )}
 
-      <div className={cn(cell, "col-span-2 sm:col-span-1 lg:flex-1")}>
-        <div className="min-w-0 shrink-0">
-          <div className={big}>{pulse ? deploys.length : last ? relativeTime(last.at) : "—"}</div>
-          <div className={small}>
-            {pulse ? "deploys" : "since the last deploy"}
-            {last && (
-              <>
-                {" "}
-                · {pulse ? "last " : ""}
-                <Link href={`/projects/${last.name}`} className={inlineLink}>
-                  {last.name}
-                </Link>
-                {pulse ? ` ${relativeTime(last.at)}` : ""}
-              </>
-            )}
+      {show("deploys") && (
+        <div className={cn(cell, "flex-[2_1_19rem] sm:flex-[2_1_26rem]")}>
+          <div className="min-w-0 shrink-0">
+            <div className={big}>{pulse ? deploys.length : last ? relativeTime(last.at) : "—"}</div>
+            <div className={small}>
+              {pulse ? "deploys" : "since the last deploy"}
+              {last && (
+                <>
+                  {" "}
+                  · {pulse ? "last " : ""}
+                  <Link href={`/projects/${last.name}`} className={inlineLink}>
+                    {last.name}
+                  </Link>
+                  {pulse ? ` ${relativeTime(last.at)}` : ""}
+                </>
+              )}
+            </div>
           </div>
+          {deploys.length > 0 && (
+            <DeployTicks
+              times={deploys.map((d) => Date.parse(d.at))}
+              since={since}
+              className="hidden h-7 min-w-16 flex-1 sm:block"
+            />
+          )}
         </div>
-        {deploys.length > 0 && (
-          <DeployTicks
-            times={deploys.map((d) => Date.parse(d.at))}
-            since={since}
-            className="hidden h-7 min-w-16 flex-1 lg:block"
-          />
-        )}
-      </div>
+      )}
 
-      <Link href="/insights" className={cn(cell, cellLink, "col-span-2 text-[var(--text-primary)] sm:col-span-1 lg:shrink-0")}>
-        <ChartLine className="size-4 shrink-0 text-[var(--accent)]" aria-hidden />
-        <div className="min-w-0">
-          <div className="text-[13px] font-medium">Insights</div>
-          <div className={small}>compare services</div>
-        </div>
-        <ArrowRight className="ml-auto size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-      </Link>
+      {show("insights") && (
+        <Link href="/insights" className={cn(cell, cellLink, "text-[var(--text-primary)]")}>
+          <ChartLine className="size-4 shrink-0 text-[var(--accent)]" aria-hidden />
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium">Insights</div>
+            <div className={small}>compare services</div>
+          </div>
+          <ArrowRight className="ml-auto size-3.5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+        </Link>
+      )}
+
+      </div>
+      <PanelPicker panels={panels} onPanels={onPanels} isAdmin={isAdmin} />
     </div>
+  );
+}
+
+function PanelPicker({ panels, onPanels, isAdmin }: { panels: readonly PanelKey[]; onPanels: (next: PanelKey[]) => void; isAdmin: boolean }) {
+  const options = PANELS.filter((p) => !p.adminOnly || isAdmin);
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label="Choose panels"
+        title="Choose panels"
+        className="flex w-11 shrink-0 items-center justify-center border-l border-[var(--border-subtle)] text-[var(--text-tertiary)] outline-none transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus-visible:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)] data-[popup-open]:bg-[var(--bg-tertiary)] data-[popup-open]:text-[var(--text-primary)]"
+      >
+        <SlidersHorizontal className="size-4" aria-hidden />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-0">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+          <p className="text-sm font-semibold tracking-tight">Panels</p>
+          <button
+            type="button"
+            onClick={() => onPanels([...DEFAULT_PANELS])}
+            className="inline-flex h-7 items-center rounded-md px-2 text-xs text-[var(--link)] outline-none hover:bg-[var(--bg-tertiary)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+          >
+            Reset
+          </button>
+        </header>
+        <ul className="p-1">
+          {options.map((p) => {
+            const on = panels.includes(p.key);
+            return (
+              <li key={p.key}>
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-[var(--bg-tertiary)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ring)]">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => onPanels(on ? panels.filter((k) => k !== p.key) : [...panels, p.key])}
+                    className="mt-0.5 accent-[var(--accent)]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[13px] text-[var(--text-primary)]">{p.label}</span>
+                    <span className="block text-xs text-[var(--text-tertiary)]">{p.hint}</span>
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 

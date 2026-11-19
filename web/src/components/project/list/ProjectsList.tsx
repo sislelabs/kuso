@@ -25,6 +25,7 @@ import type { KusoProject } from "@/types/projects";
 import { attentionItems, lastDeployedProject, projectErrorTotal, wallTitle } from "./fleetModel";
 import { ProjectTile } from "./ProjectTile";
 import { FleetStrip, ProblemList, type FleetStripCapacity } from "./WallSummary";
+import { useFleetBackups, useFleetUptime, useFleetVulns, usePanelPrefs } from "./fleetPanels";
 import type { ProjectCardActions } from "./ProjectCardMenu";
 import { ProjectsToolbar } from "./ProjectsToolbar";
 import {
@@ -161,6 +162,10 @@ export function ProjectsList({
     };
   }, [entries, fleetErrors.byProject]);
 
+  const [panels, setPanels] = usePanelPrefs();
+  const vulns = useFleetVulns(names, panels.includes("cves"));
+  const uptime = useFleetUptime(names, panels.includes("uptime"));
+  const backups = useFleetBackups(canManage && panels.includes("backups"));
   const pulse = useProjectsPulse();
   // Node usage is admin-only; it shares ServersPopover's query so the
   // top bar and the strip make one request between them.
@@ -305,6 +310,12 @@ export function ProjectsList({
         : header("Projects", `${projects.length} project${projects.length === 1 ? "" : "s"}`)}
       {summaryQuery.data && (
         <FleetStrip
+          panels={panels}
+          onPanels={setPanels}
+          isAdmin={canManage}
+          vulns={vulns}
+          uptime={uptime}
+          backups={backups}
           running={fleet.running}
           stopped={fleet.stopped}
           broken={fleet.attention.some((a) => a.tone === "danger" || a.tone === "warning")}
