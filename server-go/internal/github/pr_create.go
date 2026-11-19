@@ -135,19 +135,3 @@ func normalizeMergeMethod(method string) string {
 		return "squash"
 	}
 }
-
-// parseRepoFullName splits an "owner/repo" string into its parts. It
-// tolerates a leading/trailing slash but rejects anything that isn't
-// exactly two non-empty segments (e.g. "owner", "owner/repo/extra", "/",
-// "owner/"). The full_name carried on PR/repo payloads is always the
-// two-segment form, so callers that already have owner+repo split don't
-// need this — it exists for the handler path that receives a single
-// repoFullName string (mirrors PostPRComment's input shape).
-func parseRepoFullName(fullName string) (owner, repo string, err error) {
-	trimmed := strings.Trim(strings.TrimSpace(fullName), "/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("github: invalid repo full_name %q", fullName)
-	}
-	return parts[0], parts[1], nil
-}

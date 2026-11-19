@@ -1,44 +1,9 @@
 package github
 
-import "testing"
-
-func TestParseRepoFullName(t *testing.T) {
-	tests := []struct {
-		name      string
-		in        string
-		wantOwner string
-		wantRepo  string
-		wantErr   bool
-	}{
-		{name: "simple", in: "sislelabs/kuso", wantOwner: "sislelabs", wantRepo: "kuso"},
-		{name: "leading slash", in: "/sislelabs/kuso", wantOwner: "sislelabs", wantRepo: "kuso"},
-		{name: "trailing slash", in: "sislelabs/kuso/", wantOwner: "sislelabs", wantRepo: "kuso"},
-		{name: "surrounding whitespace", in: "  sislelabs/kuso  ", wantOwner: "sislelabs", wantRepo: "kuso"},
-		{name: "no slash", in: "kuso", wantErr: true},
-		{name: "empty", in: "", wantErr: true},
-		{name: "just slash", in: "/", wantErr: true},
-		{name: "empty owner", in: "/kuso", wantErr: true},
-		{name: "empty repo", in: "sislelabs/", wantErr: true},
-		{name: "too many segments", in: "sislelabs/kuso/extra", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			owner, repo, err := parseRepoFullName(tt.in)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("parseRepoFullName(%q) = (%q,%q,nil), want error", tt.in, owner, repo)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseRepoFullName(%q) unexpected error: %v", tt.in, err)
-			}
-			if owner != tt.wantOwner || repo != tt.wantRepo {
-				t.Errorf("parseRepoFullName(%q) = (%q,%q), want (%q,%q)", tt.in, owner, repo, tt.wantOwner, tt.wantRepo)
-			}
-		})
-	}
-}
+import (
+	"context"
+	"testing"
+)
 
 func TestNormalizeMergeMethod(t *testing.T) {
 	tests := []struct {
@@ -69,13 +34,13 @@ func TestNormalizeMergeMethod(t *testing.T) {
 // rest of the package guards the same way (see PostPRComment).
 func TestPRMethods_NilClientGuard(t *testing.T) {
 	var c *Client
-	if _, err := c.CreateBranch(nil, 1, "o", "r", "main", "fix"); err == nil {
+	if _, err := c.CreateBranch(context.Background(), 1, "o", "r", "main", "fix"); err == nil {
 		t.Error("CreateBranch on nil client: want error, got nil")
 	}
-	if _, _, err := c.OpenPR(nil, 1, "o", "r", "fix", "main", "t", "b"); err == nil {
+	if _, _, err := c.OpenPR(context.Background(), 1, "o", "r", "fix", "main", "t", "b"); err == nil {
 		t.Error("OpenPR on nil client: want error, got nil")
 	}
-	if err := c.MergePR(nil, 1, "o", "r", 1, "squash"); err == nil {
+	if err := c.MergePR(context.Background(), 1, "o", "r", 1, "squash"); err == nil {
 		t.Error("MergePR on nil client: want error, got nil")
 	}
 }
