@@ -78,17 +78,6 @@ func BuildInstallCommand(k3sURL, k3sToken string, labels map[string]string, node
 	)
 }
 
-// BuildAgentExec returns just the INSTALL_K3S_EXEC payload (without
-// curl/env wrapping). Used by the bootstrap script's inline assembly
-// when the script template wants to set env vars itself.
-func BuildAgentExec(labels map[string]string, nodeName string) string {
-	flags := buildAgentFlags(labels, nodeName)
-	if flags == "" {
-		return "agent"
-	}
-	return "agent " + flags
-}
-
 func buildAgentFlags(labels map[string]string, nodeName string) string {
 	keys := make([]string, 0, len(labels))
 	for k := range labels {

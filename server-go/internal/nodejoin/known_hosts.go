@@ -1,9 +1,11 @@
 package nodejoin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -54,7 +56,13 @@ func (s *SecretKnownHosts) Lookup(ctx context.Context, host string) ([]byte, err
 	return decodeBase64(enc)
 }
 
-// Pin records key for host, retrying on a concurrent write.
+// ErrHostKeyMismatch means host already has a different pinned key.
+var ErrHostKeyMismatch = errors.New("host key does not match pinned key")
+
+// Pin records key for host if it has no pin yet, retrying on a
+// concurrent write. An existing pin is never overwritten: the same key is
+// a no-op and a different key fails with ErrHostKeyMismatch, so two
+// racing first dials can't let the later one replace the earlier pin.
 func (s *SecretKnownHosts) Pin(ctx context.Context, host string, key []byte) error {
 	val := []byte(host + " " + encodeBase64(key))
 	for attempt := 0; attempt < 5; attempt++ {
@@ -65,6 +73,12 @@ func (s *SecretKnownHosts) Pin(ctx context.Context, host string, key []byte) err
 				Data:       map[string][]byte{knownHostKey(host): val},
 			}, metav1.CreateOptions{})
 		} else if err == nil {
+			if existing, ok := sec.Data[knownHostKey(host)]; ok {
+				if bytes.Equal(existing, val) {
+					return nil
+				}
+				return fmt.Errorf("%w: %s", ErrHostKeyMismatch, host)
+			}
 			if sec.Data == nil {
 				sec.Data = map[string][]byte{}
 			}
