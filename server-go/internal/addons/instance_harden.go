@@ -146,6 +146,9 @@ func applyInstanceRoleSettings(ctx context.Context, db *sql.DB, role string, fre
 		have[n] = true
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, []string{fmt.Sprintf("read settings of %s: %v", role, err)}
+	}
 	set := 0
 	var warns []string
 	for _, st := range instanceRoleSettings {
@@ -388,6 +391,9 @@ func HardenInstanceServer(ctx context.Context, adminDSN string, lockShared bool)
 		names = append(names, n)
 	}
 	shared.Close()
+	if err := shared.Err(); err != nil {
+		return res, fmt.Errorf("list shared databases: %w", err)
+	}
 	for _, n := range names {
 		kept, err := lockDatabaseConnect(ctx, db, n)
 		if err != nil {

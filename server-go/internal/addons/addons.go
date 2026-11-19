@@ -1583,17 +1583,6 @@ func addonPVCSelector(fqn string) string {
 // projects.UnsubscribeAddon to centralise the per-service lock. Every
 // write is attempted; the failures come back joined.
 func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonShort string) (err error) {
-	// Defensive: the fake dynamic client used in unit tests panics on
-	// List for GVRs whose list-kind isn't registered. Production
-	// always has the KusoServiceList kind wired, so the recover is a
-	// pure test-friendliness measure — addon-package tests that don't
-	// seed services shouldn't crash the delete path.
-	defer func() {
-		if r := recover(); r != nil {
-			// best-effort; an unsubscribe failure leaves a stale
-			// subscription entry that the next user save will clean up
-		}
-	}()
 	// Match short ("pg") AND fully-qualified ("tickero-pg") shape so a
 	// service that recorded its subscription as the FQN gets cleaned up too.
 	isThis := func(sub string) bool { return sub == addonShort || sub == project+"-"+addonShort }
