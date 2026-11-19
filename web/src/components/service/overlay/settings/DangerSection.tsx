@@ -11,6 +11,7 @@ import { useDeleteService, useService } from "@/features/services";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { deleteAddon, deleteEnvironment, useAddons, useEnvironments, useServices } from "@/features/projects";
 import { friendlyApiError } from "@/features/projects/names";
+import { discardService } from "@/features/staged";
 import { serviceShortName } from "@/lib/utils";
 import { Section, Code } from "./_primitives";
 import { exclusiveAddons, serviceEnvs } from "./deletePlan";
@@ -75,6 +76,7 @@ export function DangerSection({
       setWorking(false);
       return;
     }
+    discardService(project, service);
     const failed: string[] = [];
     for (const fqn of alsoDelete) {
       const short = serviceShortName(project, fqn);
