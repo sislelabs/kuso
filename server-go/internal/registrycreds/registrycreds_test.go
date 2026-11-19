@@ -193,6 +193,9 @@ func TestLogout_RefusesWhileReferencedThenDeletes(t *testing.T) {
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "api") {
 		t.Fatalf("logout of an in-use credential: err = %v, want ErrConflict naming the service", err)
 	}
+	if _, err := cs.CoreV1().Secrets("kuso").Get(ctx, cred.SecretName, metav1.GetOptions{}); err != nil {
+		t.Errorf("refused logout deleted the in-use secret: %v", err)
+	}
 
 	s2, cs2 := newSvc(t, imageService("shop", "api", ""))
 	cred, _ = s2.Login(ctx, "shop", "ghcr.io", "u", "p")
@@ -205,5 +208,4 @@ func TestLogout_RefusesWhileReferencedThenDeletes(t *testing.T) {
 	if err := s2.Logout(ctx, "shop", "ghcr.io"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second logout err = %v, want ErrNotFound", err)
 	}
-	_ = cs
 }
