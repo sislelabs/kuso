@@ -91,7 +91,8 @@ rules:
   - apiGroups: [cert-manager.io]
     resources: [certificates, certificaterequests, issuers, clusterissuers]
     verbs: [get, list, watch, create, update, patch, delete]
-  # kusoaddon/templates/public-tcp.yaml renders an IngressRouteTCP. A
+  # kusoaddon/templates/public-tcp.yaml renders an IngressRouteTCP (plus
+  # MiddlewareTCPs when publicTCP.sourceRanges/maxConnections are set). A
   # missing grant fails the addon's helm release with a Forbidden, and
   # every later change to that addon stops reconciling.
   # kusoenvironment/templates/ingress-limits.yaml renders a Middleware per
@@ -99,7 +100,7 @@ rules:
   # manager's KUSO_INGRESS_LIMITS env below turns that template on and
   # must only be set where this rule is granted.
   - apiGroups: [traefik.io]
-    resources: [ingressroutetcps, middlewares]
+    resources: [ingressroutetcps, middlewares, middlewaretcps]
     verbs: [get, list, watch, create, update, patch, delete]
   # CloudNativePG glue for HA Postgres addons (kept here so a fresh
   # install isn't surprised when ha:true fails). If CNPG isn't

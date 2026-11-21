@@ -9,8 +9,12 @@ The Traefik install hosts a configurable pool of TCP entrypoints
 named `tcp-<port>` (e.g. tcp-30000, tcp-30001, …) — see hack/install.sh
 KUSO_TCP_PROXY_PORTS. This template binds ONE of those entrypoints to
 the addon's primary Service. HostSNI(`*`) means plain L4 with no SNI
-routing; the addon's own auth is the only access gate. The kuso server's
-port allocator ensures no two addons share an entrypoint.
+routing. Without publicTCP.sourceRanges the addon's own auth is the only
+access gate; with it a MiddlewareTCP ipAllowList drops other sources.
+publicTCP.maxConnections adds a per-client-IP inFlightConn cap. Traefik
+refuses a MiddlewareTCP that sets two middleware types, so each is its own
+object. The kuso server's port allocator ensures no two addons share an
+entrypoint.
 */}}
 {{- if and .Values.publicTCP .Values.publicTCP.enabled (gt (int .Values.publicTCP.port) 0) (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $name := include "kusoaddon.fullname" . -}}
@@ -45,6 +49,35 @@ port allocator ensures no two addons share an entrypoint.
        freezes every later spec change to the addon until someone turns
        publicTCP off; the server rejects these kinds at enable time. */ -}}
 {{- if gt $svcPort 0 -}}
+{{- $ranges := .Values.publicTCP.sourceRanges | default list -}}
+{{- $maxConn := int (.Values.publicTCP.maxConnections | default 0) -}}
+{{- if $ranges }}
+apiVersion: traefik.io/v1alpha1
+kind: MiddlewareTCP
+metadata:
+  name: {{ $name }}-public-tcp-allow
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  ipAllowList:
+    sourceRange:
+      {{- range $ranges }}
+      - {{ . | quote }}
+      {{- end }}
+---
+{{ end -}}
+{{- if gt $maxConn 0 }}
+apiVersion: traefik.io/v1alpha1
+kind: MiddlewareTCP
+metadata:
+  name: {{ $name }}-public-tcp-inflight
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  inFlightConn:
+    amount: {{ $maxConn }}
+---
+{{ end -}}
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
@@ -66,6 +99,15 @@ spec:
     # adds no extra auth here, hence the admin-gated allocator + the
     # destructive-action confirm in the UI.
     - match: HostSNI(`*`)
+      {{- if or $ranges (gt $maxConn 0) }}
+      middlewares:
+        {{- if $ranges }}
+        - name: {{ $name }}-public-tcp-allow
+        {{- end }}
+        {{- if gt $maxConn 0 }}
+        - name: {{ $name }}-public-tcp-inflight
+        {{- end }}
+      {{- end }}
       services:
         - name: {{ $svcName }}
           port: {{ $svcPort }}

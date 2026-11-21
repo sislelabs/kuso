@@ -1198,15 +1198,20 @@ type KusoAddonPooler struct {
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.
-// Only Enabled is user-settable; the allocated port lives in
-// status.publicTCPPort and is stamped by the kuso server's port
-// allocator after the chart renders the IngressRouteTCP.
+// Enabled, SourceRanges and MaxConnections are user-settable; Port is
+// stamped by the kuso server's port allocator.
 type KusoAddonPublicTCP struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// Port, when stamped by the allocator, is the public TCP port the
 	// addon is reachable on. The helm chart reads this to render the
 	// matching Traefik entrypoint binding. Zero = unallocated.
 	Port int32 `json:"port,omitempty"`
+	// SourceRanges limits the route to these client CIDRs via a Traefik
+	// MiddlewareTCP ipAllowList. Empty = reachable from anywhere.
+	SourceRanges []string `json:"sourceRanges,omitempty"`
+	// MaxConnections caps concurrent connections per client IP via a
+	// MiddlewareTCP inFlightConn. Zero = no cap.
+	MaxConnections int32 `json:"maxConnections,omitempty"`
 }
 
 // KusoAddonWebUI is the opt-in web-console block on KusoAddonSpec.

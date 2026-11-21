@@ -44,15 +44,15 @@ func TestEnablePublicTCP_BackToBackGetDistinctPortsDespiteStaleCache(t *testing.
 	k.Cache.Stop()
 	s := &Service{Kube: k, Namespace: "kuso"}
 
-	pa, err := s.EnablePublicTCP(context.Background(), "alpha", "a")
+	pa, err := s.EnablePublicTCP(context.Background(), "alpha", "a", PublicTCPOptions{})
 	if err != nil {
 		t.Fatalf("enable a: %v", err)
 	}
-	pb, err := s.EnablePublicTCP(context.Background(), "alpha", "b")
+	pb, err := s.EnablePublicTCP(context.Background(), "alpha", "b", PublicTCPOptions{})
 	if err != nil {
 		t.Fatalf("enable b: %v", err)
 	}
-	if pa == pb {
-		t.Fatalf("both addons got port %d", pa)
+	if pa.Port == pb.Port {
+		t.Fatalf("both addons got port %d", pa.Port)
 	}
 }

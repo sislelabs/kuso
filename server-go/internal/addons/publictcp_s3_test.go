@@ -17,11 +17,11 @@ func TestEnablePublicTCP_S3RefusedButExistingKept(t *testing.T) {
 		seedAddonSpec("alpha", "legacy", kube.KusoAddonSpec{Kind: "s3", Project: "alpha",
 			PublicTCP: &kube.KusoAddonPublicTCP{Enabled: true, Port: 30004}}),
 	)
-	if _, err := s.EnablePublicTCP(context.Background(), "alpha", "files"); !errors.Is(err, ErrPublicTCPS3Plaintext) {
+	if _, err := s.EnablePublicTCP(context.Background(), "alpha", "files", PublicTCPOptions{}); !errors.Is(err, ErrPublicTCPS3Plaintext) {
 		t.Errorf("new s3 exposure: err = %v, want ErrPublicTCPS3Plaintext", err)
 	}
-	port, err := s.EnablePublicTCP(context.Background(), "alpha", "legacy")
-	if err != nil || port != 30004 {
-		t.Errorf("existing s3 exposure: port=%d err=%v, want 30004", port, err)
+	pt, err := s.EnablePublicTCP(context.Background(), "alpha", "legacy", PublicTCPOptions{})
+	if err != nil || pt.Port != 30004 {
+		t.Errorf("existing s3 exposure: publicTCP=%+v err=%v, want port 30004", pt, err)
 	}
 }

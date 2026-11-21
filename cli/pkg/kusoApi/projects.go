@@ -518,10 +518,23 @@ func (k *KusoClient) RotateAddonPassword(project, addon string) (*resty.Response
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/rotate-password")
 }
 
+// PublicTCPOptions are the optional access restrictions sent with
+// EnablePublicTCP. A nil field leaves the server's value alone; an empty
+// SourceRanges or a zero MaxConnections clears it.
+type PublicTCPOptions struct {
+	SourceRanges   *[]string `json:"sourceRanges,omitempty"`
+	MaxConnections *int32    `json:"maxConnections,omitempty"`
+}
+
 // EnablePublicTCP opts the addon into a public TCP endpoint, allocating
-// a port from the cluster's configured pool. The server returns
-// {"port": <N>} on success. Admin-gated.
-func (k *KusoClient) EnablePublicTCP(project, addon string) (*resty.Response, error) {
+// a port from the cluster's configured pool, and sets any restrictions
+// in opts (also on an already-enabled addon). The server returns
+// {"port": <N>, "sourceRanges"?: [...], "maxConnections"?: <N>}.
+// Admin-gated.
+func (k *KusoClient) EnablePublicTCP(project, addon string, opts PublicTCPOptions) (*resty.Response, error) {
+	if opts.SourceRanges != nil || opts.MaxConnections != nil {
+		k.client.SetBody(opts)
+	}
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/public-tcp")
 }
 

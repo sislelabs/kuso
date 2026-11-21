@@ -355,6 +355,10 @@ export interface KusoAddonSpec {
   publicTCP?: {
     enabled?: boolean;
     port?: number;
+    // sourceRanges: client CIDRs allowed in; empty = any source.
+    sourceRanges?: string[];
+    // maxConnections: concurrent connections per client IP; 0 = no cap.
+    maxConnections?: number;
   };
   // webUI: opt-in reverse-proxy access to the addon's built-in web
   // console (mailpit's mail viewer, NATS monitor, ...). When enabled

@@ -172,6 +172,13 @@ pooler:
 # user toggle; port is server-allocated from the cluster's configured
 # pool (KUSO_TCP_PROXY_PORTS on kuso-server). The chart renders a
 # Traefik IngressRouteTCP only when BOTH are set. Default off.
+# sourceRanges (CIDRs) renders a MiddlewareTCP ipAllowList on the route;
+# maxConnections > 0 renders a per-client-IP inFlightConn cap. Both are
+# matched against the source address Traefik sees, which is only the real
+# client when the Traefik Service preserves it (externalTrafficPolicy:
+# Local).
 publicTCP:
   enabled: false
   port: 0
+  sourceRanges: []
+  maxConnections: 0

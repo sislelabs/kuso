@@ -648,8 +648,16 @@ migration tool), the addon must be explicitly exposed. It is **off by default**.
 ```bash
 kuso project addon public-tcp enable <project> <addon>    # admin-only
 #   → "addon <project>/<addon> exposed on public TCP port <PORT>"
+kuso project addon public-tcp enable <project> <addon> --allow-cidr 203.0.113.7/32  # only these sources (repeatable)
+kuso project addon public-tcp enable <project> <addon> --max-connections 20         # per-client-IP cap
 kuso project addon public-tcp disable <project> <addon> --yes   # frees the port (prompts without --yes)
 ```
+
+Re-running `enable` keeps the port and changes only the restrictions you pass
+(`--clear-allow-cidrs` and `--max-connections 0` remove them). The allow-list
+matches the source address Traefik sees. That is the real client only when the
+Traefik Service keeps it (`externalTrafficPolicy: Local`); otherwise every
+client shows up with an in-cluster address and a public CIDR blocks everyone.
 
 s3 addons can't be exposed this way: MinIO speaks plain HTTP, so kuso refuses.
 

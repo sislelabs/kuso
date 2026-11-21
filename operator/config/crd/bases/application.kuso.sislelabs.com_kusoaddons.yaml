@@ -203,6 +203,20 @@ spec:
                         Server-allocated TCP port from the configured
                         pool. 0 = unallocated. Set by the kuso server;
                         do not edit by hand.
+                    sourceRanges:
+                      type: array
+                      description: >-
+                        Client CIDRs allowed to connect (Traefik
+                        MiddlewareTCP ipAllowList). Empty = any source.
+                      maxItems: 64
+                      items:
+                        type: string
+                    maxConnections:
+                      type: integer
+                      minimum: 0
+                      description: >-
+                        Max concurrent connections per client IP
+                        (Traefik MiddlewareTCP inFlightConn). 0 = no cap.
                 webUI:
                   type: object
                   description: >-

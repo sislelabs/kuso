@@ -51,6 +51,7 @@ EOF
 }
 {
   stub_crd traefik.io v1alpha1 IngressRouteTCP ingressroutetcps
+  stub_crd traefik.io v1alpha1 MiddlewareTCP middlewaretcps
   stub_crd postgresql.cnpg.io v1 Cluster clusters
   stub_crd postgresql.cnpg.io v1 Pooler poolers
 } > "$work/stub-crds.yaml"

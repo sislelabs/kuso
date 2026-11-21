@@ -148,7 +148,9 @@ def matrix(p, s):
         base = {"project": p, "kind": k}
         if k == "postgres":
             base = {**base, "backup": {"schedule": "0 2 * * *", "bucket": "b"},
-                    "pooler": {"enabled": True}, "publicTCP": {"enabled": True, "port": 30001}}
+                    "pooler": {"enabled": True},
+                    "publicTCP": {"enabled": True, "port": 30001,
+                                  "sourceRanges": ["203.0.113.0/24"], "maxConnections": 10}}
         yield "kusoaddon", f"{p}-{k}", base
         if k in ADDON_HA_KINDS:
             yield "kusoaddon", f"{p}-{k}-ha", {"project": p, "kind": k, "ha": True}

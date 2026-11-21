@@ -1052,8 +1052,19 @@ function PublicTCPSection({
   const [confirming, setConfirming] = useState(false);
   const [confirmingEnable, setConfirmingEnable] = useState(false);
 
+  const savedCidrs = (pt?.sourceRanges ?? []).join(", ");
+  const [cidrs, setCidrs] = useState(savedCidrs);
+  useEffect(() => setCidrs(savedCidrs), [savedCidrs]);
+  const ranges = cidrs.split(/[\s,]+/).filter(Boolean);
+  const cidrsDirty = ranges.join(",") !== (pt?.sourceRanges ?? []).join(",");
+
   const enableM = useMutation({
-    mutationFn: () => enableAddonPublicTCP(project, addon),
+    mutationFn: () =>
+      enableAddonPublicTCP(
+        project,
+        addon,
+        ranges.length > 0 ? { sourceRanges: ranges } : undefined,
+      ),
     onSuccess: (res) => {
       toast.success(`Public TCP port ${res.port} allocated`);
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
@@ -1063,6 +1074,22 @@ function PublicTCPSection({
     },
     onError: (e) =>
       toastError(e, "Failed to enable public TCP"),
+  });
+
+  const saveCidrsM = useMutation({
+    mutationFn: () =>
+      enableAddonPublicTCP(project, addon, { sourceRanges: ranges }),
+    onSuccess: () => {
+      toast.success(ranges.length > 0 ? "Allowed sources saved" : "Source allow-list removed");
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+    },
+    onError: (e) => toastError(e, "Failed to save allowed sources"),
+  });
+  useAddonOverlayDirty("addon-public-tcp", enabled && cidrsDirty, {
+    onSave: () => saveCidrsM.mutateAsync(),
+    onDiscard: () => setCidrs(savedCidrs),
+    saving: saveCidrsM.isPending,
+    saveError: saveCidrsM.error instanceof Error ? saveCidrsM.error.message : undefined,
   });
 
   const disableM = useMutation({
@@ -1106,16 +1133,47 @@ function PublicTCPSection({
         <p className="text-xs text-[var(--text-secondary)]">
           Expose this addon on a raw TCP port reachable from the public
           internet. The addon&apos;s own protocol auth (Postgres SCRAM,
-          Redis ACL, etc.) is the only access gate — kuso adds none.
-          Admin-only.
+          Redis ACL, etc.) is the only access gate unless you list allowed
+          sources below. Admin-only.
         </p>
+        <div className="space-y-1">
+          <label
+            htmlFor="public-tcp-cidrs"
+            className="text-xs font-medium text-[var(--text-tertiary)]"
+          >
+            Allowed sources (CIDRs)
+          </label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="public-tcp-cidrs"
+              value={cidrs}
+              onChange={(e) => setCidrs(e.target.value)}
+              placeholder="203.0.113.7/32, 198.51.100.0/24"
+              spellCheck={false}
+              className="h-7 font-mono text-xs"
+            />
+            {enabled && (
+              <SaveButton
+                dirty={cidrsDirty}
+                saving={saveCidrsM.isPending}
+                onClick={() => saveCidrsM.mutate()}
+              />
+            )}
+          </div>
+          <p className="text-hint">
+            Empty accepts any source. Matched against the client address
+            Traefik sees.
+          </p>
+        </div>
         {enabled ? (
           <div className="space-y-2">
             <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-subtle)] px-3 py-2">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />
                 <span className="text-xs font-medium text-[var(--warning)]">
-                  Reachable from the public internet
+                  {(pt?.sourceRanges ?? []).length > 0
+                    ? "Reachable from the allowed sources"
+                    : "Reachable from the public internet"}
                 </span>
               </div>
               <div className="mt-2 font-mono text-xs text-[var(--text-primary)]">
@@ -1180,11 +1238,17 @@ function PublicTCPSection({
         body={
           <span>
             This allocates a raw TCP port on{" "}
-            <span className="font-mono">{host}</span> reachable from anywhere.
-            kuso adds <strong>no</strong> network gate — the addon&apos;s own
-            protocol auth is the only thing standing between the internet and
-            your data. Type <span className="font-mono">{addon}</span> to
-            confirm.
+            <span className="font-mono">{host}</span>{" "}
+            {ranges.length > 0 ? (
+              <>reachable only from {ranges.join(", ")}.</>
+            ) : (
+              <>
+                reachable from anywhere. kuso adds <strong>no</strong> network
+                gate — the addon&apos;s own protocol auth is the only thing
+                standing between the internet and your data.
+              </>
+            )}{" "}
+            Type <span className="font-mono">{addon}</span> to confirm.
           </span>
         }
         pending={enableM.isPending}

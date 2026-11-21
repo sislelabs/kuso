@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -117,14 +118,82 @@ func checkPublicTCPSupported(spec *kube.KusoAddonSpec) error {
 	return nil
 }
 
+// maxPublicTCPSourceRanges matches the CRD's maxItems on
+// spec.publicTCP.sourceRanges.
+const maxPublicTCPSourceRanges = 64
+
+// maxPublicTCPConnections bounds spec.publicTCP.maxConnections. Traefik's
+// inFlightConn takes any int64; the cap only catches typos.
+const maxPublicTCPConnections = 100000
+
+// PublicTCPOptions are the optional access restrictions on a public TCP
+// endpoint. A nil field leaves the addon's current value alone; a
+// non-nil empty SourceRanges or a zero MaxConnections clears it.
+type PublicTCPOptions struct {
+	SourceRanges   *[]string `json:"sourceRanges,omitempty"`
+	MaxConnections *int32    `json:"maxConnections,omitempty"`
+}
+
+func (o PublicTCPOptions) empty() bool {
+	return o.SourceRanges == nil && o.MaxConnections == nil
+}
+
+// normalize validates the options and rewrites each CIDR to its
+// canonical network form, dropping duplicates.
+func (o PublicTCPOptions) normalize() (PublicTCPOptions, error) {
+	if o.MaxConnections != nil && (*o.MaxConnections < 0 || *o.MaxConnections > maxPublicTCPConnections) {
+		return o, fmt.Errorf("%w: maxConnections must be between 0 and %d", ErrInvalid, maxPublicTCPConnections)
+	}
+	if o.SourceRanges == nil {
+		return o, nil
+	}
+	in := *o.SourceRanges
+	if len(in) > maxPublicTCPSourceRanges {
+		return o, fmt.Errorf("%w: at most %d sourceRanges, got %d", ErrInvalid, maxPublicTCPSourceRanges, len(in))
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		_, n, err := net.ParseCIDR(strings.TrimSpace(raw))
+		if err != nil {
+			return o, fmt.Errorf("%w: sourceRanges: %q is not a CIDR (e.g. 203.0.113.7/32)", ErrInvalid, raw)
+		}
+		c := n.String()
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	o.SourceRanges = &out
+	return o, nil
+}
+
+func (o PublicTCPOptions) applyTo(pt *kube.KusoAddonPublicTCP) {
+	if o.SourceRanges != nil {
+		pt.SourceRanges = nil
+		if len(*o.SourceRanges) > 0 {
+			pt.SourceRanges = append([]string(nil), (*o.SourceRanges)...)
+		}
+	}
+	if o.MaxConnections != nil {
+		pt.MaxConnections = *o.MaxConnections
+	}
+}
+
 // EnablePublicTCP flips spec.publicTCP.{enabled:true,port:<allocated>}
 // on the addon, allocating the next free port from the configured
-// pool. Idempotent: if the addon already has an allocated port, that
-// port is returned unchanged.
-func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (int32, error) {
+// pool, and applies opts in the same write so a restricted endpoint is
+// never briefly open to every source. Returns the resulting block.
+// Idempotent: if the addon already has an allocated port it is kept and
+// only opts are applied.
+func (s *Service) EnablePublicTCP(ctx context.Context, project, name string, opts PublicTCPOptions) (*kube.KusoAddonPublicTCP, error) {
 	lo, hi, ok := PublicTCPPool()
 	if !ok {
-		return 0, ErrPublicTCPNotConfigured
+		return nil, ErrPublicTCPNotConfigured
+	}
+	opts, err := opts.normalize()
+	if err != nil {
+		return nil, err
 	}
 
 	publicTCPMu.Lock()
@@ -137,32 +206,35 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 	cur, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return 0, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+			return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 		}
-		return 0, fmt.Errorf("get addon: %w", err)
+		return nil, fmt.Errorf("get addon: %w", err)
 	}
 	// Self-guard ownership: a pre-qualified name can resolve to a sibling
 	// project's CR when project names overlap. Guard inside the Service
 	// method so the guarantee doesn't depend on the handler precheck.
 	if !addonOwnedByProject(cur, project) {
-		return 0, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 	}
 	if err := checkPublicTCPSupported(&cur.Spec); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if cur.Spec.PublicTCP != nil && cur.Spec.PublicTCP.Enabled && cur.Spec.PublicTCP.Port > 0 {
-		return cur.Spec.PublicTCP.Port, nil
+		if opts.empty() {
+			return cur.Spec.PublicTCP, nil
+		}
+		return s.restrictPublicTCP(ctx, ns, fqn, project, name, opts)
 	}
 	// After the idempotent return: an s3 exposure made before this check
 	// keeps its port (reconcilehealth flags it), a new one is refused.
 	if cur.Spec.Kind == "s3" {
-		return 0, ErrPublicTCPS3Plaintext
+		return nil, ErrPublicTCPS3Plaintext
 	}
 
 	// Build the in-use port set from every addon cluster-wide.
 	inUse, err := s.usedPublicTCPPorts(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("scan in-use ports: %w", err)
+		return nil, fmt.Errorf("scan in-use ports: %w", err)
 	}
 	picked := int32(0)
 	for p := lo; p <= hi; p++ {
@@ -172,7 +244,7 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 		}
 	}
 	if picked == 0 {
-		return 0, ErrPublicTCPPoolExhausted
+		return nil, ErrPublicTCPPoolExhausted
 	}
 
 	updated, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(a *kube.KusoAddon) error {
@@ -188,6 +260,7 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 		// kuso-server; multi-replica relies on this re-scan.
 		if a.Spec.PublicTCP != nil && a.Spec.PublicTCP.Enabled && a.Spec.PublicTCP.Port > 0 {
 			picked = a.Spec.PublicTCP.Port
+			opts.applyTo(a.Spec.PublicTCP)
 			return nil
 		}
 		// Re-scan the cluster-wide in-use set from inside the mutate
@@ -217,13 +290,33 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 			picked = next
 		}
 		a.Spec.PublicTCP = &kube.KusoAddonPublicTCP{Enabled: true, Port: picked}
+		opts.applyTo(a.Spec.PublicTCP)
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("patch addon: %w", err)
+		return nil, fmt.Errorf("patch addon: %w", err)
 	}
-	_ = updated
-	return picked, nil
+	return updated.Spec.PublicTCP, nil
+}
+
+// restrictPublicTCP applies opts to an addon whose port is already
+// allocated.
+func (s *Service) restrictPublicTCP(ctx context.Context, ns, fqn, project, name string, opts PublicTCPOptions) (*kube.KusoAddonPublicTCP, error) {
+	updated, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(a *kube.KusoAddon) error {
+		if !addonOwnedByProject(a, project) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
+		pt := a.Spec.PublicTCP
+		if pt == nil || !pt.Enabled || pt.Port <= 0 {
+			return fmt.Errorf("%w: public TCP on addon %s/%s was disabled concurrently; enable it again", ErrConflict, project, name)
+		}
+		opts.applyTo(pt)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("patch addon: %w", err)
+	}
+	return updated.Spec.PublicTCP, nil
 }
 
 // DisablePublicTCP clears the public-TCP block on the addon, freeing

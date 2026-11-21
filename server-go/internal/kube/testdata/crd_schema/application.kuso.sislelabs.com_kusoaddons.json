@@ -222,9 +222,22 @@
                 "default": false,
                 "type": "boolean"
               },
+              "maxConnections": {
+                "description": "Max concurrent connections per client IP (Traefik MiddlewareTCP inFlightConn). 0 = no cap.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "port": {
                 "description": "Server-allocated TCP port from the configured pool. 0 = unallocated. Set by the kuso server; do not edit by hand.",
                 "type": "integer"
+              },
+              "sourceRanges": {
+                "description": "Client CIDRs allowed to connect (Traefik MiddlewareTCP ipAllowList). Empty = any source.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
               }
             },
             "type": "object"

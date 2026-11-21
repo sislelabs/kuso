@@ -140,7 +140,9 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 }
 
 // EnablePublicTCP opts the addon into a public TCP endpoint,
-// allocating a port from the cluster's configured pool. Returns
+// allocating a port from the cluster's configured pool. An optional
+// {sourceRanges, maxConnections} body sets or clears the access
+// restrictions (also on an already-enabled addon). Returns
 // {port: <N>} on success. Admin-gated.
 func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
@@ -155,12 +157,28 @@ func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "resolve addon", err)
 		return
 	}
-	port, err := h.Svc.EnablePublicTCP(ctx, project, name)
+	// Optional body: access restrictions. An empty body keeps the
+	// addon's current ones (and allocates with none on first enable).
+	var opts addons.PublicTCPOptions
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+			return
+		}
+	}
+	pt, err := h.Svc.EnablePublicTCP(ctx, project, name, opts)
 	if err != nil {
 		h.fail(w, "enable public-tcp", err)
 		return
 	}
 	if h.Audit != nil {
+		msg := fmt.Sprintf("addon %s/%s exposed on public TCP port %d", project, name, pt.Port)
+		if len(pt.SourceRanges) > 0 {
+			msg += fmt.Sprintf("; sourceRanges=%v", pt.SourceRanges)
+		}
+		if pt.MaxConnections > 0 {
+			msg += fmt.Sprintf("; maxConnections=%d", pt.MaxConnections)
+		}
 		h.Audit.Log(ctx, audit.Entry{
 			User:     auditUser(ctx),
 			Severity: "warn",
@@ -168,10 +186,16 @@ func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) 
 			Pipeline: project,
 			App:      name,
 			Resource: "kusoaddon",
-			Message:  fmt.Sprintf("addon %s/%s exposed on public TCP port %d", project, name, port),
+			Message:  msg,
 		})
 	}
-	out := map[string]any{"port": port}
+	out := map[string]any{"port": pt.Port}
+	if len(pt.SourceRanges) > 0 {
+		out["sourceRanges"] = pt.SourceRanges
+	}
+	if pt.MaxConnections > 0 {
+		out["maxConnections"] = pt.MaxConnections
+	}
 	if warn := addons.PublicTCPWarning(cur.Spec.Kind); warn != "" {
 		out["warning"] = warn
 	}

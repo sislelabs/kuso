@@ -19,13 +19,13 @@ func TestEnablePublicTCP_RejectsUnsupportedKinds(t *testing.T) {
 		seedAddonSpec("alpha", "q", kube.KusoAddonSpec{Kind: "valkey", Project: "alpha"}),
 	)
 	for _, name := range []string{"mail", "cache"} {
-		if _, err := s.EnablePublicTCP(context.Background(), "alpha", name); !errors.Is(err, ErrInvalid) {
+		if _, err := s.EnablePublicTCP(context.Background(), "alpha", name, PublicTCPOptions{}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
 		}
 	}
-	port, err := s.EnablePublicTCP(context.Background(), "alpha", "q")
-	if err != nil || port != 30000 {
-		t.Fatalf("valkey: port=%d err=%v, want 30000", port, err)
+	pt, err := s.EnablePublicTCP(context.Background(), "alpha", "q", PublicTCPOptions{})
+	if err != nil || pt.Port != 30000 {
+		t.Fatalf("valkey: publicTCP=%+v err=%v, want port 30000", pt, err)
 	}
 }
 

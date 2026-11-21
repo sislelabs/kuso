@@ -36,34 +36,77 @@ var addonPublicTCPCmd = &cobra.Command{
 	Short:   "Expose (or hide) an addon on a raw public TCP port",
 	Long: `Manage an addon's public TCP endpoint. When enabled, kuso allocates a
 port from the cluster's configured pool and binds a Traefik IngressRouteTCP
-to the addon's primary Service. The addon's own protocol auth (Postgres
-SCRAM, Redis ACL, MinIO keys, …) is the ONLY access gate — kuso adds none.
-Admin-only.`,
+to the addon's primary Service. Unless you restrict it with --allow-cidr,
+the addon's own protocol auth (Postgres SCRAM, Redis ACL, MinIO keys, …) is
+the ONLY access gate. Admin-only.`,
 }
+
+var (
+	addonPublicTCPAllowCIDRs []string
+	addonPublicTCPClearCIDRs bool
+	addonPublicTCPMaxConns   int32
+)
 
 var addonPublicTCPEnableCmd = &cobra.Command{
 	Use:   "enable <project> <addon>",
-	Short: "Allocate a public TCP port for the addon (admin only)",
+	Short: "Allocate a public TCP port for the addon, or change its restrictions (admin only)",
+	Long: `Allocate a public TCP port for the addon. Re-running on an enabled addon
+keeps its port and updates only the restrictions you pass:
+
+  --allow-cidr        accept connections only from these CIDRs (repeatable)
+  --clear-allow-cidrs accept connections from any source again
+  --max-connections   cap concurrent connections per client IP (0 removes the cap)
+
+Restrictions match the source address Traefik sees, which is the real
+client only when the Traefik Service preserves it (externalTrafficPolicy:
+Local); otherwise every client appears as an in-cluster address.`,
 	Example: `  kuso project addon public-tcp enable shop postgres
+  kuso project addon public-tcp enable shop postgres --allow-cidr 203.0.113.7/32 --allow-cidr 198.51.100.0/24
+  kuso project addon public-tcp enable shop postgres --max-connections 20
+  kuso project addon public-tcp enable shop postgres --clear-allow-cidrs
   # then connect at kuso.sislelabs.com:<port> with the addon's own creds`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.EnablePublicTCP(args[0], args[1])
+		var opts kusoApi.PublicTCPOptions
+		allowSet := cmd.Flags().Changed("allow-cidr")
+		if allowSet && addonPublicTCPClearCIDRs {
+			return fmt.Errorf("--allow-cidr and --clear-allow-cidrs are mutually exclusive")
+		}
+		if allowSet {
+			ranges := append([]string(nil), addonPublicTCPAllowCIDRs...)
+			opts.SourceRanges = &ranges
+		} else if addonPublicTCPClearCIDRs {
+			opts.SourceRanges = &[]string{}
+		}
+		if cmd.Flags().Changed("max-connections") {
+			n := addonPublicTCPMaxConns
+			opts.MaxConnections = &n
+		}
+		resp, err := api.EnablePublicTCP(args[0], args[1], opts)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("enable public-tcp: %w", err)
 		}
 		var out struct {
-			Port    int    `json:"port"`
-			Warning string `json:"warning"`
+			Port           int      `json:"port"`
+			SourceRanges   []string `json:"sourceRanges"`
+			MaxConnections int      `json:"maxConnections"`
+			Warning        string   `json:"warning"`
 		}
 		if err := json.Unmarshal(resp.Body(), &out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 		fmt.Printf("addon %s/%s exposed on public TCP port %d\n", args[0], args[1], out.Port)
-		fmt.Fprintln(cmd.ErrOrStderr(), "note: reachable from the public internet — the addon's own auth is the only gate")
+		if len(out.SourceRanges) > 0 {
+			fmt.Printf("allowed sources: %s\n", strings.Join(out.SourceRanges, ", "))
+		} else {
+			fmt.Fprintln(cmd.ErrOrStderr(), "note: reachable from the public internet — the addon's own auth is the only gate (restrict with --allow-cidr)")
+		}
+		if out.MaxConnections > 0 {
+			fmt.Printf("max connections per client IP: %d\n", out.MaxConnections)
+		}
 		if out.Warning != "" {
 			fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+out.Warning)
 		}
@@ -281,6 +324,9 @@ func init() {
 	// project.go (projectAddonCmd is registered there).
 	projectAddonCmd.AddCommand(addonPublicTCPCmd)
 	addonPublicTCPCmd.AddCommand(addonPublicTCPEnableCmd)
+	addonPublicTCPEnableCmd.Flags().StringArrayVar(&addonPublicTCPAllowCIDRs, "allow-cidr", nil, "only accept connections from this CIDR (repeatable); replaces the current list")
+	addonPublicTCPEnableCmd.Flags().BoolVar(&addonPublicTCPClearCIDRs, "clear-allow-cidrs", false, "remove the source allow-list (accept any source)")
+	addonPublicTCPEnableCmd.Flags().Int32Var(&addonPublicTCPMaxConns, "max-connections", 0, "max concurrent connections per client IP (0 removes the cap)")
 	addonPublicTCPCmd.AddCommand(addonPublicTCPDisableCmd)
 	addonPublicTCPDisableCmd.Flags().BoolVarP(&addonPublicTCPDisableYes, "yes", "y", false, "skip the confirmation prompt")
 

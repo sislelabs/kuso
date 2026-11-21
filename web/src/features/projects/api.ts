@@ -244,17 +244,25 @@ export async function repairAddonPassword(
   );
 }
 
+// PublicTCPOptions restricts a public TCP endpoint. An omitted field keeps
+// the addon's current value; [] / 0 clears it.
+export interface PublicTCPOptions {
+  sourceRanges?: string[];
+  maxConnections?: number;
+}
+
 // enableAddonPublicTCP allocates a port from the cluster's configured
 // pool, flips spec.publicTCP on the addon, and returns the allocated
-// port. Admin-only server-side. Idempotent: re-enabling returns the
-// existing port unchanged.
+// port. Admin-only server-side. Idempotent: re-enabling keeps the
+// existing port and applies only the passed options.
 export async function enableAddonPublicTCP(
   project: string,
   addon: string,
-): Promise<{ port: number }> {
+  opts?: PublicTCPOptions,
+): Promise<{ port: number; sourceRanges?: string[]; maxConnections?: number }> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/public-tcp`,
-    { method: "POST" },
+    opts ? { method: "POST", body: opts } : { method: "POST" },
   );
 }
 
