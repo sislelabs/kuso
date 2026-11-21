@@ -640,7 +640,7 @@ func (a *Activator) recordActivity(ctx context.Context, ns, env string) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), activityWriteTimeout)
 	go func() {
 		defer cancel()
-		_, err := a.kc.UpdateKusoEnvironmentWithRetry(wctx, ns, env, func(e *kube.KusoEnvironment) error {
+		_, err := a.kc.UpdateKusoEnvironmentBookkeeping(wctx, ns, env, func(e *kube.KusoEnvironment) error {
 			if ts, err := time.Parse(time.RFC3339, e.Annotations[scaledown.LastActivityAnnotation]); err == nil && now.Sub(ts) < activityStampInterval {
 				return errStampFresh
 			}

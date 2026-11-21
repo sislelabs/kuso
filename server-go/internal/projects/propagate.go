@@ -144,6 +144,16 @@ func (c changedFields) any() bool {
 	return false
 }
 
+// sleepTuningOnly reports whether a propagation touches nothing the
+// env chart renders: only sleep changed and sleep.enabled (the one sleep
+// field the ingress reads) stays put.
+func sleepTuningOnly(changed changedFields, envSleep *kube.KusoEnvSleep, svcSleep *kube.KusoServiceSleep) bool {
+	if changed != (changedFields{Sleep: true}) {
+		return false
+	}
+	return (envSleep != nil && envSleep.Enabled) == (svcSleep != nil && svcSleep.Enabled)
+}
+
 // propagateChangedToEnvs is the single chokepoint that mirrors a
 // post-PATCH KusoService onto every owned KusoEnvironment. Replaces
 // six per-field propagators that each issued their own LIST + N
@@ -241,7 +251,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		// touched. F-03 fixed the same class for KusoService writes;
 		// the propagation loop is the last surface in this package
 		// that needs RMW.
-		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
+		update := s.Kube.UpdateKusoEnvironmentWithRetry
+		if sleepTuningOnly(changed, envs[i].Spec.Sleep, svc.Spec.Sleep) {
+			update = s.Kube.UpdateKusoEnvironmentBookkeeping
+		}
+		_, err := update(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
 			// publicEnv is a build-time concern (sentinel names to
 			// substitute at pod start); mirror it onto the env CR on every
 			// propagation pass — cheap, idempotent, and decoupled from the

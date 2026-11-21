@@ -363,6 +363,18 @@ func updateWithRetry[T any](
 	kind, namespace, name string,
 	mutate func(*T) error,
 ) (*T, error) {
+	return updateWithRetryAs(ctx, c, gvr, kind, namespace, name, "", mutate)
+}
+
+// updateWithRetryAs is updateWithRetry recording the write under
+// fieldManager ("" keeps the client default).
+func updateWithRetryAs[T any](
+	ctx context.Context,
+	c *Client,
+	gvr schema.GroupVersionResource,
+	kind, namespace, name, fieldManager string,
+	mutate func(*T) error,
+) (*T, error) {
 	var out T
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		raw, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -391,7 +403,7 @@ func updateWithRetry[T any](
 			return fromUnstructured(u, &out)
 		}
 		preserveUnknownSpec(raw.Object, before.Object, u.Object)
-		updated, uerr := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+		updated, uerr := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{FieldManager: fieldManager})
 		if uerr != nil {
 			return uerr
 		}
@@ -424,6 +436,23 @@ func (c *Client) UpdateKusoEnvironmentWithRetry(ctx context.Context, namespace, 
 		return nil, err
 	}
 	return updateWithRetry[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, name, mutate)
+}
+
+// FieldManagerBookkeeping owns kuso-server env CR writes that change
+// nothing the chart renders (activity stamps, live-image lists, sleep
+// tuning). Drift reads the "kuso-server" managedFields time as the last
+// spec edit, and the helm-operator writes nothing back for a no-op
+// render, so under that name each such write showed "Applying changes…"
+// for two minutes on a service that was not changing.
+const FieldManagerBookkeeping = "kuso-server-annotations"
+
+// UpdateKusoEnvironmentBookkeeping is UpdateKusoEnvironmentWithRetry for
+// writes that leave the rendered chart unchanged.
+func (c *Client) UpdateKusoEnvironmentBookkeeping(ctx context.Context, namespace, name string, mutate func(*KusoEnvironment) error) (*KusoEnvironment, error) {
+	if err := c.paceEnvWrite(ctx); err != nil {
+		return nil, err
+	}
+	return updateWithRetryAs[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, name, FieldManagerBookkeeping, mutate)
 }
 
 // UpdateKusoAddonWithRetry — same shape for addon CRs. Addon settings

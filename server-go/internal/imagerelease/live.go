@@ -88,12 +88,8 @@ func (w *Watcher) recordLiveImage(ctx context.Context, ns string, e *kube.KusoEn
 	}
 }
 
-// FieldManagerAnnotations owns kuso-server's bookkeeping annotations on
-// env CRs. Drift reads the "kuso-server" managedFields time as the last
-// spec edit; this write lands right after a rollout finishes, and under
-// that name it re-armed the reconcile-pending grace, so the service said
-// "Applying changes…" for two minutes after it was already live.
-const FieldManagerAnnotations = "kuso-server-annotations"
+// FieldManagerAnnotations: see kube.FieldManagerBookkeeping.
+const FieldManagerAnnotations = kube.FieldManagerBookkeeping
 
 // addLiveImage appends ref to the env's AnnLiveImages with a
 // resourceVersion-guarded merge patch, retrying on conflict.

@@ -177,7 +177,9 @@ func TestRecordActivity_SkipsWhenAnotherReplicaStamped(t *testing.T) {
 		t.Fatal(err)
 	}
 	var updates atomic.Int64
-	dyn.PrependReactor("update", "kusoenvironments", func(k8stesting.Action) (bool, runtime.Object, error) {
+	var manager atomic.Value
+	dyn.PrependReactor("update", "kusoenvironments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		manager.Store(a.(k8stesting.UpdateActionImpl).UpdateOptions.FieldManager)
 		updates.Add(1)
 		return false, nil, nil
 	})
@@ -198,5 +200,10 @@ func TestRecordActivity_SkipsWhenAnotherReplicaStamped(t *testing.T) {
 			t.Fatal("stale stamp never refreshed")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// Under "kuso-server" drift reads the stamp as a spec edit and shows
+	// "Applying changes…" for two minutes on a service that isn't changing.
+	if m := manager.Load(); m != kube.FieldManagerBookkeeping {
+		t.Errorf("stamp written by field manager %q, want %q", m, kube.FieldManagerBookkeeping)
 	}
 }
