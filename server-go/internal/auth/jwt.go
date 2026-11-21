@@ -6,6 +6,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -56,8 +57,14 @@ type Claims struct {
 // Issuer signs and verifies tokens with HS256. The secret is shared with
 // the TS server (process.env.JWT_SECRET) so tokens round-trip between
 // implementations during the staged cutover.
+//
+// previous holds retired secrets (KUSO_JWT_PREVIOUS_SECRETS) that still
+// verify but never sign, so rotating JWT_SECRET doesn't log everyone out
+// or kill CI tokens.
 type Issuer struct {
 	secret       []byte
+	kid          string
+	previous     []signingKey
 	ttl          time.Duration
 	revoked      RevocationChecker  // optional; set via SetRevocationChecker
 	resolvePerms PermissionResolver // optional; set via SetPermissionResolver
@@ -115,7 +122,85 @@ func NewIssuer(secret string, ttl time.Duration) (*Issuer, error) {
 	if ttl <= 0 {
 		ttl = 10 * time.Hour // matches TS default of 36000s
 	}
-	return &Issuer{secret: []byte(secret), ttl: ttl}, nil
+	return &Issuer{secret: []byte(secret), kid: KeyID(secret), ttl: ttl}, nil
+}
+
+type signingKey struct {
+	kid    string
+	secret []byte
+}
+
+// KeyID is the `kid` header stamped on tokens signed with secret: a
+// truncated SHA-256 of the secret under a fixed label, so it names the
+// key without revealing it.
+func KeyID(secret string) string {
+	sum := sha256.Sum256([]byte("kuso-jwt-kid\x00" + secret))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ParseSecretList splits a comma-separated secret list (the
+// KUSO_JWT_PREVIOUS_SECRETS format), trimming blanks.
+func ParseSecretList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// SetPreviousSecrets registers retired secrets that still verify tokens
+// (with a matching kid, or with no kid at all) but never sign. Entries
+// equal to the current secret are ignored. Call before serving.
+func (i *Issuer) SetPreviousSecrets(secrets []string) {
+	i.previous = nil
+	for _, s := range secrets {
+		if s == "" || s == string(i.secret) {
+			continue
+		}
+		i.previous = append(i.previous, signingKey{kid: KeyID(s), secret: []byte(s)})
+	}
+}
+
+// PreviousSecretsWeakness reports the first unsafe previous secret, or
+// "". A weak previous secret is as forgeable as a weak current one,
+// because it still verifies tokens.
+func PreviousSecretsWeakness(secrets []string) string {
+	for n, s := range secrets {
+		if p := JWTSecretWeakness(s); p != "" {
+			return fmt.Sprintf("KUSO_JWT_PREVIOUS_SECRETS entry %d: %s", n+1, p)
+		}
+	}
+	return ""
+}
+
+// verificationKeys picks the secrets a token may be checked against. A
+// token with a kid is checked only against the secret with that kid; one
+// without (every token minted before kids existed) is tried against the
+// current secret, then each previous one.
+func (i *Issuer) verificationKeys(t *jwt.Token) (any, error) {
+	raw, has := t.Header["kid"]
+	if !has {
+		keys := []jwt.VerificationKey{i.secret}
+		for _, p := range i.previous {
+			keys = append(keys, p.secret)
+		}
+		return jwt.VerificationKeySet{Keys: keys}, nil
+	}
+	kid, ok := raw.(string)
+	if !ok {
+		return nil, errors.New("auth: kid header is not a string")
+	}
+	if kid == i.kid {
+		return i.secret, nil
+	}
+	for _, p := range i.previous {
+		if kid == p.kid {
+			return p.secret, nil
+		}
+	}
+	return nil, fmt.Errorf("auth: unknown kid %q", kid)
 }
 
 // Sign issues a JWT with the given claim payload. exp is set from ttl.
@@ -159,6 +244,7 @@ func (i *Issuer) signWith(c Claims, expiresAt time.Time, omitExp bool) (string, 
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
+	tok.Header["kid"] = i.kid
 	signed, err := tok.SignedString(i.secret)
 	if err != nil {
 		return "", fmt.Errorf("auth: sign: %w", err)
@@ -174,11 +260,11 @@ func (i *Issuer) Verify(tokenStr string) (*Claims, error) {
 	tok, err := jwt.ParseWithClaims(tokenStr, &c, func(t *jwt.Token) (any, error) {
 		// Reject any algorithm other than HMAC-SHA256. This guards
 		// against "alg=none" downgrades and RS256-key-confusion attacks.
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("auth: unexpected signing method %q", t.Method.Alg())
 		}
-		return i.secret, nil
-	})
+		return i.verificationKeys(t)
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
 		return nil, fmt.Errorf("auth: verify: %w", err)
 	}

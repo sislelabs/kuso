@@ -56,6 +56,18 @@ curl -s localhost:3000/healthz
 
 `KUSO_HTTP_ADDR` (or `--addr`) overrides the listen address (default `:3000`). A fresh install refuses to boot with a short `JWT_SECRET` unless `KUSO_ALLOW_INSECURE_JWT=1` is set — fine for a throwaway dev DB, never for a real one.
 
+### Rotating `JWT_SECRET`
+
+Tokens carry a `kid` header derived from the secret that signed them. `KUSO_JWT_PREVIOUS_SECRETS` (comma-separated) lists retired secrets that still verify tokens but never sign new ones. Tokens without a `kid` (everything older kuso versions issued) are checked against the current secret, then each previous one.
+
+To rotate without logging anyone out:
+
+1. In Secret `kuso/kuso-server-secrets`, set `KUSO_JWT_PREVIOUS_SECRETS` to the old value and `JWT_SECRET` to a new 32+ character random string.
+2. Restart kuso-server: `kubectl -n kuso rollout restart deploy/kuso-server`.
+3. Once everyone has signed in again and API tokens have been re-issued, remove the old value from `KUSO_JWT_PREVIOUS_SECRETS` and restart again. Never-expiring tokens keep verifying until you do.
+
+If you're rotating because the old secret leaked or is weak, skip the previous list: that secret can still forge tokens for as long as it's listed. kuso-server logs a `SECURITY` error at boot when a previous secret is weak.
+
 ## Container image
 
 ```sh

@@ -154,6 +154,11 @@ func main() {
 		logger.Error("auth: bad config", "err", err)
 		os.Exit(2)
 	}
+	previousJWTSecrets := auth.ParseSecretList(os.Getenv("KUSO_JWT_PREVIOUS_SECRETS"))
+	issuer.SetPreviousSecrets(previousJWTSecrets)
+	if len(previousJWTSecrets) > 0 {
+		logger.Info("auth: accepting tokens from previous JWT secrets", "count", len(previousJWTSecrets))
+	}
 
 	database, err := db.Open(*dbDSN)
 	if err != nil {
@@ -270,8 +275,11 @@ func main() {
 	}
 	if jwtProblem != "" {
 		serverstate.SetInsecureJWT(jwtProblem)
-		logger.Error("SECURITY: insecure JWT secret; tokens can be forged. Rotate it: set a new 32+ char random JWT_SECRET in Secret kuso/kuso-server-secrets and restart kuso-server (everyone is logged out), or re-run hack/install.sh",
+		logger.Error("SECURITY: insecure JWT secret; tokens can be forged. Rotate it: set a new 32+ char random JWT_SECRET in Secret kuso/kuso-server-secrets and restart kuso-server (everyone is logged out; don't keep the old secret in KUSO_JWT_PREVIOUS_SECRETS), or re-run hack/install.sh",
 			"problem", jwtProblem)
+	}
+	if p := auth.PreviousSecretsWeakness(previousJWTSecrets); p != "" {
+		logger.Error("SECURITY: insecure previous JWT secret; it still verifies tokens, so they can be forged. Remove it from KUSO_JWT_PREVIOUS_SECRETS and restart kuso-server", "problem", p)
 	}
 
 	// First-boot bootstrap: seed admin role + user from the configured
