@@ -426,17 +426,23 @@ spec:
           {{- $hcPort := .Values.healthcheck.port | default .Values.port }}
           {{- /* 0 is a valid delay; `default 5` treated it as unset. The
                  other probe fields below must be >= 1, so default is right
-                 for them. */}}
+                 for them.
+                 Readiness defaults to no delay and a 2s period: it can't
+                 run before the startupProbe passes, so a delay or a long
+                 period is only time between "listening" and "Ready" on
+                 every start and wake. Liveness keeps 5s/10s. */}}
           {{- $hcDelay := 5 }}
-          {{- if not (kindIs "invalid" .Values.healthcheck.initialDelaySeconds) }}{{ $hcDelay = int .Values.healthcheck.initialDelaySeconds }}{{ end }}
+          {{- $hcReadyDelay := 0 }}
+          {{- if not (kindIs "invalid" .Values.healthcheck.initialDelaySeconds) }}{{ $hcDelay = int .Values.healthcheck.initialDelaySeconds }}{{ $hcReadyDelay = $hcDelay }}{{ end }}
           readinessProbe:
             httpGet:
               path: {{ .Values.healthcheck.path | quote }}
               port: {{ $hcPort }}
-            initialDelaySeconds: {{ $hcDelay }}
-            periodSeconds: {{ .Values.healthcheck.periodSeconds | default 10 }}
+            initialDelaySeconds: {{ $hcReadyDelay }}
+            periodSeconds: {{ .Values.healthcheck.periodSeconds | default 2 }}
             timeoutSeconds: {{ .Values.healthcheck.timeoutSeconds | default 2 }}
-            failureThreshold: {{ .Values.healthcheck.failureThreshold | default 3 }}
+            {{- /* 15 x the 2s default period keeps the old 30s (3 x 10s) before a failing pod leaves the endpoints. */}}
+            failureThreshold: {{ .Values.healthcheck.failureThreshold | default (ternary 3 15 (not (empty .Values.healthcheck.periodSeconds))) }}
             successThreshold: 1
           livenessProbe:
             httpGet:

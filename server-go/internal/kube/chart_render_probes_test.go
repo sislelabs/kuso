@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A Recreate env (RWO volume) has no overlap between old and new pod, so the
@@ -87,16 +89,69 @@ envVars:
 	}
 }
 
-// initialDelaySeconds 0 is valid and must survive the render; `default 5`
-// used to turn it into 5.
-func TestKusoEnvironmentChart_HealthcheckZeroDelay(t *testing.T) {
-	t.Parallel()
-	zero := helmTemplate(t, "test-env", "healthcheck.path=/healthz", "healthcheck.initialDelaySeconds=0")
-	if strings.Count(zero, "initialDelaySeconds: 0") != 2 {
-		t.Errorf("explicit 0 delay not rendered on both HTTP probes:\n%s", zero)
+// appProbes decodes the app container's readiness/liveness probes.
+func appProbes(t *testing.T, rendered string) (ready, live map[string]any) {
+	t.Helper()
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name           string         `yaml:"name"`
+						ReadinessProbe map[string]any `yaml:"readinessProbe"`
+						LivenessProbe  map[string]any `yaml:"livenessProbe"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
 	}
-	unset := helmTemplate(t, "test-env", "healthcheck.path=/healthz")
-	if strings.Count(unset, "initialDelaySeconds: 5") != 2 {
-		t.Errorf("unset delay should default to 5 on both HTTP probes:\n%s", unset)
+	if err := yaml.Unmarshal([]byte(rendered), &d); err != nil {
+		t.Fatalf("decode deployment: %v\n%s", err, rendered)
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == "app" {
+			return c.ReadinessProbe, c.LivenessProbe
+		}
+	}
+	t.Fatalf("no app container:\n%s", rendered)
+	return nil, nil
+}
+
+// Readiness can't run before the TCP startupProbe passes, so its initial
+// delay and period are pure time-to-Ready on every start and wake: they
+// default to 0s/2s. Liveness keeps 5s/10s. Explicit values win on both, 0
+// included (`default 5` used to turn an explicit 0 into 5). The defaulted
+// readiness threshold scales to keep the old 30s before a pod is unready.
+func TestKusoEnvironmentChart_HealthcheckProbeTiming(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                  string
+		sets                  []string
+		readyDelay, readyPer  int
+		liveDelay, livePeriod int
+		readyFail             int
+	}{
+		{"defaults", nil, 0, 2, 5, 10, 15},
+		{"explicit zero delay", []string{"healthcheck.initialDelaySeconds=0"}, 0, 2, 0, 10, 15},
+		{"explicit values", []string{"healthcheck.initialDelaySeconds=7", "healthcheck.periodSeconds=4"}, 7, 4, 7, 4, 3},
+		{"explicit threshold", []string{"healthcheck.failureThreshold=5"}, 0, 2, 5, 10, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ready, live := appProbes(t, helmTemplate(t, "test-env", append([]string{"healthcheck.path=/healthz"}, tc.sets...)...))
+			if ready["httpGet"] == nil || live["httpGet"] == nil {
+				t.Fatalf("want HTTP probes, got readiness=%v liveness=%v", ready, live)
+			}
+			check := func(probe string, m map[string]any, delay, period int) {
+				if m["initialDelaySeconds"] != delay || m["periodSeconds"] != period {
+					t.Errorf("%s: initialDelaySeconds=%v periodSeconds=%v, want %d/%d", probe, m["initialDelaySeconds"], m["periodSeconds"], delay, period)
+				}
+			}
+			check("readiness", ready, tc.readyDelay, tc.readyPer)
+			check("liveness", live, tc.liveDelay, tc.livePeriod)
+			if ready["failureThreshold"] != tc.readyFail {
+				t.Errorf("readiness failureThreshold=%v, want %d", ready["failureThreshold"], tc.readyFail)
+			}
+		})
 	}
 }
