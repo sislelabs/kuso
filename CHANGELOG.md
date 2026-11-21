@@ -19,6 +19,19 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.51.0] — 2026-11-21
+
+### Other
+- Let public-TCP addons restrict source ranges and cap connections ([e3ab5e3](https://github.com/sislelabs/kuso/commit/e3ab5e3b6172ded13b2152a05fdc1efd22d59f91))
+- Warn on risky pods in kuso namespaces at admission ([17126e6](https://github.com/sislelabs/kuso/commit/17126e6af7f48ad1998b00d31d7eb3b8ad32cd56))
+- Let JWT_SECRET rotate without logging everyone out ([1152c96](https://github.com/sislelabs/kuso/commit/1152c9632eb536669753cca619252a56ded25ef5))
+- Skip the missing-env regexes for lines that cannot match ([a240517](https://github.com/sislelabs/kuso/commit/a240517f9b118e1f7e056b5b933e6333913b8116))
+- Pull Docker Hub images through mirror.gcr.io in buildkitd ([cde0f4a](https://github.com/sislelabs/kuso/commit/cde0f4a9159e925a515563003a4008dadf3e0c37))
+- Cut per-build overhead in cache, clone and placement ([9a84042](https://github.com/sislelabs/kuso/commit/9a840421f40ca47b61fb2b7b60b6173c64c62da7))
+- Read the env once per wake and log what woke it ([f22b360](https://github.com/sislelabs/kuso/commit/f22b360321c065b55ca3b4cfe988859bd6e74208))
+- Make health-checked services Ready sooner on start and wake ([b228bfa](https://github.com/sislelabs/kuso/commit/b228bfaceabf76041cfa835a6e7daefa6b67dccf))
+- Finish the addon wait as soon as every addon answers ([9dcd38a](https://github.com/sislelabs/kuso/commit/9dcd38a7d526689c5902044d2ba0a0c5d87ec200))
+
 ## [0.50.0] — 2026-11-19
 
 ### Other
@@ -1393,11 +1406,6 @@ messages on every release. The format is loosely based on
 - Pick the pg_dump client by server version in backups and snapshots ([876cf93](https://github.com/sislelabs/kuso/commit/876cf936c5fa572bc556267dd5fbe6516c18d74b))
 - Retry a failed release Job instead of reusing its failure ([b84e2e6](https://github.com/sislelabs/kuso/commit/b84e2e60d7a6b2ac67460b933b4fa049b47f5ef5))
 - Report an unset subscription as everything it mounts ([75760d5](https://github.com/sislelabs/kuso/commit/75760d55491d712aca8760a02e107ebb10850c89))
-
-## [0.26.16] — 2026-09-28
-
-### Other
-- Finish project delete cleanup when a leftover can't be removed ([c8721ed](https://github.com/sislelabs/kuso/commit/c8721ed158b91a68c1e926e419f8965ffe6382c8))
 
 
 ---

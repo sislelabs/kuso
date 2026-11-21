@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.16] — 2026-09-28
+
+### Other
+- Finish project delete cleanup when a leftover can't be removed ([c8721ed](https://github.com/sislelabs/kuso/commit/c8721ed158b91a68c1e926e419f8965ffe6382c8))
+
 ## [0.26.15] — 2026-09-28
 
 ### Other
