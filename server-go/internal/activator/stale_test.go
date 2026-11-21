@@ -42,6 +42,11 @@ func TestStaleCapturableRequest(t *testing.T) {
 		"cookie":        {req(http.MethodGet, map[string]string{"Cookie": "sid=1"}), false},
 		"authorization": {req(http.MethodGet, map[string]string{"Authorization": "Bearer x"}), false},
 		"upgrade":       {req(http.MethodGet, map[string]string{"Upgrade": "websocket"}), false},
+		"proxy-auth":    {req(http.MethodGet, map[string]string{"Proxy-Authorization": "Basic x"}), false},
+		"api key":       {req(http.MethodGet, map[string]string{"X-Api-Key": "k"}), false},
+		"token header":  {req(http.MethodGet, map[string]string{"X-Access-Token": "t"}), false},
+		"session":       {req(http.MethodGet, map[string]string{"X-Session-Id": "s"}), false},
+		"forwarded":     {req(http.MethodGet, map[string]string{"X-Forwarded-For": "1.2.3.4", "Accept": "text/html"}), true},
 	}
 	for name, c := range cases {
 		if got := staleCapturable(c.r); got != c.want {
@@ -68,19 +73,22 @@ func TestStaleStorableResponse(t *testing.T) {
 		r    *http.Response
 		want bool
 	}{
-		"plain 200":                {resp(200, nil, 10), true},
-		"unknown length":           {resp(200, nil, -1), true},
+		"no cache-control":         {resp(200, nil, 10), false},
+		"max-age=0 only":           {resp(200, map[string][]string{"Cache-Control": {"max-age=0"}}, 10), false},
+		"s-maxage":                 {resp(200, map[string][]string{"Cache-Control": {"s-maxage=31536000, stale-while-revalidate"}}, 10), true},
+		"plain public":             {resp(200, map[string][]string{"Cache-Control": {"public"}}, 10), true},
+		"unknown length":           {resp(200, map[string][]string{"Cache-Control": {"public"}}, -1), true},
 		"public max-age":           {resp(200, map[string][]string{"Cache-Control": {"public, max-age=60"}}, 10), true},
-		"vary accept-encoding":     {resp(200, map[string][]string{"Vary": {"Accept-Encoding"}}, 10), true},
-		"404":                      {resp(404, nil, 10), false},
+		"vary accept-encoding":     {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"Accept-Encoding"}}, 10), true},
+		"404":                      {resp(404, map[string][]string{"Cache-Control": {"public"}}, 10), false},
 		"304":                      {resp(304, nil, 0), false},
-		"set-cookie":               {resp(200, map[string][]string{"Set-Cookie": {"a=b"}}, 10), false},
+		"set-cookie":               {resp(200, map[string][]string{"Cache-Control": {"public"}, "Set-Cookie": {"a=b"}}, 10), false},
 		"cache-control private":    {resp(200, map[string][]string{"Cache-Control": {"private, max-age=60"}}, 10), false},
 		"cache-control no-store":   {resp(200, map[string][]string{"Cache-Control": {"no-store"}}, 10), false},
 		"cache-control no-cache":   {resp(200, map[string][]string{"Cache-Control": {"max-age=0", "no-cache=\"Set-Cookie\""}}, 10), false},
-		"vary cookie":              {resp(200, map[string][]string{"Vary": {"Accept-Encoding, Cookie"}}, 10), false},
-		"vary star":                {resp(200, map[string][]string{"Vary": {"*"}}, 10), false},
-		"content-length over 1MiB": {resp(200, nil, staleMaxEntry+1), false},
+		"vary cookie":              {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"Accept-Encoding, Cookie"}}, 10), false},
+		"vary star":                {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"*"}}, 10), false},
+		"content-length over 1MiB": {resp(200, map[string][]string{"Cache-Control": {"public"}}, staleMaxEntry+1), false},
 	}
 	for name, c := range cases {
 		if got := staleStorable(c.r); got != c.want {

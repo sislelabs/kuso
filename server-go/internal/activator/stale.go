@@ -109,7 +109,15 @@ func encodingBucket(vals []string) string {
 // anonymousRequest reports a request with no credentials: only those may
 // be stored or answered from the shared copy.
 func anonymousRequest(r *http.Request) bool {
-	return r.Header.Get("Cookie") == "" && r.Header.Get("Authorization") == "" && r.Header.Get("Upgrade") == ""
+	for k := range r.Header {
+		switch lk := strings.ToLower(k); {
+		case lk == "cookie", lk == "upgrade", strings.Contains(lk, "auth"),
+			strings.Contains(lk, "token"), strings.Contains(lk, "api-key"),
+			strings.Contains(lk, "apikey"), strings.Contains(lk, "session"):
+			return false
+		}
+	}
+	return true
 }
 
 // staleCapturable reports whether a proxied request's response may be
@@ -134,14 +142,28 @@ func staleStorable(resp *http.Response) bool {
 	if resp.ContentLength > staleMaxEntry {
 		return false
 	}
+	// The app must opt in to shared caching: a response is only stored
+	// when it says any cache may keep it (public, or a positive s-maxage /
+	// max-age). Silence is not consent: a page personalised by a header we
+	// don't know about would otherwise replay to every visitor.
+	shared := false
 	for _, cc := range resp.Header.Values("Cache-Control") {
 		for _, d := range strings.Split(cc, ",") {
-			name, _, _ := strings.Cut(strings.TrimSpace(d), "=")
+			name, val, _ := strings.Cut(strings.TrimSpace(d), "=")
 			switch strings.ToLower(strings.TrimSpace(name)) {
 			case "private", "no-store", "no-cache":
 				return false
+			case "public":
+				shared = true
+			case "s-maxage", "max-age":
+				if n, err := strconv.Atoi(strings.Trim(strings.TrimSpace(val), `"`)); err == nil && n > 0 {
+					shared = true
+				}
 			}
 		}
+	}
+	if !shared {
+		return false
 	}
 	for _, v := range resp.Header.Values("Vary") {
 		for _, f := range strings.Split(v, ",") {
