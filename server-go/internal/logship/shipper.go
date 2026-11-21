@@ -776,7 +776,7 @@ var missingEnvPatterns = []*regexp.Regexp{
 // matchMissingEnv tries every pattern, returns the first var name
 // captured or "" when nothing matches.
 func matchMissingEnv(line string) string {
-	if len(line) < 8 {
+	if len(line) < 8 || !mayMatchMissingEnv(line) {
 		return ""
 	}
 	for _, re := range missingEnvPatterns {
@@ -786,6 +786,25 @@ func matchMissingEnv(line string) string {
 		}
 	}
 	return ""
+}
+
+// mayMatchMissingEnv reports whether line contains a literal that
+// every missingEnvPatterns match requires, so the common line skips
+// all the regexes. Keep it in sync with the patterns (all
+// case-sensitive):
+//
+//	"Error: "      KeyError: / ReferenceError:
+//	" env"         (Missing|Required) env
+//	"missing"      (panic|fatal):.*missing\s+X\s+env
+//	               required key X missing value
+//	"is required"  X\s+is required
+//	"is not set"   X\s+is not set
+func mayMatchMissingEnv(line string) bool {
+	return strings.Contains(line, "Error: ") ||
+		strings.Contains(line, " env") ||
+		strings.Contains(line, "missing") ||
+		strings.Contains(line, "is required") ||
+		strings.Contains(line, "is not set")
 }
 
 // recordEnvHint stamps the (project, service, var-name) tuple onto an
