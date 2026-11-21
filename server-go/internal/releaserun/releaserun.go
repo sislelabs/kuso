@@ -79,8 +79,8 @@ const (
 
 // waitForAddonsScript is the wait-for-addons initContainer body. It
 // derives host:port from whichever of DATABASE_URL / REDIS_URL / NATS_URL
-// are present in the release env and TCP-waits (busybox `nc -z`) until each
-// accepts a connection, up to ~120s. This rides out the window where a
+// are present in the release env and TCP-waits (busybox `nc -z`, all addons
+// concurrently) until each accepts a connection, up to ~120s. This rides out the window where a
 // freshly-provisioned addon is still bootstrapping, or where an addon
 // reconcile briefly re-applies its Service. A var that is unset or has no
 // derivable host:port is skipped (not every app uses every datastore).
@@ -115,30 +115,40 @@ wait_one() {
   [ -z "$host" ] && return 0
   [ -z "$port" ] && port=$4
   echo "wait-for-addons: waiting for $name at $host:$port"
-  i=0
-  attempts="${WAIT_FOR_ADDONS_ATTEMPTS:-60}"
-  while [ "$i" -lt "$attempts" ]; do
-    if nc -z -w 2 "$host" "$port" 2>/dev/null; then
+  # WAIT_FOR_ADDONS_ATTEMPTS counts the 2s slots of the old fixed retry;
+  # callers size their budget with it, so it still means attempts x 2s.
+  budget=$(( ${WAIT_FOR_ADDONS_ATTEMPTS:-60} * 2 ))
+  deadline=$(( $(date +%s) + budget ))
+  while :; do
+    # A fresh pod's first SYN is often dropped until its network policy
+    # is programmed; a short timeout and a quick retry get through as
+    # soon as it is, instead of sitting out a 2s timeout plus a 2s sleep.
+    if nc -z -w 1 "$host" "$port" 2>/dev/null; then
       echo "wait-for-addons: $name reachable at $host:$port"
       return 0
     fi
-    i=$((i+1))
-    sleep 2
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 0.25
   done
-  echo "wait-for-addons: $name at $host:$port not reachable after $((attempts*2))s" >&2
+  echo "wait-for-addons: $name at $host:$port not reachable after ${budget}s" >&2
   return 1
 }
 
-rc=0
+# One background probe per addon: the wait is the slowest addon, not the sum.
+pids=""
 if [ -n "${DATABASE_URL:-}" ]; then
-  set -- $(host_port_from_url "$DATABASE_URL"); wait_one postgres "${1:-}" "${2:-}" 5432 || rc=1
+  set -- $(host_port_from_url "$DATABASE_URL"); wait_one postgres "${1:-}" "${2:-}" 5432 & pids="$pids $!"
 fi
 if [ -n "${REDIS_URL:-}" ]; then
-  set -- $(host_port_from_url "$REDIS_URL"); wait_one redis "${1:-}" "${2:-}" 6379 || rc=1
+  set -- $(host_port_from_url "$REDIS_URL"); wait_one redis "${1:-}" "${2:-}" 6379 & pids="$pids $!"
 fi
 if [ -n "${NATS_URL:-}" ]; then
-  set -- $(host_port_from_url "$NATS_URL"); wait_one nats "${1:-}" "${2:-}" 4222 || rc=1
+  set -- $(host_port_from_url "$NATS_URL"); wait_one nats "${1:-}" "${2:-}" 4222 & pids="$pids $!"
 fi
+rc=0
+for pid in $pids; do
+  wait "$pid" || rc=1
+done
 # Strict (default): a present addon that never answers is a failure — the
 # release Job runs with backoffLimit 0 and wants a clear verdict, not a
 # migration attempted against nothing. Soft (WAIT_FOR_ADDONS_SOFT=1): app
