@@ -342,7 +342,7 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wake (coalesced) and wait until Ready, bounded by holdTimeout.
-	wctx, cancel := context.WithTimeout(ctx, a.holdTimeout)
+	wctx, cancel := context.WithTimeout(context.WithValue(ctx, wakeTriggerKey{}, r), a.holdTimeout)
 	defer cancel()
 	if err := a.wakeAndWait(wctx, ns, env); err != nil {
 		if errors.Is(err, errNotDeployed) {
@@ -795,9 +795,28 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	if !inFlight && err == nil {
 		// One line per real cold start (the owning waiter only), so wake
 		// latency is measurable from logs instead of pod timestamps.
-		a.logger.Info("activator: woke", "namespace", ns, "service", name, "readyAfter", a.now().Sub(start).Round(time.Millisecond).String())
+		a.logger.Info("activator: woke", wokeLogAttrs(ctx, ns, name, a.now().Sub(start))...)
 	}
 	return err
+}
+
+type wakeTriggerKey struct{}
+
+// wokeLogAttrs includes what woke the env, to tell a real visitor from a
+// monitor or crawler that keeps an otherwise idle app cycling.
+func wokeLogAttrs(ctx context.Context, ns, name string, took time.Duration) []any {
+	attrs := []any{"namespace", ns, "service", name, "readyAfter", took.Round(time.Millisecond).String()}
+	if r, ok := ctx.Value(wakeTriggerKey{}).(*http.Request); ok {
+		attrs = append(attrs, "method", r.Method, "path", r.URL.Path, "userAgent", truncate(r.UserAgent(), 200))
+	}
+	return attrs
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // errNotDeployed: the env has no image yet, so there is nothing to wake.
@@ -886,11 +905,13 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	// A new preview/named env waits at 0 for its first build. Raising it
 	// would start a pod with image ":latest" (InvalidImageName) and answer
 	// a misleading "failed to start".
-	if env, err := a.kc.GetKusoEnvironment(ctx, ns, name); err == nil && env != nil &&
-		(env.Spec.Image == nil || env.Spec.Image.Repository == "") {
-		return errNotDeployed
+	notDeployed := func(env *kube.KusoEnvironment) error {
+		if env.Spec.Image == nil || env.Spec.Image.Repository == "" {
+			return errNotDeployed
+		}
+		return nil
 	}
-	if err := scaledown.Wake(ctx, a.kc, a.logger, ns, name, a.now()); err != nil {
+	if err := scaledown.WakeIf(ctx, a.kc, a.logger, ns, name, a.now(), notDeployed); err != nil {
 		return err
 	}
 	go func() {
@@ -922,10 +943,12 @@ const (
 	// readyCheckTimeout bounds one endpoint LIST. On the fast path a
 	// timeout proxies optimistically; in a poller it is just a missed tick.
 	readyCheckTimeout = 3 * time.Second
-	// slowPollAfter / slowPollInterval: past the usual 1-5s cold start a
-	// wake is a slow pull or an unschedulable pod, and polling at 4/s for
-	// the rest of the hold only loads the apiserver.
-	slowPollAfter    = 5 * time.Second
+	// slowPollAfter / slowPollInterval: past a normal cold start a wake is
+	// a slow pull or an unschedulable pod, and polling at 4/s for the rest
+	// of the hold only loads the apiserver. Wakes measured 5-9s (sandbox,
+	// wait-for-addons, app start), so a 5s cutoff put the typical Ready
+	// on the 1s tick and added ~0.5s to it.
+	slowPollAfter    = 15 * time.Second
 	slowPollInterval = time.Second
 )
 

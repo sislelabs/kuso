@@ -26,15 +26,32 @@ import (
 // env the chart omits spec.replicas, so raising the Deployment above 0 is
 // what reactivates the (implicitly paused) HPA.
 func Wake(ctx context.Context, kc *kube.Client, logger *slog.Logger, ns, name string, now time.Time) error {
+	return WakeIf(ctx, kc, logger, ns, name, now, nil)
+}
+
+// WakeIf is Wake with a precondition run against the env CR the wake reads
+// anyway, so a caller that must inspect the env first needs no GET of its
+// own. An error from check aborts the wake before anything is written and
+// is returned unwrapped. check is not called when the env can't be read;
+// the wake then goes ahead as Wake always has.
+func WakeIf(ctx context.Context, kc *kube.Client, logger *slog.Logger, ns, name string, now time.Time, check func(*kube.KusoEnvironment) error) error {
 	if kc == nil || kc.Clientset == nil {
 		return fmt.Errorf("scaledown: no kube client")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	want := preSleepReplicas(ctx, kc, ns, name)
-
+	// The update's own GET is the only env read on the wake path; want
+	// stays 1 if it fails.
+	want := 1
+	var checkErr error
 	if _, uerr := kc.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(e *kube.KusoEnvironment) error {
+		if check != nil {
+			if checkErr = check(e); checkErr != nil {
+				return checkErr
+			}
+		}
+		want = preSleepReplicas(e)
 		if e.Spec.ReplicaCountValue() < want {
 			e.Spec.SetReplicaCount(want)
 		}
@@ -44,7 +61,9 @@ func Wake(ctx context.Context, kc *kube.Client, logger *slog.Logger, ns, name st
 		e.Annotations[LastActivityAnnotation] = now.UTC().Format(time.RFC3339)
 		delete(e.Annotations, PreSleepReplicasAnnotation)
 		return nil
-	}); uerr != nil {
+	}); checkErr != nil {
+		return checkErr
+	} else if uerr != nil {
 		logger.Warn("scaledown: persist wake on env", "ns", ns, "env", name, "err", uerr)
 	}
 
@@ -74,11 +93,7 @@ func replicasTestFailed(err error) bool {
 
 // preSleepReplicas reads the count scaledown stashed before sleeping the
 // env. 1 when missing or unparseable — the floor that always serves.
-func preSleepReplicas(ctx context.Context, kc *kube.Client, ns, name string) int {
-	env, err := kc.GetKusoEnvironment(ctx, ns, name)
-	if err != nil || env == nil {
-		return 1
-	}
+func preSleepReplicas(env *kube.KusoEnvironment) int {
 	if v := env.Annotations[PreSleepReplicasAnnotation]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
 			return n
