@@ -303,6 +303,9 @@ type PatchImageRequest struct {
 type PatchSecurityContextRequest struct {
 	Capabilities             *PatchCapabilitiesRequest `json:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool                     `json:"allowPrivilegeEscalation,omitempty"`
+	// HostUsers false runs the pods in a Kubernetes user namespace; nil = no
+	// user namespace (kuso's default).
+	HostUsers *bool `json:"hostUsers,omitempty"`
 }
 
 // PatchCapabilitiesRequest lists Linux capabilities to ADD to the

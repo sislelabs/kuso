@@ -344,6 +344,8 @@ type SleepSpec struct {
 type SecuritySpec struct {
 	Capabilities             *CapabilitiesSpec `yaml:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool             `yaml:"allowPrivilegeEscalation,omitempty"`
+	// HostUsers false runs the pods in a Kubernetes user namespace.
+	HostUsers *bool `yaml:"hostUsers,omitempty"`
 }
 
 type CapabilitiesSpec struct {

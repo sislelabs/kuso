@@ -138,6 +138,12 @@ spec:
       # serviceAccountName + automountServiceAccountToken: true on
       # the parent KusoService spec (future work).
       automountServiceAccountToken: false
+      {{- /* Opt-in user namespace (spec.securityContext.hostUsers: false):
+             in-container root maps to an unprivileged host UID. Unset
+             renders nothing, so existing pods keep their spec. */}}
+      {{- if eq (toString (.Values.securityContext).hostUsers) "false" }}
+      hostUsers: false
+      {{- end }}
       {{- if .Values.disableServiceLinks }}
       {{- /* ISO-13: no <SVC>_SERVICE_HOST vars for every Service in the
              namespace. Gated on a flag only new env CRs carry, so the

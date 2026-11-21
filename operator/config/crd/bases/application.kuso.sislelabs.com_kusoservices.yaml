@@ -334,6 +334,12 @@ spec:
                               - KILL
                     allowPrivilegeEscalation:
                       type: boolean
+                    hostUsers:
+                      type: boolean
+                      description: >-
+                        false runs the pods in a Kubernetes user namespace
+                        (pod spec hostUsers: false). Unset or true = no
+                        user namespace.
                 sleep:
                   type: object
                   description: |

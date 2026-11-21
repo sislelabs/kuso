@@ -14,11 +14,12 @@ export function SecuritySection({ state, setState }: SectionProps) {
     .map((c) => c.trim())
     .filter(Boolean).length;
   const status =
-    capCount === 0 && !state.allowPrivilegeEscalation
+    capCount === 0 && !state.allowPrivilegeEscalation && !state.userNamespace
       ? "Hardened default"
       : [
           capCount > 0 ? `+${capCount} capabilit${capCount === 1 ? "y" : "ies"}` : null,
           state.allowPrivilegeEscalation ? "escalation allowed" : null,
+          state.userNamespace ? "user namespace" : null,
         ]
           .filter(Boolean)
           .join(", ");
@@ -55,6 +56,12 @@ export function SecuritySection({ state, setState }: SectionProps) {
         hint="Lets a process gain more privileges than its parent, e.g. through setuid binaries."
         on={state.allowPrivilegeEscalation}
         onChange={(v) => setState((s) => ({ ...s, allowPrivilegeEscalation: v }))}
+      />
+      <SwitchField
+        label="User namespace"
+        hint="Runs the pods in a Kubernetes user namespace, so root in the container is not root on the node. Files an older pod wrote to a volume may need their ownership fixed."
+        on={state.userNamespace}
+        onChange={(v) => setState((s) => ({ ...s, userNamespace: v }))}
       />
     </Section>
   );

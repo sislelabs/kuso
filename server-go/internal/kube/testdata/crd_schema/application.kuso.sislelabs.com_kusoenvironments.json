@@ -397,6 +397,10 @@
                   }
                 },
                 "type": "object"
+              },
+              "hostUsers": {
+                "description": "false runs the pods in a Kubernetes user namespace (pod spec hostUsers: false). Unset or true = no user namespace.",
+                "type": "boolean"
               }
             },
             "type": "object"

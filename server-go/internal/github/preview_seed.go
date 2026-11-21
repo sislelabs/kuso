@@ -63,7 +63,7 @@ const (
 // Returns immediately after the Job spec is submitted; the actual
 // seed runs asynchronously. Errors here mean we couldn't even submit
 // the Job (typically: kube apiserver unreachable, namespace gone).
-func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, envScope, image, seedCmd string, envFromSecrets []string, envVars []envVar, privateEgress, platformAPIEgress bool) error {
+func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, envScope, image, seedCmd string, envFromSecrets []string, envVars []envVar, privateEgress, platformAPIEgress bool, sc *kube.KusoSecurityContext) error {
 	if seedCmd == "" {
 		return nil
 	}
@@ -126,6 +126,7 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 					SecurityContext: &corev1.PodSecurityContext{
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
+					HostUsers: sc.PodHostUsers(),
 					Containers: []corev1.Container{{
 						Name:    "seed",
 						Image:   image,

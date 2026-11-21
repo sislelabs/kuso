@@ -834,7 +834,38 @@ var (
 	repoTokenStdin             bool     // read the repo token from stdin instead of the flag
 	serviceSetCapAdd           []string // Linux capabilities to add back (e.g. SETUID,SETGID)
 	serviceSetAllowPrivEsc     string   // "on" | "off" | "" (leave alone)
+	serviceSetUserNamespace    string   // "on" | "off" | "default"
 )
+
+// currentSecurityContext decodes a GET service body's spec.securityContext
+// into the patch shape, so every field the server returns is sent back.
+func currentSecurityContext(body []byte) (*kusoApi.PatchSecurityContextRequest, error) {
+	var wire struct {
+		Spec struct {
+			SecurityContext *kusoApi.PatchSecurityContextRequest `json:"securityContext"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, fmt.Errorf("decode current service: %w", err)
+	}
+	if wire.Spec.SecurityContext == nil {
+		return &kusoApi.PatchSecurityContextRequest{}, nil
+	}
+	return wire.Spec.SecurityContext, nil
+}
+
+// parseUserNamespaceFlag maps --user-namespace to spec.securityContext.hostUsers:
+// on runs the pods in a user namespace (hostUsers false); off and default
+// both clear the field, which is kuso's default of no user namespace.
+func parseUserNamespaceFlag(v string) (*bool, error) {
+	switch v {
+	case "on", "true", "yes":
+		return kusoApi.BoolPtr(false), nil
+	case "off", "false", "no", "default":
+		return nil, nil
+	}
+	return nil, fmt.Errorf("--user-namespace must be on|off|default (got %q)", v)
+}
 
 // addRepoTokenFlags registers --repo-token / --repo-token-stdin, read by
 // resolveRepoToken.
@@ -902,6 +933,8 @@ Settings → Source / Networking flow.
   --cap-add SETUID --cap-add SETGID   # add back Linux capabilities (repeatable)
   --allow-privilege-escalation=on     # allow a process to gain more privs than its parent
   --allow-privilege-escalation=off    # disallow (kuso's hardened default)
+  --user-namespace=on                 # run pods in a user namespace (container root != host root)
+  --user-namespace=default            # no user namespace (kuso's default)
   --watch-paths 'apps/web/**,packages/**'  # push builds only when these change ('' = default)
   --image-pull-secret ghcr.io   # pull a runtime=image service with a 'kuso registry login' credential ('' clears)
   --repo https://gitlab.com/acme/api.git  # re-point the service at a new source repo
@@ -1148,36 +1181,26 @@ Secret and never returns it. Supply it via --repo-token, on stdin with
 			}
 			req.Repo = rp
 		}
-		if cmd.Flags().Changed("cap-add") || cmd.Flags().Changed("allow-privilege-escalation") {
+		if cmd.Flags().Changed("cap-add") || cmd.Flags().Changed("allow-privilege-escalation") || cmd.Flags().Changed("user-namespace") {
 			// Server-side semantic: a non-nil securityContext REPLACES the
 			// whole block verbatim (no per-field merge server-side). So
-			// changing just one of cap-add/allow-privilege-escalation has
-			// to round-trip the other's current value through a
-			// fetch-then-patch sequence — otherwise we'd silently reset
-			// the untouched sub-field to its zero value.
+			// changing one sub-field has to round-trip the others' current
+			// values through a fetch-then-patch sequence — otherwise we'd
+			// silently reset them to their zero value.
 			cur, err := api.GetService(args[0], args[1])
 			if err := checkRespErr(cur, err); err != nil {
 				return fmt.Errorf("fetch current service spec: %w", err)
 			}
-			var curWire struct {
-				Spec struct {
-					SecurityContext *struct {
-						Capabilities *struct {
-							Add []string `json:"add"`
-						} `json:"capabilities"`
-						AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation"`
-					} `json:"securityContext"`
-				} `json:"spec"`
+			sc, err := currentSecurityContext(cur.Body())
+			if err != nil {
+				return err
 			}
-			if err := json.Unmarshal(cur.Body(), &curWire); err != nil {
-				return fmt.Errorf("decode current service: %w", err)
-			}
-			sc := &kusoApi.PatchSecurityContextRequest{}
-			if curWire.Spec.SecurityContext != nil {
-				if curWire.Spec.SecurityContext.Capabilities != nil {
-					sc.Capabilities = &kusoApi.PatchCapabilitiesRequest{Add: curWire.Spec.SecurityContext.Capabilities.Add}
+			if cmd.Flags().Changed("user-namespace") {
+				hu, err := parseUserNamespaceFlag(serviceSetUserNamespace)
+				if err != nil {
+					return err
 				}
-				sc.AllowPrivilegeEscalation = curWire.Spec.SecurityContext.AllowPrivilegeEscalation
+				sc.HostUsers = hu
 			}
 			if cmd.Flags().Changed("cap-add") {
 				caps := make([]string, 0, len(serviceSetCapAdd))
@@ -2049,6 +2072,7 @@ func init() {
 	addRepoTokenFlags(serviceSetCmd)
 	serviceSetCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
 	serviceSetCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetUserNamespace, "user-namespace", "", "run the pods in a Kubernetes user namespace, so container root is not host root (on|off|default); rolls every env")
 	serviceSetCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
 	serviceSetCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
 	addServiceSetFieldFlags(serviceSetCmd)
@@ -2153,6 +2177,7 @@ func init() {
 	// register every flag the shared RunE reads.
 	serviceSetTopCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetUserNamespace, "user-namespace", "", "run the pods in a Kubernetes user namespace, so container root is not host root (on|off|default); rolls every env")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetWatchPaths, "watch-paths", "", "comma-separated repo-root globs; pushes build only when a changed file matches ('' clears them: build on every push)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetImagePullSecret, "image-pull-secret", "", "registry credential (host or secret name from 'kuso registry list') for runtime=image pulls; '' clears")
 	addServiceSetFieldFlags(serviceSetTopCmd)

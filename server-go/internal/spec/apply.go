@@ -352,7 +352,7 @@ func toKubeSecurityContext(s *SecuritySpec) *kube.KusoSecurityContext {
 	if s == nil {
 		return nil
 	}
-	out := &kube.KusoSecurityContext{AllowPrivilegeEscalation: s.AllowPrivilegeEscalation}
+	out := &kube.KusoSecurityContext{AllowPrivilegeEscalation: s.AllowPrivilegeEscalation, HostUsers: s.HostUsers}
 	if s.Capabilities != nil {
 		out.Capabilities = &kube.KusoCapabilities{Add: s.Capabilities.Add}
 	}

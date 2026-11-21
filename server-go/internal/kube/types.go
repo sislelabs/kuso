@@ -624,14 +624,32 @@ type KusoCapabilities struct {
 type KusoSecurityContext struct {
 	Capabilities             *KusoCapabilities `json:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool             `json:"allowPrivilegeEscalation,omitempty"`
+	// HostUsers=false runs every pod of the service in a Kubernetes user
+	// namespace (pod spec hostUsers: false), so in-container root maps to
+	// an unprivileged host UID. Unlike the fields above it tightens the
+	// default. nil or true = no user namespace.
+	HostUsers *bool `json:"hostUsers,omitempty"`
 }
 
-// IsDefault reports whether c relaxes nothing (nil, no added capabilities,
-// no escalation) and so renders the same as the hardened default.
+// IsDefault reports whether c changes nothing (nil, no added capabilities,
+// no escalation, no user namespace) and so renders the same as the
+// hardened default.
 func (c *KusoSecurityContext) IsDefault() bool {
 	return c == nil ||
 		((c.AllowPrivilegeEscalation == nil || !*c.AllowPrivilegeEscalation) &&
-			(c.Capabilities == nil || len(c.Capabilities.Add) == 0))
+			(c.Capabilities == nil || len(c.Capabilities.Add) == 0) &&
+			c.PodHostUsers() == nil)
+}
+
+// PodHostUsers is the value for a pod spec's hostUsers field: false when
+// the service opted into a user namespace, otherwise nil so the pod spec
+// stays exactly what it was before the field existed.
+func (c *KusoSecurityContext) PodHostUsers() *bool {
+	if c == nil || c.HostUsers == nil || *c.HostUsers {
+		return nil
+	}
+	f := false
+	return &f
 }
 
 // allowedAddCapabilities is the server-side allowlist of Linux

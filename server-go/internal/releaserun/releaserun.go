@@ -504,6 +504,7 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 					SecurityContext: &corev1.PodSecurityContext{
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
+					HostUsers: env.Spec.SecurityContext.PodHostUsers(),
 				},
 			},
 		},

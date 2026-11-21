@@ -217,7 +217,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	// Exported because apply now resets an omitted block: an export ->
 	// apply round-trip must not strip a service's capabilities.
 	if sc := cr.Spec.SecurityContext; sc != nil {
-		s.SecurityContext = &SecuritySpec{AllowPrivilegeEscalation: sc.AllowPrivilegeEscalation}
+		s.SecurityContext = &SecuritySpec{AllowPrivilegeEscalation: sc.AllowPrivilegeEscalation, HostUsers: sc.HostUsers}
 		if sc.Capabilities != nil {
 			s.SecurityContext.Capabilities = &CapabilitiesSpec{Add: sc.Capabilities.Add}
 		}

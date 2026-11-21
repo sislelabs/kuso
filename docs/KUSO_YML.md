@@ -65,7 +65,7 @@ A push is held to tighter rules than `kuso apply`, because whoever can push to t
 | `release` | `{command, timeoutSeconds}` | Pre-deploy hook (migrations). It runs once per build, before promotion, and a failure blocks the rollout. If you leave it out, or leave `command` empty, the hook is cleared. The server's default timeout is 900s. |
 | `buildArgs` | map | `--build-arg KEY=VAL`, the same in every environment. Don't put secrets here. |
 | `publicEnv` | list of strings | Env vars inlined into the build output (for example `NEXT_PUBLIC_*`) that still differ per environment. The value is substituted at pod start. |
-| `securityContext` | `{capabilities: {add: [...]}, allowPrivilegeEscalation}` | Opt-in. If you leave it out, the container drops all capabilities and can't escalate. |
+| `securityContext` | `{capabilities: {add: [...]}, allowPrivilegeEscalation, hostUsers}` | Opt-in. If you leave it out, the container drops all capabilities and can't escalate. `hostUsers: false` runs the pods in a user namespace. |
 | `size` | string | Pod-size preset (`small`/`medium`/`large` or an admin-defined one). Used **only when the service is created**. Later applies ignore it. |
 | `watchPaths` | list of globs | Repo-root globs that gate push builds. The default is `path/**` when `path` is set. |
 

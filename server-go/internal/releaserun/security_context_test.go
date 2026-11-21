@@ -40,3 +40,22 @@ func TestBuildJob_AppliesEnvSecurityContext(t *testing.T) {
 		t.Fatalf("default release container context relaxed: %+v", sc)
 	}
 }
+
+func TestBuildJob_HostUsersFollowsEnv(t *testing.T) {
+	t.Parallel()
+	r := New(nil)
+	img := &kube.KusoImage{Repository: "registry/alpha/api", Tag: "v1"}
+	f := false
+	env := &kube.KusoEnvironment{Spec: kube.KusoEnvironmentSpec{
+		Project: "alpha", Service: "alpha-api",
+		Release:         &kube.KusoReleaseSpec{Command: []string{"migrate"}},
+		SecurityContext: &kube.KusoSecurityContext{HostUsers: &f},
+	}}
+	if hu := r.buildJob(env, img, "j", 60).Spec.Template.Spec.HostUsers; hu == nil || *hu {
+		t.Fatalf("release pod hostUsers = %v, want false", hu)
+	}
+	env.Spec.SecurityContext = nil
+	if hu := r.buildJob(env, img, "j", 60).Spec.Template.Spec.HostUsers; hu != nil {
+		t.Fatalf("default release pod hostUsers = %v, want unset", *hu)
+	}
+}

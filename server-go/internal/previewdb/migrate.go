@@ -178,6 +178,7 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 					SecurityContext: &corev1.PodSecurityContext{
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
+					HostUsers: env.Spec.SecurityContext.PodHostUsers(),
 				},
 			},
 		},

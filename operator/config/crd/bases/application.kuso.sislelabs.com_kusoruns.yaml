@@ -204,6 +204,12 @@ spec:
                               - KILL
                     allowPrivilegeEscalation:
                       type: boolean
+                    hostUsers:
+                      type: boolean
+                      description: >-
+                        false runs the pods in a Kubernetes user namespace
+                        (pod spec hostUsers: false). Unset or true = no
+                        user namespace.
                 # resources overrides the run container's requests/limits
                 # (chart default 100m/128Mi request, 1 CPU/1Gi limit). Was
                 # pruned by the apiserver, so heavier migrations had no way

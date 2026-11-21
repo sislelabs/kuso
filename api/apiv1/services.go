@@ -105,6 +105,8 @@ type ServiceRelease struct {
 type ServiceSecurityContext struct {
 	Capabilities             *ServiceCapabilities `json:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool                `json:"allowPrivilegeEscalation,omitempty"`
+	// HostUsers false runs the pods in a Kubernetes user namespace.
+	HostUsers *bool `json:"hostUsers,omitempty"`
 }
 
 // ServiceCapabilities is the capabilities block on

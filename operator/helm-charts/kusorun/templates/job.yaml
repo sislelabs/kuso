@@ -46,6 +46,10 @@ spec:
       # kube apiserver, so don't mount a ServiceAccount token — same
       # rule the kusoenvironment deployment and kusocron apply.
       automountServiceAccountToken: false
+      {{- /* Same opt-in user namespace as the service's pods. */}}
+      {{- if eq (toString (.Values.securityContext).hostUsers) "false" }}
+      hostUsers: false
+      {{- end }}
       {{- if .Values.envScope }}
       # ISO-13: no Docker-link env vars; same gate as the isolation labels.
       enableServiceLinks: false

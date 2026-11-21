@@ -115,6 +115,8 @@ export interface FormState {
   // default (drop ALL, no escalation).
   capAdd: string;
   allowPrivilegeEscalation: boolean;
+  // userNamespace = spec.securityContext.hostUsers === false.
+  userNamespace: boolean;
   // HTTP health check (spec.healthcheck). Off = TCP probes only. The
   // number fields are strings so blank can mean "server default".
   hcEnabled: boolean;
@@ -247,6 +249,7 @@ export function fromSvc(svc?: KusoService): FormState {
     uptimePath: svc?.spec.uptime?.path ?? "",
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
+    userNamespace: svc?.spec.securityContext?.hostUsers === false,
     hcEnabled: !!svc?.spec.healthcheck?.path,
     hcPath: svc?.spec.healthcheck?.path ?? "",
     hcPort: numStr(svc?.spec.healthcheck?.port),

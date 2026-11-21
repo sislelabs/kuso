@@ -33,3 +33,21 @@ func TestServiceDiff_OmittedSecurityContextResets(t *testing.T) {
 		t.Errorf("unchanged (absent) securityContext still sent: %+v", req.SecurityContext)
 	}
 }
+
+// An export -> apply round trip must keep the user namespace: dropping
+// hostUsers from the export would make `kuso apply` silently turn it off.
+func TestServiceDiff_HostUsersRoundTrips(t *testing.T) {
+	f := false
+	live := &kube.KusoService{}
+	live.Spec.SecurityContext = &kube.KusoSecurityContext{HostUsers: &f}
+	d := exportService("shop", *live)
+	if d.SecurityContext == nil || d.SecurityContext.HostUsers == nil || *d.SecurityContext.HostUsers {
+		t.Fatalf("export securityContext = %+v, want hostUsers false", d.SecurityContext)
+	}
+	if req, fields := diffServiceSpec(live, d); req.SecurityContext != nil {
+		t.Errorf("unchanged hostUsers still sent: %+v (%+v)", req.SecurityContext, fields)
+	}
+	if got := toKubeSecurityContext(d.SecurityContext); got.PodHostUsers() == nil {
+		t.Errorf("apply mapping dropped hostUsers: %+v", got)
+	}
+}

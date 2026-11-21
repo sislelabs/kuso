@@ -70,6 +70,7 @@ type SecurityContext struct {
 		Add []string `json:"add,omitempty"`
 	} `json:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
+	HostUsers                *bool `json:"hostUsers,omitempty"`
 }
 
 type Service struct {

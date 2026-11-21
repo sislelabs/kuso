@@ -37,3 +37,31 @@ func TestValidateSecurityContext(t *testing.T) {
 		})
 	}
 }
+
+func TestKusoSecurityContext_HostUsers(t *testing.T) {
+	t.Parallel()
+	f, tr := false, true
+	cases := []struct {
+		name        string
+		sc          *KusoSecurityContext
+		wantDefault bool
+		wantPod     *bool
+	}{
+		{"nil ctx", nil, true, nil},
+		{"unset", &KusoSecurityContext{}, true, nil},
+		{"hostUsers true", &KusoSecurityContext{HostUsers: &tr}, true, nil},
+		{"hostUsers false", &KusoSecurityContext{HostUsers: &f}, false, &f},
+		{"caps plus userns", &KusoSecurityContext{HostUsers: &f, Capabilities: &KusoCapabilities{Add: []string{"SETUID"}}}, false, &f},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sc.IsDefault(); got != tc.wantDefault {
+				t.Errorf("IsDefault = %v, want %v", got, tc.wantDefault)
+			}
+			got := tc.sc.PodHostUsers()
+			if (got == nil) != (tc.wantPod == nil) || (got != nil && *got != *tc.wantPod) {
+				t.Errorf("PodHostUsers = %v, want %v", got, tc.wantPod)
+			}
+		})
+	}
+}

@@ -57,7 +57,7 @@ export const SECTION_FIELDS = {
   release: ["releaseCommand", "releaseTimeout", "snapshotBeforeDeploy"],
   healthcheck: ["hcEnabled", "hcPath", "hcPort", "hcDelay", "hcPeriod", "hcTimeout", "hcThreshold"],
   uptime: ["uptimeEnabled", "uptimePath"],
-  security: ["capAdd", "allowPrivilegeEscalation"],
+  security: ["capAdd", "allowPrivilegeEscalation", "userNamespace"],
 } as const satisfies Record<string, readonly (keyof FormState)[]>;
 
 export type SaveableSection = keyof typeof SECTION_FIELDS;

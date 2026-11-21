@@ -32,3 +32,16 @@ func TestBuildMigrateJob_FollowsEnvEgressAndPlacement(t *testing.T) {
 		t.Errorf("default env's migrate pod lacks public egress: %v", pod.Labels)
 	}
 }
+
+func TestBuildMigrateJob_HostUsersFollowsEnv(t *testing.T) {
+	t.Parallel()
+	env := previewEnvCR("tickero-api-pr-36", []string{"tickero-db-pr-36-conn"}, []string{"migrate"}, "abc")
+	if hu := buildMigrateJob("kuso", "tickero", "tickero-db-pr-36", &env, "", 1).Spec.Template.Spec.HostUsers; hu != nil {
+		t.Fatalf("default migrate pod hostUsers = %v, want unset", *hu)
+	}
+	f := false
+	env.Spec.SecurityContext = &kube.KusoSecurityContext{HostUsers: &f}
+	if hu := buildMigrateJob("kuso", "tickero", "tickero-db-pr-36", &env, "", 1).Spec.Template.Spec.HostUsers; hu == nil || *hu {
+		t.Fatalf("migrate pod hostUsers = %v, want false", hu)
+	}
+}

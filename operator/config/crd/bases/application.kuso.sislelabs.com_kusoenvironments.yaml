@@ -401,6 +401,12 @@ spec:
                               - KILL
                     allowPrivilegeEscalation:
                       type: boolean
+                    hostUsers:
+                      type: boolean
+                      description: >-
+                        false runs the pods in a Kubernetes user namespace
+                        (pod spec hostUsers: false). Unset or true = no
+                        user namespace.
                 runtime:
                   type: string
                   description: Mirrors KusoService.spec.runtime so the env helm chart can specialise (e.g. workers skip Service/Ingress/probes).

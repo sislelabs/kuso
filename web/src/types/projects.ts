@@ -127,6 +127,8 @@ export interface KusoServiceSpec {
   securityContext?: {
     capabilities?: { add?: string[] };
     allowPrivilegeEscalation?: boolean;
+    // false = pods run in a Kubernetes user namespace; unset = none.
+    hostUsers?: boolean;
   };
   // release is a pre-deploy hook: a one-off Job that runs the given
   // command (with the new image + service env) BEFORE a rollout is

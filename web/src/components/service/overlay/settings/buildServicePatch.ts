@@ -231,7 +231,11 @@ export function buildServicePatch(
     );
     if (release) body.release = release;
   }
-  if (state.capAdd !== baseline.capAdd || state.allowPrivilegeEscalation !== baseline.allowPrivilegeEscalation) {
+  if (
+    state.capAdd !== baseline.capAdd ||
+    state.allowPrivilegeEscalation !== baseline.allowPrivilegeEscalation ||
+    state.userNamespace !== baseline.userNamespace
+  ) {
     const caps = state.capAdd
       .split(",")
       .map((c) => c.trim())
@@ -241,6 +245,7 @@ export function buildServicePatch(
     body.securityContext = {
       ...(caps.length > 0 ? { capabilities: { add: caps } } : {}),
       allowPrivilegeEscalation: state.allowPrivilegeEscalation,
+      ...(state.userNamespace ? { hostUsers: false } : {}),
     };
   }
   const hc = healthcheckPatch(state, baseline);
@@ -347,7 +352,11 @@ export function fieldDiffValues(field: string, base: FormState, next: FormState)
         ? `${s.releaseCommand.trim()}${s.releaseTimeout ? ` (${s.releaseTimeout}s)` : ""}`
         : "",
     securityContext: (s) =>
-      [s.capAdd.trim() && `capAdd: ${s.capAdd.trim()}`, s.allowPrivilegeEscalation ? "allowPrivilegeEscalation: true" : ""]
+      [
+        s.capAdd.trim() && `capAdd: ${s.capAdd.trim()}`,
+        s.allowPrivilegeEscalation ? "allowPrivilegeEscalation: true" : "",
+        s.userNamespace ? "hostUsers: false" : "",
+      ]
         .filter(Boolean)
         .join(", "),
     privateEgress: (s) => (s.privateEgress ? "namespace-only egress" : "internet egress"),

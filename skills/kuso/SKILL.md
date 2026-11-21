@@ -478,6 +478,8 @@ kuso project service set tools uptime-kuma \
 
 Capabilities pass a server-side allowlist (escape-equivalent caps like `SYS_ADMIN` are rejected).
 
+`--user-namespace on` runs a service's pods in a Kubernetes user namespace, so root in the container isn't root on the node (`default` turns it off; it rolls every env).
+
 **`obsidian-livesync`** is CouchDB set up for the Obsidian Self-hosted LiveSync plugin; there's no init script to run.
 
 - Password: `kuso shell <project> couchdb`, then `echo $COUCHDB_PASSWORD` (`secret list` never shows values). The username is the `admin_user` prompt, `admin` by default.

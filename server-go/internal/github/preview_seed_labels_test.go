@@ -6,6 +6,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/kube"
 )
 
 // The project netpols select pods by kuso.sislelabs.com/project. An
@@ -15,7 +17,7 @@ import (
 // user image.
 func TestRunPreviewSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	d := newDispatcher(t)
-	if err := d.runPreviewSeedJob(context.Background(), "e2e", "e2e-web-pr-1", "preview-pr-1", "img:tag", "npm run seed", []string{"e2e-db-pr-1-conn", "e2e-web-pr-1-secrets"}, nil, false, false); err != nil {
+	if err := d.runPreviewSeedJob(context.Background(), "e2e", "e2e-web-pr-1", "preview-pr-1", "img:tag", "npm run seed", []string{"e2e-db-pr-1-conn", "e2e-web-pr-1-secrets"}, nil, false, false, nil); err != nil {
 		t.Fatalf("runPreviewSeedJob: %v", err)
 	}
 	jobs, err := d.Kube.Clientset.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{})
@@ -54,6 +56,24 @@ func TestRunPreviewSeedJob_PodTemplateCarriesProjectLabel(t *testing.T) {
 	if sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
 		sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
 		t.Errorf("seed container securityContext = %+v, want no privesc + drop ALL", sc)
+	}
+	if spec.HostUsers != nil {
+		t.Errorf("default seed pod hostUsers = %v, want unset", *spec.HostUsers)
+	}
+}
+
+func TestRunPreviewSeedJob_HostUsersFollowsService(t *testing.T) {
+	d := newDispatcher(t)
+	f := false
+	if err := d.runPreviewSeedJob(context.Background(), "e2e", "e2e-web-pr-1", "preview-pr-1", "img:tag", "npm run seed", nil, nil, false, false, &kube.KusoSecurityContext{HostUsers: &f}); err != nil {
+		t.Fatalf("runPreviewSeedJob: %v", err)
+	}
+	jobs, err := d.Kube.Clientset.BatchV1().Jobs("kuso").List(context.Background(), metav1.ListOptions{})
+	if err != nil || len(jobs.Items) != 1 {
+		t.Fatalf("list jobs: %v (n=%d)", err, len(jobs.Items))
+	}
+	if hu := jobs.Items[0].Spec.Template.Spec.HostUsers; hu == nil || *hu {
+		t.Errorf("seed pod hostUsers = %v, want false", hu)
 	}
 }
 
