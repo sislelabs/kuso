@@ -157,6 +157,28 @@ func renderPodSpec(buildName string, b *kube.KusoBuild, strategy string, res cor
 	return spec
 }
 
+// preferBuildkitNode adds a soft preference for the node running the
+// build's buildkitd daemon, so the build context upload stays on-node.
+// Preferred only: a full or cordoned node never blocks the build.
+// buildpacks never talks to buildkitd, so it gets no preference.
+func preferBuildkitNode(spec *corev1.PodSpec, strategy, node string) {
+	if node == "" || strategy == "buildpacks" || spec.Affinity == nil || spec.Affinity.NodeAffinity == nil {
+		return
+	}
+	na := spec.Affinity.NodeAffinity
+	na.PreferredDuringSchedulingIgnoredDuringExecution = append(na.PreferredDuringSchedulingIgnoredDuringExecution,
+		corev1.PreferredSchedulingTerm{
+			Weight: 100,
+			Preference: corev1.NodeSelectorTerm{
+				MatchFields: []corev1.NodeSelectorRequirement{{
+					Key:      "metadata.name",
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{node},
+				}},
+			},
+		})
+}
+
 // dropAllCapsNonRoot is the securityContext we apply to every
 // container that doesn't need root. Pinned here so a future tighten
 // (e.g. seccompProfile per container) lands in one place.
@@ -370,6 +392,8 @@ if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
   if ! git checkout "$REF" 2>/dev/null; then
     if [ -n "$PR" ] && git fetch --depth 1 origin "refs/pull/$PR/head" && git checkout "$REF" 2>/dev/null; then
       :
+    elif git fetch --depth 1 origin "$REF" && git checkout "$REF" 2>/dev/null; then
+      echo "fetched $REF directly"
     else
       echo "checkout $REF failed; deepening clone"
       git fetch --unshallow
@@ -514,34 +538,16 @@ echo "env-detect: $(jq -r 'length' /workspace/.kuso/detected-env.json) candidate
 
 // renderNixpacksPlanContainer mirrors the chart's nixpacks-plan init.
 // The script is preserved verbatim from the chart; we only template
-// in the repo path via env. /nix is symlinked to /cache/nix when a
-// cache PVC is attached for the warm-store perf win.
+// in the repo path via env. `nixpacks build --out .` only writes the
+// plan and Dockerfile (the image carries no nix store), so it needs
+// no cache volume.
 func renderNixpacksPlanContainer(b *kube.KusoBuild) corev1.Container {
 	image := pinnedImage(defaultNixpacksImage + ":" + defaultNixpacksVersion)
 	path := repoPath(b)
 	mounts := []corev1.VolumeMount{
 		{Name: "workspace", MountPath: "/workspace"},
 	}
-	if hasCache(b) {
-		mounts = append(mounts, corev1.VolumeMount{
-			Name: "cache", MountPath: "/cache",
-		})
-	}
-	useCache := "false"
-	if hasCache(b) {
-		useCache = "true"
-	}
 	script := `set -e
-if [ "$USE_CACHE" = "true" ]; then
-  mkdir -p /cache/nix
-  if [ ! -L /nix ] && [ ! -d /nix ]; then
-    ln -sf /cache/nix /nix
-  elif [ -d /nix ] && [ ! -L /nix ]; then
-    cp -an /nix/. /cache/nix/ 2>/dev/null || true
-    rm -rf /nix
-    ln -sf /cache/nix /nix
-  fi
-fi
 SRC="/workspace/src/$REPO_PATH"
 cd "$SRC"
 
@@ -659,7 +665,6 @@ nixpacks build . --out . "$@"
 
 	env := []corev1.EnvVar{
 		{Name: "REPO_PATH", Value: path},
-		{Name: "USE_CACHE", Value: useCache},
 	}
 	// LITERAL build env only. Secret-sourced vars are deliberately absent
 	// from this pod: everything handed to the nixpacks flow ends up as an
@@ -1393,8 +1398,11 @@ echo "==> buildkit: secret ids=${KUSO_BUILDENV_SECRET_KEYS:-<none>}"
 
 # Preview builds run PR code; they read the shared cache but never write it,
 # or a PR could plant layers the next production build imports.
+# mode=min: builds are project-sticky on one daemon, whose local store
+# serves intermediate stages; the registry cache only needs the final
+# image's layers (already pushed) for a cold daemon.
 if [ "${CACHE_EXPORT:-1}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
-  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=max,compression=zstd,registry.insecure=$INSECURE,ignore-error=true
+  set -- "$@" --export-cache type=registry,ref="$CACHE",mode=min,compression=zstd,registry.insecure=$INSECURE,ignore-error=true
 elif [ "${CACHE_EXPORT:-1}" != "1" ]; then
   echo "==> buildkit: preview build, cache is read-only"
 fi
@@ -1578,15 +1586,9 @@ exit "$RC"
 			Name: "docker-config", MountPath: "/tmp/.docker", ReadOnly: true,
 		})
 	}
-	// nixpacks /cache mount survives via the same emptyDir-shared
-	// workspace; legacy per-language subPaths still mount when a
-	// cache PVC is attached.
+	// Legacy per-language subPaths still mount when a cache PVC is
+	// attached (static only, see hasCache).
 	if hasCache(b) {
-		if strategy == "nixpacks" {
-			mounts = append(mounts, corev1.VolumeMount{
-				Name: "cache", MountPath: "/cache",
-			})
-		}
 		mounts = append(mounts,
 			corev1.VolumeMount{Name: "cache", MountPath: "/tmp/.npm", SubPath: "deps/npm"},
 			corev1.VolumeMount{Name: "cache", MountPath: "/tmp/go/pkg/mod", SubPath: "deps/go-mod"},

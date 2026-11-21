@@ -28,8 +28,8 @@ func TestBuildkitHostDialsTheProjectsReadyDaemon(t *testing.T) {
 	}
 	ctx := context.Background()
 	s := &Service{Kube: &kube.Client{Clientset: fake.NewClientset()}, Namespace: "kuso"}
-	if got := s.buildkitHost(ctx, "shop"); got != buildkit.DefaultHost {
-		t.Fatalf("no daemons: %q, want the Service", got)
+	if got, node := s.buildkitHost(ctx, "shop"); got != buildkit.DefaultHost || node != "" {
+		t.Fatalf("no daemons: %q on %q, want the Service and no node", got, node)
 	}
 
 	s.Kube.Clientset = fake.NewClientset(
@@ -39,8 +39,8 @@ func TestBuildkitHostDialsTheProjectsReadyDaemon(t *testing.T) {
 	)
 	for i := range 30 {
 		p := fmt.Sprintf("p%d", i)
-		if got := s.buildkitHost(ctx, p); got != "tcp://10.42.1.3:1234" {
-			t.Fatalf("%s: got %q, want the only Ready daemon in the home namespace", p, got)
+		if got, node := s.buildkitHost(ctx, p); got != "tcp://10.42.1.3:1234" || node != "node-a" {
+			t.Fatalf("%s: got %q on %q, want the only Ready daemon in the home namespace", p, got, node)
 		}
 	}
 
@@ -49,7 +49,7 @@ func TestBuildkitHostDialsTheProjectsReadyDaemon(t *testing.T) {
 		daemon("bk-b", "kuso", "node-b", "10.42.2.3", true),
 	)
 	want, _ := buildkit.Pick("shop", []buildkit.Daemon{{Node: "node-a", IP: "10.42.1.3"}, {Node: "node-b", IP: "10.42.2.3"}})
-	if got := s.buildkitHost(ctx, "shop"); got != want.Host() {
-		t.Fatalf("got %q, want the project's rendezvous pick %q", got, want.Host())
+	if got, node := s.buildkitHost(ctx, "shop"); got != want.Host() || node != want.Node {
+		t.Fatalf("got %q on %q, want the project's rendezvous pick %q on %q", got, node, want.Host(), want.Node)
 	}
 }

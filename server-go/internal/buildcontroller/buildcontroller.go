@@ -742,7 +742,9 @@ func (s *Service) ensureJob(ctx context.Context, u *unstructured.Unstructured, b
 	if _, err := s.Kube.Clientset.CoreV1().ServiceAccounts(ns).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create sa: %w", err)
 	}
-	job := renderJob(name, ns, b, ownerRef, s.buildkitHost(ctx, b.Spec.Project))
+	host, node := s.buildkitHost(ctx, b.Spec.Project)
+	job := renderJob(name, ns, b, ownerRef, host)
+	preferBuildkitNode(&job.Spec.Template.Spec, strategyOf(b), node)
 	if _, err := s.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create job: %w", err)
 	}
@@ -751,15 +753,16 @@ func (s *Service) ensureJob(ctx context.Context, u *unstructured.Unstructured, b
 
 // buildkitHost picks the daemon for a project's build from the Ready
 // kuso-buildkitd pods in the home namespace (pod cache, else a live
-// list). Unknown → the daemons' Service.
-func (s *Service) buildkitHost(ctx context.Context, project string) string {
+// list), and the node that daemon runs on. Unknown → the daemons'
+// Service and no node.
+func (s *Service) buildkitHost(ctx context.Context, project string) (host, node string) {
 	home := s.Namespace
 	if home == "" {
 		home = "kuso"
 	}
 	sel, err := labels.Parse(buildkit.PodLabel)
 	if err != nil {
-		return buildkit.DefaultHost
+		return buildkit.DefaultHost, ""
 	}
 	var pods []*corev1.Pod
 	if cached, ok := s.Cache.ListPodsByLabel(sel); ok {
@@ -776,13 +779,17 @@ func (s *Service) buildkitHost(ctx context.Context, project string) string {
 			if s.Logger != nil {
 				s.Logger.Warn("buildcontroller: list build daemons; using the Service", "err", err)
 			}
-			return buildkit.DefaultHost
+			return buildkit.DefaultHost, ""
 		}
 		for i := range list.Items {
 			pods = append(pods, &list.Items[i])
 		}
 	}
-	return buildkit.HostFor(project, buildkit.ReadyDaemons(pods))
+	d, ok := buildkit.Pick(project, buildkit.ReadyDaemons(pods))
+	if !ok {
+		return buildkit.DefaultHost, ""
+	}
+	return d.Host(), d.Node
 }
 
 // decodeBuild turns an unstructured CR into our typed KusoBuild.
@@ -828,9 +835,18 @@ func repoPath(b *kube.KusoBuild) string {
 	return b.Spec.Repo.Path
 }
 
-// hasCache reports whether a cache PVC was attached to the build.
+// hasCache reports whether the build mounts its cache PVC. Only
+// buildpacks (CNB cache) and static (buildCmd's npm cache) compile in
+// the pod; dockerfile/nixpacks compile inside buildkitd, so a PVC on
+// those would only pin the build to the PVC's node (RWO local-path).
+// A CR stamped with a PVC before the server stopped attaching one for
+// those strategies is ignored here too.
 func hasCache(b *kube.KusoBuild) bool {
-	return b != nil && b.Spec.Cache != nil && b.Spec.Cache.PVCName != ""
+	if b == nil || b.Spec.Cache == nil || b.Spec.Cache.PVCName == "" {
+		return false
+	}
+	s := strategyOf(b)
+	return s == "buildpacks" || s == "static"
 }
 
 // resourceRequirements maps the CR's resources block to the kube

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -99,6 +100,19 @@ func (s *Service) readRepoToken(ctx context.Context, ns, secretName string) (str
 		return "", fmt.Errorf("repo token secret %s/%s has no %s key", ns, secretName, kube.RepoTokenSecretKey)
 	}
 	return tok, nil
+}
+
+// strategyUsesCachePVC reports whether a build strategy compiles in the
+// build pod and so reads the cache PVC. dockerfile/nixpacks compile in
+// buildkitd; giving them an RWO PVC only pins every later build of the
+// service to the node the PVC first bound on. Mirrors
+// buildcontroller.hasCache.
+func strategyUsesCachePVC(strategy string) bool {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "buildpacks", "static":
+		return true
+	}
+	return false
 }
 
 // BuildCachePVCName is the build-cache PVC a service's production

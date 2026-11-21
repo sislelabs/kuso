@@ -1186,7 +1186,7 @@ func (s *Service) create(ctx context.Context, project, service string, req Creat
 	// fails for any reason, we proceed without caching — the build is
 	// slower but still correct.
 	cachePVC := ""
-	if !queued && !buildCacheDisabled(proj) {
+	if !queued && !buildCacheDisabled(proj) && strategyUsesCachePVC(strategy) {
 		// Only ensure the PVC for the build that will actually run.
 		// Queued CRs don't render Jobs, and the PVC is only consumed
 		// at Job render time anyway. The dispatcher promote path
@@ -2423,7 +2423,7 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 		projCR = pp
 	}
 	cachePVC := ""
-	if !buildCacheDisabled(projCR) {
+	if !buildCacheDisabled(projCR) && strategyUsesCachePVC(next.Spec.Strategy) {
 		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5, next.Annotations[AnnPreviewEnv] != "")
 	}
 	cachePatch := ""

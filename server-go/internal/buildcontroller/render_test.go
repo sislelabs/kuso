@@ -117,19 +117,48 @@ func TestRenderJobBasic(t *testing.T) {
 	}
 }
 
-func TestRenderJobNixpacksWithCache(t *testing.T) {
-	b := baseBuild()
-	b.Spec.Strategy = "nixpacks"
-	b.Spec.Cache = &kube.KusoBuildCache{PVCName: "alpha-cache"}
-	job := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost)
-	pod := job.Spec.Template.Spec
-	inits := initContainerNames(pod)
-	want := []string{"cache-init", "clone", "env-detect", "nixpacks-plan"}
-	if !sliceEq(inits, want) {
-		t.Errorf("nixpacks+cache init containers = %v, want %v", inits, want)
+// dockerfile/nixpacks compile inside buildkitd: a cache PVC left on an
+// older CR must not be mounted, or the RWO volume pins the build to the
+// node it first bound on.
+func TestRenderJobIgnoresCachePVCForDaemonBuilds(t *testing.T) {
+	for strategy, wantInits := range map[string][]string{
+		"dockerfile": {"clone", "env-detect"},
+		"nixpacks":   {"clone", "env-detect", "nixpacks-plan"},
+	} {
+		b := baseBuild()
+		b.Spec.Strategy = strategy
+		b.Spec.Cache = &kube.KusoBuildCache{PVCName: "alpha-cache"}
+		pod := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost).Spec.Template.Spec
+		if inits := initContainerNames(pod); !sliceEq(inits, wantInits) {
+			t.Errorf("%s: init containers = %v, want %v", strategy, inits, wantInits)
+		}
+		for _, v := range pod.Volumes {
+			if v.PersistentVolumeClaim != nil {
+				t.Errorf("%s: mounts PVC volume %q", strategy, v.Name)
+			}
+		}
 	}
-	if !volumeExists(pod, "cache") {
-		t.Error("cache volume missing")
+}
+
+func TestRenderJobMountsCachePVCForInPodBuilds(t *testing.T) {
+	for _, strategy := range []string{"static", "buildpacks"} {
+		b := baseBuild()
+		b.Spec.Strategy = strategy
+		b.Spec.Static = &kube.KusoStaticSpec{BuildCmd: "npm run build", OutputDir: "dist"}
+		b.Spec.Cache = &kube.KusoBuildCache{PVCName: "alpha-cache"}
+		pod := renderJob("b1", "kuso-alpha", b, metav1.OwnerReference{Name: "b1"}, testBuildkitHost).Spec.Template.Spec
+		if inits := initContainerNames(pod); len(inits) == 0 || inits[0] != "cache-init" {
+			t.Errorf("%s: init containers = %v, want cache-init first", strategy, inits)
+		}
+		pvc := false
+		for _, v := range pod.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == "alpha-cache" {
+				pvc = true
+			}
+		}
+		if !pvc {
+			t.Errorf("%s: cache PVC not mounted", strategy)
+		}
 	}
 }
 
