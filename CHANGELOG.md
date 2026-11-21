@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.53.0] — 2026-11-21
+
+### Other
+- Share serve-stale copies between activator replicas ([17372e2](https://github.com/sislelabs/kuso/commit/17372e2b77dc8ac30398f0ec1542e51c41b33da0))
+- Audit securityContext changes on a service ([e92307d](https://github.com/sislelabs/kuso/commit/e92307d30ced5d762ede177b2fa667cfb639af92))
+
 ## [0.52.0] — 2026-11-21
 
 ### Other
@@ -1402,11 +1408,6 @@ messages on every release. The format is loosely based on
 ### ✨ Features
 - Add watch paths, private registries, CI gating, plan diffs, DX fixes ([ee8d9da](https://github.com/sislelabs/kuso/commit/ee8d9da43ee91ef806ba40258b6f02289e6120e2))
 - Add log drains and a metrics export endpoint ([e83531b](https://github.com/sislelabs/kuso/commit/e83531b23ee7921235f323e4f76d082e7f78e984))
-
-## [0.26.18] — 2026-09-28
-
-### Other
-- Reap snapshot Jobs and report shared-key resyncs ([538a7de](https://github.com/sislelabs/kuso/commit/538a7de6ab3eb4cebdb111a15c2fddf5802ad48f))
 
 
 ---

@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.18] — 2026-09-28
+
+### Other
+- Reap snapshot Jobs and report shared-key resyncs ([538a7de](https://github.com/sislelabs/kuso/commit/538a7de6ab3eb4cebdb111a15c2fddf5802ad48f))
+
 ## [0.26.17] — 2026-09-28
 
 ### Other
