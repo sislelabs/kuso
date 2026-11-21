@@ -67,8 +67,14 @@ func TestStaleCapturableRequest(t *testing.T) {
 func TestStaleStorableResponse(t *testing.T) {
 	t.Parallel()
 	resp := func(status int, h map[string][]string, cl int64) *http.Response {
-		return &http.Response{StatusCode: status, Header: http.Header(h), ContentLength: cl}
+		return &http.Response{StatusCode: status, Header: http.Header(h), ContentLength: cl,
+			Request: httptest.NewRequest(http.MethodGet, "http://site.example.com/", nil)}
 	}
+	rscReq := httptest.NewRequest(http.MethodGet, "http://site.example.com/", nil)
+	rscReq.Header.Set("RSC", "1")
+	nextVary := map[string][]string{"Cache-Control": {"s-maxage=31536000"}, "Vary": {"rsc, next-router-state-tree, Accept-Encoding"}}
+	rscResp := resp(200, nextVary, 10)
+	rscResp.Request = rscReq
 	cases := map[string]struct {
 		r    *http.Response
 		want bool
@@ -86,7 +92,9 @@ func TestStaleStorableResponse(t *testing.T) {
 		"cache-control private":    {resp(200, map[string][]string{"Cache-Control": {"private, max-age=60"}}, 10), false},
 		"cache-control no-store":   {resp(200, map[string][]string{"Cache-Control": {"no-store"}}, 10), false},
 		"cache-control no-cache":   {resp(200, map[string][]string{"Cache-Control": {"max-age=0", "no-cache=\"Set-Cookie\""}}, 10), false},
-		"vary cookie":              {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"Accept-Encoding, Cookie"}}, 10), false},
+		"vary cookie, none sent":   {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"Accept-Encoding, Cookie"}}, 10), true},
+		"next.js plain page load":  {resp(200, nextVary, 10), true},
+		"next.js RSC request":      {rscResp, false},
 		"vary star":                {resp(200, map[string][]string{"Cache-Control": {"public"}, "Vary": {"*"}}, 10), false},
 		"content-length over 1MiB": {resp(200, map[string][]string{"Cache-Control": {"public"}}, staleMaxEntry+1), false},
 	}
@@ -279,6 +287,7 @@ func newStaleFixture(t *testing.T, serveStale bool) *staleFixture {
 		f.upstream.Add(1)
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("Cache-Control", "public, max-age=60")
+		w.Header().Set("Vary", "rsc, Accept-Encoding") // as Next.js sends
 		_, _ = io.WriteString(w, "page "+r.URL.Path)
 	}))
 	t.Cleanup(up.Close)
@@ -412,6 +421,7 @@ func TestServeStale_HeldPathsUnchanged(t *testing.T) {
 		"POST":           {true, http.MethodPost, nil},
 		"cookie":         {true, http.MethodGet, map[string]string{"Cookie": "sid=1"}},
 		"cache miss":     {true, http.MethodGet, map[string]string{"X-Miss": "1"}},
+		"varied header":  {true, http.MethodGet, map[string]string{"Rsc": "1"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -467,5 +477,20 @@ func TestSlimEnvKeepsServeStale(t *testing.T) {
 	}
 	if !buildHostIndex([]kube.KusoEnvironment{e}, time.Now()).exact["h.example.com"].serveStale {
 		t.Fatal("serveStale lost between the informer transform and the host index")
+	}
+}
+
+func TestStaleVaryMatchesOnlyRequestsLackingVariedHeaders(t *testing.T) {
+	t.Parallel()
+	e := &staleEntry{header: http.Header{"Vary": {"rsc, next-router-state-tree, Accept-Encoding"}}}
+	plain := httptest.NewRequest(http.MethodGet, "http://site.example.com/", nil)
+	plain.Header.Set("Accept-Encoding", "gzip")
+	if !varyMatches(e, plain) {
+		t.Error("a plain page load must get the stored plain variant")
+	}
+	rsc := httptest.NewRequest(http.MethodGet, "http://site.example.com/", nil)
+	rsc.Header.Set("Rsc", "1")
+	if varyMatches(e, rsc) {
+		t.Error("an RSC request must not get the stored HTML variant")
 	}
 }

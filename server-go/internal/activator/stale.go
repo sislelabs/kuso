@@ -165,11 +165,38 @@ func staleStorable(resp *http.Response) bool {
 	if !shared {
 		return false
 	}
-	for _, v := range resp.Header.Values("Vary") {
+	// Vary on a header the storing request didn't send describes the
+	// variant for requests without it (Next.js varies on RSC/router
+	// headers a plain page load never carries); serveStale only replays
+	// it to requests that also lack them. Vary: * matches no request.
+	for _, name := range varyNames(resp.Header) {
+		if name == "*" || resp.Request == nil || resp.Request.Header.Get(name) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// varyNames lists the Vary header names other than Accept-Encoding, which
+// staleKey already folds into the cache key.
+func varyNames(h http.Header) []string {
+	var names []string
+	for _, v := range h.Values("Vary") {
 		for _, f := range strings.Split(v, ",") {
 			if f = strings.TrimSpace(f); f != "" && !strings.EqualFold(f, "Accept-Encoding") {
-				return false
+				names = append(names, f)
 			}
+		}
+	}
+	return names
+}
+
+// varyMatches reports whether r selects the variant stored in e: r must
+// lack every header the stored response varied on.
+func varyMatches(e *staleEntry, r *http.Request) bool {
+	for _, name := range varyNames(e.header) {
+		if r.Header.Get(name) != "" {
+			return false
 		}
 	}
 	return true
@@ -349,7 +376,7 @@ func (a *Activator) serveStale(w http.ResponseWriter, r *http.Request, ns, env s
 	}
 	key := ns + "/" + env
 	e, ok := a.stale.get(staleKey(key, r), a.now())
-	if !ok || a.fastReady(r.Context(), ns, env) {
+	if !ok || !varyMatches(e, r) || a.fastReady(r.Context(), ns, env) {
 		return false
 	}
 	serve, kick := a.claimStaleWake(key)
