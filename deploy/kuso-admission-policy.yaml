@@ -9,8 +9,10 @@
 #   kubectl apply -f deploy/kuso-admission-policy.yaml
 # hack/install.sh applies it on fresh installs.
 #
-# Both policies key on the ServiceAccount username, so they assume the
-# home namespace is `kuso` (as deploy/server-go.yaml does).
+# The two ServiceAccount policies key on the ServiceAccount username, so
+# they assume the home namespace is `kuso` (as deploy/server-go.yaml
+# does). The last policy (kuso-pod-hardening-audit) never denies: it
+# flags risky tenant pods in Audit + Warn mode only.
 ---
 # kuso-server: the `bind` verb on kuso-server-managed-ns (needed so
 # EnsureNamespace can stamp the managed-ns RoleBinding into a new project
@@ -189,3 +191,91 @@ metadata:
 spec:
   policyName: kuso-activator-scope
   validationActions: [Deny]
+---
+# Flags (never denies) tenant pods that ask for more than kuso grants:
+# added capabilities outside the allowlist, privileged containers,
+# hostPath volumes, hostNetwork/hostPID/hostIPC. Project namespaces
+# already enforce PodSecurity `baseline`, which blocks most of this; the
+# policy exists for the home `kuso` namespace (no PSA labels, legacy
+# projects run there) and for any namespace whose PSA level an operator
+# lowered.
+#
+# Audit + Warn only: a hit adds an audit annotation (visible only when the
+# apiserver writes an audit log) and a warning to whoever created the pod.
+# failurePolicy Ignore so an evaluation error can never block a pod.
+#
+# In the `kuso` namespace only pods carrying kuso.sislelabs.com/project
+# are checked: buildkitd and the pkg-probe / apply-updates jobs there are
+# privileged by design. A pod without that label in `kuso` is not flagged.
+#
+# allowedCapabilities must match allowedAddCapabilities in
+# server-go/internal/kube/types.go (TestAdmissionPolicyCapAllowlistInSync).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kuso-pod-hardening-audit
+spec:
+  failurePolicy: Ignore
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        app.kubernetes.io/managed-by: kuso
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  matchConditions:
+    - name: tenant-pod
+      expression: >-
+        request.namespace != 'kuso' ||
+        (has(object.metadata.labels) && 'kuso.sislelabs.com/project' in object.metadata.labels)
+  variables:
+    - name: podName
+      expression: >-
+        has(object.metadata.name) && object.metadata.name != '' ? object.metadata.name :
+        (has(object.metadata.generateName) ? object.metadata.generateName : '<unnamed>')
+    - name: allowedCapabilities
+      expression: "['NET_BIND_SERVICE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'SETPCAP', 'KILL']"
+    - name: containers
+      expression: >-
+        dyn(object.spec.containers) +
+        (has(object.spec.initContainers) ? dyn(object.spec.initContainers) : dyn([])) +
+        (has(object.spec.ephemeralContainers) ? dyn(object.spec.ephemeralContainers) : dyn([]))
+  validations:
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.capabilities) ||
+          !has(c.securityContext.capabilities.add) ||
+          c.securityContext.capabilities.add.all(cap,
+            [cap.trim().upperAscii()].all(u,
+              [(u.startsWith('CAP_') ? u.substring(4) : u).trim()].all(n,
+                n == '' || n in variables.allowedCapabilities))))
+      messageExpression: >-
+        'pod ' + variables.podName + ' adds capabilities outside the kuso allowlist (' +
+        variables.allowedCapabilities.join(', ') + ')'
+      reason: Forbidden
+    - expression: >-
+        variables.containers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.privileged) ||
+          c.securityContext.privileged != true)
+      messageExpression: "'pod ' + variables.podName + ' runs a privileged container'"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath))
+      messageExpression: "'pod ' + variables.podName + ' mounts a hostPath volume'"
+      reason: Forbidden
+    - expression: >-
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork) &&
+        !(has(object.spec.hostPID) && object.spec.hostPID) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC)
+      messageExpression: "'pod ' + variables.podName + ' shares a host namespace (hostNetwork, hostPID or hostIPC)'"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kuso-pod-hardening-audit
+spec:
+  policyName: kuso-pod-hardening-audit
+  validationActions: [Audit, Warn]
