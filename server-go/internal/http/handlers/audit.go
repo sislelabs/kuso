@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -30,6 +31,43 @@ type AuditHandler struct {
 func (h *AuditHandler) Mount(r chi.Router) {
 	r.Get("/api/audit", h.List)
 	r.Get("/api/audit/app/{pipeline}/{phase}/{app}", h.ListForApp)
+	r.Get("/api/audit/verify", h.Verify)
+}
+
+// verifyTimeout bounds one chain walk; the routine chain can hold the
+// full 200k-row cap.
+const verifyTimeout = 2 * time.Minute
+
+// Verify walks the audit hash chains (admin-only, like the instance-wide
+// list). ?chain=&seq=&hash= additionally checks one published
+// audit.checkpoint. A broken chain is still 200: the report is the answer.
+func (h *AuditHandler) Verify(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	opts := audit.VerifyOptions{Chain: q.Get("chain"), Hash: q.Get("hash")}
+	if v := q.Get("seq"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "seq must be an integer")
+			return
+		}
+		opts.Seq = n
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), verifyTimeout)
+	defer cancel()
+	rep, err := h.Svc.Verify(ctx, opts)
+	if errors.Is(err, audit.ErrBadCheckpoint) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		h.Logger.Error("verify audit", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func auditCtx(r *http.Request) (context.Context, context.CancelFunc) {

@@ -122,6 +122,9 @@ const (
 	// EventAddonImageUpdated: the addon image updater rolled an addon
 	// onto a newer image of its tag.
 	EventAddonImageUpdated EventType = "security.addon_image_updated"
+	// EventAuditCheckpoint publishes the audit hash-chain heads so a copy
+	// lives outside kuso's database (internal/audit/checkpoint.go).
+	EventAuditCheckpoint EventType = "audit.checkpoint"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -182,6 +185,7 @@ var EventCatalogue = []EventTypeInfo{
 	{EventDeployBlocked, "Deploy blocked by vulnerabilities", "other", "@here"},
 	{EventScanFailed, "Vulnerability scan failed", "other", ""},
 	{EventAddonImageUpdated, "Addon image updated", "other", ""},
+	{EventAuditCheckpoint, "Audit log checkpoint", "other", ""},
 	{EventUpdateAvailable, "kuso update available", "other", ""},
 	{EventUpdateFailed, "kuso update failed", "other", "@here"},
 	{EventUpdatePartial, "kuso update needs manual steps", "other", ""},

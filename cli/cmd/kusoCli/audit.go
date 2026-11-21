@@ -112,7 +112,95 @@ a deploy phase (default "production").`,
 	},
 }
 
+var (
+	auditVerifyChain string
+	auditVerifySeq   int64
+	auditVerifyHash  string
+)
+
+var auditVerifyCmd = &cobra.Command{
+	Use:   "verify",
+	Args:  cobra.NoArgs,
+	Short: "Check the audit log's hash chains for edited or deleted rows (admin only).",
+	Long: `Walk both audit hash chains (security and routine) from the oldest row
+retention kept to the current head and report the first row that was
+edited, deleted, or inserted out of order.
+
+A chain that verifies on its own only proves the rows are consistent with
+each other: someone with database access can rewrite a whole chain. Pass
+the values from an audit.checkpoint notification (sent to your unscoped
+webhook/Discord channels) to prove the history up to that point is the
+one that was published. Exits non-zero when anything fails.`,
+	Example: `  kuso audit verify
+  kuso audit verify --chain security --seq 1042 --hash 9f2c...e1
+  kuso audit verify -o json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if (auditVerifyChain != "") != (auditVerifyHash != "") || (auditVerifyChain != "" && auditVerifySeq <= 0) {
+			return fmt.Errorf("--chain, --seq and --hash go together")
+		}
+		r, err := api.VerifyAudit(auditVerifyChain, auditVerifySeq, auditVerifyHash)
+		if err := checkRespErr(r, err); err != nil {
+			return err
+		}
+		var rep kusoApi.AuditVerifyReport
+		if err := json.Unmarshal(r.Body(), &rep); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(r.Body()))
+		} else {
+			printAuditVerify(rep)
+		}
+		if !rep.OK {
+			return fmt.Errorf("audit log verification failed")
+		}
+		return nil
+	},
+}
+
+func printAuditVerify(rep kusoApi.AuditVerifyReport) {
+	tw := tablewriter.NewWriter(os.Stdout)
+	tw.SetHeader([]string{"Chain", "Status", "Rows", "Oldest kept", "Head seq", "Head hash"})
+	for _, c := range rep.Chains {
+		status := "ok"
+		if !c.OK {
+			status = "BROKEN"
+		}
+		tw.Append([]string{c.Chain, status, fmt.Sprint(c.Rows), fmt.Sprint(c.FloorSeq), fmt.Sprint(c.HeadSeq), c.HeadHash})
+	}
+	tw.Render()
+	for _, c := range rep.Chains {
+		if c.Break == nil {
+			continue
+		}
+		fmt.Printf("\n%s chain breaks at seq %d: %s\n", c.Chain, c.Break.Seq, c.Break.Reason)
+		if c.Break.Expected != "" {
+			fmt.Printf("  expected %s\n  actual   %s\n", c.Break.Expected, dashIfEmpty(c.Break.Actual))
+		}
+	}
+	if cp := rep.Checkpoint; cp != nil {
+		if cp.OK {
+			fmt.Printf("\ncheckpoint %s seq %d matches.\n", cp.Chain, cp.Seq)
+		} else {
+			fmt.Printf("\ncheckpoint %s seq %d does NOT match: %s\n", cp.Chain, cp.Seq, cp.Reason)
+		}
+	}
+	if rep.UnchainedSinceStart > 0 {
+		fmt.Printf("\nnote: %d audit rows written since the chains started carry no chain position "+
+			"(a pre-upgrade replica, a failed chained insert, or rows inserted directly).\n", rep.UnchainedSinceStart)
+	}
+}
+
 func init() {
+	auditVerifyCmd.Flags().StringVar(&auditVerifyChain, "chain", "", "checkpoint chain: security or routine")
+	auditVerifyCmd.Flags().Int64Var(&auditVerifySeq, "seq", 0, "checkpoint seq")
+	auditVerifyCmd.Flags().StringVar(&auditVerifyHash, "hash", "", "checkpoint hash (64 hex characters)")
+	auditVerifyCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	auditCmd.AddCommand(auditVerifyCmd)
+
 	auditCmd.Flags().StringVar(&auditApp, "app", "", "scope to a project or project/service (empty = instance-wide, admin only)")
 	auditCmd.Flags().StringVar(&auditPhase, "phase", "", "deploy phase for a per-service read (default production)")
 	auditCmd.Flags().IntVar(&auditLimit, "limit", 0, "max rows (default 100 server-side, max 1000)")

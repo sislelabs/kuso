@@ -40,6 +40,19 @@ type Service struct {
 	SecurityMaxAge time.Duration
 
 	mu sync.Mutex // guards the periodic trim() call
+
+	// now overrides the clock in tests; nil means time.Now.
+	now func() time.Time
+}
+
+// clock returns the current UTC time at timestamptz (microsecond)
+// precision, so the value hashed is the value stored.
+func (s *Service) clock() time.Time {
+	t := time.Now()
+	if s.now != nil {
+		t = s.now()
+	}
+	return t.UTC().Truncate(time.Microsecond)
 }
 
 const (
@@ -174,26 +187,32 @@ func (s *Service) Log(ctx context.Context, e Entry) {
 	if e.Resource == "" {
 		e.Resource = "unknown"
 	}
-	now := time.Now().UTC()
+	now := s.clock()
 	// Detached from the request: the mutation already committed, so a
 	// client that disconnects now must not cancel its audit row.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logTimeout)
 	defer cancel()
-	// `user` is a Postgres reserved word; camelCase columns also
-	// need quoting. Unquoted, the INSERT silently fails the FK.
-	if _, err := s.DB.ExecContext(ctx, `
+	if err := s.insertChained(ctx, e, now); err != nil {
+		// Keep the row even when the chain can't take it: verify counts
+		// unchained rows written after the chains started.
+		slog.Error("audit: chained insert failed, writing unchained row", "err", err)
+		// `user` is a Postgres reserved word; camelCase columns also
+		// need quoting. Unquoted, the INSERT silently fails the FK.
+		if _, err := s.DB.ExecContext(ctx, `
 INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user", "createdAt", "updatedAt")
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		now, e.Severity, e.Action, e.Namespace, e.Phase, e.App, e.Pipeline, e.Resource, e.Message, e.User, now, now,
-	); err != nil {
-		// Logging an audit row must never affect the call site — log
-		// the failure and move on.
-		slog.Error("audit: log failed", "err", err)
-		return
+			now, e.Severity, e.Action, e.Namespace, e.Phase, e.App, e.Pipeline, e.Resource, e.Message, e.User, now, now,
+		); err != nil {
+			// Logging an audit row must never affect the call site — log
+			// the failure and move on.
+			slog.Error("audit: log failed", "err", err)
+			return
+		}
 	}
-	// Mirror security-relevant rows to the server log too: pod stdout is
-	// collected by whatever ships cluster logs off-box, so these survive a
-	// control-plane DB restore or a compromised Postgres.
+	// Security rows also go to stdout. That only leaves the box if
+	// something outside kuso collects pod logs: kuso's own logship writes
+	// them into this same Postgres. The off-box tamper evidence is the
+	// chain checkpoint (checkpoint.go).
 	if IsSecuritySeverity(e.Severity) {
 		slog.Info("audit", "severity", e.Severity, "action", e.Action, "user", e.User,
 			"project", e.Pipeline, "app", e.App, "resource", e.Resource, "message", e.Message)
@@ -361,33 +380,49 @@ func (s *Service) trim(ctx context.Context) error {
 		return nil
 	}
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
+	now := s.clock()
+	// Chained rows are only ever cut as a prefix of their chain (see
+	// chain.go); the timestamp deletes are for pre-chain rows.
 	if s.MaxAge > 0 {
 		if _, err := s.DB.ExecContext(ctx,
-			`DELETE FROM "Audit" WHERE "timestamp" < $1 AND severity NOT IN `+securitySeverities,
+			`DELETE FROM "Audit" WHERE "chainSeq" IS NULL AND "timestamp" < $1 AND severity NOT IN `+securitySeverities,
 			now.Add(-s.MaxAge)); err != nil {
 			return fmt.Errorf("audit: trim routine by age: %w", err)
+		}
+		if err := s.trimChainBefore(ctx, ChainRoutine, now.Add(-s.MaxAge)); err != nil {
+			return fmt.Errorf("audit: trim routine chain by age: %w", err)
 		}
 	}
 	if s.SecurityMaxAge > 0 {
 		if _, err := s.DB.ExecContext(ctx,
-			`DELETE FROM "Audit" WHERE "timestamp" < $1 AND severity IN `+securitySeverities,
+			`DELETE FROM "Audit" WHERE "chainSeq" IS NULL AND "timestamp" < $1 AND severity IN `+securitySeverities,
 			now.Add(-s.SecurityMaxAge)); err != nil {
 			return fmt.Errorf("audit: trim security by age: %w", err)
+		}
+		if err := s.trimChainBefore(ctx, ChainSecurity, now.Add(-s.SecurityMaxAge)); err != nil {
+			return fmt.Errorf("audit: trim security chain by age: %w", err)
 		}
 	}
 	if s.MaxBackups > 0 {
 		// The OFFSET row is the (MaxBackups+1)-th newest routine row;
 		// deleting it and every older routine row keeps exactly
 		// MaxBackups. No row at that offset → NULL → nothing deleted.
+		// Chained routine ids rise with chainSeq (both are assigned under
+		// the head lock), so this cuts a prefix of the routine chain.
 		if _, err := s.DB.ExecContext(ctx, `
-DELETE FROM "Audit"
-WHERE severity NOT IN `+securitySeverities+` AND id <= (
+WITH cut AS (
   SELECT id FROM "Audit"
   WHERE severity NOT IN `+securitySeverities+`
   ORDER BY id DESC
   LIMIT 1 OFFSET $1
-)`, s.MaxBackups); err != nil {
+), d AS (
+  DELETE FROM "Audit"
+  WHERE severity NOT IN `+securitySeverities+` AND id <= (SELECT id FROM cut)
+  RETURNING "chain", "chainSeq"
+)
+UPDATE "AuditChainHead"
+SET "floorSeq" = GREATEST("floorSeq", (SELECT max("chainSeq") + 1 FROM d WHERE "chain" = 'routine'))
+WHERE "chain" = 'routine'`, s.MaxBackups); err != nil {
 			return fmt.Errorf("audit: trim routine by count: %w", err)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // regression guard for the placeholder bug: the queries used `?`
 // (SQLite) against a Postgres control plane, so every Log/Get failed
 // with `pq: syntax error`. Running them against real Postgres catches it.
-func openAuditTestDB(t *testing.T) *db.DB {
+func openAuditTestDB(t testing.TB) *db.DB {
 	t.Helper()
 	dsn := os.Getenv("KUSO_TEST_PG_DSN")
 	if dsn == "" {
@@ -26,6 +26,10 @@ func openAuditTestDB(t *testing.T) *db.DB {
 	}
 	if _, err := d.DB.Exec(`TRUNCATE TABLE "Audit" RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate Audit: %v", err)
+	}
+	if _, err := d.DB.Exec(`UPDATE "AuditChainHead" SET "seq" = 0, "hash" = decode(repeat('00', 32), 'hex'),
+  "floorSeq" = 1, "checkpointSeq" = 0, "checkpointAt" = NULL, "createdAt" = now()`); err != nil {
+		t.Fatalf("reset AuditChainHead: %v", err)
 	}
 	// Audit rows FK "user" → User.id, and Service.Log stamps entries
 	// with the system user "1" when no user is set. A real install
@@ -249,6 +253,10 @@ func TestAuditTrim(t *testing.T) {
 	if total != 3 {
 		t.Errorf("after trim total=%d, want 3 (MaxBackups)", total)
 	}
+	rep := mustVerify(t, s)
+	if c := rep.Chains[1]; c.Chain != ChainRoutine || c.FloorSeq != 8 || c.FirstSeq != 8 || c.HeadSeq != 10 {
+		t.Errorf("routine chain after count trim = %+v, want floor/first 8, head 10", c)
+	}
 }
 
 // OPS-N8: a flood of cheap routine rows must not evict security rows, and
@@ -258,21 +266,20 @@ func TestAuditTrimKeepsSecurityRowsAndPrunesByAge(t *testing.T) {
 	ctx := context.Background()
 	s := &Service{DB: d, Enabled: true, MaxBackups: 5, MaxAge: 90 * 24 * time.Hour, SecurityMaxAge: 365 * 24 * time.Hour}
 
+	// Written in time order, as in production: one critical row past
+	// SecurityMaxAge, then a routine row past MaxAge and a warn row past
+	// MaxAge but inside SecurityMaxAge, then today's rows.
+	at := func(daysAgo int) { s.now = func() time.Time { return time.Now().Add(-time.Duration(daysAgo) * day) } }
+	at(400)
+	s.Log(ctx, Entry{Severity: "critical", Action: "old", Message: "ancient-critical"})
+	at(100)
+	s.Log(ctx, Entry{Severity: "info", Action: "old", Message: "old-info"})
+	s.Log(ctx, Entry{Severity: "warn", Action: "old", Message: "old-warn"})
+	at(0)
 	s.Log(ctx, Entry{Severity: "warn", Action: "sharedsecret.set", Message: "early-warn"})
 	s.Log(ctx, Entry{Severity: "critical", Action: "github.configure", Message: "early-critical"})
 	for i := 0; i < 20; i++ {
 		s.Log(ctx, Entry{Severity: "info", Action: "addon.sql_query", Message: "flood"})
-	}
-	// Backdate: one routine row past MaxAge, one warn row past MaxAge
-	// but inside SecurityMaxAge, one critical row past SecurityMaxAge.
-	s.Log(ctx, Entry{Severity: "info", Action: "old", Message: "old-info"})
-	s.Log(ctx, Entry{Severity: "warn", Action: "old", Message: "old-warn"})
-	s.Log(ctx, Entry{Severity: "critical", Action: "old", Message: "ancient-critical"})
-	if _, err := d.DB.Exec(`UPDATE "Audit" SET "timestamp" = NOW() - INTERVAL '100 days' WHERE message IN ('old-info','old-warn')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.DB.Exec(`UPDATE "Audit" SET "timestamp" = NOW() - INTERVAL '400 days' WHERE message = 'ancient-critical'`); err != nil {
-		t.Fatal(err)
 	}
 
 	if err := s.trim(ctx); err != nil {
@@ -299,4 +306,5 @@ func TestAuditTrimKeepsSecurityRowsAndPrunesByAge(t *testing.T) {
 	if count["flood"] != 5 {
 		t.Errorf("routine flood rows = %d, want 5 (count cap)", count["flood"])
 	}
+	mustVerify(t, s)
 }

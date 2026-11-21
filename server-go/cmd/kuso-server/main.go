@@ -1010,6 +1010,7 @@ func main() {
 						serverstate.LoopErrorScan,
 						serverstate.LoopHealth,
 						serverstate.LoopInstancePG,
+						serverstate.LoopAuditCheckpoint,
 					)
 				})
 			}()
@@ -1292,6 +1293,20 @@ func main() {
 			if os.Getenv("KUSO_INSTANCEPG_DISABLED") != "true" && instancePGSvc != nil {
 				serverstate.RegisterLoop(serverstate.LoopInstancePG, instancepg.HeartbeatInterval)
 				goSafe(logger, "instancepg", func() { instancePGSvc.Run(workCtx, 0) })
+			}
+			// Audit hash-chain checkpoints go out through notify so the
+			// chain heads exist somewhere the DB credentials can't reach.
+			// Run beats every tick, including no-op ones.
+			if auditSvc.Enabled && !audit.CheckpointsDisabled() {
+				serverstate.RegisterLoop(serverstate.LoopAuditCheckpoint, audit.CheckpointTick)
+				goSafe(logger, "audit-checkpoint", func() {
+					(&audit.Checkpointer{
+						Svc:      auditSvc,
+						Notify:   notifyDisp,
+						Interval: audit.CheckpointInterval(),
+						Logger:   logger.With("component", "audit-checkpoint"),
+					}).Run(workCtx)
+				})
 			}
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {

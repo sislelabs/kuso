@@ -95,10 +95,11 @@ const (
 	// only when they'll actually run+beat. Ticking loops only; the once-and-
 	// return platformharden pass is deliberately EXCLUDED (it can't stamp a
 	// fixed-interval heartbeat) — see startSingletons.
-	LoopRunsPoller = "runs-poller"
-	LoopErrorScan  = "errorscan"
-	LoopHealth     = "health"
-	LoopInstancePG = "instancepg"
+	LoopRunsPoller      = "runs-poller"
+	LoopErrorScan       = "errorscan"
+	LoopHealth          = "health"
+	LoopInstancePG      = "instancepg"
+	LoopAuditCheckpoint = "audit-checkpoint"
 )
 
 // loopState tracks one registered singleton loop's liveness signal.
