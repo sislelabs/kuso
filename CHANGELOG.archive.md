@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.26.17] — 2026-09-28
+
+### Other
+- Match wildcard hosts on wake, heal old clones, size marketplace apps ([3021b86](https://github.com/sislelabs/kuso/commit/3021b8642fca0006d1376ced39ee897755f51805))
+- Pick the pg_dump client by server version in backups and snapshots ([876cf93](https://github.com/sislelabs/kuso/commit/876cf936c5fa572bc556267dd5fbe6516c18d74b))
+- Retry a failed release Job instead of reusing its failure ([b84e2e6](https://github.com/sislelabs/kuso/commit/b84e2e60d7a6b2ac67460b933b4fa049b47f5ef5))
+- Report an unset subscription as everything it mounts ([75760d5](https://github.com/sislelabs/kuso/commit/75760d55491d712aca8760a02e107ebb10850c89))
+
 ## [0.26.16] — 2026-09-28
 
 ### Other

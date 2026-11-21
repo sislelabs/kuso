@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.52.0] — 2026-11-21
+
+### Other
+- Serve stale copies of Next.js pages that vary on RSC headers ([d338674](https://github.com/sislelabs/kuso/commit/d3386741a49e7f918eb6de8f342ace0fbe4fcbba))
+- Make the audit log tamper-evident with hash chains and off-box checkpoints ([ead2221](https://github.com/sislelabs/kuso/commit/ead2221b9aafa09e491ef109285576d380a02ed0))
+- Store a page for serve-stale only when it opts in to shared caching ([3ea6d67](https://github.com/sislelabs/kuso/commit/3ea6d67fdc408183f4e50a97c3b7144afa92323d))
+- Serve the last good page while a sleeping service wakes ([fd6f75f](https://github.com/sislelabs/kuso/commit/fd6f75fd39828ab93bf536aed10da9119e4e9361))
+- Let a service run its pods in a user namespace ([ff9ae58](https://github.com/sislelabs/kuso/commit/ff9ae5808eb447a8a3b8cd3856630d37e23531bf))
+
 ## [0.51.0] — 2026-11-21
 
 ### Other
@@ -1398,14 +1407,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Reap snapshot Jobs and report shared-key resyncs ([538a7de](https://github.com/sislelabs/kuso/commit/538a7de6ab3eb4cebdb111a15c2fddf5802ad48f))
-
-## [0.26.17] — 2026-09-28
-
-### Other
-- Match wildcard hosts on wake, heal old clones, size marketplace apps ([3021b86](https://github.com/sislelabs/kuso/commit/3021b8642fca0006d1376ced39ee897755f51805))
-- Pick the pg_dump client by server version in backups and snapshots ([876cf93](https://github.com/sislelabs/kuso/commit/876cf936c5fa572bc556267dd5fbe6516c18d74b))
-- Retry a failed release Job instead of reusing its failure ([b84e2e6](https://github.com/sislelabs/kuso/commit/b84e2e60d7a6b2ac67460b933b4fa049b47f5ef5))
-- Report an unset subscription as everything it mounts ([75760d5](https://github.com/sislelabs/kuso/commit/75760d55491d712aca8760a02e107ebb10850c89))
 
 
 ---
