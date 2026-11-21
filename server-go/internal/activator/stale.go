@@ -63,6 +63,10 @@ type staleCache struct {
 	// concurrent large responses can't each pin staleMaxEntry.
 	inflight    atomic.Int64
 	maxInflight int64
+
+	// onStore receives each copy captured here (not ones a peer pushed),
+	// so stalePeers can replicate it.
+	onStore atomic.Pointer[func(*staleEntry)]
 }
 
 func newStaleCache(maxBytes, maxPerEnv, maxInflight int64, ttl time.Duration) *staleCache {
@@ -282,7 +286,11 @@ func (c *staleCache) capture(resp *http.Response, env, key string, now func() ti
 	header := resp.Header.Clone()
 	header.Del("Content-Length")
 	resp.Body = &captureBody{ReadCloser: resp.Body, c: c, done: func(body []byte) {
-		c.put(&staleEntry{key: key, env: env, status: resp.StatusCode, header: header, body: body, stored: now()})
+		e := &staleEntry{key: key, env: env, status: resp.StatusCode, header: header, body: body, stored: now()}
+		c.put(e)
+		if f := c.onStore.Load(); f != nil {
+			(*f)(e)
+		}
 	}}
 }
 

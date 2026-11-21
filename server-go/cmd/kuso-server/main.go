@@ -2684,6 +2684,13 @@ func runActivator(addr string, logger *slog.Logger) {
 	defer stop()
 	act.WatchEnvs(ctx)
 	go act.KeepActive(ctx)
+	if peerAddr := envOr("KUSO_ACTIVATOR_PEER_ADDR", ":3001"); peerAddr != "off" {
+		go func() {
+			if err := act.ServeStalePeers(ctx, peerAddr, envOr("KUSO_NAMESPACE", "kuso")); err != nil {
+				logger.Warn("activator: stale peer listener stopped; serve-stale copies stay per replica", "err", err)
+			}
+		}()
+	}
 	logger.Info("kuso activator listening", "addr", addr)
 	if err := act.Serve(ctx, srv, activator.ResolveDrainConfig(), logger); err != nil && err != http.ErrServerClosed {
 		logger.Error("activator: serve", "err", err)
