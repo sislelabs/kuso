@@ -222,6 +222,12 @@ data:
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
+    # Pull Docker Hub images through Google's public cache to stay clear
+    # of Hub's anonymous pull rate limit. Pull/resolve only; buildkit
+    # tries the next host (docker.io itself) when the mirror errors or
+    # lacks the image.
+    [registry."docker.io"]
+      mirrors = ["mirror.gcr.io"]
     # A Dockerfile's `# syntax=<image>` line runs that image as the build
     # frontend inside this shared daemon. A frontend of the author's choice
     # can ignore BUILDKIT_CACHE_MOUNT_NS and read or seed another
