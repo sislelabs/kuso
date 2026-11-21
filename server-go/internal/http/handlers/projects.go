@@ -1480,6 +1480,20 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "patch service", err)
 		return
 	}
+	if req.SecurityContext != nil && h.Audit != nil {
+		// Capabilities and the user namespace decide how much of the host
+		// a container's root can touch.
+		sc, _ := json.Marshal(req.SecurityContext)
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "service.securityContext",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("set securityContext on %s/%s to %s", project, service, sc),
+		})
+	}
 	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	redactServiceRepoIfNeeded(ctx, h.DB, project, out)

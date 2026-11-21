@@ -249,3 +249,22 @@ func TestAudit_NodeLabels(t *testing.T) {
 	}
 	expectOneAuditRow(t, d, "node.labels", "region=eu", "")
 }
+
+func TestAudit_ServiceSecurityContextPatch(t *testing.T) {
+	d := openTestDB(t)
+	a := &audit.Service{DB: d, Enabled: true}
+	h := &ProjectsHandler{Svc: &execGateFakeSvc{}, DB: d, Audit: a, Logger: quietLogger(), Namespace: "kuso"}
+	r := chi.NewRouter()
+	r.Patch("/api/projects/{project}/services/{service}", h.PatchService)
+
+	if rr := auditDo(t, r, auditAdmin, http.MethodPatch, "/api/projects/p1/services/web", `{"port":3000}`); rr.Code != http.StatusOK {
+		t.Fatalf("port patch: %d %s", rr.Code, rr.Body)
+	}
+	if rows := auditRowsFor(t, d, "service.securityContext"); len(rows) != 0 {
+		t.Fatalf("a patch without securityContext wrote %d rows", len(rows))
+	}
+	if rr := auditDo(t, r, auditAdmin, http.MethodPatch, "/api/projects/p1/services/web", `{"securityContext":{"hostUsers":false}}`); rr.Code != http.StatusOK {
+		t.Fatalf("securityContext patch: %d %s", rr.Code, rr.Body)
+	}
+	expectOneAuditRow(t, d, "service.securityContext", "hostUsers", "")
+}
