@@ -16,6 +16,7 @@ type PatchSleepRequest struct {
 	Enabled       *bool  `json:"enabled,omitempty"`
 	AfterMinutes  *int   `json:"afterMinutes,omitempty"`
 	NonProduction string `json:"nonProduction,omitempty"`
+	ServeStale    *bool  `json:"serveStale,omitempty"`
 	// WakeOn.ExcludePaths keeps every env warm (min 1 replica) so callback
 	// paths never hit a cold start; {"clear":true} drops the list.
 	WakeOn *PatchWakeOnRequest `json:"wakeOn,omitempty"`

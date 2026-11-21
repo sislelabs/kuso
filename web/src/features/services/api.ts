@@ -420,6 +420,7 @@ export interface PatchServiceBody {
     afterMinutes?: number;
     // "on" (default) | "off": whether non-production envs sleep.
     nonProduction?: "on" | "off";
+    serveStale?: boolean;
     // wakeOn.excludePaths: any request to a listed path keeps the whole
     // deployment warm even when scale.min=0 (webhooks/callbacks on a
     // sleeping service). Send {clear:true} to drop them.

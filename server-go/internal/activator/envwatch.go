@@ -98,7 +98,7 @@ func slimEnvForHostIndex(obj any) (any, error) {
 	}
 	spec := map[string]any{}
 	if src, ok := u.Object["spec"].(map[string]any); ok {
-		for _, k := range []string{"host", "additionalHosts", "wildcardDomains", "internal", "runtime", "stopped"} {
+		for _, k := range []string{"host", "additionalHosts", "wildcardDomains", "internal", "runtime", "stopped", "sleep"} {
 			if v, ok := src[k]; ok {
 				spec[k] = v
 			}

@@ -188,6 +188,9 @@ type ServiceSleep struct {
 	// NonProduction: "" / "on" = non-production envs sleep when idle
 	// (the default); "off" = they never sleep.
 	NonProduction string `json:"nonProduction,omitempty"`
+	// ServeStale: while a sleeping env wakes, answer anonymous GET/HEAD
+	// with the last cacheable 200 for that URL.
+	ServeStale bool `json:"serveStale,omitempty"`
 }
 
 // ServiceStatic configures the static runtime: optional buildCmd

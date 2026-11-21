@@ -459,6 +459,11 @@
                 ],
                 "type": "string"
               },
+              "serveStale": {
+                "default": false,
+                "description": "While a sleeping env wakes, kuso-activator answers\nanonymous GET/HEAD requests with the last cacheable\n200 it proxied for that URL (marked X-Kuso-Stale: 1,\nCache-Control: no-store) instead of holding them.\nFor public sites; leave off for apps whose pages\nmust never be served out of date.\n",
+                "type": "boolean"
+              },
               "wakeOn": {
                 "description": "Must-stay-warm signals. When excludePaths is\nnon-empty, the operator keeps the deployment\nat min 1 even when scale.Min=0 would otherwise\nidle it. Tickero's payment-callback use case:\nwakeOn.excludePaths: [\"/api/v1/payments/notify\"]\nmeans /api/v1/payments/notify is reachable 24/7\nand the rest of the service stays warm too\n(per-path isolation needs a service split).\n",
                 "properties": {

@@ -420,6 +420,10 @@
               "enabled": {
                 "default": false,
                 "type": "boolean"
+              },
+              "serveStale": {
+                "default": false,
+                "type": "boolean"
               }
             },
             "type": "object"

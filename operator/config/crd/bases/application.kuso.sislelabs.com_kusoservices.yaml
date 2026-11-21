@@ -375,6 +375,16 @@ spec:
                         non-production env (named envs, env-group clones,
                         PR previews) sleeps after afterMinutes idle by
                         default; "off" keeps them always on.
+                    serveStale:
+                      type: boolean
+                      default: false
+                      description: |
+                        While a sleeping env wakes, kuso-activator answers
+                        anonymous GET/HEAD requests with the last cacheable
+                        200 it proxied for that URL (marked X-Kuso-Stale: 1,
+                        Cache-Control: no-store) instead of holding them.
+                        For public sites; leave off for apps whose pages
+                        must never be served out of date.
                     wakeOn:
                       type: object
                       description: |

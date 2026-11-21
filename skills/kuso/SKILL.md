@@ -283,6 +283,7 @@ Three distinct states — don't conflate them:
   - Autoscaled services (`scale.max > scale.min`) sleep too. The HPA pauses at 0 replicas and resumes on wake.
   - Never sleeps: workers, `internal` services, services with `wakeOn.excludePaths`, stopped services, and every service in a project with `alwaysOn`.
   - Toggle: `kuso project service sleep <p> <s> on|off [--after 30m] [--non-production on|off]`. With no state, it prints the current settings. The web UI has the same controls under Settings → Sleep.
+  - `--serve-stale on` (`sleep.serveStale`, off by default): while an env wakes, anonymous GET/HEAD requests get the last cacheable 200 the activator proxied for that URL at once (`X-Kuso-Stale: 1`, `Cache-Control: no-store`). Cookie/Authorization requests, POSTs and URLs with no stored copy still wait. Per activator replica, in memory: the copy is lost on restart.
 - **Wake:** `kuso project service wake <p> <s>` forces a sleeping production env up now. Any request to a sleeping env's URL also wakes it.
 - **Hard-stop:** `kuso project service stop <p> <s>` (or `kuso project stop <p>` for everything) pins 0 replicas and does NOT wake on traffic — visitors get a "service stopped" page until `... start`.
 

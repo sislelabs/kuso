@@ -766,6 +766,9 @@ type KusoServiceSleep struct {
 	// NonProduction: "" or "on" = non-production envs sleep when idle
 	// (the default); "off" = they never sleep.
 	NonProduction string `json:"nonProduction,omitempty"`
+	// ServeStale: while an env wakes, the activator answers anonymous
+	// GET/HEAD with the last cacheable 200 it proxied for that URL.
+	ServeStale bool `json:"serveStale,omitempty"`
 }
 
 // SleepNonProductionOff is the KusoServiceSleep.NonProduction value that
@@ -1048,7 +1051,8 @@ type KusoAutoscaling struct {
 }
 
 type KusoEnvSleep struct {
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled    bool `json:"enabled,omitempty"`
+	ServeStale bool `json:"serveStale,omitempty"`
 }
 
 // ---- KusoAddon -----------------------------------------------------------

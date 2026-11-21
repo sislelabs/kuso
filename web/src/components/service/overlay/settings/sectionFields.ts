@@ -35,7 +35,7 @@ export const SECTION_FIELDS = {
     "memRequest",
     "memLimit",
   ],
-  sleep: ["sleepEnabled", "sleepAfter", "sleepNonProduction", "sleepExcludePaths"],
+  sleep: ["sleepEnabled", "sleepAfter", "sleepNonProduction", "sleepServeStale", "sleepExcludePaths"],
   placement: ["placement", "placementNodes"],
   volumes: ["volumes"],
   build: [

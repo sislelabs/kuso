@@ -104,6 +104,7 @@ export interface KusoServiceSpec {
     enabled?: boolean;
     afterMinutes?: number;
     nonProduction?: "on" | "off";
+    serveStale?: boolean;
     wakeOn?: { excludePaths?: string[] };
   };
   // stopped=true is a hard stop: the service is scaled to 0 replicas

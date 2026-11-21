@@ -51,8 +51,12 @@ export function buildServicePatch(
     state.scaleDownWindow !== baseline.scaleDownWindow;
   const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
   const nonProdChanged = state.sleepNonProduction !== baseline.sleepNonProduction;
+  const serveStaleChanged = state.sleepServeStale !== baseline.sleepServeStale;
   const sleepChanged =
-    state.sleepEnabled !== baseline.sleepEnabled || state.sleepAfter !== baseline.sleepAfter || nonProdChanged;
+    state.sleepEnabled !== baseline.sleepEnabled ||
+    state.sleepAfter !== baseline.sleepAfter ||
+    nonProdChanged ||
+    serveStaleChanged;
   if (scaleChanged || excludeChanged || sleepChanged) {
     const min = Number(state.scaleMin);
     const max = Number(state.scaleMax);
@@ -96,6 +100,9 @@ export function buildServicePatch(
       }
       if (nonProdChanged) {
         body.sleep.nonProduction = state.sleepNonProduction === "off" ? "off" : "on";
+      }
+      if (serveStaleChanged) {
+        body.sleep.serveStale = state.sleepServeStale;
       }
       if (excludeChanged) {
         const paths = state.sleepExcludePaths
@@ -293,6 +300,7 @@ export function fieldDiffValues(field: string, base: FormState, next: FormState)
       [
         `production ${Number(s.scaleMin) === 0 || s.sleepEnabled ? "sleeps" : "always on"}`,
         `after ${s.sleepAfter}m`,
+        s.sleepServeStale ? "serves stale while waking" : "",
         s.sleepExcludePaths.trim() ? `keep-warm: ${norm(s.sleepExcludePaths)}` : "",
       ]
         .filter(Boolean)

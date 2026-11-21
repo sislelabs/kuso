@@ -146,6 +146,12 @@ type Activator struct {
 	podFail     map[string]podFailEntry
 	podCheckOff atomic.Bool
 
+	// stale holds replayable responses for serveStale envs (stale.go).
+	// staleWakes tracks each env's current serve-stale wake (claimStaleWake).
+	stale      *staleCache
+	staleMu    sync.Mutex
+	staleWakes map[string]staleWake
+
 	// nowFn is time.Now, overridable in tests. Read via now().
 	nowFn func() time.Time
 }
@@ -190,7 +196,14 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		heldByEnv:      map[string]int64{},
 		maxHeldPerEnv:  resolveMaxHeldPerEnv(),
 		podFail:        map[string]podFailEntry{},
-		nowFn:          time.Now,
+		stale: newStaleCache(
+			int64(envInt("KUSO_ACTIVATOR_STALE_CACHE_MB", 64))<<20,
+			int64(envInt("KUSO_ACTIVATOR_STALE_CACHE_PER_ENV_MB", 8))<<20,
+			int64(envInt("KUSO_ACTIVATOR_STALE_INFLIGHT_MB", 16))<<20,
+			time.Duration(envInt("KUSO_ACTIVATOR_STALE_TTL_HOURS", 24))*time.Hour,
+		),
+		staleWakes: map[string]staleWake{},
+		nowFn:      time.Now,
 	}
 	a.hosts = &hostResolver{
 		// Every env kind: non-production envs (named, env-group clones,
@@ -304,7 +317,8 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	env, ns, stopped, err := a.resolveByHost(ctx, host)
+	t, err := a.resolveTarget(ctx, host)
+	env, ns, stopped := t.env, t.ns, t.stopped
 	if errors.Is(err, errHostNotFound) {
 		if ok, muted := a.missLog.allow(a.now()); ok {
 			a.logger.Warn("activator: no env claims host", "host", host, "suppressed", muted)
@@ -338,6 +352,10 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	// (curl, health checks, APIs) gets terse text.
 	if stopped {
 		writeActivatorPage(w, r, http.StatusServiceUnavailable, stoppedPageHTML, "This service is stopped.\n")
+		return
+	}
+
+	if t.serveStale && a.serveStale(w, r, ns, env) {
 		return
 	}
 
@@ -389,6 +407,17 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 		a.forgetReady(ns, env)
 		rw.Header().Set("Retry-After", "2")
 		http.Error(rw, "service is starting, please retry", http.StatusServiceUnavailable)
+	}
+	if t.serveStale && staleCapturable(r) {
+		envKey, key := ns+"/"+env, staleKey(ns+"/"+env, r)
+		if !a.stale.fresh(key, a.now(), staleRecaptureAfter) {
+			proxy.ModifyResponse = func(resp *http.Response) error {
+				if staleStorable(resp) {
+					a.stale.capture(resp, envKey, key, a.now)
+				}
+				return nil
+			}
+		}
 	}
 	// Record activity so scaledown can tell this env is NOT idle. The
 	// app's own traefik counter reads zero for sleep-routed envs (all
@@ -1101,6 +1130,9 @@ func (a *Activator) markReady(ns, name string) {
 	a.readyMu.Lock()
 	a.readyAt[ns+"/"+name] = a.now()
 	a.readyMu.Unlock()
+	a.staleMu.Lock()
+	delete(a.staleWakes, ns+"/"+name)
+	a.staleMu.Unlock()
 }
 
 func (a *Activator) forgetReady(ns, name string) {
@@ -1158,16 +1190,21 @@ func (a *Activator) endpointReadyLegacy(ctx context.Context, ns, name string) (b
 // additional hosts or wildcard covers the request host. errHostNotFound
 // means no env claims it; any other error means the lookup failed.
 func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns string, stopped bool, err error) {
+	t, err := a.resolveTarget(ctx, host)
+	return t.env, t.ns, t.stopped, err
+}
+
+func (a *Activator) resolveTarget(ctx context.Context, host string) (hostTarget, error) {
 	t, stale, err := a.hosts.resolve(ctx, host)
 	if err != nil {
-		return "", "", false, err
+		return hostTarget{}, err
 	}
 	if stale {
 		if ok, muted := a.lookupErrLog.allow(a.now()); ok {
 			a.logger.Warn("activator: env list failing, serving last good host map", "suppressed", muted)
 		}
 	}
-	return t.env, t.ns, t.stopped, nil
+	return t, nil
 }
 
 // hostOnly strips any :port suffix from an HTTP Host header.

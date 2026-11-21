@@ -47,6 +47,13 @@ export function SleepSection({ state, setState }: SectionProps) {
           setState((s) => ({ ...s, sleepNonProduction: s.sleepNonProduction === "off" ? "on" : "off" }))
         }
       />
+      <SwitchField
+        label="Serve last page while waking"
+        hint="Anonymous visitors get the last cached copy of a page at once while the app starts. For public sites; logged-in and non-GET requests still wait."
+        on={state.sleepServeStale}
+        stateLabel={state.sleepServeStale ? "Stale copy" : "Wait"}
+        onChange={() => setState((s) => ({ ...s, sleepServeStale: !s.sleepServeStale }))}
+      />
       <Field
         label="Idle window"
         hint="Minutes without a request before an environment sleeps. Applies to production and the others."

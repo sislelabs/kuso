@@ -217,6 +217,7 @@ spec:
                   type: object
                   properties:
                     enabled: { type: boolean, default: false }
+                    serveStale: { type: boolean, default: false }
                 autoSleep:
                   type: boolean
                   description: >-

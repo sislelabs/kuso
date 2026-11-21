@@ -276,6 +276,7 @@ type ServiceSleep struct {
 	// NonProduction: "" / "on" = non-production envs sleep when idle
 	// (the default); "off" = they never sleep.
 	NonProduction string `json:"nonProduction,omitempty"`
+	ServeStale    bool   `json:"serveStale,omitempty"`
 }
 
 // SetEnvRequest is the body of POST /api/projects/:p/services/:s/env.

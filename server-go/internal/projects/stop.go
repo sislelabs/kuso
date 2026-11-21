@@ -94,12 +94,17 @@ func (s *Service) setProjectStopped(ctx context.Context, project string, stopped
 // paths excludePaths exists to protect. Treat excludePaths as "never
 // activator-route": return nil so the env's ingress points straight at
 // the app's own Service.
+//
+// ServeStale is carried even when Enabled is false: non-production envs
+// reach the activator through autoSleep, not sleep.enabled, and the chart
+// only routes on sleep.enabled, so {serveStale:true} alone changes no
+// routing.
 func envSleepFrom(s *kube.KusoServiceSleep) *kube.KusoEnvSleep {
-	if s == nil || !s.Enabled {
+	if s == nil || (!s.Enabled && !s.ServeStale) {
 		return nil
 	}
 	if s.WakeOn != nil && len(s.WakeOn.ExcludePaths) > 0 {
 		return nil
 	}
-	return &kube.KusoEnvSleep{Enabled: true}
+	return &kube.KusoEnvSleep{Enabled: s.Enabled, ServeStale: s.ServeStale}
 }

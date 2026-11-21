@@ -34,6 +34,8 @@ type hostTarget struct {
 	// stopped mirrors spec.stopped: a stopped env serves the stopped page
 	// and is never woken by traffic.
 	stopped bool
+	// serveStale mirrors spec.sleep.serveStale (stale.go).
+	serveStale bool
 }
 
 // hostIndex is one env LIST turned into host lookups. It is rebuilt
@@ -70,7 +72,7 @@ func buildHostIndex(envs []kube.KusoEnvironment, at time.Time) *hostIndex {
 		if e.Spec.Internal || e.Spec.Runtime == "worker" {
 			continue
 		}
-		t := hostTarget{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped}
+		t := hostTarget{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, serveStale: e.Spec.Sleep != nil && e.Spec.Sleep.ServeStale}
 		hosts := append([]string{e.Spec.Host}, e.Spec.AdditionalHosts...)
 		for _, h := range hosts {
 			add(idx.exact, h, t)

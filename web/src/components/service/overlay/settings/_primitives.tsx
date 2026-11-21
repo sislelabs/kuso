@@ -78,6 +78,7 @@ export interface FormState {
   sleepEnabled: boolean;
   sleepAfter: string;
   sleepNonProduction: string;
+  sleepServeStale: boolean;
   // Resources (pod CPU/memory requests+limits). Empty string = unset
   // (chart default). e.g. cpuRequest "100m", memRequest "128Mi".
   cpuRequest: string;
@@ -219,6 +220,7 @@ export function fromSvc(svc?: KusoService): FormState {
     sleepEnabled: !!svc?.spec.sleep?.enabled,
     sleepAfter: String(svc?.spec.sleep?.afterMinutes || 30),
     sleepNonProduction: svc?.spec.sleep?.nonProduction ?? "",
+    sleepServeStale: !!svc?.spec.sleep?.serveStale,
     cpuRequest: svc?.spec.resources?.requests?.cpu ?? "",
     cpuLimit: svc?.spec.resources?.limits?.cpu ?? "",
     memRequest: svc?.spec.resources?.requests?.memory ?? "",

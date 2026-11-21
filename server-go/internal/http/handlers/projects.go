@@ -109,7 +109,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		}
 	}
 	if in.Sleep != nil {
-		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes, NonProduction: in.Sleep.NonProduction}
+		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes, NonProduction: in.Sleep.NonProduction, ServeStale: in.Sleep.ServeStale}
 	}
 	if in.Static != nil {
 		out.Static = &projects.ServiceStaticSpec{

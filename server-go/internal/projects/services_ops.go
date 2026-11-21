@@ -548,6 +548,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			sleep.AfterMinutes = req.Sleep.AfterMinutes
 		}
 		sleep.NonProduction = req.Sleep.NonProduction
+		sleep.ServeStale = req.Sleep.ServeStale
 	}
 
 	// Cascade-delete the service CR when the project is deleted — but
@@ -2882,6 +2883,7 @@ type PatchSleepRequest struct {
 	// NonProduction: "" / "on" = non-production envs sleep when idle
 	// (the default); "off" = they never sleep. nil = leave alone.
 	NonProduction *string `json:"nonProduction,omitempty"`
+	ServeStale    *bool   `json:"serveStale,omitempty"`
 }
 
 // validateSleepNonProduction accepts the KusoServiceSleep.NonProduction
@@ -3155,6 +3157,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			if req.Sleep.NonProduction != nil {
 				svc.Spec.Sleep.NonProduction = *req.Sleep.NonProduction
+			}
+			if req.Sleep.ServeStale != nil {
+				svc.Spec.Sleep.ServeStale = *req.Sleep.ServeStale
 			}
 			if req.Sleep.WakeOn != nil {
 				if req.Sleep.WakeOn.Clear {
