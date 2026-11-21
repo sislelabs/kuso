@@ -2,6 +2,18 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.27.0] — 2026-09-28
+
+### Other
+- Run addon admin commands on the CloudNativePG primary ([d5965bf](https://github.com/sislelabs/kuso/commit/d5965bf234c7c810fd5c56a330a9eaf892d923b1))
+- Map compose env by variable shape and diagnose missing capabilities ([bb00193](https://github.com/sislelabs/kuso/commit/bb00193253958fa8588fc351fb575ec5ceb7f158))
+- Alert on 5xx rate, p95 latency, certificate expiry and DNS mismatch ([25ec5a3](https://github.com/sislelabs/kuso/commit/25ec5a393f6422b95ab349bc20c801d952262f68))
+- Let kuso-server delete the namespaces it creates ([da163f9](https://github.com/sislelabs/kuso/commit/da163f98b305d770e5b5ed1085b7c119fc03d498))
+
+### ✨ Features
+- Add watch paths, private registries, CI gating, plan diffs, DX fixes ([ee8d9da](https://github.com/sislelabs/kuso/commit/ee8d9da43ee91ef806ba40258b6f02289e6120e2))
+- Add log drains and a metrics export endpoint ([e83531b](https://github.com/sislelabs/kuso/commit/e83531b23ee7921235f323e4f76d082e7f78e984))
+
 ## [0.26.18] — 2026-09-28
 
 ### Other
